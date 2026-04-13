@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ article.title or 'Article' }} — {{ project.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
+  </head>
+  <body class="bg-body-tertiary">
+    <nav class="navbar navbar-expand-lg bg-white border-bottom">
+      <div class="container">
+        <a class="navbar-brand fw-semibold" href="{{ url_for('home') }}">Auto Articles</a>
+        <div class="ms-auto d-flex align-items-center gap-2">
+          <a class="btn btn-sm btn-outline-secondary requires-saved-article" id="backToProjectLink" href="{{ url_for('project_detail', project_id=project.id) }}">Back to project</a>
+        </div>
+      </div>
+    </nav>
+
+    {% if project_settings_incomplete|default(false) %}
+      <div class="alert alert-danger border-0 rounded-0 mb-0 py-2 px-3 text-center small" role="alert">
+        WordPress username and application password are not set for this project.
+        <a href="{{ url_for('project_detail', project_id=project.id) }}?open_settings=1" class="alert-link fw-semibold text-decoration-underline">Project settings</a>
+      </div>
+    {% endif %}
+
+    <main class="container py-4">
+      <nav aria-label="breadcrumb" class="mb-3">
+        <ol class="breadcrumb mb-0">
+          <li class="breadcrumb-item"><a href="{{ url_for('home') }}">Projects</a></li>
+          <li class="breadcrumb-item"><a class="requires-saved-article" href="{{ url_for('project_detail', project_id=project.id) }}">{{ project.name }}</a></li>
+          <li class="breadcrumb-item active" aria-current="page">Edit post</li>
+        </ol>
+      </nav>
+
+      <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <h1 class="h4 mb-0">{{ article.title or 'Untitled' }}</h1>
+        {% set st = (article.status or 'pending')|lower %}
+        {% if st == 'published' %}
+          <span class="badge text-bg-success">Published</span>
+        {% elif st == 'draft' %}
+          <span class="badge text-bg-secondary">Draft</span>
+        {% else %}
+          <span class="badge text-bg-warning text-dark">Pending</span>
+        {% endif %}
+      </div>
+      <p class="small text-body-secondary mb-4"><a href="{{ project.website_url }}" target="_blank" rel="noopener noreferrer">{{ project.website_url }}</a></p>
+
+      <div class="row g-4">
+        <div class="col-12 col-lg-5">
+          <div class="card shadow-sm">
+            <div class="card-body">
+              <h2 class="h5 mb-3">Generate article</h2>
+
+              {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                  <div class="mb-3">
+                    {% for category, message in messages %}
+                      <div class="alert alert-{{ 'danger' if category == 'error' else ('success' if category == 'success' else 'secondary') }} mb-2" role="alert">
+                        {{ message }}
+                      </div>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              {% endwith %}
+
+              <form id="generateArticleForm" method="post" action="{{ url_for('generate_project_article', project_id=project.id, article_id=article.id) }}">
+                {% if project.prompts and project.prompts|length > 0 %}
+                  <div class="mb-3">
+                    <label class="form-label" for="genPromptSelect">Writing prompt</label>
+                    <select class="form-select" id="genPromptSelect" name="prompt_id" aria-label="Writing prompt for generation">
+                      <option value="" {% if not default_prompt_id %}selected{% endif %}>
+                        Project default{% if default_prompt_name %} ({{ default_prompt_name }}){% endif %}
+                      </option>
+                      {% for pr in project.prompts %}
+                        <option value="{{ pr.id }}" {% if pr.id == default_prompt_id %}selected{% endif %}>{{ pr.name }}</option>
+                      {% endfor %}
+                    </select>
+                    <div class="form-text">
+                      Prompts are managed on the <a href="{{ url_for('project_detail', project_id=project.id) }}">project page</a>.
+                      Use <span class="fw-medium">Project default</span> to follow the default set there, or pick a specific prompt for this run.
+                    </div>
+                  </div>
+                {% else %}
+                  <div class="alert alert-light border py-2 small mb-3" role="note">
+                    No writing prompts for this project yet.
+                    <a href="{{ url_for('project_detail', project_id=project.id) }}">Add prompts on the project page</a>
+                    to customize generation (or the built-in template is used).
+                  </div>
+                {% endif %}
+
+                {% if project.image_prompts and project.image_prompts|length > 0 %}
+                  <div class="mb-3">
+                    <label class="form-label" for="genImagePromptSelect">Image generation prompt</label>
+                    <select class="form-select" id="genImagePromptSelect" name="image_prompt_id" aria-label="Image generation prompt">
+                      <option value="" {% if not default_image_prompt_id %}selected{% endif %}>
+                        Project default{% if default_image_prompt_name %} ({{ default_image_prompt_name }}){% endif %}
+                      </option>
+                      {% for ipr in project.image_prompts %}
+                        <option value="{{ ipr.id }}" {% if ipr.id == default_image_prompt_id %}selected{% endif %}>{{ ipr.name }}</option>
+                      {% endfor %}
+                    </select>
+                    <div class="form-text">
+                      Generates a featured image alongside the article (DALL·E 3, requires <span class="fw-medium">OPENAI_API_KEY</span>).
+                      Manage prompts on the <a href="{{ url_for('project_detail', project_id=project.id) }}">project page</a>.
+                    </div>
+                  </div>
+                {% endif %}
+
+                <div class="mb-3">
+                  <label class="form-label">Article title</label>
+                  <input class="form-control" name="title" placeholder="e.g. How to Start a Home Garden" required
+                         value="{{ last.title if last else '' }}">
+                </div>
+
+                <div class="mb-3">
+                  <label class="form-label">Targeting keywords</label>
+                  <input class="form-control" name="keywords" placeholder="keyword1, keyword2, keyword3" required
+                         value="{{ (last.keywords | join(', ')) if last and last.keywords else '' }}"
+                         maxlength="2000" autocomplete="off">
+                  <div class="form-text">Comma-separated. Maximum 10 keywords. Used in the article and as WordPress tags when posting.</div>
+                </div>
+
+                <div class="mb-3">
+                  <label class="form-label" for="genFocusKeyphrase">Focus keyphrase (Yoast)</label>
+                  <input class="form-control" id="genFocusKeyphrase" name="focus_keyphrase" type="text"
+                         placeholder="e.g. accused rights India"
+                         value="{{ last.focus_keyphrase if last and last.focus_keyphrase else '' }}"
+                         maxlength="200" autocomplete="off">
+                  <div class="form-text">One phrase only (no commas). Used as the Yoast focus keyphrase and in prompts. Leave blank to let the AI choose the keyphrase.</div>
+                </div>
+
+                <button class="btn btn-primary w-100" type="submit">Generate</button>
+              </form>
+            </div>
+          </div>
+
+          {% if last and last.article %}
+            <div class="card shadow-sm mt-3">
+              <div class="card-body">
+                <div class="fw-semibold mb-1">Post to WordPress</div>
+                <div class="text-body-secondary small mb-3">
+                  Uses this project’s WordPress settings. Draft/Published updates this post’s status on the project list.
+                </div>
+
+                <form method="post" action="{{ url_for('wordpress_post_project', project_id=project.id, article_id=article.id) }}" id="wpPostForm">
+                  <input type="hidden" name="article_body" id="wpArticleBodyCopy" value="">
+                  <input type="hidden" name="confirm_post_without_featured_image" id="confirmPostWithoutFeaturedImage" value="">
+                  <div class="mb-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                      <label class="form-label mb-1" for="wpRestBase">WordPress post type</label>
+                      {% if selected_wp_rest_base == (project_default_wp_rest_base|default('posts')) %}
+                        <span class="badge text-bg-primary">Default</span>
+                      {% endif %}
+                    </div>
+                    <select class="form-select" id="wpRestBase" name="wp_rest_base" aria-label="WordPress post type">
+                      {% for pt in wp_post_types %}
+                        <option value="{{ pt.rest_base }}" {% if pt.rest_base == selected_wp_rest_base %}selected{% endif %}>
+                          {{ pt.name }} ({{ pt.rest_base }}){% if pt.rest_base == (project_default_wp_rest_base|default('posts')) %} — Default{% endif %}
+                        </option>
+                      {% endfor %}
+                    </select>
+                    {% if wp_post_types_error %}
+                      <div class="form-text text-warning">Could not refresh types from WordPress: {{ wp_post_types_error }} Showing fallback (Posts only).</div>
+                    {% else %}
+                      <div class="form-text">Loaded from your WordPress REST API (<code class="small">/wp/v2/types</code>). Pick the same type you use in the WP admin sidebar (Posts, Pages, or a custom type).</div>
+                    {% endif %}
+                  </div>
+
+                  <div class="row g-2">
+                    <div class="col-12 col-md-6">
+                      <div class="mb-3">
+                        <div class="d-flex justify-content-between align-items-center">
+                          <label class="form-label mb-1">Status</label>
+                          {% if (selected_wp_status|default('draft')) == (project_default_wp_status|default('draft')) %}
+                            <span class="badge text-bg-primary">Default</span>
+                          {% endif %}
+                        </div>
+                        <select class="form-select" name="wp_status">
+                          <option value="draft" {% if (selected_wp_status|default('draft')) == 'draft' %}selected{% endif %}>
+                            Draft{% if (project_default_wp_status|default('draft')) == 'draft' %} — Default{% endif %}
+                          </option>
+                          <option value="publish" {% if (selected_wp_status|default('draft')) == 'publish' %}selected{% endif %}>
+                            Publish{% if (project_default_wp_status|default('draft')) == 'publish' %} — Default{% endif %}
+                          </option>
+                        </select>
+                        <div class="form-text">Default comes from the project’s <span class="fw-medium">WP defaults</span>.</div>
+                      </div>
+                    </div>
+                    <div class="col-12 col-md-6">
+                    <div class="mb-3">
+                      <label class="form-label">Tags</label>
+                      <input class="form-control" value="{{ (last.keywords | join(', ')) if last and last.keywords else '' }}" disabled>
+                      <div class="form-text">From targeting keywords. Sent only when post type is <span class="fw-medium">Posts</span> (standard blog posts).</div>
+                    </div>
+                    </div>
+                  </div>
+
+                  <div class="border rounded-3 p-3 mb-3 bg-body">
+                    <div class="fw-semibold mb-2">Yoast SEO (optional)</div>
+                    <div class="mb-3">
+                      <label class="form-label">Focus keyphrase</label>
+                      <input class="form-control" name="wp_focus_keyphrase" placeholder="e.g. digital marketing Mohali"
+                             value="{{ (last.focus_keyphrase if last and last.focus_keyphrase else session.get('wp_focus_keyphrase', '')) }}">
+                      <div class="form-text">Filled from <span class="fw-medium">Generate article</span> (focus keyphrase). Edit here before posting if needed.</div>
+                    </div>
+                    <div class="mb-3">
+                      <label class="form-label" for="seoMetaTitle">Meta title</label>
+                      <input class="form-control" id="seoMetaTitle" name="wp_meta_title" placeholder="SEO title shown in search" autocomplete="off"
+                             value="{{ (last.meta_title if last and last.meta_title else session.get('wp_meta_title', '')) }}">
+                      <div class="d-flex justify-content-between align-items-center small mt-1 mb-1">
+                        <span id="seoMetaTitleHint" class="text-body-secondary seo-meter-hint"></span>
+                        <span class="text-body-secondary"><span id="seoMetaTitleCount">0</span> / 60</span>
+                      </div>
+                      <div class="seo-meter-track" aria-hidden="true"><div id="seoMetaTitleMeter" class="seo-meter-fill seo-meter-fill--neutral" style="width:0%"></div></div>
+                    </div>
+                    <div class="mb-0">
+                      <label class="form-label" for="seoMetaDescription">Meta description</label>
+                      <textarea class="form-control" id="seoMetaDescription" name="wp_meta_description" rows="3" placeholder="SEO description shown in search" autocomplete="off">{{ (last.meta_description if last and last.meta_description else session.get('wp_meta_description', '')) }}</textarea>
+                      <div class="d-flex justify-content-between align-items-center small mt-1 mb-1">
+                        <span id="seoMetaDescHint" class="text-body-secondary seo-meter-hint"></span>
+                        <span class="text-body-secondary"><span id="seoMetaDescCount">0</span> / 160</span>
+                      </div>
+                      <div class="seo-meter-track" aria-hidden="true"><div id="seoMetaDescMeter" class="seo-meter-fill seo-meter-fill--neutral" style="width:0%"></div></div>
+                    </div>
+                  </div>
+
+                  <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" value="on" id="wpRemember" name="wp_remember">
+                    <label class="form-check-label" for="wpRemember">
+                      Remember WordPress fields in browser session
+                    </label>
+                  </div>
+
+                  {% if not has_featured_image %}
+                    <p class="small text-warning mb-2">
+                      No featured image yet. Generate one with <span class="fw-semibold">Generate article</span> (if your project uses image prompts), or upload under <span class="fw-semibold">Featured image</span> below.
+                      {% if requires_featured_image %}
+                        Posting without an image requires confirmation.
+                      {% else %}
+                        Posting without an image will show a warning first.
+                      {% endif %}
+                    </p>
+                  {% endif %}
+
+                  <button class="btn btn-success w-100" type="submit">Post to WordPress</button>
+                </form>
+              </div>
+            </div>
+          {% endif %}
+        </div>
+
+        <div class="col-12 col-lg-7 d-flex flex-column gap-4">
+          {% if last and last.article %}
+            <form id="saveArticleForm" method="post" action="{{ url_for('save_article_body', project_id=project.id, article_id=article.id) }}" class="d-none" aria-hidden="true"></form>
+          {% endif %}
+          <div class="card shadow-sm">
+            <div class="card-body">
+              <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-2">
+                <div>
+                  <h2 class="h5 mb-0">Result</h2>
+                  {% if last and last.generated_at %}
+                    <div class="text-body-secondary small">
+                      Generated at {{ last.generated_at }}
+                      {% if last.keywords and last.keywords|length > 0 %}
+                        · Keywords: {{ last.keywords | join(', ') }}
+                      {% endif %}
+                    </div>
+                  {% else %}
+                    <div class="text-body-secondary small">Generated content will appear here.</div>
+                  {% endif %}
+                  {% if last and last.article %}
+                    <p class="text-body-secondary small mb-0 mt-1">Edit the text below, then click <span class="fw-semibold">Save</span> before posting to WordPress or leaving this page.</p>
+                  {% endif %}
+                </div>
+                {% if last and last.article %}
+                  <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-success btn-sm" type="submit" form="saveArticleForm" id="saveArticleBtn" disabled>Save</button>
+                    <button class="btn btn-outline-primary btn-sm" type="button" id="copyBtn">Copy</button>
+                  </div>
+                {% endif %}
+              </div>
+
+              {% if last and last.article %}
+                <textarea class="form-control font-mono" rows="26" id="articleBox" name="article_body" form="saveArticleForm" spellcheck="false">{{ last.article }}</textarea>
+              {% else %}
+                <div class="placeholder-box">
+                  <div class="text-body-secondary">
+                    Enter a title + keywords, then click <span class="fw-semibold">Generate</span>.
+                  </div>
+                </div>
+              {% endif %}
+            </div>
+          </div>
+
+          {% if last %}
+            <div class="card shadow-sm">
+              <div class="card-body">
+                <h2 class="h5 mb-2">Featured image</h2>
+                <p class="text-body-secondary small mb-3">
+                  {% if requires_featured_image %}
+                    Only <span class="fw-semibold">one</span> featured image: generate with <span class="fw-semibold">Generate article</span> (DALL·E) <span class="fw-semibold">or</span> upload one file below—not both. If an image is already set, use <span class="fw-semibold">Clear featured image</span> before switching between generate and upload.
+                  {% else %}
+                    Optional: one image for WordPress. Clear the current image before uploading a different file.
+                  {% endif %}
+                </p>
+                {% if has_featured_image %}
+                  {% if article.get('featured_image_source') == 'uploaded' %}
+                    <p class="text-body-secondary small mb-2">Uploaded at {{ article.featured_image_generated_at or '—' }}</p>
+                  {% else %}
+                    <p class="text-body-secondary small mb-2">Generated at {{ article.featured_image_generated_at or '—' }}</p>
+                  {% endif %}
+                  <img class="img-fluid rounded border w-100 mb-3" src="{{ url_for('serve_article_featured_image', project_id=project.id, article_id=article.id) }}?v={{ (article.featured_image_generated_at or article.id)|urlencode }}" alt="Featured image for this post" loading="eager">
+                  <form method="post" action="{{ url_for('clear_article_featured_image', project_id=project.id, article_id=article.id) }}" class="mb-0" onsubmit="return confirm('Remove this featured image? You can generate or upload again after clearing.');">
+                    <button type="submit" class="btn btn-sm btn-outline-danger">Clear featured image</button>
+                  </form>
+                  <p class="text-body-secondary small mt-3 mb-0">Upload is available only after you clear the image above.</p>
+                {% else %}
+                  <div id="featuredImageLocalPreview" class="d-none mb-3">
+                    <p class="text-body-secondary small mb-2">Preview <span class="text-warning">(not saved yet — click Save upload)</span></p>
+                    <img id="featuredImageLocalPreviewImg" class="img-fluid rounded border w-100" src="" alt="Selected image preview">
+                  </div>
+                  <p class="text-body-secondary small mb-3" id="featuredImageEmptyHint">No image yet. Generate on the left or choose a file below, then click <span class="fw-semibold">Save upload</span> (max 8 MB).</p>
+                  <form method="post" enctype="multipart/form-data" action="{{ url_for('upload_article_featured_image', project_id=project.id, article_id=article.id) }}" class="border rounded-3 p-3 bg-body" id="featuredImageUploadForm">
+                    <label class="form-label mb-1" for="featuredImageUpload">Upload image</label>
+                    <input class="form-control form-control-sm" type="file" name="file" id="featuredImageUpload" accept="image/png,image/jpeg,image/webp,image/gif" required>
+                    <div class="form-text">One file only. PNG, JPEG, WebP, or GIF. If you see “No module named PIL”, run <code class="small">pip install Pillow</code> in the same Python environment as the app.</div>
+                    <button type="submit" class="btn btn-sm btn-primary mt-2">Save upload</button>
+                  </form>
+                  <script>
+                    (function () {
+                      var input = document.getElementById('featuredImageUpload');
+                      var wrap = document.getElementById('featuredImageLocalPreview');
+                      var img = document.getElementById('featuredImageLocalPreviewImg');
+                      var hint = document.getElementById('featuredImageEmptyHint');
+                      if (!input || !wrap || !img) return;
+                      var prevUrl = null;
+                      input.addEventListener('change', function () {
+                        if (prevUrl) {
+                          try { URL.revokeObjectURL(prevUrl); } catch (e) {}
+                          prevUrl = null;
+                        }
+                        var f = input.files && input.files[0];
+                        if (!f) {
+                          wrap.classList.add('d-none');
+                          if (hint) hint.classList.remove('d-none');
+                          return;
+                        }
+                        prevUrl = URL.createObjectURL(f);
+                        img.src = prevUrl;
+                        wrap.classList.remove('d-none');
+                        if (hint) hint.classList.add('d-none');
+                      });
+                    })();
+                  </script>
+                {% endif %}
+              </div>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </main>
+
+    <div
+      id="articleGenerateLoading"
+      class="position-fixed top-0 start-0 w-100 h-100 justify-content-center align-items-center"
+      style="z-index: 1080; background: rgba(15, 23, 42, 0.55); display: none;"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="articleGenerateLoadingTitle"
+      aria-busy="true"
+    >
+      <div class="bg-white rounded-3 shadow-lg p-4 text-center mx-3" style="max-width: 24rem;">
+        <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
+        <span class="visually-hidden">Generation in progress</span>
+        <div id="articleGenerateLoadingTitle" class="fw-semibold mb-2">Generating…</div>
+        <p id="articleGenerateLoadingDetail" class="text-body-secondary small mb-0">Please wait.</p>
+      </div>
+    </div>
+    <script type="application/json" id="generate-loading-config">{{ {'expectsImage': (project.image_prompts|default([])|length > 0) } | tojson }}</script>
+
+    {% if last and last.article %}
+    <div class="modal fade" id="unsavedArticleModal" tabindex="-1" aria-labelledby="unsavedArticleModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 class="modal-title h5" id="unsavedArticleModalLabel">Save required</h2>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <p class="mb-0">You have unsaved changes. Save the article before posting to WordPress or leaving this page.</p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="button" class="btn btn-primary" id="unsavedModalSaveBtn">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% if not has_featured_image %}
+    <div class="modal fade" id="noFeaturedImageModal" tabindex="-1" aria-labelledby="noFeaturedImageModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2 class="modal-title h5" id="noFeaturedImageModalLabel">No featured image</h2>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <p class="mb-2">
+              You have not generated a featured image or manually uploaded one for this post.
+            </p>
+            {% if requires_featured_image %}
+              <p class="mb-2 small text-warning">This project is set up to use featured images — WordPress will look better with one.</p>
+            {% endif %}
+            <p class="mb-0 text-body-secondary small">
+              If you still want to post without a featured image, click <span class="fw-semibold">Proceed</span>.
+            </p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="button" class="btn btn-warning" id="noFeaturedImagePostBtn">Proceed</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    <script type="application/json" id="saved-article-snapshot">{{ last.article|tojson }}</script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+      (function () {
+        var box = document.getElementById('articleBox');
+        var saveBtn = document.getElementById('saveArticleBtn');
+        var copyBtn = document.getElementById('copyBtn');
+        var wpForm = document.getElementById('wpPostForm');
+        var leaveGuards = document.querySelectorAll('a.requires-saved-article');
+        var snapEl = document.getElementById('saved-article-snapshot');
+        var modalEl = document.getElementById('unsavedArticleModal');
+        var modalSaveBtn = document.getElementById('unsavedModalSaveBtn');
+        var noFeaturedModalEl = document.getElementById('noFeaturedImageModal');
+        var noFeaturedPostBtn = document.getElementById('noFeaturedImagePostBtn');
+        var hasImg = {{ has_featured_image|tojson }};
+        var saveUrl = {{ url_for('save_article_body', project_id=project.id, article_id=article.id)|tojson }};
+        var projectUrl = {{ url_for('project_detail', project_id=project.id)|tojson }};
+
+        var savedSnapshot = '';
+        try {
+          savedSnapshot = snapEl ? JSON.parse(snapEl.textContent || '""') : '';
+        } catch (e) {
+          savedSnapshot = '';
+        }
+
+        function normalize(t) {
+          if (t == null) return '';
+          return String(t).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        }
+
+        function isDirty() {
+          if (!box) return false;
+          return normalize(box.value) !== normalize(savedSnapshot);
+        }
+
+        function syncWpHidden() {
+          var h = document.getElementById('wpArticleBodyCopy');
+          if (h && box) h.value = box.value;
+        }
+
+        function updateDirtyUi() {
+          var dirty = isDirty();
+          if (saveBtn) saveBtn.disabled = !dirty;
+        }
+
+        var pendingAction = null;
+        var pendingLeaveUrl = null;
+        var skipWpDirtyCheck = false;
+
+        function showUnsavedModal(action, leaveUrl) {
+          pendingAction = action;
+          pendingLeaveUrl = leaveUrl || null;
+          if (modalEl && window.bootstrap) {
+            window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+          }
+        }
+
+        if (modalEl) {
+          modalEl.addEventListener('hidden.bs.modal', function () {
+            pendingAction = null;
+            pendingLeaveUrl = null;
+          });
+        }
+
+        if (box) {
+          box.addEventListener('input', function () {
+            syncWpHidden();
+            updateDirtyUi();
+          });
+        }
+        syncWpHidden();
+        updateDirtyUi();
+
+        if (copyBtn) {
+          copyBtn.addEventListener('click', async function () {
+            if (!box) return;
+            await navigator.clipboard.writeText(box.value);
+            copyBtn.textContent = 'Copied';
+            setTimeout(function () { copyBtn.textContent = 'Copy'; }, 1200);
+          });
+        }
+
+        if (wpForm) {
+          wpForm.addEventListener('submit', function (e) {
+            syncWpHidden();
+            var skipDirty = skipWpDirtyCheck;
+            if (skipWpDirtyCheck) {
+              skipWpDirtyCheck = false;
+            }
+            if (!skipDirty && isDirty()) {
+              e.preventDefault();
+              showUnsavedModal('post');
+              return;
+            }
+            var confirmFeat = document.getElementById('confirmPostWithoutFeaturedImage');
+            if (!hasImg && (!confirmFeat || confirmFeat.value !== '1')) {
+              e.preventDefault();
+              if (noFeaturedModalEl && window.bootstrap) {
+                window.bootstrap.Modal.getOrCreateInstance(noFeaturedModalEl).show();
+              }
+            }
+          });
+        }
+
+        if (noFeaturedPostBtn && wpForm) {
+          noFeaturedPostBtn.addEventListener('click', function () {
+            var confirmFeat = document.getElementById('confirmPostWithoutFeaturedImage');
+            if (confirmFeat) confirmFeat.value = '1';
+            syncWpHidden();
+            if (noFeaturedModalEl && window.bootstrap) {
+              window.bootstrap.Modal.getOrCreateInstance(noFeaturedModalEl).hide();
+            }
+            wpForm.requestSubmit();
+          });
+        }
+
+        var saveForm = document.getElementById('saveArticleForm');
+        if (saveForm && box) {
+          saveForm.addEventListener('submit', function () {
+            savedSnapshot = normalize(box.value);
+          });
+        }
+
+        leaveGuards.forEach(function (a) {
+          a.addEventListener('click', function (e) {
+            if (isDirty()) {
+              e.preventDefault();
+              showUnsavedModal('back', a.href);
+            }
+          });
+        });
+
+        window.addEventListener('beforeunload', function (e) {
+          if (isDirty()) {
+            e.preventDefault();
+            e.returnValue = '';
+          }
+        });
+
+        async function saveViaFetch() {
+          if (!box) return;
+          var fd = new FormData();
+          fd.append('article_body', box.value);
+          var r = await fetch(saveUrl, {
+            method: 'POST',
+            body: fd,
+            credentials: 'same-origin',
+            headers: { 'X-Requested-With': 'XMLHttpRequest' }
+          });
+          if (!r.ok) throw new Error('save failed');
+          var j = await r.json();
+          if (!j.ok) throw new Error('save failed');
+          savedSnapshot = normalize(box.value);
+          updateDirtyUi();
+          syncWpHidden();
+        }
+
+        if (modalSaveBtn) {
+          modalSaveBtn.addEventListener('click', async function () {
+            var act = pendingAction;
+            var leaveUrl = pendingLeaveUrl;
+            try {
+              await saveViaFetch();
+              if (modalEl && window.bootstrap) {
+                window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+              }
+              if (act === 'back') {
+                window.location.href = leaveUrl || projectUrl;
+              } else if (act === 'post' && wpForm) {
+                skipWpDirtyCheck = true;
+                wpForm.requestSubmit();
+              }
+            } catch (err) {
+              window.alert('Could not save. Please try again.');
+            }
+          });
+        }
+
+        function updateSeoYoastMeters() {
+          var titleIn = document.getElementById('seoMetaTitle');
+          var titleMeter = document.getElementById('seoMetaTitleMeter');
+          var titleCountEl = document.getElementById('seoMetaTitleCount');
+          var titleHint = document.getElementById('seoMetaTitleHint');
+          var descIn = document.getElementById('seoMetaDescription');
+          var descMeter = document.getElementById('seoMetaDescMeter');
+          var descCountEl = document.getElementById('seoMetaDescCount');
+          var descHint = document.getElementById('seoMetaDescHint');
+          if (!titleIn || !titleMeter || !titleCountEl) return;
+
+          function setMeter(el, pct, color) {
+            el.style.width = Math.min(100, Math.max(0, pct)) + '%';
+            el.className = 'seo-meter-fill seo-meter-fill--' + color;
+          }
+
+          function titleState(len) {
+            var max = 60;
+            var pct = (len / max) * 100;
+            var color = 'neutral';
+            var hint = '';
+            if (len === 0) {
+              color = 'neutral';
+            } else if (len > max) {
+              color = 'red';
+              hint = 'Too long for search snippets';
+            } else if (len >= 50 && len <= max) {
+              color = 'green';
+              hint = 'Good length';
+            } else if (len >= 40 && len <= 49) {
+              color = 'orange';
+              hint = 'A bit short';
+            } else {
+              color = 'orange';
+              hint = 'Too short';
+            }
+            return { pct: Math.min(100, pct), color: color, hint: hint };
+          }
+
+          function descState(len) {
+            var max = 160;
+            var pct = (len / max) * 100;
+            var color = 'neutral';
+            var hint = '';
+            if (len === 0) {
+              color = 'neutral';
+            } else if (len > max) {
+              color = 'red';
+              hint = 'Too long — may be truncated';
+            } else if (len >= 140 && len <= max) {
+              color = 'green';
+              hint = 'Good length';
+            } else if (len >= 120 && len <= 139) {
+              color = 'orange';
+              hint = 'Could be longer';
+            } else {
+              color = 'orange';
+              hint = 'Too short';
+            }
+            return { pct: Math.min(100, pct), color: color, hint: hint };
+          }
+
+          var tl = titleIn.value.length;
+          var ts = titleState(tl);
+          titleCountEl.textContent = String(tl);
+          setMeter(titleMeter, ts.pct, ts.color);
+          if (titleHint) titleHint.textContent = ts.hint;
+
+          if (descIn && descMeter && descCountEl) {
+            var dl = descIn.value.length;
+            var ds = descState(dl);
+            descCountEl.textContent = String(dl);
+            setMeter(descMeter, ds.pct, ds.color);
+            if (descHint) descHint.textContent = ds.hint;
+          }
+        }
+
+        if (document.getElementById('seoMetaTitle')) {
+          updateSeoYoastMeters();
+          var seoTitleEl = document.getElementById('seoMetaTitle');
+          var seoDescEl = document.getElementById('seoMetaDescription');
+          if (seoTitleEl) seoTitleEl.addEventListener('input', updateSeoYoastMeters);
+          if (seoDescEl) seoDescEl.addEventListener('input', updateSeoYoastMeters);
+        }
+      })();
+    </script>
+    {% else %}
+    <script>
+      const btn = document.getElementById('copyBtn');
+      if (btn) {
+        btn.addEventListener('click', async () => {
+          const box = document.getElementById('articleBox');
+          await navigator.clipboard.writeText(box.value);
+          btn.textContent = 'Copied';
+          setTimeout(() => (btn.textContent = 'Copy'), 1200);
+        });
+      }
+    </script>
+    {% endif %}
+
+    <script>
+      (function () {
+        var form = document.getElementById('generateArticleForm');
+        var overlay = document.getElementById('articleGenerateLoading');
+        var detail = document.getElementById('articleGenerateLoadingDetail');
+        var titleEl = document.getElementById('articleGenerateLoadingTitle');
+        var cfgEl = document.getElementById('generate-loading-config');
+        var expectsImage = false;
+        if (cfgEl) {
+          try {
+            var cfg = JSON.parse(cfgEl.textContent || '{}');
+            expectsImage = !!cfg.expectsImage;
+          } catch (e) {}
+        }
+        if (!form || !overlay) return;
+        form.addEventListener('submit', function () {
+          if (titleEl) {
+            titleEl.textContent = expectsImage ? 'Generating article & featured image…' : 'Generating article…';
+          }
+          if (detail) {
+            detail.textContent = expectsImage
+              ? 'Writing the article and creating the featured image (DALL·E 3). This can take one or two minutes — do not close this tab.'
+              : 'Writing the article. This may take a minute — do not close this tab.';
+          }
+          overlay.style.display = 'flex';
+          document.body.style.overflow = 'hidden';
+          var btn = form.querySelector('button[type="submit"]');
+          if (btn) btn.disabled = true;
+        });
+      })();
+    </script>
+    <script src="{{ url_for('static', filename='page-loading.js') }}"></script>
+  </body>
+</html>

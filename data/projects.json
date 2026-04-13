@@ -1,0 +1,165 @@
+[
+  {
+    "id": "daf93d8f-be5c-474c-ab3b-85fb6c341ae9",
+    "name": "Sheokand Lega",
+    "website_url": "https://sheokandlegal.com",
+    "wp_site_url": "https://sheokandlegal.com",
+    "wp_username": "sheokand",
+    "wp_app_password": "Mhkp nEn1 zCsN Hwe0 jdQx TMKG",
+    "wp_category_ids": "",
+    "prompts": [
+      {
+        "id": "59f5defb-b9ba-48ba-a192-c80d84837a43",
+        "name": "AEO / GEO / SEO Optimized  - 2000+ Words Articles",
+        "text": "Role & Perspective\r\nYou are a senior legal research analyst, subject-matter expert in Indian law, and enterprise SEO/AEO/GEO strategist. Your responsibility is to draft a ~2,000-word, high-authority, informational legal article for a law firm’s website knowledge repository, strictly aligned with Bar Council of India regulations and non-solicitation norms.\r\n🔹 INPUT VARIABLES (TO BE PROVIDED)\r\nArticle Title: {article title}\r\nFocus Keyphrase: {focus_keyphrase}\r\nTarget Keywords List: {keywords}\r\n\r\n\r\n\r\n🔹 OBJECTIVE\r\nDevelop a reader-centric, search-optimized, and legally precise article that:\r\nEducates readers on the subject matter under Indian law\r\nDemonstrates institutional thought leadership without promotional positioning\r\nPerforms strongly across search engines, answer engines, and generative AI platforms\r\n🔹 CONTENT & OPTIMIZATION REQUIREMENTS\r\n1️⃣ Title & Keyword Integration\r\nDo not add any H1 tag headline in the article content.\r\nStrategically and naturally incorporate the keywords list provided above, ensuring:\r\nInclusion of short-tail, long-tail, and conversational query keywords\r\nThe content should contain external and internal keywords of the website. Live website URL: https://sheokandlegal.com/\r\nOptimal keyword placement in:\r\nHeadings and sub-headings (H2–H4)\r\nIntroductory and concluding sections\r\nContextual body content (without keyword stuffing)\r\n2️⃣ Legal Accuracy & Indian Law Framework\r\nReference only accurate and current Indian laws, including:\r\nRelevant Articles of the Constitution of India\r\nApplicable Central Acts, Codes, Rules, and Regulations\r\nUpdated legislative frameworks (where replaced or amended)\r\nCite authoritative Supreme Court and High Court judgments, where relevant\r\nEnsure statutory citations are precise, contextual, and non-speculative\r\n3️⃣ SEO / AEO / GEO STRUCTURE\r\nThe article must be optimized to:\r\nAnswer high-intent legal queries succinctly\r\nProvide structured, AI-readability-friendly content\r\nInclude:\r\nClear definitions\r\nStep-by-step legal explanations\r\nFAQ-style sections addressing user search behavior\r\nScannable formatting using bullet points, numbered lists, and tables (where appropriate)\r\nThe article headings, h1 should contain the targeting Focus Keyphrase.\r\nThe article heading h2-h6 should also contain the targeting keywords or the synonyms of the targeting Focus Keyphrase with respect to YOAST SEO or RANK MATH SEO.\r\n\r\n4️⃣ Mandatory Article Structure\r\nThe article should include the following sections:\r\nIntroduction – Context, scope, and relevance of the topic\r\nConceptual Overview – Foundational explanation of the legal subject\r\nStatutory Framework Under Indian Law – Laws, sections, and constitutional provisions\r\nRights, Duties, and Legal Obligations\r\nProcedural Aspects and Legal Mechanisms\r\nJudicial Interpretation and Landmark Case Laws\r\nPractical Implications for Individuals and Businesses\r\nCommon Misconceptions and Clarifications\r\nFrequently Asked Questions (AEO-Optimized)\r\nEmerging Trends and Legal Developments in India\r\nConclusion – Key legal takeaways and informational summary (Do not add the word \"Conclusion in the article\")\r\n- Make sure not generic AI words are used in the article. The article should be ready to copy paste on the website.\r\n5️⃣ Tone, Style & Compliance\r\nMaintain a formal, neutral, and authoritative tone\r\nAvoid:\r\nPromotional language\r\nLegal advice or outcome-based assurances\r\nCalls to action or solicitation\r\nPosition content as general legal information only\r\n🔹 FINAL OUTPUT GUIDELINES\r\nApproximate length: 2,000 words\r\nHigh editorial quality with logical flow and clarity\r\nFully compliant with Indian legal ethics and advertising norms\r\nOptimized for long-term organic visibility and AI discoverability"
+      },
+      {
+        "id": "1e0ebab9-4b22-4386-9f81-d9e7a20ba90a",
+        "name": "test",
+        "text": "test"
+      }
+    ],
+    "default_prompt_id": "59f5defb-b9ba-48ba-a192-c80d84837a43",
+    "image_prompts": [
+      {
+        "id": "adb4e44c-f7c4-4690-a5ea-ce8bd9660277",
+        "name": "2d Image",
+        "text": "create a 2d image on {article title} and do not write test on the image."
+      },
+      {
+        "id": "bfcc2abc-1c7a-43b3-b256-8584d84f26af",
+        "name": "Legal Firm Article Image Generation",
+        "text": "You are a legal visual design specialist and AI image prompt engineer tasked with generating high-quality, contextually relevant, and non-promotional images for a law firm’s knowledge-based legal articles.\r\n\r\nThe images must:\r\n\r\nVisually represent the legal theme of the article titled \"{title}\"\r\nMaintain professional, neutral, and institutional aesthetics\r\nAvoid any form of advertising, solicitation, or misleading representation\r\nBe suitable for SEO, AEO, GEO, and AI-driven content platforms\r\n🔹 CORE IMAGE GENERATION PROMPT STRUCTURE\r\n\r\nBase Prompt Template (Reusable with Dynamic Input):\r\n\r\nCreate a high-resolution, professional, and concept-driven legal illustration representing the topic: \"{article title}\".\r\n\r\nThe image should visually interpret legal concepts associated with this topic under Indian law, using symbolic, abstract, or realistic elements such as courtrooms, legal documents, scales of justice, judges’ benches, gavels, constitutional motifs, or legal professionals in a neutral setting.\r\n\r\nEnsure the design reflects Indian legal context where relevant (e.g., Indian court architecture, Constitution of India symbolism, judicial attire), while maintaining a globally professional aesthetic.\r\n\r\nThe composition should be clean, minimal, and corporate in tone, suitable for a law firm knowledge repository. Avoid clutter and ensure strong focal hierarchy.\r\n\r\nUse a refined color palette (navy blue, grey, white, muted gold accents), soft lighting, and balanced contrast to evoke trust, authority, and clarity.\r\n\r\nThe image must not include:\r\n\r\nAny logos, branding, or firm names\r\nAny text overlays or promotional messaging\r\nAny exaggerated or dramatized courtroom scenes\r\n\r\nStyle options (adapt dynamically based on topic relevance):\r\n\r\nPhotorealistic legal environment\r\nMinimalist vector illustration\r\nIsometric legal infographic style\r\nConceptual abstract legal visualization\r\n\r\nEnsure the final output is:\r\n\r\nSEO-friendly (clear subject representation)\r\nSuitable for featured image or header banner\r\nVisually aligned with legal professionalism and compliance standards\r\n🔹 DYNAMIC ENHANCEMENT MODULES (FOR VARIATION & UNIQUENESS)\r\n\r\nTo ensure each image is distinct and context-aware, append one or more of the following modules based on article type:\r\n\r\n1️⃣ Litigation / Court-Based Topics\r\n\r\nEmphasize courtroom interiors, judicial proceedings, legal arguments, case files, or scales of justice in action. Subtle depiction of judges or lawyers without identifiable faces.\r\n\r\n2️⃣ Constitutional / Rights-Based Topics\r\n\r\nIntegrate symbolic elements such as the Constitution of India, Ashoka Pillar, fundamental rights motifs, or abstract justice symbolism.\r\n\r\n3️⃣ Corporate / Commercial Law Topics\r\n\r\nInclude modern office environments, legal documentation, contracts, business professionals in formal settings, and digital law interfaces.\r\n\r\n4️⃣ NRI / Cross-Border Legal Topics\r\n\r\nBlend international elements such as global maps, digital communication, remote legal access, and India-centric legal symbols.\r\n\r\n5️⃣ Criminal Law Topics\r\n\r\nUse restrained and non-sensational visuals such as legal files, investigation boards, cyber grids, or courtroom silhouettes—avoid violence or dramatization.\r\n\r\n6️⃣ Property / Real Estate Law Topics\r\n\r\nIncorporate property visuals (buildings, land documents, registry papers) with legal overlays like scales or contracts.\r\n\r\n🔹 STYLE CONTROL PARAMETERS\r\n\r\nInclude these directives in all prompts:\r\n\r\nAspect Ratio: 16:9 (featured image) or 1:1 (inline use)\r\nResolution: High-definition, sharp detailing\r\nLighting: Soft, professional, non-dramatic\r\nCamera Angle: Slightly elevated or eye-level for authority\r\nDepth of Field: Moderate (clear subject focus)\r\nTexture: Clean, modern, noise-free\r\n🔹 NEGATIVE PROMPT (MANDATORY FILTER)\r\n\r\nAvoid: text, watermark, logo, brand name, advertisement, exaggerated expressions, cinematic drama, dark or violent themes, caricatures, informal settings, cluttered composition.\r\n\r\n🔹 EXAMPLE (WITH DYNAMIC TITLE INSERTION)\r\n\r\nInput:\r\n{title} = “Legal Process to Challenge High Court Orders in the Supreme Court”\r\n\r\nGenerated Prompt:\r\n\r\nCreate a high-resolution, professional legal illustration representing the topic: \"Legal Process to Challenge High Court Orders in the Supreme Court\".\r\nDepict a refined courtroom transition concept, showing a pathway or progression from a High Court setting to the Supreme Court of India, symbolized through architectural elements and legal documents. Include subtle representation of legal files, judicial benches, and scales of justice. Maintain an Indian legal context with dignified and neutral visuals. Use a corporate color palette with balanced lighting and minimal composition. Avoid text, branding, or dramatization.\r\n\r\n🔹 OUTPUT CHARACTERISTICS\r\n\r\nEach generated image must:\r\n\r\nAlign with legal informational content strategy\r\nBe reusable across blogs, knowledge hubs, and legal explainers\r\nEnhance user engagement and conceptual clarity\r\nMaintain strict compliance with Bar Council of India norms"
+      },
+      {
+        "id": "878a1940-d6e5-4c32-9653-217dff581950",
+        "name": "Realistic DSLR style",
+        "text": "Create a photorealistic editorial stock photograph for a law-firm article (not an illustration or 3D render).\r\n\r\nTopic (for mood only—do not paint these words on the image): \"{article title}\".\r\nVisual ideas tied to: {focus keyphrase} and {targeting keywords} — show them through objects and setting only, never as readable text.\r\n\r\nCOMPOSITION (critical): Choose ONE primary focal subject only — for example a neat desk still life, a close-up of case files and a pen, a judge’s bench with empty chairs, or a lawyer consultation table with one open file. Maximum two anonymous adults, shown from behind or with faces turned away / out of frame; no identifiable faces. No crowds, no gallery of people along the walls, no packed courtroom wide shot.\r\n\r\nSETTING: Indian legal context — believable Indian court or chamber interior OR senior advocate’s office. Keep the frame simple: one wall, one desk zone, a few props. Large areas of calm background (wood panelling, plain plaster, or blurred bookshelves) with no posters, no certificates, no nameplates, and no wall art that could contain lettering.\r\n\r\nACCURACY: Do not include a gavel (not used in Indian courts). Avoid Western-only clichés unless clearly generic (e.g. generic scales as a small prop, not a poster).\r\n\r\nLIGHT: Soft daylight from a side window mixed with gentle indoor ambient light; moderate contrast; no strong lens flares, no cinematic spotlight, no neon glow.\r\n\r\nCAMERA: Shot like a real DSLR photo — 50mm or 85mm lens, eye level or slight overhead for desk scenes, shallow depth of field, crisp focus on the main subject, natural bokeh in the background.\r\n\r\nMATERIALS: Real wood grain, paper edge texture, fabric weave on robes (if any), subtle dust or wear on the desk — not plastic-perfect surfaces.\r\n\r\nCOLOR: Muted professional palette — navy, grey, off-white, warm wood, restrained gold accents only if subtle.\r\n\r\nFORBIDDEN: text, letters, captions, logos, watermarks, infographics, vector art, cartoon, glossy CGI, symmetrical “perfect” movie-poster posing, duplicated clone-like people, extra clocks, surreal architecture, or distorted signage.\r\n\r\nOutput: single photograph, realistic, high detail, natural noise, believable shadows."
+      }
+    ],
+    "default_image_prompt_id": "878a1940-d6e5-4c32-9653-217dff581950",
+    "created_at": "2026-04-10 16:00:51",
+    "gsc_property_url": "sc-domain:sheokandlegal.com",
+    "gsc_index_on_publish": true,
+    "context_links": [
+      {
+        "id": "8bde38f8-42bd-43cf-9afb-f8441ddfb5e4",
+        "phrase": "Criminal Lawyers In Chandigarh",
+        "url": "https://sheokandlegal.com/criminal-lawyers-in-chandigarh/"
+      },
+      {
+        "id": "e27e0a24-fafc-4b3c-aa66-5cd531f185af",
+        "phrase": "Lawyers In Chandigarh",
+        "url": "https://sheokandlegal.com/"
+      },
+      {
+        "id": "ee2914c5-e442-41ef-bc0e-1f6f7024ad99",
+        "phrase": "Best lawyer in chandigarh",
+        "url": "https://sheokandlegal.com/"
+      },
+      {
+        "id": "289c94ec-2e0e-4455-9f39-f1306a1c9c83",
+        "phrase": "Top lawyers in chandigarh",
+        "url": "https://sheokandlegal.com/"
+      },
+      {
+        "id": "62b3e086-fd6e-4999-ab7d-cc2189871b81",
+        "phrase": "Top Law firm In Chandigarh",
+        "url": "https://sheokandlegal.com"
+      },
+      {
+        "id": "a7b03c7a-4cba-4b4e-b43b-5a91ee234279",
+        "phrase": "Bharatiya Nyaya Sanhita 2023",
+        "url": "https://sheokandlegal.com/bare-acts/bharatiya-nyaya-sanhita-2023-bns/"
+      },
+      {
+        "id": "5b63ecef-40b1-4cad-b8e0-6afc04e7e4a8",
+        "phrase": "Bharatiya Nagarik Suraksha Sanhita 2023",
+        "url": "https://sheokandlegal.com/bare-acts/bharatiya-nagarik-suraksha-sanhita-2023-bnss/"
+      },
+      {
+        "id": "5ff01771-ee2d-47d9-8057-2d4086a51408",
+        "phrase": "Bharatiya Sakshya Adhiniyam 2023",
+        "url": "https://sheokandlegal.com/bare-acts/bharatiya-sakshya-adhiniyam-2023-bsa/"
+      },
+      {
+        "id": "20c18303-de97-4739-ba15-fe485efda184",
+        "phrase": "BSA",
+        "url": "https://sheokandlegal.com/bare-acts/bharatiya-sakshya-adhiniyam-2023-bsa/"
+      },
+      {
+        "id": "db43537c-a430-4d41-8952-7ac25e92f7d5",
+        "phrase": "BNS",
+        "url": "https://sheokandlegal.com/bare-acts/bharatiya-nyaya-sanhita-2023-bns/"
+      },
+      {
+        "id": "46f8a7fe-85fa-4874-a187-79fcdc5b091f",
+        "phrase": "BNSS",
+        "url": "https://sheokandlegal.com/bare-acts/bharatiya-nagarik-suraksha-sanhita-2023-bnss/"
+      },
+      {
+        "id": "f071905f-53ea-493b-be81-0a72a1396b3a",
+        "phrase": "NRI lawyer In Chandigarh",
+        "url": "https://sheokandlegal.com/nri-legal-services/"
+      },
+      {
+        "id": "7a5f7128-04f5-4333-a45d-60f8f837ca0c",
+        "phrase": "NRI Legal Services",
+        "url": "https://sheokandlegal.com/nri-legal-services/"
+      },
+      {
+        "id": "799059ae-773d-4da3-b1ea-7829d23fe66f",
+        "phrase": "NRI Law firm in chandigarh",
+        "url": "https://sheokandlegal.com/nri-legal-services/"
+      },
+      {
+        "id": "9000b842-9c71-4556-b982-5737067e9cb6",
+        "phrase": "Civil Lawyer In chandigarh",
+        "url": "https://sheokandlegal.com/civil-lawyers-in-chandigarh/"
+      },
+      {
+        "id": "ea3a8953-d8eb-4637-a530-bb51596bc509",
+        "phrase": "Civil Law",
+        "url": "https://sheokandlegal.com/civil-lawyers-in-chandigarh/"
+      },
+      {
+        "id": "50acd6b4-bcfe-4a5b-b3da-facc9d4569a4",
+        "phrase": "NRI property",
+        "url": "https://sheokandlegal.com/nri-property-lawyer"
+      }
+    ],
+    "default_wp_rest_base": "articles",
+    "default_wp_status": "publish"
+  },
+  {
+    "id": "de8bf7ed-cd1e-4d0b-8954-9fd76ae3ec7a",
+    "name": "Hypedge",
+    "website_url": "https://hypedge.com",
+    "wp_site_url": "https://hypedge.com",
+    "wp_username": "jasdeep",
+    "wp_app_password": "yTf9 61hw hE9j QEw6 WLin X5at",
+    "wp_category_ids": "",
+    "prompts": [
+      {
+        "id": "61a82b38-4832-4acd-b3e1-f31d582be619",
+        "name": "2000+",
+        "text": "Write 2000 words charachters related to {article title},  {targeting keywords} and {focus keyphrase}"
+      }
+    ],
+    "default_prompt_id": "61a82b38-4832-4acd-b3e1-f31d582be619",
+    "image_prompts": [
+      {
+        "id": "e43bc001-6214-41d5-8653-b36e497453e2",
+        "name": "Real Image",
+        "text": "Create a photorealistic editorial stock photograph for a law-firm article (not an illustration or 3D render).\r\n\r\nTopic (for mood only—do not paint these words on the image): \"{article title}\".\r\nVisual ideas tied to: {focus keyphrase} and {targeting keywords} — show them through objects and setting only, never as readable text.\r\n\r\nCOMPOSITION (critical): Choose ONE primary focal subject only — for example a neat desk still life, a close-up of case files and a pen, a judge’s bench with empty chairs, or a lawyer consultation table with one open file. Maximum two anonymous adults, shown from behind or with faces turned away / out of frame; no identifiable faces. No crowds, no gallery of people along the walls, no packed courtroom wide shot.\r\n\r\nSETTING: Indian legal context — believable Indian court or chamber interior OR senior advocate’s office. Keep the frame simple: one wall, one desk zone, a few props. Large areas of calm background (wood panelling, plain plaster, or blurred bookshelves) with no posters, no certificates, no nameplates, and no wall art that could contain lettering.\r\n\r\nACCURACY: Do not include a gavel (not used in Indian courts). Avoid Western-only clichés unless clearly generic (e.g. generic scales as a small prop, not a poster).\r\n\r\nLIGHT: Soft daylight from a side window mixed with gentle indoor ambient light; moderate contrast; no strong lens flares, no cinematic spotlight, no neon glow.\r\n\r\nCAMERA: Shot like a real DSLR photo — 50mm or 85mm lens, eye level or slight overhead for desk scenes, shallow depth of field, crisp focus on the main subject, natural bokeh in the background.\r\n\r\nMATERIALS: Real wood grain, paper edge texture, fabric weave on robes (if any), subtle dust or wear on the desk — not plastic-perfect surfaces.\r\n\r\nCOLOR: Muted professional palette — navy, grey, off-white, warm wood, restrained gold accents only if subtle.\r\n\r\nFORBIDDEN: text, letters, captions, logos, watermarks, infographics, vector art, cartoon, glossy CGI, symmetrical “perfect” movie-poster posing, duplicated clone-like people, extra clocks, surreal architecture, or distorted signage.\r\n\r\nOutput: single photograph, realistic, high detail, natural noise, believable shadows."
+      }
+    ],
+    "default_image_prompt_id": "e43bc001-6214-41d5-8653-b36e497453e2",
+    "context_links": [],
+    "gsc_property_url": "",
+    "gsc_index_on_publish": true,
+    "default_wp_rest_base": "posts",
+    "default_wp_status": "draft",
+    "created_at": "2026-04-13 13:52:54"
+  }
+]

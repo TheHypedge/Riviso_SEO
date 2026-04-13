@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.example
+data/google_oauth.json
+.autoenv/
+.flask_session/
+.venv_datwin/
+articles.txt
+test.py
