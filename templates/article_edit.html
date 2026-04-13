@@ -143,7 +143,12 @@
                   Uses this project’s WordPress settings. Draft/Published updates this post’s status on the project list.
                 </div>
 
-                <form method="post" action="{{ url_for('wordpress_post_project', project_id=project.id, article_id=article.id) }}" id="wpPostForm">
+                <form
+                  method="post"
+                  action="{{ url_for('wordpress_post_project', project_id=project.id, article_id=article.id) }}"
+                  id="wpPostForm"
+                  data-no-loading
+                >
                   <input type="hidden" name="article_body" id="wpArticleBodyCopy" value="">
                   <input type="hidden" name="confirm_post_without_featured_image" id="confirmPostWithoutFeaturedImage" value="">
                   <div class="mb-3">
@@ -426,6 +431,7 @@
     {% endif %}
     <script type="application/json" id="saved-article-snapshot">{{ last.article|tojson }}</script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='page-loading.js') }}"></script>
     <script>
       (function () {
         var box = document.getElementById('articleBox');
@@ -524,6 +530,10 @@
               if (noFeaturedModalEl && window.bootstrap) {
                 window.bootstrap.Modal.getOrCreateInstance(noFeaturedModalEl).show();
               }
+              return;
+            }
+            if (typeof window.__appPageLoadingShow === 'function') {
+              window.__appPageLoadingShow('Posting to WordPress…');
             }
           });
         }
@@ -733,6 +743,5 @@
         });
       })();
     </script>
-    <script src="{{ url_for('static', filename='page-loading.js') }}"></script>
   </body>
 </html>

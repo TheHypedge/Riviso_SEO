@@ -36,7 +36,7 @@ from wordpress_module import (
 
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY")
 
 # Store sessions server-side so we can keep large generated articles.
 app.config.update(
@@ -543,6 +543,28 @@ def _parse_article_datetime(s: str) -> datetime | None:
     return None
 
 
+def _parse_schedule_times_json(raw: str) -> dict[str, str] | None:
+    """Parse JSON object of article_id -> datetime-local string from bulk schedule form."""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    try:
+        data = json.loads(s)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    out: dict[str, str] = {}
+    for k, v in data.items():
+        ks = str(k).strip()
+        if not ks or v is None:
+            continue
+        vs = str(v).strip()
+        if vs:
+            out[ks] = vs
+    return out or None
+
+
 def _parse_bulk_schedule_datetime(raw: str) -> datetime | None:
     """Parse datetime from bulk schedule form (datetime-local or stored format)."""
     s = (raw or "").strip().replace("T", " ", 1)
@@ -556,43 +578,11 @@ def _parse_bulk_schedule_datetime(raw: str) -> datetime | None:
     return None
 
 
-def _compute_evenly_spaced_datetimes(start: datetime, end: datetime, n: int) -> list[datetime]:
-    """
-    Spread n post times from start through end (inclusive endpoints when n > 1).
-    Matches: effective_interval ≈ (end - start) / max(n - 1, 1) between consecutive posts.
-    """
-    if n <= 0:
-        return []
-    if n == 1:
-        return [start.replace(microsecond=0)]
-    if end < start:
-        raise ValueError("End must be on or after start.")
-    span_sec = (end - start).total_seconds()
-    if span_sec <= 0:
-        return [start.replace(microsecond=0)] * n
-    out: list[datetime] = []
-    for i in range(n):
-        t = start + timedelta(seconds=span_sec * i / (n - 1))
-        out.append(t.replace(microsecond=0))
-    return out
-
-
 def _clamp_future_schedule_dt(dt: datetime) -> datetime:
     now = datetime.now().replace(microsecond=0)
     if dt < now:
         return now + timedelta(minutes=1)
     return dt.replace(microsecond=0)
-
-
-def _clamp_future_schedule_range(start: datetime, end: datetime) -> tuple[datetime, datetime]:
-    now = datetime.now().replace(microsecond=0)
-    if start < now:
-        start = now + timedelta(minutes=1)
-    if end < now:
-        end = start + timedelta(days=7)
-    if end < start:
-        end = start + timedelta(hours=1)
-    return start.replace(microsecond=0), end.replace(microsecond=0)
 
 
 def _bulk_schedule_thread_entry(project_id: str, ids: list[str], form_snapshot: dict) -> None:
@@ -610,6 +600,14 @@ def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict
     wp_st = (form_snapshot.get("schedule_wp_status") or "draft").strip().lower()
     if wp_st not in ("draft", "publish"):
         wp_st = "draft"
+
+    wp_types, _ = _wp_post_types_for_project(project)
+    allowed_bases = {t["rest_base"] for t in wp_types}
+    raw_schedule_rb = (form_snapshot.get("schedule_wp_rest_base") or "").strip()
+    if raw_schedule_rb:
+        schedule_rest_base = _normalize_wp_rest_base(raw_schedule_rb, allowed_bases)
+    else:
+        schedule_rest_base = _normalize_wp_rest_base(project.get("default_wp_rest_base"), allowed_bases)
 
     bulk_prompt = (form_snapshot.get("bulk_prompt_id") or "").strip()
     bulk_image = (form_snapshot.get("bulk_image_prompt_id") or "").strip()
@@ -697,26 +695,20 @@ def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict
             + (f"Skipped {skipped} (already posted, empty body, or missing featured image)." if skipped else "")
         )
 
+    times_map = _parse_schedule_times_json(form_snapshot.get("schedule_times_json") or "")
+    if not times_map:
+        return "Please set a date and time for each selected article."
     times: list[datetime] = []
-    if n_elig == 1:
-        raw_dt = form_snapshot.get("schedule_at") or ""
+    for t in eligible:
+        aid = (t.get("id") or "").strip()
+        title_hint = (t.get("title") or "").strip() or "Untitled"
+        raw_dt = times_map.get(aid)
+        if raw_dt is None:
+            return f"Missing schedule time for «{title_hint[:80]}»."
         dt = _parse_bulk_schedule_datetime(raw_dt)
         if not dt:
-            return "Please enter a valid date and time for scheduling."
-        dt = _clamp_future_schedule_dt(dt)
-        times = [dt]
-    else:
-        rs = form_snapshot.get("schedule_start") or ""
-        re_end = form_snapshot.get("schedule_end") or ""
-        start = _parse_bulk_schedule_datetime(rs)
-        end = _parse_bulk_schedule_datetime(re_end)
-        if not start or not end:
-            return "Please enter both starting and ending date and time."
-        start, end = _clamp_future_schedule_range(start, end)
-        try:
-            times = _compute_evenly_spaced_datetimes(start, end, n_elig)
-        except ValueError as e:
-            return str(e)
+            return f"Invalid date and time for «{title_hint[:80]}»."
+        times.append(_clamp_future_schedule_dt(dt))
 
     batch_id = str(uuid.uuid4())
     arts = _load_articles()
@@ -731,6 +723,7 @@ def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict
             {
                 "wp_scheduled_at": sched_str,
                 "wp_schedule_wp_status": wp_st,
+                "wp_rest_base": schedule_rest_base,
                 "wp_schedule_error": "",
                 "wp_schedule_batch_id": batch_id,
                 "wp_schedule_batch_index": i,
@@ -739,16 +732,7 @@ def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict
         )
     _save_articles(arts)
 
-    span_days = 0.0
-    if n_elig > 1 and times:
-        span_days = (times[-1] - times[0]).total_seconds() / 86400.0
     msg = f"Scheduled {n_elig} article(s) for automatic WordPress posting."
-    if n_elig > 1:
-        interval_h = (times[-1] - times[0]).total_seconds() / 3600.0 / max(n_elig - 1, 1)
-        msg += (
-            f" Spacing: ~{interval_h:.2f} hours between posts over ~{span_days:.2f} day(s) "
-            f"({n_elig} posts in this batch)."
-        )
     if skipped:
         msg += f" Skipped {skipped} (already posted, empty body, or missing featured image)."
     app.logger.info(msg)
@@ -1934,6 +1918,7 @@ def project_detail(project_id: str):
         bulk_schedule_meta.append(
             {
                 "id": aid,
+                "created_at": (a.get("created_at") or "").strip(),
                 "hasBody": bool((a.get("article") or "").strip()),
                 "hasImage": bool(os.path.isfile(_article_featured_image_path(aid))),
             }
@@ -2374,11 +2359,10 @@ def bulk_articles_action(project_id: str):
 
         form_snapshot = {
             "schedule_wp_status": wp_st,
+            "schedule_wp_rest_base": (request.form.get("schedule_wp_rest_base") or "").strip(),
             "bulk_prompt_id": (request.form.get("bulk_prompt_id") or "").strip(),
             "bulk_image_prompt_id": (request.form.get("bulk_image_prompt_id") or "").strip(),
-            "schedule_at": request.form.get("schedule_at") or "",
-            "schedule_start": request.form.get("schedule_start") or "",
-            "schedule_end": request.form.get("schedule_end") or "",
+            "schedule_times_json": request.form.get("schedule_times_json") or "",
         }
         threading.Thread(
             target=_bulk_schedule_thread_entry,

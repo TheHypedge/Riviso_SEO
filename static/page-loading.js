@@ -2,6 +2,9 @@
  * Global loading overlay: full-page navigations (form submit / form.submit()),
  * and in-flight fetch() calls (e.g. save via AJAX).
  * Opt out: add data-no-loading to a <form>, or id="generateArticleForm" (custom overlay).
+ * wpPostForm (article edit) uses data-no-loading: submit may be prevented after unsaved / no-image
+ * checks; the capture-phase listener would show this overlay before those handlers run. After checks
+ * pass, article_edit calls __appPageLoadingShow('Posting to WordPress…').
  */
 (function () {
   if (window.__appPageLoadingInit) return;
@@ -32,16 +35,21 @@
     document.body.classList.add('app-page-loading-active');
   }
 
+  var DEFAULT_LOADING_TEXT = 'Loading…';
+
   function hide() {
     if (!overlay) return;
     overlay.classList.remove('is-visible');
     document.body.classList.remove('app-page-loading-active');
+    var p = overlay.querySelector('.app-page-loading-text');
+    if (p) p.textContent = DEFAULT_LOADING_TEXT;
   }
 
   function shouldSkipForm(form) {
     if (!form || form.tagName !== 'FORM') return true;
     if (form.hasAttribute('data-no-loading')) return true;
     if (form.id === 'generateArticleForm') return true;
+    if (form.id === 'wpPostForm') return true;
     return false;
   }
 
@@ -82,4 +90,19 @@
     hide();
     if (ev.persisted) hide();
   });
+
+  /**
+   * For forms that opt out of the capture-phase submit hook (e.g. wpPostForm): call this only
+   * after you know the submit will proceed (no preventDefault for unsaved / confirm dialogs).
+   * @param {string} [message] - Optional label (default "Loading…").
+   */
+  window.__appPageLoadingShow = function (message) {
+    show();
+    if (overlay && message) {
+      var p = overlay.querySelector('.app-page-loading-text');
+      if (p) p.textContent = message;
+    }
+  };
+
+  window.__appPageLoadingHide = hide;
 })();

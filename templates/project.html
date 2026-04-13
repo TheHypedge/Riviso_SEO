@@ -586,10 +586,9 @@
               <input type="hidden" name="filter_status" value="{{ status_filter|default('') }}">
               <input type="hidden" name="action" id="bulkActionInput" value="">
               <input type="hidden" name="new_status" id="bulkNewStatusInput" value="">
-              <input type="hidden" name="schedule_at" id="bulkScheduleAtInput" value="">
-              <input type="hidden" name="schedule_start" id="bulkScheduleStartHidden" value="">
-              <input type="hidden" name="schedule_end" id="bulkScheduleEndHidden" value="">
+              <input type="hidden" name="schedule_times_json" id="bulkScheduleTimesJsonInput" value="">
               <input type="hidden" name="schedule_wp_status" id="bulkScheduleWpStatusInput" value="">
+              <input type="hidden" name="schedule_wp_rest_base" id="bulkScheduleWpRestBaseHidden" value="">
               <input type="hidden" name="bulk_prompt_id" id="bulkPromptIdHidden" value="">
               <input type="hidden" name="bulk_image_prompt_id" id="bulkImagePromptIdHidden" value="">
             </form>
@@ -1026,7 +1025,15 @@
       </div>
     </div>
 
-    <div class="modal fade" id="bulkScheduleModal" tabindex="-1" aria-labelledby="bulkScheduleModalLabel" aria-hidden="true">
+    <div
+      class="modal fade"
+      id="bulkScheduleModal"
+      tabindex="-1"
+      aria-labelledby="bulkScheduleModalLabel"
+      aria-hidden="true"
+      data-default-wp-status="{{ project.default_wp_status or 'draft' }}"
+      data-default-wp-rest-base="{{ project.default_wp_rest_base or 'posts' }}"
+    >
       <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content">
           <div class="modal-header">
@@ -1074,33 +1081,38 @@
               </div>
               {% endif %}
             </div>
-            <div id="bulkScheduleSingleWrap" class="mb-3">
-              <label class="form-label" for="bulkScheduleDatetime">Date and time</label>
-              <input class="form-control" type="datetime-local" id="bulkScheduleDatetime">
+            <div id="bulkSchedulePerArticleWrap" class="mb-3">
+              <p class="small text-body-secondary mb-2" id="bulkSchedulePerArticleHint"></p>
+              <div id="bulkSchedulePerArticleList" class="d-flex flex-column gap-2" style="max-height: 50vh; overflow-y: auto;"></div>
             </div>
-            <div id="bulkScheduleRangeWrap" class="d-none mb-3">
-              <p class="small text-body-secondary mb-2">
-                Posts are spaced evenly from <span class="fw-medium">start</span> through <span class="fw-medium">end</span>
-                (same batch order as the table: oldest added first). If the app restarts, the next article in the batch posts when its time is due.
-              </p>
-              <div class="row g-2">
-                <div class="col-md-6">
-                  <label class="form-label" for="bulkScheduleStart">Starting date and time</label>
-                  <input class="form-control" type="datetime-local" id="bulkScheduleStart">
-                </div>
-                <div class="col-md-6">
-                  <label class="form-label" for="bulkScheduleEnd">End date and time</label>
-                  <input class="form-control" type="datetime-local" id="bulkScheduleEnd">
-                </div>
+            <div class="row g-2 mb-2">
+              <div class="col-12 col-md-6">
+                <label class="form-label" for="bulkScheduleWpStatus">Post status</label>
+                <select class="form-select" id="bulkScheduleWpStatus" aria-label="WordPress post status for scheduled posts">
+                  <option value="draft" {% if (project.default_wp_status or 'draft') == 'draft' %}selected{% endif %}>Draft</option>
+                  <option value="publish" {% if (project.default_wp_status or 'draft') == 'publish' %}selected{% endif %}>Published</option>
+                </select>
+              </div>
+              <div class="col-12 col-md-6">
+                <label class="form-label" for="bulkScheduleWpRestBase">Post type</label>
+                <select class="form-select" id="bulkScheduleWpRestBase" aria-label="WordPress post type for scheduled posts">
+                  {% for pt in wp_post_types|default([]) %}
+                  <option value="{{ pt.rest_base }}" {% if pt.rest_base == (project.default_wp_rest_base or 'posts') %}selected{% endif %}>{{ pt.name }} ({{ pt.rest_base }})</option>
+                  {% endfor %}
+                </select>
+                {% if wp_post_types_error %}
+                <div class="form-text text-warning small">Could not refresh types from WordPress: {{ wp_post_types_error }}. Showing fallback.</div>
+                {% else %}
+                <div class="form-text small">Loaded from <code class="small">/wp/v2/types</code>.</div>
+                {% endif %}
               </div>
             </div>
-            <div class="mb-0">
-              <label class="form-label" for="bulkScheduleWpStatus">Post status</label>
-              <select class="form-select" id="bulkScheduleWpStatus">
-                <option value="draft">Draft</option>
-                <option value="publish">Published</option>
-              </select>
-            </div>
+            <p class="form-text small mb-1">
+              Post status and post type use the same values as <span class="fw-semibold">WordPress defaults</span> when you open this dialog. Change them here only for this schedule.
+            </p>
+            <p class="form-text small mb-0">
+              <button type="button" class="btn btn-link btn-sm p-0 align-baseline" id="bulkScheduleResetWpDefaults">Reset to WordPress defaults</button>
+            </p>
           </div>
           <div class="modal-footer">
             <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
@@ -1393,10 +1405,52 @@
 
         function setBulkScheduleInputsMin() {
           var minVal = toDatetimeLocalValue(new Date());
-          ['bulkScheduleDatetime', 'bulkScheduleStart', 'bulkScheduleEnd'].forEach(function (id) {
-            var el = document.getElementById(id);
-            if (el) el.setAttribute('min', minVal);
+          var list = document.getElementById('bulkSchedulePerArticleList');
+          if (list) {
+            list.querySelectorAll('input[type="datetime-local"].bulk-schedule-row-dt').forEach(function (el) {
+              el.setAttribute('min', minVal);
+            });
+          }
+        }
+
+        function bulkScheduleSortSelectedIds(ids) {
+          return ids.slice().sort(function (a, b) {
+            var ma = bulkScheduleMetaMap[a] || {};
+            var mb = bulkScheduleMetaMap[b] || {};
+            var ca = ma.created_at || '';
+            var cb = mb.created_at || '';
+            if (ca !== cb) return ca < cb ? -1 : ca > cb ? 1 : 0;
+            return a < b ? -1 : a > b ? 1 : 0;
           });
+        }
+
+        function articleTitleFromTableRow(tr) {
+          if (!tr) return '(Untitled)';
+          var el = tr.querySelector('td .fw-medium');
+          return el && el.textContent ? el.textContent.trim() : '(Untitled)';
+        }
+
+        function applyBulkScheduleWpDefaults() {
+          var modal = document.getElementById('bulkScheduleModal');
+          if (!modal) return;
+          var st = (modal.getAttribute('data-default-wp-status') || 'draft').toLowerCase();
+          if (st !== 'draft' && st !== 'publish') st = 'draft';
+          var rb = (modal.getAttribute('data-default-wp-rest-base') || 'posts').trim() || 'posts';
+          var stSel = document.getElementById('bulkScheduleWpStatus');
+          var rbSel = document.getElementById('bulkScheduleWpRestBase');
+          if (stSel) stSel.value = st;
+          if (rbSel) {
+            var found = false;
+            var j;
+            for (j = 0; j < rbSel.options.length; j++) {
+              if (rbSel.options[j].value === rb) {
+                rbSel.selectedIndex = j;
+                found = true;
+                break;
+              }
+            }
+            if (!found && rbSel.options.length) rbSel.selectedIndex = 0;
+          }
         }
 
         function bulkScheduleNeedsGeneration() {
@@ -1627,36 +1681,65 @@
         }
 
         function syncBulkScheduleModal() {
-          setBulkScheduleInputsMin();
           var n = selectedBoxes().length;
           var intro = document.getElementById('bulkScheduleIntro');
-          var singleWrap = document.getElementById('bulkScheduleSingleWrap');
-          var rangeWrap = document.getElementById('bulkScheduleRangeWrap');
-          var dtIn = document.getElementById('bulkScheduleDatetime');
-          var startIn = document.getElementById('bulkScheduleStart');
-          var endIn = document.getElementById('bulkScheduleEnd');
+          var hint = document.getElementById('bulkSchedulePerArticleHint');
+          var list = document.getElementById('bulkSchedulePerArticleList');
           updateBulkSchedulePromptVisibility();
           if (intro) {
-            if (n <= 1) {
-              intro.textContent = 'One article: choose the exact date and time (server time). Requires WordPress credentials and a featured image if the project uses image prompts.';
-            } else {
-              intro.textContent = n + ' articles: set starting and ending date and time. Posts are spaced evenly between them (oldest added first). If the app stops, each remaining post runs when its time is due, in batch order. Requires WordPress credentials and a featured image if the project uses image prompts.';
+            intro.textContent =
+              'Set the date and time for each selected article (server time). Rows are ordered oldest-added first (same order used when posting). If the app stops, remaining posts still run when their time is due. Requires WordPress credentials and a featured image if the project uses image prompts.';
+          }
+          if (hint) {
+            hint.textContent =
+              n === 1
+                ? 'Pick when this post should go to WordPress.'
+                : n + ' articles — one date and time per row (defaults are one hour apart; change as needed).';
+          }
+          if (list) {
+            list.innerHTML = '';
+            var ids = selectedBoxes().map(function (cb) {
+              return cb.value;
+            });
+            ids = bulkScheduleSortSelectedIds(ids);
+            var base = new Date(Date.now() + 5 * 60 * 1000);
+            for (var i = 0; i < ids.length; i++) {
+              var id = ids[i];
+              var tr = document.querySelector('tr[data-article-id="' + id + '"]');
+              var title = articleTitleFromTableRow(tr);
+              var row = document.createElement('div');
+              row.className = 'row g-2 align-items-end';
+              var colTitle = document.createElement('div');
+              colTitle.className = 'col-12 col-md-6';
+              var lbl = document.createElement('label');
+              lbl.className = 'form-label small mb-1';
+              lbl.setAttribute('for', 'bulkSchedDt_' + id);
+              lbl.textContent = title;
+              colTitle.appendChild(lbl);
+              var colDt = document.createElement('div');
+              colDt.className = 'col-12 col-md-6';
+              var inp = document.createElement('input');
+              inp.type = 'datetime-local';
+              inp.id = 'bulkSchedDt_' + id;
+              inp.className = 'form-control form-control-sm bulk-schedule-row-dt';
+              inp.setAttribute('data-article-id', id);
+              var d = new Date(base.getTime() + i * 60 * 60 * 1000);
+              inp.value = toDatetimeLocalValue(d);
+              colDt.appendChild(inp);
+              row.appendChild(colTitle);
+              row.appendChild(colDt);
+              list.appendChild(row);
             }
           }
-          if (singleWrap && rangeWrap) {
-            if (n <= 1) {
-              singleWrap.classList.remove('d-none');
-              rangeWrap.classList.add('d-none');
-            } else {
-              singleWrap.classList.add('d-none');
-              rangeWrap.classList.remove('d-none');
-            }
-          }
-          var t = new Date(Date.now() + 5 * 60 * 1000);
-          var tEnd = new Date(t.getTime() + 7 * 24 * 60 * 60 * 1000);
-          if (dtIn) dtIn.value = toDatetimeLocalValue(t);
-          if (startIn) startIn.value = toDatetimeLocalValue(t);
-          if (endIn) endIn.value = toDatetimeLocalValue(tEnd);
+          applyBulkScheduleWpDefaults();
+          setBulkScheduleInputsMin();
+        }
+
+        var bulkScheduleResetWpBtn = document.getElementById('bulkScheduleResetWpDefaults');
+        if (bulkScheduleResetWpBtn) {
+          bulkScheduleResetWpBtn.addEventListener('click', function () {
+            applyBulkScheduleWpDefaults();
+          });
         }
 
         var bulkScheduleModalEl = document.getElementById('bulkScheduleModal');
@@ -1725,18 +1808,16 @@
               );
               return;
             }
-            var n = selectedBoxes().length;
             var wpSel = document.getElementById('bulkScheduleWpStatus');
             var ai = document.getElementById('bulkActionInput');
-            var sat = document.getElementById('bulkScheduleAtInput');
-            var ssh = document.getElementById('bulkScheduleStartHidden');
-            var seh = document.getElementById('bulkScheduleEndHidden');
             var swp = document.getElementById('bulkScheduleWpStatusInput');
-            var dtIn = document.getElementById('bulkScheduleDatetime');
-            var startIn = document.getElementById('bulkScheduleStart');
-            var endIn = document.getElementById('bulkScheduleEnd');
+            var timesHid = document.getElementById('bulkScheduleTimesJsonInput');
+            var list = document.getElementById('bulkSchedulePerArticleList');
             if (ai) ai.value = 'schedule';
             if (swp && wpSel) swp.value = wpSel.value;
+            var wpRbSel = document.getElementById('bulkScheduleWpRestBase');
+            var wpRbHid = document.getElementById('bulkScheduleWpRestBaseHidden');
+            if (wpRbHid && wpRbSel) wpRbHid.value = wpRbSel.value;
             var needGen = bulkScheduleNeedsGeneration();
             var bpSel = document.getElementById('bulkScheduleBulkPromptSelect');
             var bph = document.getElementById('bulkPromptIdHidden');
@@ -1744,21 +1825,21 @@
             var biSel = document.getElementById('bulkScheduleBulkImagePromptSelect');
             var bih = document.getElementById('bulkImagePromptIdHidden');
             if (bih) bih.value = needGen && biSel ? bulkPromptValueForSubmit(biSel) : '';
-            if (n <= 1) {
-              if (!dtIn || !dtIn.value) return;
-              if (sat) sat.value = dtIn.value;
-              if (ssh) ssh.value = '';
-              if (seh) seh.value = '';
-            } else {
-              if (!startIn || !endIn || !startIn.value || !endIn.value) return;
-              if (new Date(startIn.value).getTime() > new Date(endIn.value).getTime()) {
-                window.alert('End must be on or after the start.');
+            var map = {};
+            if (list) {
+              list.querySelectorAll('.bulk-schedule-row-dt').forEach(function (inp) {
+                var aid = inp.getAttribute('data-article-id');
+                if (aid && inp.value) map[aid] = inp.value;
+              });
+            }
+            var boxes = selectedBoxes();
+            for (var bi = 0; bi < boxes.length; bi++) {
+              if (!map[boxes[bi].value]) {
+                window.alert('Please set a date and time for every selected article.');
                 return;
               }
-              if (sat) sat.value = '';
-              if (ssh) ssh.value = startIn.value;
-              if (seh) seh.value = endIn.value;
             }
+            if (timesHid) timesHid.value = JSON.stringify(map);
             var m = document.getElementById('bulkScheduleModal');
             if (m && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(m).hide();
             form.setAttribute('data-no-loading', '');

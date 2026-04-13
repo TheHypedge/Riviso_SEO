@@ -9,3 +9,4 @@ data/google_oauth.json
 .venv_datwin/
 articles.txt
 test.py
+data/
