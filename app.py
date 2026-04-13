@@ -41,7 +41,7 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-key-change-me")
 # Store sessions server-side so we can keep large generated articles.
 app.config.update(
     SESSION_TYPE="filesystem",
-    SESSION_FILE_DIR=os.path.join(os.path.dirname(__file__), ".flask_session"),
+    # SESSION_FILE_DIR=os.path.join(os.path.dirname(__file__), ".flask_session"),
     SESSION_PERMANENT=False,
     SESSION_USE_SIGNER=True,
 )
@@ -3420,5 +3420,5 @@ _start_wp_schedule_scheduler()
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True, threaded=True)
+    app.run()
 
