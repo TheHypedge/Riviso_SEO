@@ -2554,8 +2554,9 @@ def _generate_article_content_core(
     image_err: str | None = None
 
     try:
-        max_w = 3 if (run_image and interpolated_image_prompt) else 2
-        with ThreadPoolExecutor(max_workers=max_w) as ex:
+        # Keep peak memory low on small instances (e.g. Render free/starter):
+        # generate article + yoast in parallel, but run image generation after.
+        with ThreadPoolExecutor(max_workers=2) as ex:
             fut_article = ex.submit(
                 _generate_article_markdown,
                 title,
@@ -2572,18 +2573,16 @@ def _generate_article_content_core(
                 website_context_url=site_url,
                 focus_keyphrase_preset=fk_preset,
             )
-            fut_image = None
-            if run_image and interpolated_image_prompt:
-                fut_image = ex.submit(_generate_featured_image_png_bytes, interpolated_image_prompt)
             article_md = fut_article.result()
             yoast = fut_yoast.result()
-            if fut_image:
-                try:
-                    image_bytes = fut_image.result()
-                except Exception as e:
-                    image_err = str(e)
     except Exception as e:
         return False, str(e), None
+
+    if run_image and interpolated_image_prompt:
+        try:
+            image_bytes = _generate_featured_image_png_bytes(interpolated_image_prompt)
+        except Exception as e:
+            image_err = str(e)
 
     gen_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     fi_time = ""
