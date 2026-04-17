@@ -1,0 +1,31 @@
+{# Filter & export — compact horizontal bar #}
+{% if (article_count_total|default(0)) > 0 %}
+  <section class="app-dash-section mb-4" aria-labelledby="filter-export-heading">
+    <div class="app-card app-card--elevated app-filter-bar-card p-4">
+      <h2 id="filter-export-heading" class="h6 mb-3">Filter &amp; export</h2>
+      <form method="get" action="{{ url_for('project_detail', project_id=project.id) }}" class="app-filter-bar row g-2 g-md-3 align-items-end">
+        {% if status_filter|default('') %}
+          <input type="hidden" name="status" value="{{ status_filter }}">
+        {% endif %}
+        <div class="col-6 col-md-auto flex-grow-1 flex-md-grow-0" style="min-width: 9rem;">
+          <label class="form-label small fw-medium mb-1" for="filterFrom">Date from</label>
+          <input class="form-control form-control-sm app-form-control" type="date" id="filterFrom" name="date_from" value="{{ date_from|default('') }}">
+        </div>
+        <div class="col-6 col-md-auto flex-grow-1 flex-md-grow-0" style="min-width: 9rem;">
+          <label class="form-label small fw-medium mb-1" for="filterTo">Date to</label>
+          <input class="form-control form-control-sm app-form-control" type="date" id="filterTo" name="date_to" value="{{ date_to|default('') }}">
+        </div>
+        <div class="col-12 col-md-auto d-flex flex-wrap gap-2">
+          <button type="submit" class="btn btn-primary btn-sm px-4">Apply filter</button>
+          <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('export_project_articles', project_id=project.id, date_from=date_from|default(''), date_to=date_to|default(''), status=status_filter|default('')) }}">Export</a>
+        </div>
+        {% if date_from|default('') or date_to|default('') or status_filter|default('') %}
+          <div class="col-12">
+            <a class="small" href="{{ url_for('project_detail', project_id=project.id) }}">Clear filters</a>
+          </div>
+        {% endif %}
+      </form>
+      <p class="form-text small mb-0 mt-2">Uses <strong>Posted</strong> when set; otherwise <strong>Added</strong>.</p>
+    </div>
+  </section>
+{% endif %}

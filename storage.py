@@ -1,0 +1,494 @@
+"""MongoDB-backed persistence.
+
+All project/article data is read and written here only (MongoDB is the source of truth).
+Do not load or save `data/projects.json` / `data/articles.json` from app routes — use
+`scripts/import_json_to_db.py` or opt-in startup import via AUTO_IMPORT_JSON=1.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import threading
+from typing import Any
+
+from database import get_db, init_db
+
+_db_write_lock = threading.Lock()
+_storage_mode: str = "mongo"  # "mongo" | "json"
+_storage_init_error: str | None = None
+
+
+def _data_path(filename: str) -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(here, "data", filename)
+
+
+def _load_json_list(filename: str) -> list[dict[str, Any]]:
+    path = _data_path(filename)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+        return []
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+
+
+def storage_mode() -> str:
+    return _storage_mode
+
+
+def storage_init_error() -> str | None:
+    return _storage_init_error
+
+
+def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
+    pid = (d.get("id") or "").strip()
+    if not pid:
+        raise ValueError("project id is required")
+    return {
+        "id": pid,
+        "owner_user_id": (d.get("owner_user_id") or "").strip(),
+        "name": (d.get("name") or "")[:500],
+        "website_url": (d.get("website_url") or "")[:2048],
+        "wp_site_url": (d.get("wp_site_url") or "")[:2048] or "",
+        "wp_username": (d.get("wp_username") or "")[:500],
+        "wp_app_password": (d.get("wp_app_password") or "")[:500],
+        "wp_category_ids": (d.get("wp_category_ids") or "")[:500],
+        "prompts": list(d.get("prompts") or []),
+        "default_prompt_id": (d.get("default_prompt_id") or "").strip(),
+        "image_prompts": list(d.get("image_prompts") or []),
+        "default_image_prompt_id": (d.get("default_image_prompt_id") or "").strip(),
+        "image_style": (d.get("image_style") or "semi_real")[:32],
+        "optimize_image_prompt": bool(d.get("optimize_image_prompt", True)),
+        "context_links": list(d.get("context_links") or []),
+        "gsc_property_url": (d.get("gsc_property_url") or "")[:2048],
+        "gsc_index_on_publish": bool(d.get("gsc_index_on_publish", True)),
+        "default_wp_rest_base": (d.get("default_wp_rest_base") or "")[:200],
+        "default_wp_status": (d.get("default_wp_status") or "")[:32],
+        "created_at": (d.get("created_at") or "")[:64],
+    }
+
+
+def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
+    uid = (d.get("id") or "").strip()
+    if not uid:
+        raise ValueError("user id is required")
+    email = (d.get("email") or "").strip().lower()
+    if not email:
+        raise ValueError("user email is required")
+    return {
+        "id": uid,
+        "email": email[:500],
+        "password_hash": (d.get("password_hash") or "").strip(),
+        "role": ((d.get("role") or "user").strip().lower()[:32]) or "user",
+        "created_at": (d.get("created_at") or "")[:64],
+    }
+
+
+def get_user_by_id(user_id: str) -> dict[str, Any] | None:
+    if _storage_mode != "mongo":
+        return None
+    uid = (user_id or "").strip()
+    if not uid:
+        return None
+    doc = get_db().users.find_one({"id": uid})
+    if not doc:
+        return None
+    # stored shape is already normalized-like; just return relevant keys
+    return {
+        "id": (doc.get("id") or "").strip(),
+        "email": (doc.get("email") or "").strip(),
+        "password_hash": (doc.get("password_hash") or "").strip(),
+        "role": (doc.get("role") or "user").strip().lower(),
+        "created_at": (doc.get("created_at") or "").strip(),
+    }
+
+
+def get_user_by_email(email: str) -> dict[str, Any] | None:
+    if _storage_mode != "mongo":
+        return None
+    em = (email or "").strip().lower()
+    if not em:
+        return None
+    doc = get_db().users.find_one({"email": em})
+    if not doc:
+        return None
+    return {
+        "id": (doc.get("id") or "").strip(),
+        "email": (doc.get("email") or "").strip(),
+        "password_hash": (doc.get("password_hash") or "").strip(),
+        "role": (doc.get("role") or "user").strip().lower(),
+        "created_at": (doc.get("created_at") or "").strip(),
+    }
+
+
+def insert_user(user: dict[str, Any]) -> None:
+    if _storage_mode != "mongo":
+        raise RuntimeError("User storage requires MongoDB")
+    norm = _normalize_user_dict(user)
+    doc = {**norm, "_id": norm["id"]}
+    with _db_write_lock:
+        res = get_db().users.insert_one(doc)
+        if not res.acknowledged:
+            raise RuntimeError("MongoDB insert_user was not acknowledged")
+
+
+def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
+    aid = (d.get("id") or "").strip()
+    pid = (d.get("project_id") or "").strip()
+    if not aid or not pid:
+        raise ValueError("article id and project_id are required")
+    wp = d.get("wp_post_id")
+    if wp is not None and wp != "":
+        try:
+            wp_id = int(wp)
+        except (TypeError, ValueError):
+            wp_id = None
+    else:
+        wp_id = None
+    return {
+        "id": aid,
+        "project_id": pid,
+        "title": (d.get("title") or "")[:500],
+        "keywords": list(d.get("keywords") or []),
+        "status": (d.get("status") or "pending")[:32],
+        "article": d.get("article") or "",
+        "focus_keyphrase": (d.get("focus_keyphrase") or "")[:500],
+        "meta_title": (d.get("meta_title") or "")[:500],
+        "meta_description": (d.get("meta_description") or "")[:2000],
+        "generated_at": (d.get("generated_at") or "")[:64],
+        "posted_at": (d.get("posted_at") or "")[:64],
+        "created_at": (d.get("created_at") or "")[:64],
+        "featured_image_generated_at": (d.get("featured_image_generated_at") or "")[:64],
+        "featured_image_prompt_id": (d.get("featured_image_prompt_id") or "")[:36],
+        "featured_image_source": (d.get("featured_image_source") or "")[:32],
+        "featured_image_prompt_final": d.get("featured_image_prompt_final") or "",
+        "featured_image_prompt_raw": d.get("featured_image_prompt_raw") or "",
+        "featured_image_model": (d.get("featured_image_model") or "")[:200],
+        "featured_image_quality": (d.get("featured_image_quality") or "")[:64],
+        "featured_image_size": (d.get("featured_image_size") or "")[:32],
+        "featured_image_optimizer_model": (d.get("featured_image_optimizer_model") or "")[:200],
+        "featured_image_prompt_optimizer_error": d.get("featured_image_prompt_optimizer_error") or "",
+        "wp_post_id": wp_id,
+        "wp_link": (d.get("wp_link") or "")[:2048],
+        "wp_rest_base": (d.get("wp_rest_base") or "")[:200],
+        "wp_last_wp_status": (d.get("wp_last_wp_status") or "")[:32],
+        "wp_scheduled_at": (d.get("wp_scheduled_at") or "")[:64],
+        "wp_schedule_wp_status": (d.get("wp_schedule_wp_status") or "")[:32],
+        "wp_schedule_error": d.get("wp_schedule_error") or "",
+        "wp_schedule_batch_id": (d.get("wp_schedule_batch_id") or "")[:36],
+        "wp_schedule_batch_index": str(d.get("wp_schedule_batch_index") or "")[:32],
+        "wp_schedule_batch_total": str(d.get("wp_schedule_batch_total") or "")[:32],
+        "gsc_status": (d.get("gsc_status") or "pending")[:32],
+    }
+
+
+def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> None:
+    for k, v in updates.items():
+        if k == "prompts":
+            p["prompts"] = v
+        elif k == "image_prompts":
+            p["image_prompts"] = v
+        elif k == "context_links":
+            p["context_links"] = v
+        elif k in p or k in (
+            "id",
+            "name",
+            "website_url",
+            "wp_site_url",
+            "wp_username",
+            "wp_app_password",
+            "wp_category_ids",
+            "default_prompt_id",
+            "default_image_prompt_id",
+            "image_style",
+            "optimize_image_prompt",
+            "gsc_property_url",
+            "gsc_index_on_publish",
+            "default_wp_rest_base",
+            "default_wp_status",
+            "created_at",
+        ):
+            p[k] = v
+
+
+def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> None:
+    for k, v in updates.items():
+        if k == "keywords":
+            a["keywords"] = v
+        elif k == "wp_post_id":
+            if v is not None and v != "":
+                try:
+                    a["wp_post_id"] = int(v)
+                except (TypeError, ValueError):
+                    a["wp_post_id"] = None
+            else:
+                a["wp_post_id"] = None
+        elif k in ("wp_schedule_batch_index", "wp_schedule_batch_total"):
+            a[k] = str(v) if v is not None and v != "" else ""
+        elif k in a or k in (
+            "id",
+            "project_id",
+            "title",
+            "status",
+            "article",
+            "focus_keyphrase",
+            "meta_title",
+            "meta_description",
+            "generated_at",
+            "posted_at",
+            "created_at",
+            "featured_image_generated_at",
+            "featured_image_prompt_id",
+            "featured_image_source",
+            "featured_image_prompt_final",
+            "featured_image_prompt_raw",
+            "featured_image_model",
+            "featured_image_quality",
+            "featured_image_size",
+            "featured_image_optimizer_model",
+            "featured_image_prompt_optimizer_error",
+            "wp_link",
+            "wp_rest_base",
+            "wp_last_wp_status",
+            "wp_scheduled_at",
+            "wp_schedule_wp_status",
+            "wp_schedule_error",
+            "wp_schedule_batch_id",
+            "gsc_status",
+        ):
+            a[k] = v
+
+
+def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
+    if not doc:
+        return {}
+    d = dict(doc)
+    d.pop("_id", None)
+    return {
+        "id": d.get("id") or "",
+        "name": d.get("name") or "",
+        "website_url": d.get("website_url") or "",
+        "wp_site_url": d.get("wp_site_url") or "",
+        "wp_username": d.get("wp_username") or "",
+        "wp_app_password": d.get("wp_app_password") or "",
+        "wp_category_ids": d.get("wp_category_ids") or "",
+        "prompts": list(d.get("prompts") or []),
+        "default_prompt_id": d.get("default_prompt_id") or "",
+        "image_prompts": list(d.get("image_prompts") or []),
+        "default_image_prompt_id": d.get("default_image_prompt_id") or "",
+        "image_style": d.get("image_style") or "semi_real",
+        "optimize_image_prompt": bool(d.get("optimize_image_prompt", True)),
+        "context_links": list(d.get("context_links") or []),
+        "gsc_property_url": d.get("gsc_property_url") or "",
+        "gsc_index_on_publish": bool(d.get("gsc_index_on_publish", True)),
+        "default_wp_rest_base": d.get("default_wp_rest_base") or "",
+        "default_wp_status": d.get("default_wp_status") or "",
+        "created_at": d.get("created_at") or "",
+    }
+
+
+def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
+    if not doc:
+        return {}
+    d = dict(doc)
+    d.pop("_id", None)
+    wp = d.get("wp_post_id")
+    if isinstance(wp, int):
+        wp_out: int | None = wp
+    elif wp is not None and wp != "":
+        try:
+            wp_out = int(wp)
+        except (TypeError, ValueError):
+            wp_out = None
+    else:
+        wp_out = None
+    return {
+        "id": d.get("id") or "",
+        "project_id": d.get("project_id") or "",
+        "title": d.get("title") or "",
+        "keywords": list(d.get("keywords") or []),
+        "status": d.get("status") or "pending",
+        "article": d.get("article") or "",
+        "focus_keyphrase": d.get("focus_keyphrase") or "",
+        "meta_title": d.get("meta_title") or "",
+        "meta_description": d.get("meta_description") or "",
+        "generated_at": d.get("generated_at") or "",
+        "posted_at": d.get("posted_at") or "",
+        "created_at": d.get("created_at") or "",
+        "featured_image_generated_at": d.get("featured_image_generated_at") or "",
+        "featured_image_prompt_id": d.get("featured_image_prompt_id") or "",
+        "featured_image_source": d.get("featured_image_source") or "",
+        "featured_image_prompt_final": d.get("featured_image_prompt_final") or "",
+        "featured_image_prompt_raw": d.get("featured_image_prompt_raw") or "",
+        "featured_image_model": d.get("featured_image_model") or "",
+        "featured_image_quality": d.get("featured_image_quality") or "",
+        "featured_image_size": d.get("featured_image_size") or "",
+        "featured_image_optimizer_model": d.get("featured_image_optimizer_model") or "",
+        "featured_image_prompt_optimizer_error": d.get("featured_image_prompt_optimizer_error") or "",
+        "wp_post_id": wp_out,
+        "wp_link": d.get("wp_link") or "",
+        "wp_rest_base": d.get("wp_rest_base") or "",
+        "wp_last_wp_status": d.get("wp_last_wp_status") or "",
+        "wp_scheduled_at": d.get("wp_scheduled_at") or "",
+        "wp_schedule_wp_status": d.get("wp_schedule_wp_status") or "",
+        "wp_schedule_error": d.get("wp_schedule_error") or "",
+        "wp_schedule_batch_id": d.get("wp_schedule_batch_id") or "",
+        "wp_schedule_batch_index": d.get("wp_schedule_batch_index") or "",
+        "wp_schedule_batch_total": d.get("wp_schedule_batch_total") or "",
+        "gsc_status": d.get("gsc_status") or "pending",
+    }
+
+
+def load_projects() -> list[dict[str, Any]]:
+    if _storage_mode != "mongo":
+        return [_normalize_project_dict(p) for p in _load_json_list("projects.json")]
+    db = get_db()
+    cur = db.projects.find({}).sort("created_at", 1)
+    return [_mongo_doc_to_project(doc) for doc in cur]
+
+
+def load_articles() -> list[dict[str, Any]]:
+    if _storage_mode != "mongo":
+        return [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
+    db = get_db()
+    return [_mongo_doc_to_article(doc) for doc in db.articles.find({})]
+
+
+def save_projects_replace_all(projects: list[dict[str, Any]]) -> None:
+    """Replace all projects (import/backup only). Deletes all articles first."""
+    with _db_write_lock:
+        db = get_db()
+        db.articles.delete_many({})
+        db.projects.delete_many({})
+        if not projects:
+            return
+        docs = []
+        for p in projects:
+            norm = _normalize_project_dict(p)
+            docs.append({**norm, "_id": norm["id"]})
+        res = db.projects.insert_many(docs)
+        if not res.acknowledged or len(res.inserted_ids) != len(docs):
+            raise RuntimeError("MongoDB save_projects_replace_all insert was not fully acknowledged")
+
+
+def insert_project(project: dict[str, Any]) -> None:
+    norm = _normalize_project_dict(project)
+    doc = {**norm, "_id": norm["id"]}
+    with _db_write_lock:
+        res = get_db().projects.insert_one(doc)
+        if not res.acknowledged:
+            raise RuntimeError("MongoDB insert_project was not acknowledged")
+
+
+def update_project_fields(project_id: str, updates: dict[str, Any]) -> bool:
+    with _db_write_lock:
+        db = get_db()
+        doc = db.projects.find_one({"id": project_id})
+        if not doc:
+            return False
+        d = _mongo_doc_to_project(doc)
+        _apply_project_updates_dict(d, updates)
+        norm = _normalize_project_dict(d)
+        new_doc = {**norm, "_id": norm["id"]}
+        res = db.projects.replace_one({"id": project_id}, new_doc)
+        return bool(res.acknowledged and res.matched_count == 1)
+
+
+def delete_project_and_articles(project_id: str) -> bool:
+    with _db_write_lock:
+        db = get_db()
+        if db.projects.count_documents({"id": project_id}, limit=1) == 0:
+            return False
+        db.articles.delete_many({"project_id": project_id})
+        db.projects.delete_one({"id": project_id})
+        return True
+
+
+def save_articles_replace_all(articles: list[dict[str, Any]]) -> None:
+    with _db_write_lock:
+        get_db().articles.delete_many({})
+    for a in articles:
+        insert_article(a)
+
+
+def insert_article(article: dict[str, Any]) -> None:
+    norm = _normalize_article_dict(article)
+    doc = {**norm, "_id": norm["id"]}
+    with _db_write_lock:
+        res = get_db().articles.insert_one(doc)
+        if not res.acknowledged:
+            raise RuntimeError("MongoDB insert_article was not acknowledged")
+
+
+def insert_articles_batch(articles: list[dict[str, Any]]) -> None:
+    if not articles:
+        return
+    docs = []
+    for a in articles:
+        norm = _normalize_article_dict(a)
+        docs.append({**norm, "_id": norm["id"]})
+    with _db_write_lock:
+        res = get_db().articles.insert_many(docs)
+        if not res.acknowledged or len(res.inserted_ids) != len(docs):
+            raise RuntimeError("MongoDB insert_articles_batch was not fully acknowledged")
+
+
+def update_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
+    with _db_write_lock:
+        db = get_db()
+        doc = db.articles.find_one({"id": article_id})
+        if not doc:
+            return False
+        d = _mongo_doc_to_article(doc)
+        _apply_article_updates_dict(d, updates)
+        norm = _normalize_article_dict(d)
+        new_doc = {**norm, "_id": norm["id"]}
+        res = db.articles.replace_one({"id": article_id}, new_doc)
+        return bool(res.acknowledged and res.matched_count == 1)
+
+
+def delete_articles_by_ids(article_ids: list[str]) -> None:
+    if not article_ids:
+        return
+    with _db_write_lock:
+        get_db().articles.delete_many({"id": {"$in": article_ids}})
+
+
+def bulk_update_articles(updates: list[tuple[str, dict[str, Any]]]) -> None:
+    if not updates:
+        return
+    with _db_write_lock:
+        db = get_db()
+        for aid, u in updates:
+            doc = db.articles.find_one({"id": aid})
+            if not doc:
+                continue
+            d = _mongo_doc_to_article(doc)
+            _apply_article_updates_dict(d, u)
+            norm = _normalize_article_dict(d)
+            new_doc = {**norm, "_id": norm["id"]}
+            res = db.articles.replace_one({"id": aid}, new_doc)
+            if not (res.acknowledged and res.matched_count == 1):
+                raise RuntimeError(f"MongoDB bulk article update failed for id={aid!r}")
+
+
+def export_tables_to_json() -> tuple[list[dict], list[dict]]:
+    """Snapshot for backup."""
+    return load_projects(), load_articles()
+
+
+def init_storage() -> None:
+    global _storage_mode, _storage_init_error
+    try:
+        init_db()
+        _storage_mode = "mongo"
+        _storage_init_error = None
+    except Exception as e:
+        _storage_mode = "json"
+        _storage_init_error = str(e)

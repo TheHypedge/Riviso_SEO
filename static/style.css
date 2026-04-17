@@ -289,3 +289,412 @@ body.app-page-loading-active {
 .project-tools-preview {
   max-width: 16rem;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Project dashboard — SaaS-style layout (2-col grid, tokens, hierarchy)      */
+/* -------------------------------------------------------------------------- */
+.app-dashboard {
+  --app-bg: #f1f5f9;
+  --app-surface: #ffffff;
+  --app-border: #e2e8f0;
+  --app-text: #0f172a;
+  --app-text-muted: #64748b;
+  --app-primary: #2563eb;
+  --app-primary-hover: #1d4ed8;
+  --app-radius: 12px;
+  --app-radius-sm: 8px;
+  --app-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 4px 12px rgba(15, 23, 42, 0.04);
+  --app-shadow-lg: 0 4px 24px rgba(15, 23, 42, 0.08);
+  background-color: var(--app-bg) !important;
+  color: var(--app-text);
+}
+
+.app-dashboard-nav {
+  background: var(--app-surface) !important;
+}
+
+.app-dashboard-brand {
+  letter-spacing: -0.02em;
+}
+
+.app-dash-main {
+  max-width: 1440px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.app-dash-main {
+  padding-bottom: 3rem;
+}
+
+.app-dash-breadcrumb {
+  font-size: 0.875rem;
+}
+
+.app-dash-breadcrumb a {
+  color: var(--app-text-muted);
+}
+
+.app-dash-title {
+  font-size: clamp(1.5rem, 2.5vw, 1.875rem);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  color: var(--app-text);
+}
+
+.app-dash-site-link {
+  color: var(--app-primary);
+  font-size: 0.9375rem;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.app-dash-site-link:hover {
+  color: var(--app-primary-hover);
+  text-decoration: underline;
+}
+
+.app-dash-cta-sticky {
+  position: sticky;
+  top: 0.75rem;
+  z-index: 10;
+}
+
+/* Project page — 3-layer layout (header / config / workspace) */
+.app-proj-main {
+  max-width: 1440px;
+}
+
+.app-letter-spacing-label {
+  letter-spacing: 0.06em;
+}
+
+.app-proj-header {
+  z-index: 1015;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.5rem;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  box-shadow: var(--app-shadow);
+}
+
+.app-proj-header.sticky-top {
+  top: 0.5rem;
+}
+
+.app-proj-header__inner {
+  gap: 1rem;
+}
+
+.app-config-card {
+  border-radius: var(--app-radius);
+}
+
+.app-workspace-row {
+  align-items: flex-start;
+}
+
+.app-workspace-primary .project-tools-card {
+  border-radius: var(--app-radius-sm);
+  overflow: hidden;
+}
+
+.app-workspace-primary .accordion-button {
+  transition: background 0.15s ease;
+}
+
+.app-workspace-primary .accordion-collapse {
+  transition: height 0.28s ease;
+}
+
+.app-filter-bar-card .app-filter-bar {
+  flex-wrap: wrap;
+}
+
+.app-side-panel__card {
+  border-radius: var(--app-radius);
+}
+
+/* Tools cards */
+.app-tool-card {
+  border-radius: var(--app-radius);
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.app-tool-card:hover {
+  transform: translateY(-1px);
+}
+
+.app-tool-card:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.6);
+  outline-offset: 2px;
+}
+
+.app-tool-card__icon {
+  display: inline-flex;
+  width: 2.25rem;
+  height: 2.25rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: #f1f5f9;
+  color: #334155;
+  flex-shrink: 0;
+}
+
+.app-tools-modal-wrap .project-tools-card {
+  border: 0;
+  box-shadow: none;
+}
+
+.app-tools-modal-wrap .accordion-button {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+.app-tools-modal-wrap .accordion-body {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+
+.app-dash-cta-icon {
+  display: inline-flex;
+  vertical-align: middle;
+  margin-right: 0.35rem;
+  opacity: 0.95;
+}
+
+.app-btn-primary {
+  background: linear-gradient(180deg, #3b82f6 0%, var(--app-primary) 100%);
+  border: none;
+  color: #fff !important;
+  font-weight: 600;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.app-btn-primary:hover {
+  background: linear-gradient(180deg, #60a5fa 0%, #2563eb 100%);
+  color: #fff !important;
+  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.4);
+  transform: translateY(-1px);
+}
+
+.app-btn-primary:focus-visible {
+  outline: 2px solid var(--app-primary);
+  outline-offset: 2px;
+}
+
+/* Workflow strip */
+.app-workflow-steps {
+  padding: 0;
+  margin: 0;
+}
+
+.app-workflow-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  font-size: 0.8125rem;
+  color: var(--app-text-muted);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.app-workflow-step--active {
+  border-color: rgba(37, 99, 235, 0.35);
+  background: #eff6ff;
+  color: #1e40af;
+  font-weight: 500;
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.12);
+}
+
+.app-workflow-step__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: #e2e8f0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #475569;
+}
+
+.app-workflow-step--active .app-workflow-step__num {
+  background: var(--app-primary);
+  color: #fff;
+}
+
+/* 2-column CSS grid (desktop): main | sticky sidebar */
+.app-dash-grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+@media (min-width: 992px) {
+  .app-dash-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+    grid-template-areas:
+      "create aside"
+      "queue aside"
+      "list aside";
+    align-items: start;
+  }
+
+  .app-dash-create {
+    grid-area: create;
+  }
+  .app-dash-aside {
+    grid-area: aside;
+    position: sticky;
+    top: 1rem;
+    align-self: start;
+    max-height: calc(100vh - 2rem);
+    overflow-y: auto;
+  }
+  .app-dash-queue {
+    grid-area: queue;
+  }
+  .app-dash-list {
+    grid-area: list;
+  }
+}
+
+.app-dash-section {
+  margin-bottom: 0;
+}
+
+.app-section-head {
+  margin-bottom: 0.75rem;
+}
+
+.app-section-head--compact {
+  margin-bottom: 0.5rem;
+}
+
+.app-section-head__title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--app-text);
+  letter-spacing: -0.02em;
+  margin: 0 0 0.25rem;
+}
+
+.app-section-head--compact .app-section-head__title {
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--app-text-muted);
+  font-weight: 600;
+}
+
+.app-section-head__icon {
+  display: inline-flex;
+  color: var(--app-text-muted);
+  flex-shrink: 0;
+}
+
+.app-section-head__desc {
+  font-size: 0.875rem;
+  color: var(--app-text-muted);
+  line-height: 1.45;
+}
+
+.app-card {
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+}
+
+.app-card--elevated {
+  box-shadow: var(--app-shadow);
+  border-color: rgba(226, 232, 240, 0.9);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.app-card--elevated:hover {
+  box-shadow: var(--app-shadow-lg);
+  border-color: rgba(203, 213, 225, 0.95);
+}
+
+.app-form-control {
+  border-radius: var(--app-radius-sm);
+  border-color: var(--app-border);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.app-form-control:focus {
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.btn-ghost {
+  background: transparent;
+  border: 1px dashed var(--app-border);
+  color: var(--app-text-muted);
+}
+
+.btn-ghost:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: var(--app-text);
+}
+
+.app-badge-soft {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+  font-weight: 500;
+  font-size: 0.75rem;
+  padding: 0.35em 0.75em;
+}
+
+.app-empty-state__icon {
+  max-width: 4rem;
+}
+
+/* Sticky table header for articles */
+.articles-posts-card .articles-table-wrap table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8fafc !important;
+  box-shadow: 0 1px 0 var(--app-border);
+}
+
+/* Tools accordion inside sidebar: tighter radius */
+.app-dash-aside .project-tools-card {
+  border-radius: var(--app-radius-sm);
+  overflow: hidden;
+}
+
+.app-dash-aside .accordion-button {
+  transition: background 0.15s ease;
+}
+
+.app-dash-aside .accordion-collapse {
+  transition: height 0.25s ease;
+}
+
+/* Dark mode foundation (opt-in via data-theme="dark" on html) */
+html[data-theme="dark"] .app-dashboard {
+  --app-bg: #0f172a;
+  --app-surface: #1e293b;
+  --app-border: #334155;
+  --app-text: #f1f5f9;
+  --app-text-muted: #94a3b8;
+  --app-primary: #3b82f6;
+  --app-primary-hover: #60a5fa;
+}

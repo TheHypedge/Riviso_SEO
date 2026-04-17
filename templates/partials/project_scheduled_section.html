@@ -1,0 +1,69 @@
+<section class="app-dash-queue app-dash-section mb-4" aria-labelledby="scheduled-heading">
+  <div class="app-card app-card--elevated overflow-hidden">
+    <div class="p-4 border-bottom border-opacity-10">
+      <h2 id="scheduled-heading" class="h6 mb-1">Scheduled posts</h2>
+      <p class="text-body-secondary small mb-0">WordPress queue — not live until the scheduled time.</p>
+    </div>
+    <div class="p-4">
+      {% if scheduled_pending_articles and scheduled_pending_articles|length > 0 %}
+        <div class="table-responsive">
+          <table class="table table-hover align-middle mb-0">
+            <thead>
+              <tr>
+                <th scope="col">Title</th>
+                <th scope="col" class="text-body-secondary small text-nowrap">Scheduled for</th>
+                <th scope="col" class="text-nowrap">Post as</th>
+                <th scope="col" class="text-end">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in scheduled_pending_articles %}
+                <tr>
+                  <td class="fw-medium">{{ row.title }}</td>
+                  <td class="small text-body-secondary text-nowrap">{{ row.wp_scheduled_at }}</td>
+                  <td class="small text-nowrap">
+                    {% if row.wp_schedule_wp_status == 'publish' %}
+                      Published
+                    {% else %}
+                      Draft
+                    {% endif %}
+                  </td>
+                  <td class="text-end text-nowrap">
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-outline-primary"
+                      data-edit-schedule
+                      data-article-id="{{ row.id }}"
+                      title="Change time or draft/publish"
+                    >
+                      Edit
+                    </button>
+                    <form
+                      method="post"
+                      action="{{ url_for('cancel_article_schedule', project_id=project.id, article_id=row.id) }}"
+                      class="d-inline"
+                      onsubmit="return confirm('Cancel scheduling for this article? The post will not be sent automatically until you schedule again.');"
+                    >
+                      <input type="hidden" name="date_from" value="{{ date_from|default('') }}">
+                      <input type="hidden" name="date_to" value="{{ date_to|default('') }}">
+                      <input type="hidden" name="filter_status" value="{{ status_filter|default('') }}">
+                      <button type="submit" class="btn btn-sm btn-outline-danger">Cancel</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="app-empty-state text-center py-5 px-3">
+          <div class="app-empty-state__icon mx-auto mb-3" aria-hidden="true">
+            <svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" class="text-body-secondary opacity-50"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          </div>
+          <p class="text-body-secondary small mb-3 mb-md-2">No scheduled articles</p>
+          <button type="button" class="btn btn-link btn-sm text-decoration-none p-0" data-bs-toggle="modal" data-bs-target="#addArticleModal">Create one</button>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</section>

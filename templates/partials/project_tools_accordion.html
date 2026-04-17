@@ -1,0 +1,324 @@
+            <div class="app-card app-card--elevated project-tools-card border-0 shadow-none">
+        <div class="accordion accordion-flush project-tools-accordion" id="projectToolsAccordion">
+            <div class="accordion-item border-0 border-bottom project-tools-accordion__item" data-tool-key="bulk_upload">
+              <h2 class="accordion-header" id="headingBulkUpload">
+                <button class="accordion-button collapsed shadow-none rounded-0 py-2 px-3" type="button" data-bs-toggle="collapse" data-bs-target="#collapseBulkUpload" aria-expanded="false" aria-controls="collapseBulkUpload">
+                  <span class="d-flex align-items-center gap-2 gap-md-3 w-100 min-w-0">
+                    <span class="project-tools-icon project-tools-icon--neutral" aria-hidden="true">
+                      <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/><path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/></svg>
+                    </span>
+                    <span class="flex-grow-1 text-start min-w-0">
+                      <span class="d-block fw-medium text-body small">Bulk Upload</span>
+                      <span class="d-block text-body-secondary" style="font-size: 0.75rem;">Excel · import many rows</span>
+                    </span>
+                    <span class="ms-auto small text-body-secondary text-nowrap d-none d-sm-inline me-2">Excel</span>
+                  </span>
+                </button>
+              </h2>
+              <div id="collapseBulkUpload" class="accordion-collapse collapse" aria-labelledby="headingBulkUpload" data-bs-parent="#projectToolsAccordion">
+                <div class="accordion-body pt-0 pb-3 px-3">
+                  <div class="project-tools-panel rounded-2 p-3">
+                    <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('bulk_upload_sample', project_id=project.id) }}">Download sample sheet</a>
+                      <form method="post" action="{{ url_for('bulk_upload_articles', project_id=project.id) }}" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 align-items-center flex-grow-1" style="min-width: 12rem;">
+                        <input class="form-control form-control-sm flex-grow-1" style="min-width: 10rem;" type="file" name="file" accept=".xlsx" required>
+                        <button type="submit" class="btn btn-sm btn-primary text-nowrap">Upload &amp; import</button>
+                      </form>
+                    </div>
+                    <p class="form-text small mb-0">
+                      Required: <span class="fw-semibold">Title</span>. Optional: <span class="fw-semibold">Focus Keyphrase</span> (single phrase), <span class="fw-semibold">Targeting Keywords</span> (comma-separated, max 10). Imports are always <span class="fw-semibold">pending</span>.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="accordion-item border-0 border-bottom project-tools-accordion__item" data-tool-key="writing_prompts">
+              <h2 class="accordion-header" id="headingWritingPrompts">
+                <button class="accordion-button collapsed shadow-none rounded-0 py-2 px-3" type="button" data-bs-toggle="collapse" data-bs-target="#collapseWritingPrompts" aria-expanded="false" aria-controls="collapseWritingPrompts">
+                  <span class="d-flex align-items-center gap-2 gap-md-3 w-100 min-w-0">
+                    <span class="project-tools-icon project-tools-icon--neutral" aria-hidden="true">
+                      <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M15.502 1.94a.5.5 0 0 1 0 .706L14.459 3.69l-2-2L13.502.646a.5.5 0 0 1 .707 0l1.293 1.293zm-1.75 2.456-2-2L4.939 9.21a.5.5 0 0 0-.121.196l-.805 2.414a.25.25 0 0 0 .316.316l2.414-.805a.5.5 0 0 0 .196-.12l6.813-6.814z"/><path fill-rule="evenodd" d="M1 13.5A1.5 1.5 0 0 0 2.5 15h11a1.5 1.5 0 0 0 1.5-1.5v-6a.5.5 0 0 0-1 0v6a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5H9a.5.5 0 0 0 0-1H2.5A1.5 1.5 0 0 0 1 2.5v11z"/></svg>
+                    </span>
+                    <span class="flex-grow-1 text-start min-w-0">
+                      <span class="d-block fw-medium text-body small">Writing Prompts</span>
+                      <span class="d-block text-body-secondary text-truncate" style="font-size: 0.75rem;">{{ (project.prompts|default([]))|length }} saved · generation</span>
+                    </span>
+                    <span class="ms-auto small text-body-secondary text-nowrap d-none d-sm-inline me-2">{{ (project.prompts|default([]))|length }} saved</span>
+                  </span>
+                </button>
+              </h2>
+              <div id="collapseWritingPrompts" class="accordion-collapse collapse" aria-labelledby="headingWritingPrompts" data-bs-parent="#projectToolsAccordion">
+                <div class="accordion-body pt-0 pb-3 px-3">
+                  <div class="project-tools-panel rounded-2 p-3">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+                      <p class="small text-body-secondary mb-0 flex-grow-1" style="max-width: 42rem;">
+                        Placeholders: <code class="small">{article title}</code>, <code class="small">{targeting keywords}</code>, <code class="small">{focus keyphrase}</code>
+                        (<code class="small">{title}</code>, <code class="small">{keywords}</code>, <code class="small">{focus_keyphrase}</code>).
+                      </p>
+                      <button type="button" class="btn btn-sm btn-primary text-nowrap" data-bs-toggle="modal" data-bs-target="#addPromptModal">Add prompt</button>
+                    </div>
+                    {% if project.prompts and project.prompts|length > 0 %}
+                      <div class="table-responsive rounded-2 border bg-white">
+                        <table class="table table-sm table-hover align-middle mb-0 project-tools-table">
+                          <thead class="table-light">
+                            <tr>
+                              <th scope="col">Name</th>
+                              <th scope="col" class="text-body-secondary d-none d-md-table-cell">Preview</th>
+                              <th scope="col" class="text-nowrap">Default</th>
+                              <th scope="col" class="text-end text-nowrap">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {% for pr in project.prompts %}
+                              <tr>
+                                <td class="fw-medium">{{ pr.name }}</td>
+                                <td class="small text-body-secondary text-break d-none d-md-table-cell project-tools-preview">{{ (pr.text or '')[:100] }}{% if (pr.text or '')|length > 100 %}…{% endif %}</td>
+                                <td>
+                                  {% if pr.id == (project.default_prompt_id or '') %}
+                                    <span class="badge rounded-pill text-bg-primary">Default</span>
+                                  {% else %}
+                                    <span class="text-body-secondary small">—</span>
+                                  {% endif %}
+                                </td>
+                                <td class="text-end">
+                                  <div class="d-inline-flex flex-wrap gap-1 justify-content-end" role="group" aria-label="Actions for {{ pr.name }}">
+                                    <button type="button" class="btn btn-sm btn-outline-primary" data-edit-prompt data-prompt-id="{{ pr.id }}">Edit</button>
+                                    <form method="post" action="{{ url_for('delete_project_prompt', project_id=project.id) }}" class="d-inline" onsubmit="return confirm('Delete this prompt? This cannot be undone.');">
+                                      <input type="hidden" name="prompt_id" value="{{ pr.id }}">
+                                      <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                                    </form>
+                                  </div>
+                                </td>
+                              </tr>
+                            {% endfor %}
+                          </tbody>
+                        </table>
+                      </div>
+                    {% else %}
+                      <p class="text-body-secondary small mb-0">No prompts yet. Add one to customize article generation.</p>
+                    {% endif %}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="accordion-item border-0 border-bottom project-tools-accordion__item" data-tool-key="context_links">
+              <h2 class="accordion-header" id="headingContextLinks">
+                <button class="accordion-button collapsed shadow-none rounded-0 py-2 px-3" type="button" data-bs-toggle="collapse" data-bs-target="#collapseContextLinks" aria-expanded="false" aria-controls="collapseContextLinks">
+                  <span class="d-flex align-items-center gap-2 gap-md-3 w-100 min-w-0">
+                    <span class="project-tools-icon project-tools-icon--neutral" aria-hidden="true">
+                      <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.715 6.542 3.343 7.914a3 3 0 1 0 4.243 4.243l1.828-1.829A3 3 0 0 0 8.586 5.5L8 6.086a1.002 1.002 0 0 0-.154.43 1 1 0 1 0 1.49-.872l.846-.846a2 2 0 1 1 2.829 2.828L11.657 9.914a2 2 0 0 1-2.829 0l-.849-.849a1 1 0 1 1 1.415-1.415l.849.849a1 1 0 0 0 1.414 0l1.829-1.828a1 1 0 0 0 0-1.415l-.849-.849a1 1 0 1 1 1.415-1.415l.849.849a3 3 0 0 1 0 4.243l-1.828 1.829a3 3 0 0 1-4.243 0l-.849-.849a1 1 0 1 1 1.415-1.415l.849.849a1 1 0 0 0 1.414 0l.846-.846a1 1 0 0 0-.154-1.43l-1.828-1.829A3 3 0 0 0 4.715 6.542Z"/></svg>
+                    </span>
+                    <span class="flex-grow-1 text-start min-w-0">
+                      <span class="d-block fw-medium text-body small">Context Links</span>
+                      <span class="d-block text-body-secondary text-truncate" style="font-size: 0.75rem;">{{ (project.context_links|default([]))|length }} phrase{{ 's' if (project.context_links|default([]))|length != 1 else '' }} · WordPress</span>
+                    </span>
+                    <span class="ms-auto small text-body-secondary text-nowrap d-none d-sm-inline me-2">{{ (project.context_links|default([]))|length }} phrase{{ 's' if (project.context_links|default([]))|length != 1 else '' }}</span>
+                  </span>
+                </button>
+              </h2>
+              <div id="collapseContextLinks" class="accordion-collapse collapse" aria-labelledby="headingContextLinks" data-bs-parent="#projectToolsAccordion">
+                <div class="accordion-body pt-0 pb-3 px-3">
+                  <div class="project-tools-panel rounded-2 p-3">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+                      <p class="small text-body-secondary mb-0 flex-grow-1" style="max-width: 42rem;">
+                        When you post to WordPress, each phrase below is matched without regard to case and turned into a link (longer phrases first). The visible text stays as written in the article. Existing links in the article are left unchanged.
+                      </p>
+                      <button type="button" class="btn btn-sm btn-primary text-nowrap" data-bs-toggle="modal" data-bs-target="#addContextLinkModal">Add link</button>
+                    </div>
+                    {% if project.context_links and project.context_links|length > 0 %}
+                      <div class="table-responsive rounded-2 border bg-white">
+                        <table class="table table-sm table-hover align-middle mb-0 project-tools-table">
+                          <thead class="table-light">
+                            <tr>
+                              <th scope="col">Text</th>
+                              <th scope="col" class="text-body-secondary d-none d-md-table-cell">Link</th>
+                              <th scope="col" class="text-end text-nowrap">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {% for cl in project.context_links %}
+                              <tr>
+                                <td class="small fw-medium text-break">{{ cl.phrase }}</td>
+                                <td class="small text-body-secondary text-break d-none d-md-table-cell">
+                                  <a href="{{ cl.url }}" target="_blank" rel="noopener noreferrer" class="link-secondary text-break">{{ (cl.url or '')[:72] }}{% if (cl.url or '')|length > 72 %}…{% endif %}</a>
+                                </td>
+                                <td class="text-end">
+                                  <div class="d-inline-flex flex-wrap gap-1 justify-content-end" role="group" aria-label="Actions for context link">
+                                    <button type="button" class="btn btn-sm btn-outline-primary" data-edit-context-link data-context-link-id="{{ cl.id }}">Edit</button>
+                                    <form method="post" action="{{ url_for('delete_project_context_link', project_id=project.id) }}" class="d-inline" onsubmit="return confirm('Remove this context link?');">
+                                      <input type="hidden" name="context_link_id" value="{{ cl.id }}">
+                                      <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                                    </form>
+                                  </div>
+                                </td>
+                              </tr>
+                            {% endfor %}
+                          </tbody>
+                        </table>
+                      </div>
+                    {% else %}
+                      <p class="text-body-secondary small mb-0">No context links yet. Add phrases to auto-link when posting articles for this project.</p>
+                    {% endif %}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="accordion-item border-0 border-bottom project-tools-accordion__item" data-tool-key="search_console">
+              <h2 class="accordion-header" id="headingSearchConsole">
+                <button class="accordion-button collapsed shadow-none rounded-0 py-2 px-3" type="button" data-bs-toggle="collapse" data-bs-target="#collapseSearchConsole" aria-expanded="false" aria-controls="collapseSearchConsole">
+                  <span class="d-flex align-items-center gap-2 gap-md-3 w-100 min-w-0">
+                    <span class="project-tools-icon project-tools-icon--neutral" aria-hidden="true">
+                      <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/></svg>
+                    </span>
+                    <span class="flex-grow-1 text-start min-w-0">
+                      <span class="d-block fw-medium text-body small">Google Search Console</span>
+                      <span class="d-block text-body-secondary text-truncate" style="font-size: 0.75rem;">
+                        {% if project.gsc_property_url %}{{ (project.gsc_property_url or '')[:48] }}{% if (project.gsc_property_url or '')|length > 48 %}…{% endif %}{% else %}Property not set{% endif %}
+                      </span>
+                    </span>
+                    <span class="ms-auto small text-body-secondary text-truncate d-none d-md-inline me-2" style="max-width: 7rem;">{% if project.gsc_property_url %}Linked{% else %}Not set{% endif %}</span>
+                  </span>
+                </button>
+              </h2>
+              <div id="collapseSearchConsole" class="accordion-collapse collapse" aria-labelledby="headingSearchConsole" data-bs-parent="#projectToolsAccordion">
+                <div class="accordion-body pt-0 pb-3 px-3">
+                  <div class="project-tools-panel rounded-2 p-3">
+                    {% if not gsc_oauth_env_configured %}
+                      <p class="small text-body-secondary mb-0">
+                        Set <code class="small">GOOGLE_OAUTH_CLIENT_ID</code> and <code class="small">GOOGLE_OAUTH_CLIENT_SECRET</code> in <code class="small">.env</code> in the project folder (next to <code class="small">app.py</code>), restart the app, then connect from the <a href="{{ url_for('home') }}">home page</a>.
+                      </p>
+                    {% elif gsc_google_libs_missing|default(false) %}
+                      <p class="small text-danger mb-0">
+                        Google client libraries are not installed. From the project folder run <code class="small">pip install -r requirements.txt</code>, restart the server, then use <strong>Connect Google</strong> on the home page.
+                      </p>
+                    {% elif not gsc_google_connected %}
+                      <p class="small text-body-secondary mb-3">
+                        Connect your Google account on the <a href="{{ url_for('home') }}">home page</a> (uses a refresh token so Search Console stays linked across restarts).
+                      </p>
+                    {% else %}
+                      <p class="small text-body-secondary mb-3">
+                        Choose the Search Console <span class="fw-medium">property</span> that matches this project’s site. After a <span class="fw-medium">live</span> WordPress publish, the app calls the <a href="https://developers.google.com/webmaster-tools/v1/urlinspection.index/inspect" target="_blank" rel="noopener noreferrer">URL Inspection</a> API for the post URL. The <span class="fw-medium">GSC</span> column shows <span class="fw-medium">Submitted</span> when that API returns a valid inspection result — Search Console’s own screen may still show an early or pending step until Google processes the URL.
+                      </p>
+                      {% if gsc_google_email %}
+                        <p class="small mb-3"><span class="text-body-secondary">Signed in:</span> <span class="fw-medium">{{ gsc_google_email }}</span></p>
+                      {% endif %}
+                      <form method="post" action="{{ url_for('update_project_gsc', project_id=project.id) }}" class="row g-3 align-items-end">
+                        <div class="col-12 col-lg-8">
+                          <label class="form-label small mb-1" for="gscPropertySelect">Property for this project</label>
+                          <select class="form-select form-select-sm" id="gscPropertySelect" name="gsc_property_url" aria-label="Search Console property">
+                            <option value="">— None —</option>
+                            {% for s in gsc_sites %}
+                              {% set su = s.siteUrl %}
+                              <option value="{{ su }}" {% if su == (project.gsc_property_url or '') %}selected{% endif %}>{{ su }}{% if s.permissionLevel %} ({{ s.permissionLevel }}){% endif %}</option>
+                            {% endfor %}
+                          </select>
+                          {% if gsc_sites|length == 0 %}
+                            <div class="form-text text-warning small">No properties returned. Add and verify a site in <a href="https://search.google.com/search-console" target="_blank" rel="noopener noreferrer">Search Console</a> for this Google account, then reload this page.</div>
+                          {% endif %}
+                        </div>
+                        <div class="col-12 col-lg-4">
+                          <div class="form-check mb-2">
+                            <input class="form-check-input" type="checkbox" value="on" id="gscIndexOnPublish" name="gsc_index_on_publish" {% if project.gsc_index_on_publish|default(true) %}checked{% endif %}>
+                            <label class="form-check-label small" for="gscIndexOnPublish">Inspect URL after live publish</label>
+                          </div>
+                          <button type="submit" class="btn btn-sm btn-primary">Save Search Console settings</button>
+                        </div>
+                      </form>
+                    {% endif %}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="accordion-item border-0 project-tools-accordion__item project-tools-accordion__item--last" data-tool-key="image_prompts">
+              <h2 class="accordion-header" id="headingImagePrompts">
+                <button class="accordion-button collapsed shadow-none rounded-0 py-2 px-3" type="button" data-bs-toggle="collapse" data-bs-target="#collapseImagePrompts" aria-expanded="false" aria-controls="collapseImagePrompts">
+                  <span class="d-flex align-items-center gap-2 gap-md-3 w-100 min-w-0">
+                    <span class="project-tools-icon project-tools-icon--neutral" aria-hidden="true">
+                      <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.002 5.5a1.5 1.5 0 0 1-3 0 1.5 1.5 0 0 1 3 0z"/><path d="M2.002 1a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V3a2 2 0 0 0-2-2h-12zm12 1a1 1 0 0 1 1 1v6.256l-3.293-3.293a1 1 0 0 0-1.414 0L4.5 12.086V13h7.5a.5.5 0 0 0 0-1H6.707l4.147-4.146a.5.5 0 0 1 .708 0L15 11.293V3a1 1 0 0 1-1-1h-12z"/></svg>
+                    </span>
+                    <span class="flex-grow-1 text-start min-w-0">
+                      <span class="d-block fw-medium text-body small">Featured Images</span>
+                      <span class="d-block text-body-secondary text-truncate" style="font-size: 0.75rem;">{{ (project.image_prompts|default([]))|length }} saved · OpenAI Images</span>
+                    </span>
+                    <span class="ms-auto small text-body-secondary text-nowrap d-none d-sm-inline me-2">{{ (project.image_prompts|default([]))|length }} saved</span>
+                  </span>
+                </button>
+              </h2>
+              <div id="collapseImagePrompts" class="accordion-collapse collapse" aria-labelledby="headingImagePrompts" data-bs-parent="#projectToolsAccordion">
+                <div class="accordion-body pt-0 pb-3 px-3">
+                  <div class="project-tools-panel rounded-2 p-3">
+                    <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+                      <p class="small text-body-secondary mb-0 flex-grow-1" style="max-width: 42rem;">
+                        OpenAI Images API (<span class="fw-medium">OPENAI_API_KEY</span>; model via <span class="fw-medium">OPENAI_IMAGE_MODEL</span>).
+                        Placeholders: <code class="small">{article title}</code>, <code class="small">{targeting keywords}</code>, <code class="small">{focus keyphrase}</code>.
+                      </p>
+                      <button type="button" class="btn btn-sm btn-primary text-nowrap" data-bs-toggle="modal" data-bs-target="#addImagePromptModal">Add prompt</button>
+                    </div>
+                    <form method="post" action="{{ url_for('update_project_featured_image_settings', project_id=project.id) }}" class="border rounded-2 p-3 mb-3 bg-body">
+                      <div class="fw-semibold small mb-2">Generation style</div>
+                      <div class="row g-2 align-items-end">
+                        <div class="col-12 col-md-6">
+                          <label class="form-label small mb-1" for="projectImageStyle">Featured image look</label>
+                          <select class="form-select form-select-sm" id="projectImageStyle" name="image_style" aria-label="Featured image style">
+                            <option value="semi_real" {% if (project.image_style|default('semi_real')) == 'semi_real' %}selected{% endif %}>Semi-realistic (default)</option>
+                            <option value="photorealistic" {% if (project.image_style|default('semi_real')) == 'photorealistic' %}selected{% endif %}>Photorealistic</option>
+                            <option value="illustration" {% if (project.image_style|default('semi_real')) == 'illustration' %}selected{% endif %}>Illustration / flat</option>
+                          </select>
+                        </div>
+                        <div class="col-12 col-md-6">
+                          <div class="form-check mt-md-4">
+                            <input class="form-check-input" type="checkbox" value="on" id="projectOptimizeImagePrompt" name="optimize_image_prompt" {% if project.optimize_image_prompt|default(true) %}checked{% endif %}>
+                            <label class="form-check-label small" for="projectOptimizeImagePrompt">Optimize prompt with ChatGPT before generating</label>
+                          </div>
+                        </div>
+                        <div class="col-12">
+                          <button type="submit" class="btn btn-sm btn-outline-primary">Save image settings</button>
+                        </div>
+                      </div>
+                      <p class="text-body-secondary small mb-0 mt-2">Optimizer model: <code class="small">OPENAI_IMAGE_PROMPT_MODEL</code> or <code class="small">OPENAI_MODEL</code>.</p>
+                    </form>
+                    {% if project.image_prompts and project.image_prompts|length > 0 %}
+                      <div class="table-responsive rounded-2 border bg-white">
+                        <table class="table table-sm table-hover align-middle mb-0 project-tools-table">
+                          <thead class="table-light">
+                            <tr>
+                              <th scope="col">Name</th>
+                              <th scope="col" class="text-body-secondary d-none d-md-table-cell">Preview</th>
+                              <th scope="col" class="text-nowrap">Default</th>
+                              <th scope="col" class="text-end text-nowrap">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {% for pr in project.image_prompts %}
+                              <tr>
+                                <td class="fw-medium">{{ pr.name }}</td>
+                                <td class="small text-body-secondary text-break d-none d-md-table-cell project-tools-preview">{{ (pr.text or '')[:100] }}{% if (pr.text or '')|length > 100 %}…{% endif %}</td>
+                                <td>
+                                  {% if pr.id == (project.default_image_prompt_id or '') %}
+                                    <span class="badge rounded-pill text-bg-primary">Default</span>
+                                  {% else %}
+                                    <span class="text-body-secondary small">—</span>
+                                  {% endif %}
+                                </td>
+                                <td class="text-end">
+                                  <div class="d-inline-flex flex-wrap gap-1 justify-content-end" role="group" aria-label="Actions for {{ pr.name }}">
+                                    <button type="button" class="btn btn-sm btn-outline-primary" data-edit-image-prompt data-image-prompt-id="{{ pr.id }}">Edit</button>
+                                    <form method="post" action="{{ url_for('delete_project_image_prompt', project_id=project.id) }}" class="d-inline" onsubmit="return confirm('Delete this image prompt?');">
+                                      <input type="hidden" name="image_prompt_id" value="{{ pr.id }}">
+                                      <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+                                    </form>
+                                  </div>
+                                </td>
+                              </tr>
+                            {% endfor %}
+                          </tbody>
+                        </table>
+                      </div>
+                    {% else %}
+                      <p class="text-body-secondary small mb-0">No image prompts yet.</p>
+                    {% endif %}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>

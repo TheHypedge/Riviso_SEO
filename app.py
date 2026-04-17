@@ -9,11 +9,15 @@ import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+import zipfile
+from typing import Any
 from urllib.parse import urlencode, urlparse
+from urllib.request import urlopen
 
 from dotenv import load_dotenv
 from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_file, session, url_for
 from flask_session import Session
+from werkzeug.security import check_password_hash, generate_password_hash
 
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 # Load .env from the project folder (next to app.py), not from the shell's cwd — otherwise
@@ -34,24 +38,118 @@ from wordpress_module import (
     upload_media,
 )
 
+import storage as _storage
+
+_storage.init_storage()
+
+
+def _ensure_initial_admin_user() -> None:
+    # Only supported when MongoDB is available.
+    if getattr(_storage, "storage_mode", lambda: "mongo")() != "mongo":
+        return
+    email = "iamakhileshsoni@gmail.com"
+    password = "Admin@2026"
+    try:
+        existing = _storage.get_user_by_email(email)
+        if existing:
+            return
+        _storage.insert_user(
+            {
+                "id": str(uuid.uuid4()),
+                "email": email,
+                "password_hash": generate_password_hash(password),
+                "role": "admin",
+                "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+        app.logger.info("Created initial admin user: %s", email)
+    except Exception as e:
+        app.logger.warning("Could not ensure initial admin user: %s", e)
+
+
+def _migrate_json_if_db_empty() -> None:
+    """Optional one-time import from legacy JSON files into MongoDB.
+
+    Runs only when AUTO_IMPORT_JSON=1 and the database has no projects.
+    Normal operation always reads/writes MongoDB via storage only.
+    """
+    if (os.environ.get("AUTO_IMPORT_JSON") or "").strip() != "1":
+        return
+    try:
+        if _storage.load_projects():
+            return
+        pj = os.path.join(_DATA_DIR, "projects.json")
+        aj = os.path.join(_DATA_DIR, "articles.json")
+        if not os.path.isfile(pj) or not os.path.isfile(aj):
+            return
+        with open(pj, encoding="utf-8") as f:
+            pr = json.load(f)
+        with open(aj, encoding="utf-8") as f:
+            ar = json.load(f)
+        if not isinstance(pr, list) or not isinstance(ar, list):
+            return
+        for p in pr:
+            if isinstance(p, dict) and (p.get("id") or "").strip():
+                _storage.insert_project(p)
+        batch = [a for a in ar if isinstance(a, dict) and (a.get("id") or "").strip()]
+        if batch:
+            _storage.insert_articles_batch(batch)
+    except Exception as e:
+        app.logger.warning("Could not auto-import JSON into database: %s", e)
+
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY")
+
+_sk = (os.environ.get("FLASK_SECRET_KEY") or "").strip()
+if os.environ.get("FLASK_ENV", "").lower() == "production" and not _sk:
+    raise RuntimeError("FLASK_SECRET_KEY must be set when FLASK_ENV=production")
+if not _sk:
+    app.secret_key = "dev-insecure-change-me"
+    app.logger.warning("FLASK_SECRET_KEY not set; using insecure dev default (set FLASK_SECRET_KEY for production)")
+else:
+    app.secret_key = _sk
 
 # Store sessions server-side so we can keep large generated articles.
+_session_dir = os.path.join(_APP_DIR, ".flask_session")
+os.makedirs(_session_dir, exist_ok=True)
 app.config.update(
     SESSION_TYPE="filesystem",
-    # SESSION_FILE_DIR=os.path.join(os.path.dirname(__file__), ".flask_session"),
+    SESSION_FILE_DIR=_session_dir,
     SESSION_PERMANENT=False,
     SESSION_USE_SIGNER=True,
 )
 Session(app)
 
 _DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-_PROJECTS_FILE = os.path.join(_DATA_DIR, "projects.json")
-_ARTICLES_FILE = os.path.join(_DATA_DIR, "articles.json")
+
+_migrate_json_if_db_empty()
+_ensure_initial_admin_user()
 _ARTICLE_IMAGES_DIR = os.path.join(_DATA_DIR, "article_images")
 _MAX_PROJECTS = 9  # 3×3 grid
+
+
+def _is_authenticated() -> bool:
+    return bool((session.get("user_id") or "").strip())
+
+
+def _current_user() -> dict | None:
+    uid = (session.get("user_id") or "").strip()
+    if not uid:
+        return None
+    return _storage.get_user_by_id(uid)
+
+
+@app.before_request
+def _require_login_for_app() -> None:
+    # Allow auth endpoints and static assets without login.
+    ep = request.endpoint or ""
+    if ep in {"home", "auth_login", "auth_register", "auth_logout", "static"}:
+        return
+    # Let Flask handle None endpoints (404 etc).
+    if not ep:
+        return
+    if not _is_authenticated():
+        return redirect(url_for("home"))
 
 
 def _ensure_data_dir() -> None:
@@ -59,74 +157,38 @@ def _ensure_data_dir() -> None:
 
 
 def _load_projects() -> list[dict]:
-    _ensure_data_dir()
-    if not os.path.isfile(_PROJECTS_FILE):
+    projects = _storage.load_projects()
+    user_id = (session.get("user_id") or "").strip()
+    role = (session.get("role") or "").strip().lower()
+    if not user_id:
         return []
-    try:
-        with open(_PROJECTS_FILE, encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return data
-    except Exception:
-        pass
-    return []
-
-
-def _save_projects(projects: list[dict]) -> None:
-    _ensure_data_dir()
-    with open(_PROJECTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(projects, f, ensure_ascii=False, indent=2)
+    if role == "admin":
+        return projects
+    out: list[dict] = []
+    for p in projects:
+        if (p.get("owner_user_id") or "").strip() == user_id:
+            out.append(p)
+    return out
 
 
 def _update_project_fields(project_id: str, updates: dict) -> bool:
-    projects = _load_projects()
-    for i, p in enumerate(projects):
-        if (p.get("id") or "") == project_id:
-            projects[i].update(updates)
-            _save_projects(projects)
-            return True
-    return False
+    return _storage.update_project_fields(project_id, updates)
 
 
-_articles_file_lock = threading.Lock()
 _wp_scheduled_processor_lock = threading.Lock()
 _wp_bg_trigger_last = 0.0
 _wp_bg_trigger_lock = threading.Lock()
 
 
 def _load_articles() -> list[dict]:
-    _ensure_data_dir()
-    if not os.path.isfile(_ARTICLES_FILE):
-        return []
-    try:
-        with _articles_file_lock:
-            with open(_ARTICLES_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, list):
-                return []
-            changed = False
-            for a in data:
-                if not (a.get("status") or "").strip():
-                    a["status"] = "pending"
-                    changed = True
-                gs = (a.get("gsc_status") or "").strip().lower()
-                if gs not in {"pending", "requested"}:
-                    a["gsc_status"] = "pending"
-                    changed = True
-            if changed:
-                with open(_ARTICLES_FILE, "w", encoding="utf-8") as wf:
-                    json.dump(data, wf, ensure_ascii=False, indent=2)
-        return data
-    except Exception:
-        pass
-    return []
-
-
-def _save_articles(articles: list[dict]) -> None:
-    _ensure_data_dir()
-    with _articles_file_lock:
-        with open(_ARTICLES_FILE, "w", encoding="utf-8") as f:
-            json.dump(articles, f, ensure_ascii=False, indent=2)
+    data = _storage.load_articles()
+    for a in data:
+        if not (a.get("status") or "").strip():
+            a["status"] = "pending"
+        gs = (a.get("gsc_status") or "").strip().lower()
+        if gs not in {"pending", "requested"}:
+            a["gsc_status"] = "pending"
+    return data
 
 
 def _get_project_by_id(project_id: str) -> dict | None:
@@ -212,11 +274,26 @@ def _interpolate_article_prompt_template(
     return out
 
 
+def _normalize_project_image_settings(project: dict) -> None:
+    """Per-project featured image style + ChatGPT prompt optimizer toggle."""
+    if not isinstance(project, dict):
+        return
+    style = (project.get("image_style") or "").strip().lower()
+    if style not in ("semi_real", "photorealistic", "illustration"):
+        project["image_style"] = "semi_real"
+    oip = project.get("optimize_image_prompt")
+    if oip is None:
+        project["optimize_image_prompt"] = True
+    else:
+        project["optimize_image_prompt"] = bool(oip)
+
+
 def _normalize_project_image_prompts(project: dict) -> None:
     """Ensure image_prompts list exists (same shape as writing prompts)."""
     raw = project.get("image_prompts")
     if not isinstance(raw, list):
         project["image_prompts"] = []
+        _normalize_project_image_settings(project)
         return
     cleaned: list[dict] = []
     for item in raw:
@@ -229,6 +306,7 @@ def _normalize_project_image_prompts(project: dict) -> None:
             continue
         cleaned.append({"id": pid, "name": name[:200], "text": text[:100_000]})
     project["image_prompts"] = cleaned
+    _normalize_project_image_settings(project)
 
 
 def _normalize_project_gsc(project: dict) -> None:
@@ -448,32 +526,167 @@ def _convert_upload_to_png_bytes(raw: bytes) -> bytes:
     return out.getvalue()
 
 
-def _generate_featured_image_png_bytes(image_prompt: str) -> bytes:
-    """DALL·E 3 via OpenAI API (requires OPENAI_API_KEY)."""
+_FEATURED_IMAGE_META_KEYS = (
+    "featured_image_prompt_final",
+    "featured_image_prompt_raw",
+    "featured_image_model",
+    "featured_image_quality",
+    "featured_image_size",
+    "featured_image_optimizer_model",
+    "featured_image_prompt_optimizer_error",
+)
+
+_IMAGE_STYLE_INSTRUCTIONS: dict[str, str] = {
+    "semi_real": (
+        "Semi-realistic: cinematic editorial hero image, slightly stylized 3D or painterly realism, "
+        "dramatic but believable lighting, high detail, NOT a flat cartoon, NOT corporate clipart."
+    ),
+    "photorealistic": (
+        "Photorealistic: natural photography look, realistic lens and depth of field, natural lighting and materials."
+    ),
+    "illustration": (
+        "Illustration: clean vector or flat illustration suitable for web, bold shapes, limited palette, "
+        "not photorealistic."
+    ),
+}
+
+
+def _clear_featured_image_generation_meta_updates() -> dict[str, str]:
+    """Clear stored OpenAI image / prompt metadata on an article."""
+    return {k: "" for k in _FEATURED_IMAGE_META_KEYS}
+
+
+def _default_openai_image_size_for_model(model: str) -> str:
+    """
+    DALL·E 3 supports wide sizes like 1792x1024; GPT Image models only allow
+    1024x1024, 1024x1536, 1536x1024, and auto (per API error messages).
+    """
+    m = (model or "").lower()
+    if "dall-e" in m:
+        return "1792x1024"
+    return "1536x1024"
+
+
+def _coerce_image_size_for_model(model: str, size: str) -> str:
+    """Map legacy DALL·E sizes to the closest GPT Image size when needed."""
+    m = (model or "").lower()
+    s = (size or "").strip().lower()
+    if not s:
+        return _default_openai_image_size_for_model(model)
+    if "dall-e" in m:
+        return s
+    gpt_allowed = {"1024x1024", "1024x1536", "1536x1024", "auto"}
+    if s in gpt_allowed:
+        return s
+    if s == "1792x1024":
+        return "1536x1024"
+    if s == "1024x1792":
+        return "1024x1536"
+    return s
+
+
+def _openai_image_env_config() -> dict[str, str]:
+    """Env-driven OpenAI Images API settings (see README)."""
+    model = (os.environ.get("OPENAI_IMAGE_MODEL", "gpt-image-1.5") or "gpt-image-1.5").strip()
+    env_size = (os.environ.get("OPENAI_IMAGE_SIZE") or "").strip()
+    size = env_size or _default_openai_image_size_for_model(model)
+    return {
+        "model": model,
+        "quality": (os.environ.get("OPENAI_IMAGE_QUALITY", "high") or "").strip(),
+        "size": size,
+        "response_format": (os.environ.get("OPENAI_IMAGE_RESPONSE_FORMAT", "b64_json") or "b64_json").strip(),
+    }
+
+
+def _normalize_image_quality_for_model(model: str, raw_quality: str) -> str | None:
+    """Map env quality to values supported by the selected image model family."""
+    m = (model or "").lower()
+    q = (raw_quality or "").strip().lower()
+    if not q:
+        return None
+    if "dall-e" in m:
+        if q in ("high", "hd"):
+            return "hd"
+        if q in ("medium", "standard", "low", "auto"):
+            return "standard"
+        return q if q in ("standard", "hd") else "standard"
+    if q in ("low", "medium", "high", "auto"):
+        return q
+    if q in ("hd", "high"):
+        return "high"
+    if q in ("standard", "medium"):
+        return "medium"
+    return q
+
+
+def _decode_openai_image_response(resp: Any) -> bytes:
+    """Return PNG/JPEG bytes from an OpenAI images.generate response."""
+    if not resp or not getattr(resp, "data", None):
+        raise ValueError("Image API returned no data.")
+    item = resp.data[0]
+    b64 = getattr(item, "b64_json", None)
+    if b64:
+        return base64.b64decode(b64)
+    url = getattr(item, "url", None)
+    if url:
+        with urlopen(url, timeout=120) as r:
+            return r.read()
+    raise ValueError("Image API returned neither b64_json nor url.")
+
+
+def _generate_featured_image_png_bytes(image_prompt: str) -> tuple[bytes, dict[str, Any]]:
+    """
+    OpenAI Images API (model from OPENAI_IMAGE_MODEL, default gpt-image-1.5).
+    Requires OPENAI_API_KEY. Returns (png_bytes, metadata for article record).
+    """
     from openai import OpenAI
 
     key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not key:
         raise ValueError(
-            "OPENAI_API_KEY is required for featured image generation (DALL·E 3). "
+            "OPENAI_API_KEY is required for featured image generation. "
             "Groq and other chat-only keys cannot generate images."
         )
     client = OpenAI(api_key=key)
     prompt = (image_prompt or "").strip()[:4000]
     if not prompt:
         raise ValueError("Image prompt is empty.")
-    resp = client.images.generate(
-        model="dall-e-3",
-        prompt=prompt,
-        size="1792x1024",
-        quality="standard",
-        response_format="b64_json",
-        n=1,
-    )
-    b64 = resp.data[0].b64_json
-    if not b64:
-        raise ValueError("Image API returned no data.")
-    return base64.b64decode(b64)
+
+    cfg = _openai_image_env_config()
+    model = cfg["model"]
+    size = _coerce_image_size_for_model(model, cfg["size"])
+    raw_q = cfg["quality"]
+    rf = cfg["response_format"].lower()
+    norm_q = _normalize_image_quality_for_model(model, raw_q)
+
+    attempts: list[dict[str, Any]] = []
+    base: dict[str, Any] = {"model": model, "prompt": prompt, "n": 1}
+    if size:
+        base["size"] = size
+    if norm_q:
+        base["quality"] = norm_q
+
+    if rf and rf not in ("none", "auto", ""):
+        attempts.append({**base, "response_format": rf})
+    attempts.append(dict(base))
+
+    last_err: Exception | None = None
+    for kwargs in attempts:
+        try:
+            resp = client.images.generate(**kwargs)
+            png_bytes = _decode_openai_image_response(resp)
+            meta: dict[str, Any] = {
+                "featured_image_model": model,
+                "featured_image_quality": str(kwargs.get("quality") or ""),
+                "featured_image_size": size,
+                "featured_image_prompt_final": prompt,
+            }
+            return png_bytes, meta
+        except Exception as e:
+            last_err = e
+            continue
+    msg = str(last_err) if last_err else "unknown error"
+    raise ValueError(f"Image generation failed: {msg}") from last_err
 
 
 def _articles_for_project(project_id: str) -> list[dict]:
@@ -490,13 +703,7 @@ def _get_article_by_id(article_id: str) -> dict | None:
 
 
 def _update_article_fields(article_id: str, updates: dict) -> bool:
-    arts = _load_articles()
-    for i, a in enumerate(arts):
-        if (a.get("id") or "") == article_id:
-            arts[i].update(updates)
-            _save_articles(arts)
-            return True
-    return False
+    return _storage.update_article_fields(article_id, updates)
 
 
 def _app_article_status_from_wp_rest_status(raw) -> str:
@@ -656,7 +863,7 @@ def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict
         if need_img and not os.path.isfile(_article_featured_image_path(aid)):
             return (
                 f"Featured image missing for «{title[:80]}» after generation. "
-                f"{img_err or 'Check OPENAI_API_KEY for DALL·E.'}"
+                f"{img_err or 'Check OPENAI_API_KEY and OPENAI_IMAGE_* settings.'}"
             )
 
     arts_fresh = _load_articles()
@@ -711,26 +918,27 @@ def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict
         times.append(_clamp_future_schedule_dt(dt))
 
     batch_id = str(uuid.uuid4())
-    arts = _load_articles()
-    id_to_i = {(a.get("id") or ""): idx for idx, a in enumerate(arts)}
+    bulk_updates: list[tuple[str, dict]] = []
     for i, t in enumerate(eligible):
         aid = (t.get("id") or "").strip()
-        idx = id_to_i.get(aid)
-        if idx is None:
+        if not aid:
             continue
         sched_str = times[i].strftime("%Y-%m-%d %H:%M:%S")
-        arts[idx].update(
-            {
-                "wp_scheduled_at": sched_str,
-                "wp_schedule_wp_status": wp_st,
-                "wp_rest_base": schedule_rest_base,
-                "wp_schedule_error": "",
-                "wp_schedule_batch_id": batch_id,
-                "wp_schedule_batch_index": i,
-                "wp_schedule_batch_total": n_elig,
-            }
+        bulk_updates.append(
+            (
+                aid,
+                {
+                    "wp_scheduled_at": sched_str,
+                    "wp_schedule_wp_status": wp_st,
+                    "wp_rest_base": schedule_rest_base,
+                    "wp_schedule_error": "",
+                    "wp_schedule_batch_id": batch_id,
+                    "wp_schedule_batch_index": i,
+                    "wp_schedule_batch_total": n_elig,
+                },
+            )
         )
-    _save_articles(arts)
+    _storage.bulk_update_articles(bulk_updates)
 
     msg = f"Scheduled {n_elig} article(s) for automatic WordPress posting."
     if skipped:
@@ -1128,6 +1336,80 @@ def _get_openai_client_and_model(api_key: str | None):
     return OpenAI(api_key=key), model
 
 
+def _can_run_openai_image_prompt_optimizer(api_key: str | None) -> bool:
+    """ChatGPT prompt optimizer requires a real OpenAI key (not Groq-only)."""
+    k = (api_key or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+    if not k:
+        return False
+    if k.lower().startswith("gsk_"):
+        return False
+    if os.environ.get("LLM_PROVIDER", "").strip().lower() == "groq":
+        return False
+    return True
+
+
+def _optimize_image_prompt_for_featured(
+    raw_prompt: str,
+    *,
+    api_key: str | None,
+    style: str,
+    enabled: bool,
+) -> tuple[str, str, str | None]:
+    """
+    Rewrite the interpolated image prompt for consistent semi-realistic (or other) style.
+    Returns (final_prompt, optimizer_model_used, error_or_none).
+    Skips or falls back to raw_prompt when disabled, unavailable, or on failure.
+    """
+    raw = (raw_prompt or "").strip()
+    if not raw:
+        return "", "", None
+    if not enabled:
+        return raw, "", None
+    if not _can_run_openai_image_prompt_optimizer(api_key):
+        return raw, "", None
+    try:
+        client, base_model = _get_openai_client_and_model(api_key)
+        base_url = str(getattr(client, "base_url", "") or "")
+        if "groq.com" in base_url.lower():
+            return raw, "", None
+    except Exception:
+        return raw, "", None
+
+    opt_model = (os.environ.get("OPENAI_IMAGE_PROMPT_MODEL") or "").strip() or base_model
+    style_key = (style or "semi_real").strip().lower()
+    style_desc = _IMAGE_STYLE_INSTRUCTIONS.get(style_key, _IMAGE_STYLE_INSTRUCTIONS["semi_real"])
+
+    system = (
+        "You rewrite image generation prompts for OpenAI's image generation API. "
+        "Output a single English prompt string only—no markdown, no quotes, no preamble. "
+        "Keep the user's subject and intent. Add concrete camera, composition, and lighting when helpful. "
+        "Unless the user explicitly asks for text in the image, specify: no text, no watermarks, no logos."
+    )
+    user = f"""Style goal: {style_desc}
+
+User prompt (placeholders already filled):
+{raw}
+
+Rewrite into one optimized prompt (max ~400 words)."""
+
+    try:
+        resp = client.chat.completions.create(
+            model=opt_model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user.strip()},
+            ],
+            temperature=0.45,
+            max_tokens=700,
+        )
+        out = (resp.choices[0].message.content or "").strip()
+        if not out:
+            raise ValueError("Empty optimizer response.")
+        return out[:4000], opt_model, None
+    except Exception as e:
+        return raw, "", str(e)
+
+
 def _generate_article_markdown(
     title: str,
     keywords: list[str],
@@ -1287,6 +1569,9 @@ Return strict JSON with exactly these keys:
 
 @app.get("/")
 def home():
+    if not _is_authenticated():
+        return render_template("auth.html")
+
     projects = _load_projects()
     # Client id/secret come from .env (loaded from the app directory at startup).
     cid = (os.environ.get("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
@@ -1310,11 +1595,74 @@ def home():
         gsc_google_email=gsc_google_email,
         gsc_oauth_env_configured=gsc_oauth_env_configured,
         gsc_google_libs_missing=gsc_google_libs_missing,
+        storage_mode=_storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo",
+        storage_init_error=_storage.storage_init_error() if hasattr(_storage, "storage_init_error") else None,
+        current_user=_current_user(),
     )
+
+
+@app.post("/auth/login")
+def auth_login():
+    email = (request.form.get("email") or "").strip().lower()
+    password = request.form.get("password") or ""
+    if not email or not password:
+        flash("Email and password are required.", "error")
+        return redirect(url_for("home"))
+    user = _storage.get_user_by_email(email)
+    if not user or not (user.get("password_hash") or ""):
+        flash("Invalid email or password.", "error")
+        return redirect(url_for("home"))
+    if not check_password_hash(user["password_hash"], password):
+        flash("Invalid email or password.", "error")
+        return redirect(url_for("home"))
+    session["user_id"] = user["id"]
+    session["role"] = (user.get("role") or "user").strip().lower()
+    flash("Logged in.", "success")
+    return redirect(url_for("home"))
+
+
+@app.post("/auth/register")
+def auth_register():
+    email = (request.form.get("email") or "").strip().lower()
+    password = request.form.get("password") or ""
+    if not email or not password:
+        flash("Email and password are required.", "error")
+        return redirect(url_for("home"))
+    if len(password) < 8:
+        flash("Password must be at least 8 characters.", "error")
+        return redirect(url_for("home"))
+    existing = _storage.get_user_by_email(email)
+    if existing:
+        flash("An account with that email already exists.", "error")
+        return redirect(url_for("home"))
+    try:
+        _storage.insert_user(
+            {
+                "id": str(uuid.uuid4()),
+                "email": email,
+                "password_hash": generate_password_hash(password),
+                "role": "user",
+                "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
+    except Exception:
+        flash("Could not create account (database unavailable).", "error")
+        return redirect(url_for("home"))
+    flash("Account created. Please log in.", "success")
+    return redirect(url_for("home"))
+
+
+@app.post("/auth/logout")
+def auth_logout():
+    session.clear()
+    flash("Logged out.", "success")
+    return redirect(url_for("home"))
 
 
 @app.post("/projects")
 def add_project():
+    if not _is_authenticated():
+        return redirect(url_for("home"))
     name = (request.form.get("project_name") or "").strip()
     url_raw = (request.form.get("website_url") or "").strip()
     if not name:
@@ -1330,12 +1678,12 @@ def add_project():
         flash(f"Maximum {_MAX_PROJECTS} projects reached (3×3 grid). Remove a project to add another.", "error")
         return redirect(url_for("home"))
     new_id = str(uuid.uuid4())
-    projects.append(
+    _storage.insert_project(
         {
             "id": new_id,
+            "owner_user_id": (session.get("user_id") or "").strip(),
             "name": name[:200],
             "website_url": url,
-            # WordPress settings (optional; can be configured later per project)
             "wp_site_url": url,
             "wp_username": "",
             "wp_app_password": "",
@@ -1344,13 +1692,14 @@ def add_project():
             "default_prompt_id": "",
             "image_prompts": [],
             "default_image_prompt_id": "",
+            "image_style": "semi_real",
+            "optimize_image_prompt": True,
             "context_links": [],
             "gsc_property_url": "",
             "gsc_index_on_publish": True,
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
-    _save_projects(projects)
     flash(f"Project “{name}” added. Configure WordPress in Project settings.", "success")
     return redirect(url_for("project_detail", project_id=new_id, open_settings=1))
 
@@ -1383,7 +1732,7 @@ def update_project_settings(project_id: str):
                 flash("Category IDs must be comma-separated numbers (e.g. 12, 34).", "error")
                 return redirect(url_for("project_detail", project_id=project_id))
 
-    _update_project_fields(
+    ok = _update_project_fields(
         project_id,
         {
             "wp_site_url": wp_site_url,
@@ -1392,7 +1741,31 @@ def update_project_settings(project_id: str):
             "wp_category_ids": wp_category_ids,
         },
     )
+    if not ok:
+        flash("Could not save project settings to MongoDB. Check the server log and your connection.", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
     flash("Project settings saved.", "success")
+    return redirect(url_for("project_detail", project_id=project_id))
+
+
+@app.post("/projects/<project_id>/featured-image-settings")
+def update_project_featured_image_settings(project_id: str):
+    project = _get_project_by_id(project_id)
+    if not project:
+        flash("Project not found.", "error")
+        return redirect(url_for("home"))
+    style = (request.form.get("image_style") or "semi_real").strip().lower()
+    if style not in ("semi_real", "photorealistic", "illustration"):
+        style = "semi_real"
+    optimize = (request.form.get("optimize_image_prompt") or "") == "on"
+    _update_project_fields(
+        project_id,
+        {
+            "image_style": style,
+            "optimize_image_prompt": optimize,
+        },
+    )
+    flash("Featured image settings saved.", "success")
     return redirect(url_for("project_detail", project_id=project_id))
 
 
@@ -1851,16 +2224,9 @@ def delete_project(project_id: str):
     if not pid:
         flash("Invalid project.", "error")
         return redirect(url_for("home"))
-    projects = _load_projects()
-    before = len(projects)
-    projects = [p for p in projects if (p.get("id") or "") != pid]
-    if len(projects) == before:
+    if not _storage.delete_project_and_articles(pid):
         flash("Project not found.", "error")
         return redirect(url_for("home"))
-    _save_projects(projects)
-    arts = _load_articles()
-    arts = [a for a in arts if (a.get("project_id") or "") != pid]
-    _save_articles(arts)
     flash("Project removed.", "success")
     return redirect(url_for("home"))
 
@@ -1935,6 +2301,24 @@ def project_detail(project_id: str):
         for a in articles
     )
     scheduled_pending_articles = _pending_scheduled_article_rows(project_id)
+    _pending_n = 0
+    _draft_n = 0
+    _published_n = 0
+    for a in all_articles:
+        st = (a.get("status") or "pending").strip().lower()
+        if st == "published":
+            _published_n += 1
+        elif st == "draft":
+            _draft_n += 1
+        else:
+            _pending_n += 1
+    article_stats = {
+        "total": article_count_total,
+        "pending": _pending_n,
+        "draft": _draft_n,
+        "published": _published_n,
+        "scheduled_queue": len(scheduled_pending_articles),
+    }
 
     def _status_filter_qs(st: str) -> str:
         st = st.strip().lower()
@@ -1971,6 +2355,9 @@ def project_detail(project_id: str):
         gsc_oauth_env_configured=gsc_oauth_env_configured,
         gsc_google_email=gsc_google_email,
         gsc_google_libs_missing=gsc_google_libs_missing,
+        article_stats=article_stats,
+        storage_mode=_storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo",
+        storage_init_error=_storage.storage_init_error() if hasattr(_storage, "storage_init_error") else None,
     )
 
 
@@ -2050,6 +2437,37 @@ def bulk_upload_sample(project_id: str):
     return Response(
         data,
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/projects/<project_id>/wordpress/plugin.zip")
+def download_wordpress_plugin(project_id: str):
+    project = _get_project_by_id(project_id)
+    if not project:
+        flash("Project not found.", "error")
+        return redirect(url_for("home"))
+
+    plugin_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wordpress_plugin", "auto-articles-connector")
+    if not os.path.isdir(plugin_root):
+        return Response("Plugin source not found on server.", status=500, mimetype="text/plain")
+
+    safe_name = re.sub(r"[^a-zA-Z0-9\-_]+", "_", project.get("name") or "project")[:60] or "project"
+    filename = f"{safe_name}_auto-articles-connector.zip"
+
+    mem = BytesIO()
+    with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        for root, dirs, files in os.walk(plugin_root):
+            for fn in files:
+                if fn.startswith("."):
+                    continue
+                full = os.path.join(root, fn)
+                rel = os.path.relpath(full, os.path.dirname(plugin_root))
+                z.write(full, arcname=rel)
+    mem.seek(0)
+    return Response(
+        mem.getvalue(),
+        mimetype="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -2145,9 +2563,7 @@ def bulk_upload_articles(project_id: str):
             flash("No valid rows found to import.", "error")
             return redirect(url_for("project_detail", project_id=project_id))
 
-        arts = _load_articles()
-        arts.extend(to_add)
-        _save_articles(arts)
+        _storage.insert_articles_batch(to_add)
         flash(f"Imported {len(to_add)} articles.", "success")
         return redirect(url_for("project_detail", project_id=project_id))
     except Exception as e:
@@ -2313,11 +2729,10 @@ def bulk_articles_action(project_id: str):
         return _redirect_project_detail_with_dates(project_id)
 
     if action == "delete":
-        del_ids = {(t.get("id") or "") for t in targets}
-        new_arts = [a for a in arts if (a.get("id") or "") not in del_ids]
+        del_ids = [(t.get("id") or "").strip() for t in targets if (t.get("id") or "").strip()]
         for t in targets:
             _delete_article_featured_image_file((t.get("id") or "").strip())
-        _save_articles(new_arts)
+        _storage.delete_articles_by_ids(del_ids)
         flash(f"Deleted {len(targets)} article(s).", "success")
         return _redirect_project_detail_with_dates(project_id)
 
@@ -2400,8 +2815,7 @@ def add_project_article(project_id: str):
     if fk_err:
         flash(fk_err, "error")
         return redirect(url_for("project_detail", project_id=project_id))
-    arts = _load_articles()
-    arts.append(
+    _storage.insert_article(
         {
             "id": str(uuid.uuid4()),
             "project_id": project_id,
@@ -2418,7 +2832,6 @@ def add_project_article(project_id: str):
             "gsc_status": "pending",
         }
     )
-    _save_articles(arts)
     flash("Article added.", "success")
     return redirect(url_for("project_detail", project_id=project_id))
 
@@ -2498,12 +2911,14 @@ def _generate_article_content_core(
     """
     Shared article + optional featured image generation (same as article edit Generate).
     Returns (ok, error_message, image_error_message). image_error_message is set when
-    article saved but DALL·E failed (ok is still True).
+    article saved but OpenAI image generation failed (ok is still True).
     """
     api_key: str | None = None
     proj = dict(project)
     _normalize_project_prompts(proj)
     _normalize_project_image_prompts(proj)
+    optimize_flag = bool(proj.get("optimize_image_prompt", True))
+    image_style = (proj.get("image_style") or "semi_real").strip()
     form_prompt_id = (writing_prompt_id or "").strip()
     if form_prompt_id:
         sel = _get_prompt_by_id(proj, form_prompt_id)
@@ -2552,6 +2967,7 @@ def _generate_article_content_core(
     yoast: dict = {}
     image_bytes: bytes | None = None
     image_err: str | None = None
+    gen_meta_full: dict[str, Any] = {}
 
     try:
         # Keep peak memory low on small instances (e.g. Render free/starter):
@@ -2579,8 +2995,18 @@ def _generate_article_content_core(
         return False, str(e), None
 
     if run_image and interpolated_image_prompt:
+        final_prompt, opt_mod, opt_err = _optimize_image_prompt_for_featured(
+            interpolated_image_prompt,
+            api_key=api_key,
+            style=image_style,
+            enabled=optimize_flag,
+        )
         try:
-            image_bytes = _generate_featured_image_png_bytes(interpolated_image_prompt)
+            image_bytes, gen_meta = _generate_featured_image_png_bytes(final_prompt)
+            gen_meta_full = dict(gen_meta)
+            gen_meta_full["featured_image_prompt_raw"] = interpolated_image_prompt
+            gen_meta_full["featured_image_optimizer_model"] = (opt_mod or "") if optimize_flag else ""
+            gen_meta_full["featured_image_prompt_optimizer_error"] = (opt_err or "") if optimize_flag else ""
         except Exception as e:
             image_err = str(e)
 
@@ -2615,6 +3041,11 @@ def _generate_article_content_core(
         upd["featured_image_generated_at"] = ""
         upd["featured_image_prompt_id"] = ""
         upd["featured_image_source"] = ""
+        upd.update(_clear_featured_image_generation_meta_updates())
+    elif run_image and image_bytes:
+        upd.update(gen_meta_full)
+    elif run_image and not image_bytes:
+        upd.update(_clear_featured_image_generation_meta_updates())
 
     _update_article_fields(article_id, upd)
     return True, None, image_err
@@ -2687,11 +3118,16 @@ def save_article_body(project_id: str, article_id: str):
     body = request.form.get("article_body")
     if body is None:
         body = ""
-    _update_article_fields(article_id, {"article": body[:500_000]})
+    ok_save = _update_article_fields(article_id, {"article": body[:500_000]})
 
     wants_json = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     if wants_json:
+        if not ok_save:
+            return jsonify({"ok": False, "error": "save_failed"}), 500
         return jsonify({"ok": True})
+    if not ok_save:
+        flash("Could not save article to MongoDB.", "error")
+        return redirect(url_for("article_edit", project_id=project_id, article_id=article_id))
     flash("Article saved.", "success")
     return redirect(url_for("article_edit", project_id=project_id, article_id=article_id))
 
@@ -2711,6 +3147,7 @@ def clear_article_featured_image(project_id: str, article_id: str):
             "featured_image_generated_at": "",
             "featured_image_prompt_id": "",
             "featured_image_source": "",
+            **_clear_featured_image_generation_meta_updates(),
         },
     )
     flash("Featured image removed. You can generate a new one or upload one image.", "success")
@@ -2758,6 +3195,7 @@ def upload_article_featured_image(project_id: str, article_id: str):
             "featured_image_generated_at": ts,
             "featured_image_prompt_id": "",
             "featured_image_source": "uploaded",
+            **_clear_featured_image_generation_meta_updates(),
         },
     )
     flash("Featured image saved. It will be used when you post to WordPress.", "success")

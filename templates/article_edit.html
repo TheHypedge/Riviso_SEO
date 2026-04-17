@@ -101,7 +101,7 @@
                       {% endfor %}
                     </select>
                     <div class="form-text">
-                      Generates a featured image alongside the article (DALL·E 3, requires <span class="fw-medium">OPENAI_API_KEY</span>).
+                      Generates a featured image alongside the article (OpenAI Images API; requires <span class="fw-medium">OPENAI_API_KEY</span> and optional <span class="fw-medium">OPENAI_IMAGE_*</span> env vars).
                       Manage prompts on the <a href="{{ url_for('project_detail', project_id=project.id) }}">project page</a>.
                     </div>
                   </div>
@@ -304,7 +304,7 @@
                 <h2 class="h5 mb-2">Featured image</h2>
                 <p class="text-body-secondary small mb-3">
                   {% if requires_featured_image %}
-                    Only <span class="fw-semibold">one</span> featured image: generate with <span class="fw-semibold">Generate article</span> (DALL·E) <span class="fw-semibold">or</span> upload one file below—not both. If an image is already set, use <span class="fw-semibold">Clear featured image</span> before switching between generate and upload.
+                    Only <span class="fw-semibold">one</span> featured image: generate with <span class="fw-semibold">Generate article</span> (OpenAI Images) <span class="fw-semibold">or</span> upload one file below—not both. If an image is already set, use <span class="fw-semibold">Clear featured image</span> before switching between generate and upload.
                   {% else %}
                     Optional: one image for WordPress. Clear the current image before uploading a different file.
                   {% endif %}
@@ -733,7 +733,7 @@
           }
           if (detail) {
             detail.textContent = expectsImage
-              ? 'Writing the article and creating the featured image (DALL·E 3). This can take one or two minutes — do not close this tab.'
+              ? 'Writing the article and creating the featured image (OpenAI Images). This can take one or two minutes — do not close this tab.'
               : 'Writing the article. This may take a minute — do not close this tab.';
           }
           overlay.style.display = 'flex';

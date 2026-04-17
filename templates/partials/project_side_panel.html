@@ -1,0 +1,38 @@
+{% set stats = article_stats|default({'total': 0, 'pending': 0, 'draft': 0, 'published': 0, 'scheduled_queue': 0}) %}
+<aside class="app-side-panel vstack gap-4" aria-label="Project status and quick actions">
+  <div class="app-card app-card--elevated app-side-panel__card p-4">
+    <h2 class="h6 mb-3">WordPress status</h2>
+    {% if project_settings_incomplete|default(false) %}
+      <p class="mb-1"><span class="badge rounded-pill text-bg-warning">Not connected</span></p>
+      <p class="small text-body-secondary mb-0">Set application password in project settings to enable publishing.</p>
+      <button type="button" class="btn btn-link btn-sm px-0 mt-2" data-bs-toggle="modal" data-bs-target="#projectSettingsModal">Open project settings</button>
+    {% else %}
+      <p class="mb-1"><span class="badge rounded-pill text-bg-success">Connected</span></p>
+      <p class="small text-body-secondary mb-0">
+        Default post status:
+        <span class="fw-medium text-body">{{ 'Published' if (project.default_wp_status or 'draft') == 'publish' else 'Draft' }}</span>
+      </p>
+    {% endif %}
+  </div>
+
+  <div class="app-card app-card--elevated app-side-panel__card p-4">
+    <h2 class="h6 mb-3">Quick actions</h2>
+    <div class="d-grid gap-2">
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#addPromptModal">Add prompt</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#addImagePromptModal">Add image prompt</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" id="appSidePanelOpenBulkImport">Import data</button>
+    </div>
+    <p class="form-text small mb-0 mt-2">Import opens bulk Excel upload in Tools.</p>
+  </div>
+
+  <div class="app-card app-card--elevated app-side-panel__card p-4">
+    <h2 class="h6 mb-3">Project stats</h2>
+    <ul class="list-unstyled vstack gap-2 small mb-0">
+      <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Articles created</span><span class="fw-medium">{{ stats.total }}</span></li>
+      <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Scheduled</span><span class="fw-medium">{{ stats.scheduled_queue }}</span></li>
+      <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Published</span><span class="fw-medium">{{ stats.published }}</span></li>
+      <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Draft</span><span class="fw-medium">{{ stats.draft }}</span></li>
+      <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Pending</span><span class="fw-medium">{{ stats.pending }}</span></li>
+    </ul>
+  </div>
+</aside>

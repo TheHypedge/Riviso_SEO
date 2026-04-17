@@ -10,3 +10,4 @@ data/google_oauth.json
 articles.txt
 test.py
 data/
+*.db

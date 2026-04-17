@@ -1,0 +1,35 @@
+# Deploy Auto Articles to your VPS on every push to `main`.
+# Prerequisites: see deploy/GITHUB_ACTIONS.md
+
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          # Optional: set `port: 2222` here if SSH is not on 22
+          command_timeout: 15m
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /var/www/auto-articles
+            git fetch origin main
+            git checkout main
+            git pull --ff-only origin main
+            bash deploy/deploy.sh
