@@ -73,9 +73,72 @@ In the repo: **Settings → Secrets and variables → Actions → New repository
 
 ```bash
 cd /var/www/auto-articles
-git pull --ff-only origin main
+git fetch origin main
+git checkout main
+git reset --hard origin/main
 bash deploy/deploy.sh
 ```
+
+`git reset --hard origin/main` makes the server tree match **`main` on GitHub** and avoids failures when the clone had diverged or local edits to tracked files (e.g. accidental changes). It does **not** remove untracked files such as `.env` (still not in git).
+
+## Troubleshooting
+
+### `git@github.com: Permission denied (publickey)` on the VPS
+
+GitHub Actions can SSH **into** your server, but **`git fetch` / `git pull` run on the VPS** and talk to GitHub separately. If `origin` uses **`git@github.com:...`**, the server must have its **own** GitHub credentials (different from the Actions deploy key).
+
+Pick **one** of these:
+
+#### A. Deploy key (recommended if `origin` stays as SSH)
+
+1. On the **VPS**, as the same user that runs deploy (e.g. `root`):
+
+   ```bash
+   sudo -u root bash  # or your deploy user
+   mkdir -p ~/.ssh && chmod 700 ~/.ssh
+   ssh-keygen -t ed25519 -f ~/.ssh/github_auto_articles -N "" -C "vps-deploy-readonly"
+   cat ~/.ssh/github_auto_articles.pub
+   ```
+
+2. In GitHub: **Repository → Settings → Deploy keys → Add deploy key**  
+   - Paste the **public** key, enable **Allow read access** only (no write needed for `pull`).
+
+3. On the VPS, use this key for `github.com`:
+
+   ```bash
+   printf '%s\n' \
+     'Host github.com' \
+     '  HostName github.com' \
+     '  User git' \
+     '  IdentityFile ~/.ssh/github_auto_articles' \
+     '  IdentitiesOnly yes' >> ~/.ssh/config
+   chmod 600 ~/.ssh/config
+   ```
+
+4. Test: `ssh -T git@github.com` (should say “Hi … You’ve successfully authenticated…”).
+
+5. Re-run the **Deploy to VPS** workflow.
+
+#### B. HTTPS + token (switch `origin` away from SSH)
+
+1. Create a [Personal Access Token](https://github.com/settings/tokens) with **`Contents: Read`** (classic: `repo` scope) for this repository.
+
+2. On the **VPS**:
+
+   ```bash
+   cd /var/www/auto-articles
+   git remote set-url origin https://github.com/TheHypedge/Auto-Article-Generator.git
+   git config credential.helper store
+   git pull origin main
+   ```
+
+3. When prompted: **Username** = your GitHub username; **Password** = the **token** (not your GitHub password).
+
+After either A or B, `git fetch` / `git pull` in the deploy script should succeed.
+
+### `fatal: Not possible to fast-forward` / diverged branches
+
+The VPS clone must not keep its own commits on `main` or dirty tracked files. The workflow uses **`git reset --hard origin/main`** so the server matches GitHub. If you still deploy manually with `git pull`, use the same reset sequence as in [Manual deploy](#manual-deploy-same-steps-as-ci).
 
 ## Security notes
 
