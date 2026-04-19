@@ -28,6 +28,8 @@ jobs:
           script_stop: true
           script: |
             set -euo pipefail
+            # Git 2.35+ refuses repos owned by another user (e.g. root SSH vs www-data files)
+            git config --global --add safe.directory /var/www/auto-articles
             cd /var/www/auto-articles
             git fetch origin main
             git checkout main

@@ -7,6 +7,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+git config --global --add safe.directory "$ROOT"
+
 if [[ ! -d .venv ]]; then
   echo "Missing .venv — create it: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt" >&2
   exit 1
