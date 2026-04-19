@@ -8,11 +8,15 @@ Do not load or save `data/projects.json` / `data/articles.json` from app routes 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
+from datetime import date, datetime
 from typing import Any
 
 from database import get_db, init_db
+
+_log = logging.getLogger(__name__)
 
 _db_write_lock = threading.Lock()
 _storage_mode: str = "mongo"  # "mongo" | "json"
@@ -22,6 +26,42 @@ _storage_init_error: str | None = None
 def _data_path(filename: str) -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(here, "data", filename)
+
+
+def _users_json_path() -> str:
+    return _data_path("users.json")
+
+
+def _load_json_users() -> list[dict[str, Any]]:
+    path = _users_json_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict)]
+    except FileNotFoundError:
+        return []
+    except (json.JSONDecodeError, OSError, TypeError):
+        return []
+    return []
+
+
+def _save_json_users(users: list[dict[str, Any]]) -> None:
+    path = _users_json_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(users, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def _user_row_to_public(u: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": (u.get("id") or "").strip(),
+        "email": (u.get("email") or "").strip(),
+        "password_hash": (u.get("password_hash") or "").strip(),
+        "role": (u.get("role") or "user").strip().lower(),
+        "created_at": (u.get("created_at") or "").strip(),
+    }
 
 
 def _load_json_list(filename: str) -> list[dict[str, Any]]:
@@ -36,6 +76,15 @@ def _load_json_list(filename: str) -> list[dict[str, Any]]:
         return []
     except Exception:
         return []
+
+
+def _save_json_articles(articles: list[dict[str, Any]]) -> None:
+    """Persist full article list when using JSON storage fallback (see init_storage)."""
+    path = _data_path("articles.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(articles, f, indent=2, ensure_ascii=False)
+        f.write("\n")
 
 
 def storage_mode() -> str:
@@ -91,15 +140,19 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_user_by_id(user_id: str) -> dict[str, Any] | None:
-    if _storage_mode != "mongo":
-        return None
     uid = (user_id or "").strip()
     if not uid:
+        return None
+    if _storage_mode == "json":
+        for u in _load_json_users():
+            if (u.get("id") or "").strip() == uid:
+                return _user_row_to_public(u)
+        return None
+    if _storage_mode != "mongo":
         return None
     doc = get_db().users.find_one({"id": uid})
     if not doc:
         return None
-    # stored shape is already normalized-like; just return relevant keys
     return {
         "id": (doc.get("id") or "").strip(),
         "email": (doc.get("email") or "").strip(),
@@ -110,10 +163,15 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
 
 
 def get_user_by_email(email: str) -> dict[str, Any] | None:
-    if _storage_mode != "mongo":
-        return None
     em = (email or "").strip().lower()
     if not em:
+        return None
+    if _storage_mode == "json":
+        for u in _load_json_users():
+            if (u.get("email") or "").strip().lower() == em:
+                return _user_row_to_public(u)
+        return None
+    if _storage_mode != "mongo":
         return None
     doc = get_db().users.find_one({"email": em})
     if not doc:
@@ -128,14 +186,33 @@ def get_user_by_email(email: str) -> dict[str, Any] | None:
 
 
 def insert_user(user: dict[str, Any]) -> None:
-    if _storage_mode != "mongo":
-        raise RuntimeError("User storage requires MongoDB")
     norm = _normalize_user_dict(user)
+    if _storage_mode == "json":
+        with _db_write_lock:
+            users = _load_json_users()
+            if any((u.get("email") or "").strip().lower() == norm["email"] for u in users):
+                raise ValueError("email already registered")
+            users.append(norm)
+            _save_json_users(users)
+        return
+    if _storage_mode != "mongo":
+        raise RuntimeError("User storage requires MongoDB or JSON fallback")
     doc = {**norm, "_id": norm["id"]}
     with _db_write_lock:
         res = get_db().users.insert_one(doc)
         if not res.acknowledged:
             raise RuntimeError("MongoDB insert_user was not acknowledged")
+
+
+def _coerce_wp_scheduled_at_str(v: Any, max_len: int = 64) -> str:
+    """MongoDB may store schedule times as BSON Date; app code expects YYYY-mm-dd HH:MM:SS strings."""
+    if v is None or v == "":
+        return ""
+    if isinstance(v, datetime):
+        return v.strftime("%Y-%m-%d %H:%M:%S")[:max_len]
+    if isinstance(v, date) and not isinstance(v, datetime):
+        return v.isoformat()[:max_len]
+    return str(v).strip()[:max_len]
 
 
 def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
@@ -178,7 +255,7 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "wp_link": (d.get("wp_link") or "")[:2048],
         "wp_rest_base": (d.get("wp_rest_base") or "")[:200],
         "wp_last_wp_status": (d.get("wp_last_wp_status") or "")[:32],
-        "wp_scheduled_at": (d.get("wp_scheduled_at") or "")[:64],
+        "wp_scheduled_at": _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at")),
         "wp_schedule_wp_status": (d.get("wp_schedule_wp_status") or "")[:32],
         "wp_schedule_error": d.get("wp_schedule_error") or "",
         "wp_schedule_batch_id": (d.get("wp_schedule_batch_id") or "")[:36],
@@ -335,7 +412,7 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
         "wp_link": d.get("wp_link") or "",
         "wp_rest_base": d.get("wp_rest_base") or "",
         "wp_last_wp_status": d.get("wp_last_wp_status") or "",
-        "wp_scheduled_at": d.get("wp_scheduled_at") or "",
+        "wp_scheduled_at": _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at")),
         "wp_schedule_wp_status": d.get("wp_schedule_wp_status") or "",
         "wp_schedule_error": d.get("wp_schedule_error") or "",
         "wp_schedule_batch_id": d.get("wp_schedule_batch_id") or "",
@@ -440,6 +517,17 @@ def insert_articles_batch(articles: list[dict[str, Any]]) -> None:
 
 
 def update_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            arts = [_normalize_article_dict(dict(a)) for a in _load_json_list("articles.json")]
+            idx = next((i for i, x in enumerate(arts) if x.get("id") == article_id), None)
+            if idx is None:
+                return False
+            d = dict(arts[idx])
+            _apply_article_updates_dict(d, updates)
+            arts[idx] = _normalize_article_dict(d)
+            _save_json_articles(arts)
+        return True
     with _db_write_lock:
         db = get_db()
         doc = db.articles.find_one({"id": article_id})
@@ -463,11 +551,26 @@ def delete_articles_by_ids(article_ids: list[str]) -> None:
 def bulk_update_articles(updates: list[tuple[str, dict[str, Any]]]) -> None:
     if not updates:
         return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            arts = [_normalize_article_dict(dict(a)) for a in _load_json_list("articles.json")]
+            by_id = {x.get("id"): i for i, x in enumerate(arts) if x.get("id")}
+            for aid, u in updates:
+                idx = by_id.get(aid)
+                if idx is None:
+                    _log.warning("bulk_update_articles: missing article id %r in articles.json", aid)
+                    continue
+                d = dict(arts[idx])
+                _apply_article_updates_dict(d, u)
+                arts[idx] = _normalize_article_dict(d)
+            _save_json_articles(arts)
+        return
     with _db_write_lock:
         db = get_db()
         for aid, u in updates:
             doc = db.articles.find_one({"id": aid})
             if not doc:
+                _log.warning("bulk_update_articles: missing article id %r in MongoDB", aid)
                 continue
             d = _mongo_doc_to_article(doc)
             _apply_article_updates_dict(d, u)

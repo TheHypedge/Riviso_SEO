@@ -3,31 +3,39 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Login — Auto Articles</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
+    <title>Sign in — Auto Articles</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet" />
   </head>
-  <body class="bg-body-tertiary">
-    <nav class="navbar bg-white border-bottom">
-      <div class="container">
-        <span class="navbar-brand fw-semibold">Auto Articles</span>
-      </div>
-    </nav>
+  <body class="auth-page">
+    <a href="#auth-main-content" class="auth-skip-link">Skip to sign in</a>
 
-    <main class="container py-5" style="max-width: 920px;">
-      <div class="row g-4 align-items-start">
-        <div class="col-12 col-lg-6">
-          <h1 class="h3 mb-2">Welcome back</h1>
-          <p class="text-body-secondary mb-0">
-            Sign in to manage your projects, generate articles, schedule posts, and publish to WordPress.
-          </p>
+    <div class="auth-split" id="auth-main-content">
+      <aside class="auth-split__visual" aria-hidden="true">
+        <div class="auth-split__visual-inner">
+          <p class="auth-split__brand">Auto Articles</p>
+          <div class="auth-split__visual-body">
+            <p class="auth-split__eyebrow">You can easily</p>
+            <h1 class="auth-split__headline">
+              Get access your personal hub for clarity and productivity.
+            </h1>
+          </div>
         </div>
-        <div class="col-12 col-lg-6">
+      </aside>
+
+      <div class="auth-split__form-wrap">
+        <div class="auth-split__form-inner">
           {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-              <div class="mb-3">
+              <div class="auth-alerts" role="region" aria-label="Notifications">
                 {% for category, message in messages %}
-                  <div class="alert alert-{{ 'danger' if category == 'error' else ('success' if category == 'success' else 'secondary') }} mb-2" role="alert">
+                  <div
+                    class="auth-alert auth-alert--{{ 'error' if category == 'error' else ('success' if category == 'success' else 'neutral') }}"
+                    role="alert"
+                  >
                     {{ message }}
                   </div>
                 {% endfor %}
@@ -35,58 +43,278 @@
             {% endif %}
           {% endwith %}
 
-          <div class="card shadow-sm border-0">
-            <div class="card-body p-4">
-              <ul class="nav nav-pills mb-3" id="authTabs" role="tablist">
-                <li class="nav-item" role="presentation">
-                  <button class="nav-link active" id="login-tab" data-bs-toggle="pill" data-bs-target="#login-pane" type="button" role="tab" aria-controls="login-pane" aria-selected="true">Login</button>
-                </li>
-                <li class="nav-item" role="presentation">
-                  <button class="nav-link" id="register-tab" data-bs-toggle="pill" data-bs-target="#register-pane" type="button" role="tab" aria-controls="register-pane" aria-selected="false">Register</button>
-                </li>
-              </ul>
+          {% if storage_init_error is defined and storage_init_error %}
+            <div class="auth-alert auth-alert--warning" role="status">
+              <div class="auth-alert__title">Database connection issue</div>
+              <p class="auth-alert__text mb-0">
+                The app could not reach MongoDB, so it fell back to local JSON files. Sign-in still works; accounts are stored in
+                <code class="auth-code">data/users.json</code>. Fix <code class="auth-code">MONGODB_URI</code> in <code class="auth-code">.env</code> (remove stray quotes), confirm the DB is reachable, and for Atlas add your IP to the network access list.
+              </p>
+              <details class="auth-details">
+                <summary class="auth-details__summary">Technical detail</summary>
+                <pre class="auth-storage-pre">{{ storage_init_error }}</pre>
+              </details>
+            </div>
+          {% endif %}
 
-              <div class="tab-content" id="authTabContent">
-                <div class="tab-pane fade show active" id="login-pane" role="tabpanel" aria-labelledby="login-tab" tabindex="0">
-                  <form method="post" action="{{ url_for('auth_login') }}" class="vstack gap-3">
-                    <div>
-                      <label class="form-label" for="loginEmail">Email</label>
-                      <input class="form-control" id="loginEmail" name="email" type="email" required autocomplete="email" placeholder="you@company.com">
-                    </div>
-                    <div>
-                      <label class="form-label" for="loginPassword">Password</label>
-                      <input class="form-control" id="loginPassword" name="password" type="password" required autocomplete="current-password">
-                    </div>
-                    <button type="submit" class="btn btn-primary w-100">Login</button>
-                    <div class="small text-body-secondary">
-                      Admin seeded: <code class="small">iamakhileshsoni@gmail.com</code>
-                    </div>
-                  </form>
+          <div class="auth-card">
+            <div class="auth-card__accent" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  d="M12 2L13.09 8.26L19 9L13.09 9.74L12 16L10.91 9.74L5 9L10.91 8.26L12 2Z"
+                  fill="currentColor"
+                  opacity="0.9"
+                />
+                <path
+                  d="M19 14L19.5 16.5L22 17L19.5 17.5L19 20L18.5 17.5L16 17L18.5 16.5L19 14Z"
+                  fill="currentColor"
+                  opacity="0.55"
+                />
+              </svg>
+            </div>
+
+            <div class="auth-tabs" role="tablist" aria-label="Authentication">
+              <button
+                type="button"
+                class="auth-tab active"
+                id="login-tab"
+                role="tab"
+                aria-selected="true"
+                aria-controls="login-pane"
+                data-bs-toggle="pill"
+                data-bs-target="#login-pane"
+              >
+                Log in
+              </button>
+              <button
+                type="button"
+                class="auth-tab"
+                id="register-tab"
+                role="tab"
+                aria-selected="false"
+                aria-controls="register-pane"
+                data-bs-toggle="pill"
+                data-bs-target="#register-pane"
+              >
+                Register
+              </button>
+            </div>
+
+            <div class="tab-content auth-tab-panels">
+              <div class="tab-pane fade show active" id="login-pane" role="tabpanel" aria-labelledby="login-tab" tabindex="0">
+                <div class="auth-panel-header">
+                  <h2 class="auth-title">Welcome back</h2>
+                  <p class="auth-subtitle">Sign in to manage projects, generate articles, and publish to WordPress.</p>
                 </div>
 
-                <div class="tab-pane fade" id="register-pane" role="tabpanel" aria-labelledby="register-tab" tabindex="0">
-                  <form method="post" action="{{ url_for('auth_register') }}" class="vstack gap-3">
-                    <div>
-                      <label class="form-label" for="regEmail">Email</label>
-                      <input class="form-control" id="regEmail" name="email" type="email" required autocomplete="email" placeholder="you@company.com">
+                <form method="post" action="{{ url_for('auth_login') }}" class="auth-form" novalidate>
+                  <div class="auth-field">
+                    <label class="auth-label" for="loginEmail">Email</label>
+                    <input
+                      class="auth-input"
+                      id="loginEmail"
+                      name="email"
+                      type="email"
+                      required
+                      autocomplete="email"
+                      placeholder="you@company.com"
+                    />
+                  </div>
+                  <div class="auth-field">
+                    <label class="auth-label" for="loginPassword">Password</label>
+                    <div class="auth-input-row">
+                      <input
+                        class="auth-input auth-input--has-toggle"
+                        id="loginPassword"
+                        name="password"
+                        type="password"
+                        required
+                        autocomplete="current-password"
+                        placeholder="••••••••"
+                      />
+                      <button
+                        type="button"
+                        class="auth-toggle"
+                        data-auth-toggle="loginPassword"
+                        aria-label="Show password"
+                        aria-pressed="false"
+                      >
+                        <span class="auth-toggle__show" aria-hidden="true">
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12Z" />
+                            <circle cx="12" cy="12" r="3" />
+                          </svg>
+                        </span>
+                        <span class="auth-toggle__hide auth-toggle__hide--hidden" aria-hidden="true">
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                            <path d="M3 3l18 18" />
+                            <path d="M10.58 10.58A3 3 0 0012 15a3 3 0 002.42-4.42" />
+                            <path d="M9.88 9.88A10.4 10.4 0 001.11 12s4 7 11 7a10.5 10.5 0 004.17-.89" />
+                            <path d="M14.12 14.12A10.4 10.4 0 0022.89 12s-4-7-11-7a10.5 10.5 0 00-4.17.89" />
+                          </svg>
+                        </span>
+                      </button>
                     </div>
-                    <div>
-                      <label class="form-label" for="regPassword">Password</label>
-                      <input class="form-control" id="regPassword" name="password" type="password" required autocomplete="new-password" placeholder="At least 8 characters">
-                      <div class="form-text">Use a strong password. Minimum 8 characters.</div>
-                    </div>
-                    <button type="submit" class="btn btn-outline-primary w-100">Create account</button>
-                  </form>
+                  </div>
+                  <button type="submit" class="auth-btn auth-btn--primary">Log in</button>
+                  <p class="auth-hint">Seeded admin: <code class="auth-code">iamakhileshsoni@gmail.com</code></p>
+                </form>
+
+                <div class="auth-divider">
+                  <span>or continue with</span>
                 </div>
+                <div class="auth-social" aria-label="Social sign-in unavailable">
+                  <button type="button" class="auth-social-btn" disabled title="Not configured">
+                    <span class="auth-social-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                    </span>
+                    Google
+                  </button>
+                  <button type="button" class="auth-social-btn" disabled title="Not configured">
+                    <span class="auth-social-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                    </span>
+                    GitHub
+                  </button>
+                  <button type="button" class="auth-social-btn" disabled title="Not configured">
+                    <span class="auth-social-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.975 1.87-1.02.31-2.09.24-2.87-.29-.78-.53-1.19-1.37-1.19-2.43 0-1.14.494-2.27 1.178-3.08.744-.9 1.99-1.57 2.975-1.87 1.02-.31 2.09-.24 2.87.29.78.53 1.19 1.37 1.19 2.43zm-4.334 21.47c-1.405 0-2.725-.27-3.935-.76-1.21-.49-2.31-1.21-3.27-2.13-.96-.92-1.72-2.01-2.25-3.25-.53-1.24-.8-2.59-.8-4.01 0-1.42.27-2.77.8-4.01.53-1.24 1.29-2.33 2.25-3.25.96-.92 2.06-1.64 3.27-2.13 1.21-.49 2.53-.76 3.935-.76 1.405 0 2.725.27 3.935.76 1.21.49 2.31 1.21 3.27 2.13.96.92 1.72 2.01 2.25 3.25.53 1.24.8 2.59.8 4.01 0 1.42-.27 2.77-.8 4.01-.53 1.24-1.29 2.33-2.25 3.25-.96.92-2.06 1.64-3.27 2.13-1.21.49-2.53.76-3.935.76z"/></svg>
+                    </span>
+                    Apple
+                  </button>
+                </div>
+                <p class="auth-footer-text">
+                  Don’t have an account?
+                  <button type="button" class="auth-link" id="go-register">Register</button>
+                </p>
+              </div>
+
+              <div class="tab-pane fade" id="register-pane" role="tabpanel" aria-labelledby="register-tab" tabindex="0">
+                <div class="auth-panel-header">
+                  <h2 class="auth-title">Create an account</h2>
+                  <p class="auth-subtitle">Start organizing articles and WordPress publishing in one place.</p>
+                </div>
+
+                <form method="post" action="{{ url_for('auth_register') }}" class="auth-form" novalidate>
+                  <div class="auth-field">
+                    <label class="auth-label" for="regEmail">Email</label>
+                    <input
+                      class="auth-input"
+                      id="regEmail"
+                      name="email"
+                      type="email"
+                      required
+                      autocomplete="email"
+                      placeholder="you@company.com"
+                    />
+                  </div>
+                  <div class="auth-field">
+                    <label class="auth-label" for="regPassword">Password</label>
+                    <div class="auth-input-row">
+                      <input
+                        class="auth-input auth-input--has-toggle"
+                        id="regPassword"
+                        name="password"
+                        type="password"
+                        required
+                        autocomplete="new-password"
+                        placeholder="At least 8 characters"
+                        minlength="8"
+                      />
+                      <button
+                        type="button"
+                        class="auth-toggle"
+                        data-auth-toggle="regPassword"
+                        aria-label="Show password"
+                        aria-pressed="false"
+                      >
+                        <span class="auth-toggle__show" aria-hidden="true">
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12Z" />
+                            <circle cx="12" cy="12" r="3" />
+                          </svg>
+                        </span>
+                        <span class="auth-toggle__hide auth-toggle__hide--hidden" aria-hidden="true">
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75">
+                            <path d="M3 3l18 18" />
+                            <path d="M10.58 10.58A3 3 0 0012 15a3 3 0 002.42-4.42" />
+                            <path d="M9.88 9.88A10.4 10.4 0 001.11 12s4 7 11 7a10.5 10.5 0 004.17-.89" />
+                            <path d="M14.12 14.12A10.4 10.4 0 0022.89 12s-4-7-11-7a10.5 10.5 0 00-4.17.89" />
+                          </svg>
+                        </span>
+                      </button>
+                    </div>
+                    <p class="auth-field-hint">Use a strong password. Minimum 8 characters.</p>
+                  </div>
+                  <button type="submit" class="auth-btn auth-btn--primary">Create account</button>
+                </form>
+
+                <div class="auth-divider">
+                  <span>or continue with</span>
+                </div>
+                <div class="auth-social" aria-label="Social sign-in unavailable">
+                  <button type="button" class="auth-social-btn" disabled title="Not configured">
+                    <span class="auth-social-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                    </span>
+                    Google
+                  </button>
+                  <button type="button" class="auth-social-btn" disabled title="Not configured">
+                    <span class="auth-social-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+                    </span>
+                    GitHub
+                  </button>
+                  <button type="button" class="auth-social-btn" disabled title="Not configured">
+                    <span class="auth-social-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.975 1.87-1.02.31-2.09.24-2.87-.29-.78-.53-1.19-1.37-1.19-2.43 0-1.14.494-2.27 1.178-3.08.744-.9 1.99-1.57 2.975-1.87 1.02-.31 2.09-.24 2.87.29.78.53 1.19 1.37 1.19 2.43zm-4.334 21.47c-1.405 0-2.725-.27-3.935-.76-1.21-.49-2.31-1.21-3.27-2.13-.96-.92-1.72-2.01-2.25-3.25-.53-1.24-.8-2.59-.8-4.01 0-1.42.27-2.77.8-4.01.53-1.24 1.29-2.33 2.25-3.25.96-.92 2.06-1.64 3.27-2.13 1.21-.49 2.53-.76 3.935-.76 1.405 0 2.725.27 3.935.76 1.21.49 2.31 1.21 3.27 2.13.96.92 1.72 2.01 2.25 3.25.53 1.24.8 2.59.8 4.01 0 1.42-.27 2.77-.8 4.01-.53 1.24-1.29 2.33-2.25 3.25-.96.92-2.06 1.64-3.27 2.13-1.21.49-2.53.76-3.935.76z"/></svg>
+                    </span>
+                    Apple
+                  </button>
+                </div>
+                <p class="auth-footer-text">
+                  Already have an account?
+                  <button type="button" class="auth-link" id="go-login">Log in</button>
+                </p>
               </div>
             </div>
           </div>
-
         </div>
       </div>
-    </main>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+      (function () {
+        document.querySelectorAll('[data-auth-toggle]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var id = btn.getAttribute('data-auth-toggle');
+            var input = id && document.getElementById(id);
+            if (!input) return;
+            var show = input.type === 'password';
+            input.type = show ? 'text' : 'password';
+            btn.setAttribute('aria-pressed', show ? 'true' : 'false');
+            btn.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+            var showIc = btn.querySelector('.auth-toggle__show');
+            var hideIc = btn.querySelector('.auth-toggle__hide');
+            if (showIc && hideIc) {
+              showIc.classList.toggle('auth-toggle__hide--hidden', show);
+              hideIc.classList.toggle('auth-toggle__hide--hidden', !show);
+            }
+          });
+        });
+
+        function showAuthTab(selector) {
+          var el = document.querySelector(selector);
+          if (el && window.bootstrap && window.bootstrap.Tab) {
+            window.bootstrap.Tab.getOrCreateInstance(el).show();
+          }
+        }
+        var goReg = document.getElementById('go-register');
+        var goLog = document.getElementById('go-login');
+        if (goReg) goReg.addEventListener('click', function () { showAuthTab('#register-tab'); });
+        if (goLog) goLog.addEventListener('click', function () { showAuthTab('#login-tab'); });
+      })();
+    </script>
   </body>
 </html>
-

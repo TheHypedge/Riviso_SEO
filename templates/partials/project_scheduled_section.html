@@ -1,10 +1,18 @@
-<section class="app-dash-queue app-dash-section mb-4" aria-labelledby="scheduled-heading">
+<section
+  class="app-dash-queue app-dash-section mb-4"
+  aria-labelledby="scheduled-heading"
+  id="scheduledPostsSection"
+  data-cancel-url-pattern="{{ url_for('cancel_article_schedule', project_id=project.id, article_id='__AID__') }}"
+  data-date-from="{{ date_from|default('') }}"
+  data-date-to="{{ date_to|default('') }}"
+  data-filter-status="{{ status_filter|default('') }}"
+>
   <div class="app-card app-card--elevated overflow-hidden">
     <div class="p-4 border-bottom border-opacity-10">
       <h2 id="scheduled-heading" class="h6 mb-1">Scheduled posts</h2>
       <p class="text-body-secondary small mb-0">WordPress queue — not live until the scheduled time.</p>
     </div>
-    <div class="p-4">
+    <div class="p-4" id="scheduledSectionInner">
       {% if scheduled_pending_articles and scheduled_pending_articles|length > 0 %}
         <div class="table-responsive">
           <table class="table table-hover align-middle mb-0">

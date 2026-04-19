@@ -17,8 +17,16 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 _client: MongoClient | None = None
 
 
+def _strip_optional_quotes(raw: str) -> str:
+    """`.env` lines like MONGODB_URI='mongodb://...' sometimes retain quotes depending on tooling."""
+    s = (raw or "").strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        return s[1:-1].strip()
+    return s
+
+
 def get_mongodb_uri() -> str:
-    u = (os.environ.get("MONGODB_URI") or "").strip()
+    u = _strip_optional_quotes(os.environ.get("MONGODB_URI") or "")
     if not u:
         raise RuntimeError(
             "MONGODB_URI is not set. Add it to .env, e.g. mongodb://127.0.0.1:27017/"
@@ -27,7 +35,7 @@ def get_mongodb_uri() -> str:
 
 
 def get_database_name() -> str:
-    name = (os.environ.get("MONGODB_DB_NAME") or "auto_articles").strip()
+    name = _strip_optional_quotes(os.environ.get("MONGODB_DB_NAME") or "auto_articles")
     return name or "auto_articles"
 
 

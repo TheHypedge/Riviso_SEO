@@ -29,7 +29,7 @@
     <h2 class="h6 mb-3">Project stats</h2>
     <ul class="list-unstyled vstack gap-2 small mb-0">
       <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Articles created</span><span class="fw-medium">{{ stats.total }}</span></li>
-      <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Scheduled</span><span class="fw-medium">{{ stats.scheduled_queue }}</span></li>
+      <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Scheduled</span><span class="fw-medium" id="statScheduledQueue">{{ stats.scheduled_queue }}</span></li>
       <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Published</span><span class="fw-medium">{{ stats.published }}</span></li>
       <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Draft</span><span class="fw-medium">{{ stats.draft }}</span></li>
       <li class="d-flex justify-content-between gap-2"><span class="text-body-secondary">Pending</span><span class="fw-medium">{{ stats.pending }}</span></li>

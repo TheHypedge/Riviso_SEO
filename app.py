@@ -44,8 +44,9 @@ _storage.init_storage()
 
 
 def _ensure_initial_admin_user() -> None:
-    # Only supported when MongoDB is available.
-    if getattr(_storage, "storage_mode", lambda: "mongo")() != "mongo":
+    """Seed default admin when no user exists (MongoDB or JSON fallback)."""
+    sm = _storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo"
+    if sm not in ("mongo", "json"):
         return
     email = "iamakhileshsoni@gmail.com"
     password = "Admin@2026"
@@ -197,6 +198,39 @@ def _get_project_by_id(project_id: str) -> dict | None:
         if (p.get("id") or "") == pid:
             return p
     return None
+
+
+def _get_project_by_id_unscoped(project_id: str) -> dict | None:
+    """Load a project from storage without session/owner filtering.
+
+    Used by background threads and APScheduler where no request context exists.
+    HTTP routes must enforce access before calling code that relies on this.
+    """
+    pid = (project_id or "").strip()
+    for p in _storage.load_projects():
+        if (p.get("id") or "") == pid:
+            return p
+    return None
+
+
+_bulk_schedule_error_lock = threading.Lock()
+_bulk_schedule_last_errors: dict[str, str] = {}
+
+
+def _set_bulk_schedule_error(project_id: str, message: str) -> None:
+    pid = (project_id or "").strip()
+    if not pid:
+        return
+    with _bulk_schedule_error_lock:
+        _bulk_schedule_last_errors[pid] = message
+
+
+def _pop_bulk_schedule_error(project_id: str) -> str | None:
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    with _bulk_schedule_error_lock:
+        return _bulk_schedule_last_errors.pop(pid, None)
 
 
 def _normalize_project_prompts(project: dict) -> None:
@@ -706,6 +740,13 @@ def _update_article_fields(article_id: str, updates: dict) -> bool:
     return _storage.update_article_fields(article_id, updates)
 
 
+def _article_wp_scheduled_at_str(article: dict | None) -> str:
+    """Normalize schedule time from article row (string or BSON datetime from MongoDB)."""
+    if not article:
+        return ""
+    return _storage._coerce_wp_scheduled_at_str(article.get("wp_scheduled_at"))
+
+
 def _app_article_status_from_wp_rest_status(raw) -> str:
     """Map WordPress REST post `status` to our article status (published vs draft)."""
     if isinstance(raw, str) and raw.strip():
@@ -793,14 +834,22 @@ def _clamp_future_schedule_dt(dt: datetime) -> datetime:
 
 
 def _bulk_schedule_thread_entry(project_id: str, ids: list[str], form_snapshot: dict) -> None:
-    with app.app_context():
-        err = _bulk_schedule_pipeline(project_id, ids, form_snapshot)
-        if err:
-            app.logger.error("Bulk schedule failed: %s", err)
+    try:
+        with app.app_context():
+            err = _bulk_schedule_pipeline(project_id, ids, form_snapshot)
+            if err:
+                app.logger.error("Bulk schedule failed: %s", err)
+                _set_bulk_schedule_error(project_id, err)
+            else:
+                with _bulk_schedule_error_lock:
+                    _bulk_schedule_last_errors.pop((project_id or "").strip(), None)
+    except Exception as e:
+        app.logger.exception("Bulk schedule raised")
+        _set_bulk_schedule_error(project_id, str(e) or "Scheduling failed unexpectedly.")
 
 
 def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict) -> str | None:
-    project = _get_project_by_id(project_id)
+    project = _get_project_by_id_unscoped(project_id)
     if not project:
         return "Project not found."
 
@@ -966,7 +1015,7 @@ def _earlier_batch_member_blocks(arts: list[dict], article: dict, now: datetime)
             continue
         if o.get("wp_post_id"):
             continue
-        sched_o = (o.get("wp_scheduled_at") or "").strip()
+        sched_o = _article_wp_scheduled_at_str(o)
         if not sched_o:
             continue
         try:
@@ -979,13 +1028,16 @@ def _earlier_batch_member_blocks(arts: list[dict], article: dict, now: datetime)
     return False
 
 
-def _redirect_project_detail_with_dates(project_id: str):
+def _redirect_project_detail_with_dates(project_id: str, *, watch_schedule: bool = False):
     df = request.form.get("date_from", "").strip()
     dt = request.form.get("date_to", "").strip()
     fs = request.form.get("filter_status", "").strip().lower()
     if fs not in {"pending", "draft", "published"}:
         fs = ""
-    q = urlencode({k: v for k, v in [("date_from", df), ("date_to", dt), ("status", fs)] if v})
+    pairs = [("date_from", df), ("date_to", dt), ("status", fs)]
+    if watch_schedule:
+        pairs.append(("watch_schedule", "1"))
+    q = urlencode({k: v for k, v in pairs if v})
     url = url_for("project_detail", project_id=project_id)
     return redirect(url + ("?" + q if q else ""))
 
@@ -1008,7 +1060,7 @@ def _pending_scheduled_article_rows(project_id: str) -> list[dict]:
     for a in _articles_for_project(pid):
         if a.get("wp_post_id"):
             continue
-        sched = (a.get("wp_scheduled_at") or "").strip()
+        sched = _article_wp_scheduled_at_str(a)
         if not sched:
             continue
         wp_st = (a.get("wp_schedule_wp_status") or "draft").strip().lower()
@@ -1570,7 +1622,11 @@ Return strict JSON with exactly these keys:
 @app.get("/")
 def home():
     if not _is_authenticated():
-        return render_template("auth.html")
+        return render_template(
+            "auth.html",
+            storage_mode=_storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo",
+            storage_init_error=_storage.storage_init_error() if hasattr(_storage, "storage_init_error") else None,
+        )
 
     projects = _load_projects()
     # Client id/secret come from .env (loaded from the app directory at startup).
@@ -1645,6 +1701,12 @@ def auth_register():
                 "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             }
         )
+    except ValueError as ve:
+        if "email" in str(ve).lower():
+            flash("An account with that email already exists.", "error")
+        else:
+            flash("Could not create account.", "error")
+        return redirect(url_for("home"))
     except Exception:
         flash("Could not create account (database unavailable).", "error")
         return redirect(url_for("home"))
@@ -2237,6 +2299,9 @@ def project_detail(project_id: str):
     if not project:
         flash("Project not found.", "error")
         return redirect(url_for("home"))
+    bulk_err = _pop_bulk_schedule_error(project_id)
+    if bulk_err:
+        flash(bulk_err, "error")
     date_from = request.args.get("date_from", "").strip()
     date_to = request.args.get("date_to", "").strip()
     status_filter = request.args.get("status", "").strip().lower()
@@ -2290,8 +2355,9 @@ def project_detail(project_id: str):
             }
         )
     open_settings = request.args.get("open_settings", "").strip().lower() in ("1", "true", "yes")
+    watch_sched = request.args.get("watch_schedule", "").strip().lower() in ("1", "true", "yes")
     poll_articles_wp = any(
-        (a.get("wp_scheduled_at") or "").strip()
+        _article_wp_scheduled_at_str(a)
         for a in articles
     ) or any(
         (a.get("wp_post_id") and (a.get("status") or "").strip().lower() == "pending")
@@ -2300,6 +2366,7 @@ def project_detail(project_id: str):
         ((a.get("posted_at") or "").strip() and (a.get("status") or "").strip().lower() == "pending")
         for a in articles
     )
+    poll_schedule_ui = bool(poll_articles_wp or watch_sched)
     scheduled_pending_articles = _pending_scheduled_article_rows(project_id)
     _pending_n = 0
     _draft_n = 0
@@ -2348,6 +2415,7 @@ def project_detail(project_id: str):
         project_settings_incomplete=not _project_wp_credentials_configured(proj),
         open_project_settings_modal=open_settings,
         poll_articles_wp=poll_articles_wp,
+        poll_schedule_ui=poll_schedule_ui,
         wp_post_types=wp_post_types,
         wp_post_types_error=wp_post_types_error,
         gsc_sites=gsc_sites,
@@ -2392,12 +2460,21 @@ def project_articles_status_summary(project_id: str):
                 "id": aid,
                 "status": st,
                 "posted_at": (a.get("posted_at") or "").strip(),
-                "wp_scheduled_at": (a.get("wp_scheduled_at") or "").strip(),
+                "wp_scheduled_at": _article_wp_scheduled_at_str(a),
                 "wp_schedule_error": (a.get("wp_schedule_error") or "").strip(),
                 "gsc_status": gs,
             }
         )
-    return jsonify({"articles": out})
+    scheduled_pending = _pending_scheduled_article_rows(project_id)
+    pipeline_error = _pop_bulk_schedule_error(project_id)
+    return jsonify(
+        {
+            "articles": out,
+            "scheduled_pending": scheduled_pending,
+            "scheduled_queue": len(scheduled_pending),
+            "pipeline_error": pipeline_error,
+        }
+    )
 
 
 @app.get("/projects/<project_id>/articles/export")
@@ -2653,7 +2730,7 @@ def cancel_article_schedule(project_id: str, article_id: str):
     if article.get("wp_post_id"):
         flash("This article is already posted to WordPress.", "error")
         return _redirect_project_detail_with_dates(project_id)
-    if not (article.get("wp_scheduled_at") or "").strip():
+    if not _article_wp_scheduled_at_str(article):
         flash("Nothing to cancel — this article is not scheduled.", "error")
         return _redirect_project_detail_with_dates(project_id)
     _update_article_fields(article_id, _cleared_wp_schedule_fields())
@@ -2671,7 +2748,7 @@ def update_article_schedule(project_id: str, article_id: str):
     if article.get("wp_post_id"):
         flash("This article is already posted to WordPress.", "error")
         return _redirect_project_detail_with_dates(project_id)
-    if not (article.get("wp_scheduled_at") or "").strip():
+    if not _article_wp_scheduled_at_str(article):
         flash("This article is not scheduled.", "error")
         return _redirect_project_detail_with_dates(project_id)
     if not _is_project_wordpress_configured(project):
@@ -2757,6 +2834,7 @@ def bulk_articles_action(project_id: str):
         proj_check = dict(project)
         _normalize_project_image_prompts(proj_check)
         need_img = len(proj_check.get("image_prompts") or []) > 0
+        need_any_generation = False
         for t in targets:
             aid = (t.get("id") or "").strip()
             if not aid or t.get("wp_post_id"):
@@ -2765,6 +2843,7 @@ def bulk_articles_action(project_id: str):
             need_img_file = need_img and not os.path.isfile(_article_featured_image_path(aid))
             if not need_body and not need_img_file:
                 continue
+            need_any_generation = True
             if not (t.get("title") or "").strip():
                 flash(
                     "Cannot generate or schedule: one or more selected articles have no title. Add a title first.",
@@ -2779,18 +2858,29 @@ def bulk_articles_action(project_id: str):
             "bulk_image_prompt_id": (request.form.get("bulk_image_prompt_id") or "").strip(),
             "schedule_times_json": request.form.get("schedule_times_json") or "",
         }
+        if not need_any_generation:
+            err = _bulk_schedule_pipeline(project_id, list(ids), form_snapshot)
+            if err:
+                flash(err, "error")
+            else:
+                flash(
+                    "Articles added to the WordPress schedule queue. Due posts are sent automatically when their time is reached.",
+                    "success",
+                )
+            return _redirect_project_detail_with_dates(project_id, watch_schedule=True)
+
         threading.Thread(
             target=_bulk_schedule_thread_entry,
             args=(project_id, list(ids), form_snapshot),
             daemon=True,
         ).start()
         flash(
-            "Scheduling is running in the background. Refresh the page in a minute to see scheduled times. "
-            "If times were in the past, they were adjusted to a few minutes from now. "
-            "You can keep using the app while this completes; check the server log if something fails.",
+            "Generating content, then adding to the WordPress schedule. The queue will update shortly. "
+            "If something fails, an error will appear when you open this project again. "
+            "Past times are adjusted to a few minutes from now.",
             "success",
         )
-        return _redirect_project_detail_with_dates(project_id)
+        return _redirect_project_detail_with_dates(project_id, watch_schedule=True)
 
     flash("Unknown bulk action.", "error")
     return _redirect_project_detail_with_dates(project_id)
@@ -3652,7 +3742,7 @@ def _process_due_scheduled_wordpress_posts() -> None:
             arts = _load_articles()
             candidates: list[dict] = []
             for a in arts:
-                sched = (a.get("wp_scheduled_at") or "").strip()
+                sched = _article_wp_scheduled_at_str(a)
                 if not sched:
                     continue
                 aid = (a.get("id") or "").strip()
@@ -3676,7 +3766,7 @@ def _process_due_scheduled_wordpress_posts() -> None:
                 key=lambda x: (
                     (x.get("wp_schedule_batch_id") or ""),
                     int(x.get("wp_schedule_batch_index") or 0),
-                    x.get("wp_scheduled_at") or "",
+                    _article_wp_scheduled_at_str(x),
                 )
             )
 
@@ -3686,7 +3776,7 @@ def _process_due_scheduled_wordpress_posts() -> None:
                 cur = _get_article_by_id(aid)
                 if not cur or cur.get("wp_post_id"):
                     continue
-                sched = (cur.get("wp_scheduled_at") or "").strip()
+                sched = _article_wp_scheduled_at_str(cur)
                 if not sched:
                     continue
                 try:
@@ -3698,7 +3788,7 @@ def _process_due_scheduled_wordpress_posts() -> None:
                 if _earlier_batch_member_blocks(arts, cur, now):
                     continue
 
-                project = _get_project_by_id(cur.get("project_id") or "")
+                project = _get_project_by_id_unscoped(cur.get("project_id") or "")
                 if not project:
                     _update_article_fields(
                         aid,
@@ -3768,7 +3858,7 @@ def _process_due_scheduled_wordpress_posts() -> None:
                         "wp_schedule_batch_total": "",
                     },
                 )
-                proj_fresh = _get_project_by_id(project.get("id") or "") or project
+                proj_fresh = _get_project_by_id_unscoped(project.get("id") or "") or project
                 _maybe_request_gsc_url_inspection(
                     proj_fresh,
                     info.get("link") or "",
