@@ -32,7 +32,8 @@ jobs:
             git config --global --add safe.directory /var/www/auto-articles
             cd /var/www/auto-articles
             git fetch origin main
-            git checkout main
-            # Match GitHub exactly (discard stray local commits / dirty tracked files on the server)
-            git reset --hard origin/main
+            # Force local main to match GitHub (no diverged-branch fast-forward issues)
+            git checkout -B main origin/main
+            # Strip CRLF if present (Windows checkouts break bash: $'\r': command not found)
+            sed -i 's/\r$//' deploy/deploy.sh
             bash deploy/deploy.sh

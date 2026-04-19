@@ -74,12 +74,12 @@ In the repo: **Settings → Secrets and variables → Actions → New repository
 ```bash
 cd /var/www/auto-articles
 git fetch origin main
-git checkout main
-git reset --hard origin/main
+git checkout -B main origin/main
+sed -i 's/\r$//' deploy/deploy.sh
 bash deploy/deploy.sh
 ```
 
-`git reset --hard origin/main` makes the server tree match **`main` on GitHub** and avoids failures when the clone had diverged or local edits to tracked files (e.g. accidental changes). It does **not** remove untracked files such as `.env` (still not in git).
+`git checkout -B main origin/main` resets local **`main`** to match **`origin/main`**. Shell scripts in the repo must use **LF** line endings (see `.gitattributes`); `sed` strips stray CR characters if a file was saved with CRLF.
 
 ## Troubleshooting
 
@@ -138,7 +138,11 @@ After either A or B, `git fetch` / `git pull` in the deploy script should succee
 
 ### `fatal: Not possible to fast-forward` / diverged branches
 
-The VPS clone must not keep its own commits on `main` or dirty tracked files. The workflow uses **`git reset --hard origin/main`** so the server matches GitHub. If you still deploy manually with `git pull`, use the same reset sequence as in [Manual deploy](#manual-deploy-same-steps-as-ci).
+The VPS clone must not keep its own commits on `main` or dirty tracked files. The workflow uses **`git checkout -B main origin/main`** so the server matches GitHub.
+
+### `deploy/deploy.sh: $'\r': command not found` / `set: pipefail: invalid option name`
+
+The script was saved with **Windows (CRLF)** line endings. The repo enforces **LF** for `*.sh` via `.gitattributes`; redeploy after pulling. On the server you can run `sed -i 's/\r$//' deploy/deploy.sh` once, or `git checkout -B main origin/main` after the fix is pushed.
 
 ## Security notes
 

@@ -1,0 +1,2 @@
+# Shell scripts must use LF; CRLF breaks bash on Linux (e.g. VPS deploy).
+*.sh text eol=lf
