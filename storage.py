@@ -546,6 +546,8 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
     d.pop("_id", None)
     return {
         "id": d.get("id") or "",
+        # Required for per-user project lists and access checks (must match _normalize_project_dict).
+        "owner_user_id": (d.get("owner_user_id") or "").strip(),
         "name": d.get("name") or "",
         "website_url": d.get("website_url") or "",
         "wp_site_url": d.get("wp_site_url") or "",
