@@ -194,7 +194,7 @@
                     <th scope="col">Focus Keyphrase</th>
                     <th scope="col">Targeting Keywords</th>
                     <th scope="col">Status</th>
-                    <th scope="col" title="Google Search Console: whether this app successfully sent the live URL to the API after publish">GSC</th>
+                    <th scope="col" title="Google Search Console: whether this app successfully ran the URL Inspection API after publish">GSC</th>
                     <th scope="col">Edit post</th>
                   </tr>
                 </thead>
@@ -231,13 +231,13 @@
                       </td>
                       <td class="small js-article-gsc-cell">
                         {% set gs = (a.gsc_status or 'pending')|lower %}
-                        {% if gs == 'requested' %}
+                        {% if gs in ('requested', 'inspected') %}
                           <span
                             class="text-success fw-semibold"
-                            title="Search Console API accepted this URL. The Search Console UI may still show an early or pending indexing step until Google finishes processing."
-                          >Submitted</span>
+                            title="The URL Inspection API returned a valid inspection payload for this live URL. This does not guarantee immediate crawling or indexing."
+                          >Inspected</span>
                         {% else %}
-                          <span class="text-body-secondary" title="Not yet successfully submitted to Search Console via this app, or submit was skipped.">Pending</span>
+                          <span class="text-body-secondary" title="URL Inspection not run (or it failed / was skipped).">Pending</span>
                         {% endif %}
                       </td>
                       <td class="text-nowrap">

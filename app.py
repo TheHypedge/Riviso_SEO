@@ -187,7 +187,11 @@ def _load_articles() -> list[dict]:
         if not (a.get("status") or "").strip():
             a["status"] = "pending"
         gs = (a.get("gsc_status") or "").strip().lower()
-        if gs not in {"pending", "requested"}:
+        # Back-compat: older versions stored "requested" for a successful URL Inspection call.
+        if gs == "requested":
+            gs = "inspected"
+            a["gsc_status"] = "inspected"
+        if gs not in {"pending", "inspected"}:
             a["gsc_status"] = "pending"
     return data
 
@@ -1149,7 +1153,7 @@ def _build_articles_excel_bytes(articles: list[dict]) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Articles"
-    headers = ["Title", "Targeting keywords", "Status", "Added", "Posted", "WP link"]
+    headers = ["Article title", "Focus Keyphrase", "Targeting Keywords", "Live URL", "Status"]
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="4472C4")
     thin = Side(style="thin", color="CCCCCC")
@@ -1165,11 +1169,10 @@ def _build_articles_excel_bytes(articles: list[dict]) -> bytes:
     for row_idx, a in enumerate(articles, start=2):
         row = [
             a.get("title") or "",
+            (a.get("focus_keyphrase") or "").strip(),
             ", ".join(a.get("keywords") or []),
+            (a.get("wp_link") or "").strip(),
             _status_display_article(a.get("status")),
-            a.get("created_at") or "",
-            a.get("posted_at") or "",
-            a.get("wp_link") or "",
         ]
         for col_idx, val in enumerate(row, start=1):
             cell = ws.cell(row=row_idx, column=col_idx, value=val)
@@ -1177,11 +1180,10 @@ def _build_articles_excel_bytes(articles: list[dict]) -> bytes:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 
     ws.column_dimensions["A"].width = 42
-    ws.column_dimensions["B"].width = 40
-    ws.column_dimensions["C"].width = 14
-    ws.column_dimensions["D"].width = 20
-    ws.column_dimensions["E"].width = 20
-    ws.column_dimensions["F"].width = 36
+    ws.column_dimensions["B"].width = 28
+    ws.column_dimensions["C"].width = 44
+    ws.column_dimensions["D"].width = 48
+    ws.column_dimensions["E"].width = 14
     ws.freeze_panes = "A2"
 
     buf = BytesIO()
@@ -2453,7 +2455,9 @@ def project_articles_status_summary(project_id: str):
         if st not in {"pending", "draft", "published"}:
             st = "pending"
         gs = (a.get("gsc_status") or "pending").strip().lower()
-        if gs not in {"pending", "requested"}:
+        if gs == "requested":
+            gs = "inspected"
+        if gs not in {"pending", "inspected"}:
             gs = "pending"
         out.append(
             {
@@ -3485,7 +3489,11 @@ def _maybe_request_gsc_url_inspection(
 ) -> bool:
     """
     After a live (publish) WordPress post, call Search Console URL Inspection API.
-    On a valid inspection response, sets gsc_status to 'requested' (shown in UI as Submitted).
+    On a valid inspection response, sets gsc_status to 'inspected' (shown in UI as Inspected).
+
+    Important: Google Search Console's "Request indexing" button is not exposed via a public API
+    for general websites. The URL Inspection API returns inspection data; it does not guarantee
+    crawling or indexing.
     """
     st = (wp_status or "").strip().lower()
     if st != "publish":
@@ -3512,14 +3520,14 @@ def _maybe_request_gsc_url_inspection(
         resp = gi.request_url_inspection(creds, prop, url)
         if not gi.gsc_inspection_response_accepted(resp):
             app.logger.warning(
-                "Search Console inspect returned no usable inspectionResult for %s (property %s). Not marking GSC submitted.",
+                "Search Console inspect returned no usable inspectionResult for %s (property %s). Not marking GSC inspected.",
                 url,
                 prop,
             )
             return False
         app.logger.info("Search Console URL Inspection accepted for %s (property %s).", url, prop)
         if article_id:
-            _update_article_fields(article_id, {"gsc_status": "requested"})
+            _update_article_fields(article_id, {"gsc_status": "inspected"})
         return True
     except Exception as e:
         app.logger.warning("Search Console URL Inspection failed for %s: %s", url, e)
@@ -3623,7 +3631,7 @@ def wordpress_post_project(project_id: str, article_id: str):
         posted_msg = f"Posted to WordPress ({new_status.capitalize()}). ID {post_id}.{no_image_suffix}"
     if gsc_requested:
         posted_msg += (
-            " Search Console accepted the live URL (submitted for processing). "
+            " Search Console URL Inspection ran successfully for the live URL. "
             "Indexing status in Google updates on its own schedule."
         )
     flash(posted_msg, "success")

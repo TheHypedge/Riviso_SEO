@@ -197,7 +197,7 @@
                       </p>
                     {% else %}
                       <p class="small text-body-secondary mb-3">
-                        Choose the Search Console <span class="fw-medium">property</span> that matches this project’s site. After a <span class="fw-medium">live</span> WordPress publish, the app calls the <a href="https://developers.google.com/webmaster-tools/v1/urlinspection.index/inspect" target="_blank" rel="noopener noreferrer">URL Inspection</a> API for the post URL. The <span class="fw-medium">GSC</span> column shows <span class="fw-medium">Submitted</span> when that API returns a valid inspection result — Search Console’s own screen may still show an early or pending step until Google processes the URL.
+                        Choose the Search Console <span class="fw-medium">property</span> that matches this project’s site. After a <span class="fw-medium">live</span> WordPress publish, the app calls the <a href="https://developers.google.com/webmaster-tools/v1/urlInspection.index/inspect" target="_blank" rel="noopener noreferrer">URL Inspection</a> API for the post URL. The <span class="fw-medium">GSC</span> column shows <span class="fw-medium">Inspected</span> when that API returns a valid inspection payload. This is <span class="fw-medium">not</span> the same as clicking “Request indexing” in Search Console; Google updates indexing status on its own schedule.
                       </p>
                       {% if gsc_google_email %}
                         <p class="small mb-3"><span class="text-body-secondary">Signed in:</span> <span class="fw-medium">{{ gsc_google_email }}</span></p>
