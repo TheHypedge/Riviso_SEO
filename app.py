@@ -1402,11 +1402,33 @@ def _article_status_key(a: dict) -> str:
 
 
 def _filter_articles_by_status(articles: list[dict], status_key: str | None) -> list[dict]:
-    """Keep articles whose app status matches (pending / draft / published). Empty key = no filter."""
+    """Keep articles by status key (pending / draft / published / scheduled). Empty key = no filter."""
     sk = (status_key or "").strip().lower()
+    if sk == "scheduled":
+        out: list[dict] = []
+        for a in articles:
+            if (a.get("wp_post_id") or "").strip():
+                continue
+            if _article_wp_scheduled_at_str(a):
+                out.append(a)
+        return out
     if sk not in {"pending", "draft", "published"}:
         return articles
     return [a for a in articles if _article_status_key(a) == sk]
+
+
+def _filter_articles_by_query(articles: list[dict], q: str | None) -> list[dict]:
+    s = (q or "").strip().lower()
+    if not s:
+        return articles
+    out: list[dict] = []
+    for a in articles:
+        title = (a.get("title") or "").strip().lower()
+        fk = (a.get("focus_keyphrase") or "").strip().lower()
+        kws = " ".join([str(x).strip().lower() for x in (a.get("keywords") or []) if str(x).strip()])
+        if s in title or s in fk or s in kws:
+            out.append(a)
+    return out
 
 
 def _build_articles_excel_bytes(articles: list[dict]) -> bytes:
@@ -2768,13 +2790,33 @@ def project_detail(project_id: str):
     date_from = request.args.get("date_from", "").strip()
     date_to = request.args.get("date_to", "").strip()
     status_filter = request.args.get("status", "").strip().lower()
-    if status_filter not in {"pending", "draft", "published"}:
+    if status_filter not in {"pending", "draft", "published", "scheduled"}:
         status_filter = ""
+    q = (request.args.get("q") or "").strip()
+    tab = (request.args.get("tab") or "articles").strip().lower()
+    if tab not in {"articles", "configuration", "tools"}:
+        tab = "articles"
     all_articles = _articles_for_project(project_id)
     article_count_total = len(all_articles)
     all_articles.sort(key=lambda a: (a.get("created_at") or ""), reverse=True)
-    articles = _filter_articles_by_date_range(all_articles, date_from, date_to)
-    articles = _filter_articles_by_status(articles, status_filter)
+    filtered_all = _filter_articles_by_date_range(all_articles, date_from, date_to)
+    filtered_all = _filter_articles_by_status(filtered_all, status_filter)
+    filtered_all = _filter_articles_by_query(filtered_all, q)
+
+    per_page = 10
+    try:
+        page = int((request.args.get("page") or "").strip() or "1")
+    except Exception:
+        page = 1
+    if page < 1:
+        page = 1
+    total_filtered = len(filtered_all)
+    total_pages = max(1, (total_filtered + per_page - 1) // per_page)
+    if page > total_pages:
+        page = total_pages
+    start_i = (page - 1) * per_page
+    end_i = start_i + per_page
+    articles = filtered_all[start_i:end_i]
     proj = dict(project)
     _normalize_project_prompts(proj)
     _normalize_project_image_prompts(proj)
@@ -2868,8 +2910,18 @@ def project_detail(project_id: str):
         "project.html",
         project=proj,
         articles=articles,
+        pagination={
+            "page": page,
+            "per_page": per_page,
+            "total_items": total_filtered,
+            "total_pages": total_pages,
+            "start_index": 0 if total_filtered == 0 else (start_i + 1),
+            "end_index": min(end_i, total_filtered),
+        },
         date_from=date_from,
         date_to=date_to,
+        q=q,
+        active_tab=tab,
         article_count_total=article_count_total,
         bulk_schedule_meta=bulk_schedule_meta,
         scheduled_pending_articles=scheduled_pending_articles,

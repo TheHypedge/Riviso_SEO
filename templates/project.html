@@ -25,21 +25,16 @@
     {% endif %}
 
     <main class="container-fluid px-3 px-lg-4 py-4 app-dash-main app-proj-main">
-      <nav aria-label="breadcrumb" class="mb-3 app-dash-breadcrumb">
-        <ol class="breadcrumb mb-0">
-          <li class="breadcrumb-item"><a href="{{ url_for('home') }}" class="text-decoration-none">Projects</a></li>
-          <li class="breadcrumb-item active" aria-current="page">{{ project.name }}</li>
-        </ol>
-      </nav>
-
       {% include 'partials/project_header.html' %}
 
       {% if storage_mode|default('mongo') != 'mongo' %}
-        <div class="alert alert-warning mb-4" role="alert">
-          <div class="fw-semibold">Database offline — showing local snapshot</div>
-          <div class="small">
-            The app could not connect to MongoDB, so this page is loading from <code class="small">data/projects.json</code> and <code class="small">data/articles.json</code>.
-            Live scheduled publishing and recent edits will not appear until MongoDB reconnects.
+        <div class="app-slim-banner app-slim-banner--warning mb-3" role="alert" id="systemBanner">
+          <div class="d-flex gap-3 align-items-start justify-content-between">
+            <div class="small">
+              <span class="fw-semibold">Database offline</span>
+              <span class="text-body-secondary">— showing local snapshot. Scheduled publishing may be delayed.</span>
+            </div>
+            <button type="button" class="btn btn-sm btn-link text-decoration-none p-0" id="dismissSystemBanner" aria-label="Dismiss">Dismiss</button>
           </div>
           {% if storage_init_error %}
             <details class="mt-2">
@@ -62,235 +57,217 @@
         {% endif %}
       {% endwith %}
 
-      {% include 'partials/project_config_panel.html' %}
-
-      <div class="row g-4 app-workspace-row mb-4">
-        <div class="col-12 col-lg-8 app-workspace-primary">
-          {% include 'partials/project_filter_bar.html' %}
-
-          {% include 'partials/project_scheduled_section.html' %}
-        </div>
-        <div class="col-12 col-lg-4">
-          {% include 'partials/project_side_panel.html' %}
-        </div>
+      <div class="app-proj-tabs mb-3">
+        {% set tab = active_tab|default('articles') %}
+        <nav class="nav nav-pills gap-2" aria-label="Project sections">
+          <a class="nav-link {% if tab == 'articles' %}active{% endif %}" href="{{ url_for('project_detail', project_id=project.id, tab='articles', q=q|default(''), status=status_filter|default(''), date_from=date_from|default(''), date_to=date_to|default('')) }}">Articles</a>
+          <a class="nav-link {% if tab == 'configuration' %}active{% endif %}" href="{{ url_for('project_detail', project_id=project.id, tab='configuration') }}">Configuration</a>
+          <a class="nav-link {% if tab == 'tools' %}active{% endif %}" href="{{ url_for('project_detail', project_id=project.id, tab='tools') }}">Tools / Integrations</a>
+        </nav>
       </div>
 
-
-        <!-- Articles & posts — full width below workspace -->
-        <section class="app-dash-list app-dash-section mt-4" aria-labelledby="articles-heading">
-          <div class="app-section-head">
-            <h2 id="articles-heading" class="app-section-head__title">
-              <span class="app-section-head__icon" aria-hidden="true">
-                <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
-              </span>
-              Articles &amp; posts
-            </h2>
-            <p class="app-section-head__desc mb-0">Create, edit, and publish or schedule your content.</p>
+      {% if tab == 'configuration' %}
+        {% include 'partials/project_config_panel.html' %}
+      {% elif tab == 'tools' %}
+        <section class="app-dash-section" aria-label="Tools and integrations">
+          <div class="app-card app-card--elevated p-4">
+            <h2 class="h6 mb-3">Tools</h2>
+            {% include 'partials/project_tools_accordion.html' %}
           </div>
-      <div class="articles-posts-card app-card app-card--elevated">
-        <div class="p-3 p-md-4">
-          {% if (article_count_total|default(0)) == 0 %}
-            <div class="app-empty-state text-center py-5 px-3">
-              <div class="app-empty-state__icon mx-auto mb-3" aria-hidden="true">
-                <svg width="56" height="56" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" class="text-body-secondary opacity-40"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
-              </div>
-              <p class="text-body-secondary mb-3">No articles yet. Start by adding your first post.</p>
-            <button type="button" class="btn btn-outline-primary px-4" data-bs-toggle="modal" data-bs-target="#addArticleModal">
-              Add Article/Post
-            </button>
-            </div>
-          {% else %}
-            <div class="articles-status-filter-wrap mb-3">
-              <div class="small text-uppercase text-body-secondary fw-semibold articles-filter-label mb-2">Filter by status</div>
-              <div class="d-flex flex-wrap gap-2 align-items-center" role="tablist" aria-label="Filter articles by status">
-              <a
-                class="articles-status-pill {% if not status_filter|default('') %}is-active{% endif %}"
-                href="{{ url_for('project_detail', project_id=project.id) }}{% if article_status_filter_qs.all %}?{{ article_status_filter_qs.all }}{% endif %}"
-              ><span class="articles-status-pill__dot articles-status-pill__dot--all"></span>All</a>
-              <a
-                class="articles-status-pill articles-status-pill--pending {% if status_filter|default('') == 'pending' %}is-active{% endif %}"
-                href="{{ url_for('project_detail', project_id=project.id) }}?{{ article_status_filter_qs.pending }}"
-              ><span class="articles-status-pill__dot"></span>Pending</a>
-              <a
-                class="articles-status-pill articles-status-pill--draft {% if status_filter|default('') == 'draft' %}is-active{% endif %}"
-                href="{{ url_for('project_detail', project_id=project.id) }}?{{ article_status_filter_qs.draft }}"
-              ><span class="articles-status-pill__dot"></span>Draft</a>
-              <a
-                class="articles-status-pill articles-status-pill--published {% if status_filter|default('') == 'published' %}is-active{% endif %}"
-                href="{{ url_for('project_detail', project_id=project.id) }}?{{ article_status_filter_qs.published }}"
-              ><span class="articles-status-pill__dot"></span>Published</a>
-              </div>
-            </div>
-            {% if articles|length == 0 %}
-              <p class="text-body-secondary mb-2">No articles match the current filters (date range and/or status).</p>
-              <a class="small" href="{{ url_for('project_detail', project_id=project.id) }}">Clear filters</a>
-            {% else %}
-            <form id="bulkArticlesForm" method="post" action="{{ url_for('bulk_articles_action', project_id=project.id) }}" class="d-none" aria-hidden="true">
-              <input type="hidden" name="date_from" value="{{ date_from|default('') }}">
-              <input type="hidden" name="date_to" value="{{ date_to|default('') }}">
-              <input type="hidden" name="filter_status" value="{{ status_filter|default('') }}">
-              <input type="hidden" name="action" id="bulkActionInput" value="">
-              <input type="hidden" name="new_status" id="bulkNewStatusInput" value="">
-              <input type="hidden" name="schedule_times_json" id="bulkScheduleTimesJsonInput" value="">
-              <input type="hidden" name="schedule_wp_status" id="bulkScheduleWpStatusInput" value="">
-              <input type="hidden" name="schedule_wp_rest_base" id="bulkScheduleWpRestBaseHidden" value="">
-              <input type="hidden" name="bulk_prompt_id" id="bulkPromptIdHidden" value="">
-              <input type="hidden" name="bulk_image_prompt_id" id="bulkImagePromptIdHidden" value="">
-            </form>
-            <div
-              id="articleStatusSaveBar"
-              class="article-status-save-bar flex-wrap align-items-center justify-content-between gap-3 mb-3 d-none"
-              role="status"
-              aria-live="polite"
-            >
-              <p class="small mb-0 text-body">
-                <span class="fw-semibold">Unsaved changes</span>
-                <span class="text-body-secondary"> — article statuses are not saved until you save.</span>
-              </p>
-              <div class="d-flex flex-wrap gap-2">
-                <button type="button" class="btn btn-sm btn-outline-secondary" id="articleStatusDiscardBtn">Discard</button>
-                <button type="button" class="btn btn-sm btn-primary" id="articleStatusSaveBtn">Save changes</button>
-              </div>
-            </div>
-            <div class="d-flex flex-wrap align-items-center justify-content-end gap-2 mb-3">
-              <!-- <span id="bulkHint" class="small text-body-secondary text-end">Select rows, then pick an action.</span> -->
-              <div id="bulkToolbar" class="d-none align-items-center gap-2 flex-wrap">
-                <span id="bulkSelectedCount" class="small text-body-secondary">0 selected</span>
-                <select id="bulkActionSelect" class="form-select form-select-sm" style="min-width: 11rem; max-width: 14rem;" aria-label="Bulk action" disabled>
-                  <option value="">Choose action…</option>
-                  <option value="delete">Delete</option>
-                  <option value="change_status">Change status</option>
-                  <option value="schedule">Schedule</option>
-                </select>
-              </div>
-              <button type="button" class="btn btn-sm btn-outline-secondary" id="bulkModeToggle" aria-pressed="false">
-                Bulk actions
-              </button>
-            </div>
-            <div class="d-md-none vstack gap-2">
-              {% for a in articles %}
-                {% set st = (a.status or 'pending')|lower %}
-                {% if st == 'published' %}{% set stn = 'published' %}{% elif st == 'draft' %}{% set stn = 'draft' %}{% else %}{% set stn = 'pending' %}{% endif %}
-                <article class="border rounded-3 bg-white p-3">
-                  <div class="d-flex justify-content-between align-items-start gap-2">
-                    <div class="min-w-0">
-                      <div class="fw-semibold text-body text-break">{{ a.title or '(Untitled)' }}</div>
-                      <div class="text-body-secondary mt-1" style="font-size: 0.75rem; line-height: 1.35;">
-                        <span class="text-nowrap">Added {{ a.created_at }}</span>
-                        <span class="text-nowrap"> · Posted {{ a.posted_at or '—' }}</span>
-                      </div>
-                    </div>
-                    <a class="btn btn-sm btn-outline-primary flex-shrink-0" href="{{ url_for('article_edit', project_id=project.id, article_id=a.id) }}">Edit</a>
-                  </div>
-
-                  <div class="d-flex flex-wrap gap-2 mt-2 align-items-center">
-                    <span class="badge rounded-pill {% if stn == 'published' %}text-bg-success{% elif stn == 'draft' %}text-bg-secondary{% else %}text-bg-warning{% endif %}">
-                      {% if stn == 'published' %}Published{% elif stn == 'draft' %}Draft{% else %}Pending{% endif %}
-                    </span>
-                    {% set gs = (a.gsc_status or 'pending')|lower %}
-                    {% if gs in ('requested','inspected') %}
-                      <span class="badge rounded-pill text-bg-light border">GSC: Inspected</span>
-                    {% else %}
-                      <span class="badge rounded-pill text-bg-light border text-body-secondary">GSC: Pending</span>
-                    {% endif %}
-                    {% if (a.wp_link or '').strip() %}
-                      <a class="badge rounded-pill text-bg-light border text-decoration-none" href="{{ a.wp_link }}" target="_blank" rel="noopener noreferrer" title="Open live URL">Live URL</a>
-                    {% endif %}
-                  </div>
-
-                  {% if (a.focus_keyphrase or '').strip() %}
-                    <div class="small mt-2"><span class="text-body-secondary">Focus:</span> {{ (a.focus_keyphrase or '').strip() }}</div>
-                  {% endif %}
-                  {% if a.keywords and a.keywords|length > 0 %}
-                    <div class="small mt-1"><span class="text-body-secondary">Keywords:</span> {{ (a.keywords or []) | join(', ') }}</div>
-                  {% endif %}
-
-                  <div class="text-body-secondary mt-2" style="font-size: 0.75rem; line-height: 1.35;">
-                    <span class="text-nowrap">Sched </span>
-                    <span class="js-article-scheduled-at">{% if a.wp_scheduled_at %}{{ a.wp_scheduled_at }}{% if a.wp_schedule_error %}<span class="d-block text-danger small" title="{{ a.wp_schedule_error }}">Error</span>{% endif %}{% elif a.wp_schedule_error %}<span class="text-danger small" title="{{ a.wp_schedule_error }}">Last schedule failed</span>{% else %}—{% endif %}</span>
-                  </div>
-                </article>
-              {% endfor %}
-            </div>
-
-            <div class="table-responsive articles-table-wrap rounded-3 border bg-white d-none d-md-block">
-              <table
-                class="table table-hover align-middle mb-0"
-                id="articlesPostsTable"
-                data-status-summary-url="{{ url_for('project_articles_status_summary', project_id=project.id) }}"
-                data-date-from="{{ date_from|default('') }}"
-                data-date-to="{{ date_to|default('') }}"
-                data-status-filter="{{ status_filter|default('') }}"
-                data-status-batch-url="{{ url_for('batch_update_article_statuses', project_id=project.id) }}"
-              >
-                <thead>
-                  <tr>
-                    <th scope="col" class="bulk-select-col d-none" style="width: 2.5rem;">
-                      <input type="checkbox" class="form-check-input" id="bulkSelectAll" title="Select all in list" aria-label="Select all articles">
-                    </th>
-                    <th scope="col">Title</th>
-                    <th scope="col">Focus Keyphrase</th>
-                    <th scope="col">Targeting Keywords</th>
-                    <th scope="col">Status</th>
-                    <th scope="col" title="Google Search Console: whether this app successfully ran the URL Inspection API after publish">GSC</th>
-                    <th scope="col">Edit post</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for a in articles %}
-                    <tr data-article-id="{{ a.id }}" {% if a.wp_scheduled_at %}data-wp-scheduled="1"{% endif %}>
-                      <td class="bulk-select-col d-none">
-                        <input class="form-check-input bulk-article-cb" type="checkbox" name="article_ids" value="{{ a.id }}" form="bulkArticlesForm" aria-label="Select {{ a.title }}">
-                      </td>
-                      <td class="align-top">
-                        <div class="fw-medium">{{ a.title }}</div>
-                        <div class="text-body-secondary mt-1" style="font-size: 0.6875rem; line-height: 1.35;">
-                          <span class="text-nowrap">Added {{ a.created_at }}</span><span class="text-nowrap"> · Posted <span class="js-article-posted-at">{{ a.posted_at or '—' }}</span></span><span class="text-nowrap"> · Sched </span><span class="js-article-scheduled-at">{% if a.wp_scheduled_at %}{{ a.wp_scheduled_at }}{% if a.wp_schedule_error %}<span class="d-block text-danger small" title="{{ a.wp_schedule_error }}">Error</span>{% endif %}{% elif a.wp_schedule_error %}<span class="text-danger small" title="{{ a.wp_schedule_error }}">Last schedule failed</span>{% else %}—{% endif %}</span>
-                        </div>
-                      </td>
-                      <td class="small">{{ (a.focus_keyphrase or '').strip() or '—' }}</td>
-                      <td class="small">{{ (a.keywords or []) | join(', ') }}</td>
-                      <td class="articles-col-status">
-                        {% set st = (a.status or 'pending')|lower %}
-                        {% if st == 'published' %}{% set stn = 'published' %}{% elif st == 'draft' %}{% set stn = 'draft' %}{% else %}{% set stn = 'pending' %}{% endif %}
-                        <div class="d-flex flex-wrap align-items-center gap-2">
-                          <span class="js-article-status-badge badge rounded-pill flex-shrink-0 {% if stn == 'published' %}article-status-badge article-status-badge--published{% elif stn == 'draft' %}article-status-badge article-status-badge--draft{% else %}article-status-badge article-status-badge--pending{% endif %}">{% if stn == 'published' %}Published{% elif stn == 'draft' %}Draft{% else %}Pending{% endif %}</span>
-                          <select
-                            class="form-select form-select-sm js-article-status-select articles-status-select"
-                            data-article-id="{{ a.id }}"
-                            data-initial-status="{{ stn }}"
-                            aria-label="Status for {{ a.title }}"
-                          >
-                            <option value="pending" {% if stn == 'pending' %}selected{% endif %}>Pending</option>
-                            <option value="draft" {% if stn == 'draft' %}selected{% endif %}>Draft</option>
-                            <option value="published" {% if stn == 'published' %}selected{% endif %}>Published</option>
-                          </select>
-                        </div>
-                      </td>
-                      <td class="small js-article-gsc-cell">
-                        {% set gs = (a.gsc_status or 'pending')|lower %}
-                        {% if gs in ('requested', 'inspected') %}
-                          <span
-                            class="text-success fw-semibold"
-                            title="The URL Inspection API returned a valid inspection payload for this live URL. This does not guarantee immediate crawling or indexing."
-                          >Inspected</span>
-                        {% else %}
-                          <span class="text-body-secondary" title="URL Inspection not run (or it failed / was skipped).">Pending</span>
-                        {% endif %}
-                      </td>
-                      <td class="text-nowrap">
-                        <a href="{{ url_for('article_edit', project_id=project.id, article_id=a.id) }}">Edit post</a>
-                      </td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-            {% endif %}
-          {% endif %}
-        </div>
-      </div>
         </section>
+      {% else %}
+        <div class="row g-4 app-workspace-row mb-4">
+          <div class="col-12 col-lg-8 col-xl-9 app-workspace-primary">
+            <!-- Articles — primary view -->
+            <section class="app-dash-list app-dash-section" aria-labelledby="articles-heading">
+              <div class="app-section-head">
+                <h2 id="articles-heading" class="app-section-head__title">
+                  <span class="app-section-head__icon" aria-hidden="true">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                  </span>
+                  Articles &amp; posts
+                </h2>
+                <p class="app-section-head__desc mb-0">Create, edit, and publish or schedule your content.</p>
+              </div>
+              <div class="articles-posts-card app-card app-card--elevated">
+                <div class="p-3 p-md-4">
+                  {% if (article_count_total|default(0)) == 0 %}
+                    <div class="app-empty-state text-center py-5 px-3">
+                      <div class="app-empty-state__icon mx-auto mb-3" aria-hidden="true">
+                        <svg width="56" height="56" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" class="text-body-secondary opacity-40"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+                      </div>
+                      <p class="text-body-secondary mb-3">No articles yet. Start by adding your first post.</p>
+                      <button type="button" class="btn btn-outline-primary px-4" data-bs-toggle="modal" data-bs-target="#addArticleModal">
+                        Add Article/Post
+                      </button>
+                    </div>
+                  {% else %}
+                    {% if articles|length == 0 %}
+                      <p class="text-body-secondary mb-2">No articles match the current filters (date range and/or status).</p>
+                      <a class="small" href="{{ url_for('project_detail', project_id=project.id) }}">Clear filters</a>
+                    {% else %}
+                      <form id="bulkArticlesForm" method="post" action="{{ url_for('bulk_articles_action', project_id=project.id) }}" class="d-none" aria-hidden="true">
+                        <input type="hidden" name="date_from" value="{{ date_from|default('') }}">
+                        <input type="hidden" name="date_to" value="{{ date_to|default('') }}">
+                        <input type="hidden" name="filter_status" value="{{ status_filter|default('') }}">
+                        <input type="hidden" name="action" id="bulkActionInput" value="">
+                        <input type="hidden" name="new_status" id="bulkNewStatusInput" value="">
+                        <input type="hidden" name="schedule_times_json" id="bulkScheduleTimesJsonInput" value="">
+                        <input type="hidden" name="schedule_wp_status" id="bulkScheduleWpStatusInput" value="">
+                        <input type="hidden" name="schedule_wp_rest_base" id="bulkScheduleWpRestBaseHidden" value="">
+                        <input type="hidden" name="bulk_prompt_id" id="bulkPromptIdHidden" value="">
+                        <input type="hidden" name="bulk_image_prompt_id" id="bulkImagePromptIdHidden" value="">
+                      </form>
+                      <div class="app-articles-toolbar mb-3 p-3 rounded-3 border bg-white">
+                        <form method="get" action="{{ url_for('project_detail', project_id=project.id) }}" class="row g-2 align-items-end">
+                          <input type="hidden" name="tab" value="articles">
+                          <div class="col-12 col-md-5">
+                            <label class="form-label small fw-medium mb-1" for="articleSearch">Search</label>
+                            <input class="form-control form-control-sm" id="articleSearch" name="q" value="{{ q|default('') }}" placeholder="Search by title, keyphrase, keyword…">
+                          </div>
+                          <div class="col-6 col-md-3">
+                            <label class="form-label small fw-medium mb-1" for="statusSelect">Status</label>
+                            <select class="form-select form-select-sm" id="statusSelect" name="status">
+                              <option value="" {% if not status_filter|default('') %}selected{% endif %}>All</option>
+                              <option value="pending" {% if status_filter|default('') == 'pending' %}selected{% endif %}>Pending</option>
+                              <option value="draft" {% if status_filter|default('') == 'draft' %}selected{% endif %}>Draft</option>
+                              <option value="scheduled" {% if status_filter|default('') == 'scheduled' %}selected{% endif %}>Scheduled</option>
+                              <option value="published" {% if status_filter|default('') == 'published' %}selected{% endif %}>Published</option>
+                            </select>
+                          </div>
+                          <div class="col-6 col-md-2">
+                            <label class="form-label small fw-medium mb-1" for="df">From</label>
+                            <input class="form-control form-control-sm" type="date" id="df" name="date_from" value="{{ date_from|default('') }}">
+                          </div>
+                          <div class="col-6 col-md-2">
+                            <label class="form-label small fw-medium mb-1" for="dt">To</label>
+                            <input class="form-control form-control-sm" type="date" id="dt" name="date_to" value="{{ date_to|default('') }}">
+                          </div>
+                          <div class="col-12 d-flex flex-wrap gap-2 align-items-center justify-content-between">
+                            <div class="d-flex flex-wrap gap-2">
+                              <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+                              {% set _pl = plan_limits if plan_limits is defined else none %}
+                              {% set allow_export = (_pl.get('allow_export', true) if _pl else true) %}
+                              {% if allow_export %}
+                                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('export_project_articles', project_id=project.id, date_from=date_from|default(''), date_to=date_to|default(''), status=status_filter|default('')) }}">Export</a>
+                              {% endif %}
+                            </div>
+                            <div class="small text-body-secondary" id="bulkSelectedCount">0 selected</div>
+                          </div>
+                        </form>
+                      </div>
+                      <div class="articles-list" id="articlesList">
+                        <div class="articles-list__head d-flex align-items-center gap-3 px-3 py-2 border-bottom bg-body">
+                          <input type="checkbox" class="form-check-input m-0" id="bulkSelectAll" aria-label="Select all articles on this page">
+                          <div class="small text-body-secondary">Title</div>
+                          <div class="small text-body-secondary ms-auto">Status</div>
+                        </div>
+                        {% for a in articles %}
+                          {% set st = (a.status or 'pending')|lower %}
+                          {% if st == 'published' %}
+                            {% set stn = 'published' %}
+                          {% elif (a.wp_scheduled_at or '').strip() %}
+                            {% set stn = 'scheduled' %}
+                          {% elif st == 'draft' %}
+                            {% set stn = 'draft' %}
+                          {% else %}
+                            {% set stn = 'pending' %}
+                          {% endif %}
+                          <div class="articles-row d-flex gap-3 px-3 py-3 border-bottom bg-white" data-article-id="{{ a.id }}" {% if a.wp_scheduled_at %}data-wp-scheduled="1"{% endif %}>
+                            <div class="flex-shrink-0 pt-1">
+                              <input class="form-check-input bulk-article-cb m-0" type="checkbox" name="article_ids" value="{{ a.id }}" form="bulkArticlesForm" aria-label="Select {{ a.title }}">
+                            </div>
+                            <div class="min-w-0 flex-grow-1">
+                              <div class="d-flex flex-wrap align-items-start justify-content-between gap-2">
+                                <div class="min-w-0">
+                                  <div class="articles-row__title fw-semibold text-body text-break">{{ a.title or '(Untitled)' }}</div>
+                                  <div class="articles-row__meta text-body-secondary small mt-1">
+                                    {% if (a.focus_keyphrase or '').strip() %}
+                                      <span class="me-2"><span class="text-body-secondary">Focus:</span> {{ (a.focus_keyphrase or '').strip() }}</span>
+                                    {% endif %}
+                                    {% if a.keywords and a.keywords|length > 0 %}
+                                      <span class="me-2 d-block d-md-inline"><span class="text-body-secondary">Keywords:</span> {{ (a.keywords or []) | join(', ') }}</span>
+                                    {% endif %}
+                                  </div>
+                                  <div class="text-body-secondary mt-1" style="font-size: 0.75rem; line-height: 1.35;">
+                                    <span class="text-nowrap">Updated {{ a.updated_at or a.created_at }}</span>
+                                    <span class="text-nowrap"> · Posted <span class="js-article-posted-at">{{ a.posted_at or '—' }}</span></span>
+                                    <span class="text-nowrap"> · Sched </span>
+                                    <span class="js-article-scheduled-at">{% if a.wp_scheduled_at %}{{ a.wp_scheduled_at }}{% if a.wp_schedule_error %}<span class="d-block text-danger small" title="{{ a.wp_schedule_error }}">Error</span>{% endif %}{% elif a.wp_schedule_error %}<span class="text-danger small" title="{{ a.wp_schedule_error }}">Last schedule failed</span>{% else %}—{% endif %}</span>
+                                  </div>
+                                </div>
+                                <div class="articles-row__actions d-flex align-items-center gap-2 flex-shrink-0">
+                                  {% set gs = (a.gsc_status or 'pending')|lower %}
+                                  <span class="small js-article-gsc-cell text-nowrap">
+                                    {% if gs in ('requested','inspected') %}
+                                      <span class="text-success fw-semibold" title="URL Inspection payload received (not guaranteed indexing).">Inspected</span>
+                                    {% else %}
+                                      <span class="text-body-secondary" title="URL Inspection not run (or failed / skipped).">Pending</span>
+                                    {% endif %}
+                                  </span>
+                                  <span class="js-article-status-badge badge rounded-pill flex-shrink-0 {% if stn == 'published' %}article-status-badge article-status-badge--published{% elif stn == 'scheduled' %}article-status-badge article-status-badge--scheduled{% elif stn == 'draft' %}article-status-badge article-status-badge--draft{% else %}article-status-badge article-status-badge--pending{% endif %}">{% if stn == 'published' %}Published{% elif stn == 'scheduled' %}Scheduled{% elif stn == 'draft' %}Draft{% else %}Pending{% endif %}</span>
+                                  <a class="btn btn-sm btn-outline-primary" href="{{ url_for('article_edit', project_id=project.id, article_id=a.id) }}">Edit</a>
+                                  {% if (a.wp_link or '').strip() %}
+                                    <a class="btn btn-sm btn-outline-secondary" href="{{ a.wp_link }}" target="_blank" rel="noopener noreferrer">Preview</a>
+                                  {% endif %}
+                                  <a class="btn btn-sm btn-primary" href="{{ url_for('article_edit', project_id=project.id, article_id=a.id) }}#publish">Publish</a>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        {% endfor %}
+                      </div>
+                      {% set pg = pagination if pagination is defined else none %}
+                      {% if pg and (pg.total_pages|default(1)) > 1 %}
+                        {% set base_q = {'date_from': date_from|default(''), 'date_to': date_to|default(''), 'status': status_filter|default('')} %}
+                        <nav class="d-flex justify-content-between align-items-center gap-3 mt-3" aria-label="Articles pagination">
+                          <div class="small text-body-secondary">
+                            Page {{ pg.page }} of {{ pg.total_pages }}
+                          </div>
+                          <div class="btn-group" role="group" aria-label="Pagination controls">
+                            {% set prev_p = (pg.page - 1) %}
+                            {% set next_p = (pg.page + 1) %}
+                            <a
+                              class="btn btn-sm btn-outline-secondary {% if pg.page <= 1 %}disabled{% endif %}"
+                              href="{% if pg.page <= 1 %}#{% else %}{{ url_for('project_detail', project_id=project.id, page=prev_p, date_from=date_from|default(''), date_to=date_to|default(''), status=status_filter|default('')) }}{% endif %}"
+                              aria-label="Previous page"
+                            >Previous</a>
+                            <a
+                              class="btn btn-sm btn-outline-secondary {% if pg.page >= pg.total_pages %}disabled{% endif %}"
+                              href="{% if pg.page >= pg.total_pages %}#{% else %}{{ url_for('project_detail', project_id=project.id, page=next_p, date_from=date_from|default(''), date_to=date_to|default(''), status=status_filter|default('')) }}{% endif %}"
+                              aria-label="Next page"
+                            >Next</a>
+                          </div>
+                        </nav>
+                      {% endif %}
+                      <div
+                        id="bulkStickyBar"
+                        class="bulk-sticky-bar d-none"
+                        role="region"
+                        aria-label="Bulk actions"
+                      >
+                        <div class="bulk-sticky-bar__inner">
+                          <div class="small fw-semibold">Actions to take on selected articles</div>
+                          <div class="d-flex flex-wrap gap-2 align-items-center">
+                            <button type="button" class="btn btn-sm btn-success" data-bulk-act="publish">Publish</button>
+                            <button type="button" class="btn btn-sm btn-primary" data-bulk-act="schedule">Schedule</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-bulk-act="change_status">Change status</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" data-bulk-act="delete">Delete</button>
+                            <span class="small text-body-secondary ms-1" id="bulkStickyCount">0 selected</span>
+                          </div>
+                        </div>
+                      </div>
+                    {% endif %}
+                  {% endif %}
+                </div>
+              </div>
+            </section>
+          </div>
+          <div class="col-12 col-lg-4 col-xl-3 app-workspace-sidebar">
+            {% include 'partials/project_side_panel.html' %}
+          </div>
+        </div>
+      {% endif %}
     </main>
 
     <!-- Modal: WordPress defaults -->
@@ -807,25 +784,6 @@
       </div>
     </div>
 
-    <div class="modal fade" id="unsavedNavModal" tabindex="-1" aria-labelledby="unsavedNavModalLabel" aria-hidden="true" data-bs-backdrop="static">
-      <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content border-0 shadow">
-          <div class="modal-header border-0 pb-0">
-            <h2 class="modal-title h5" id="unsavedNavModalLabel">Unsaved status changes</h2>
-            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-          </div>
-          <div class="modal-body pt-2">
-            <p class="text-body-secondary small mb-0">You have changed one or more article statuses. Save them before leaving, or leave without saving.</p>
-          </div>
-          <div class="modal-footer border-0 pt-0 flex-wrap gap-2">
-            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal" id="unsavedNavStayBtn">Stay on page</button>
-            <button type="button" class="btn btn-outline-danger" id="unsavedNavLeaveBtn">Leave without saving</button>
-            <button type="button" class="btn btn-primary" id="unsavedNavSaveBtn">Save and continue</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <script type="application/json" id="project-prompts-data" data-default-id="{{ project.default_prompt_id or '' }}">{{ project.prompts|default([])|tojson }}</script>
     <script type="application/json" id="project-image-prompts-data" data-default-id="{{ project.default_image_prompt_id or '' }}">{{ project.image_prompts|default([])|tojson }}</script>
     <script type="application/json" id="project-context-links-data">{{ project.context_links|default([])|tojson }}</script>
@@ -845,6 +803,19 @@
     <script>
       (function () {
         document.addEventListener('DOMContentLoaded', function () {
+          var banner = document.getElementById('systemBanner');
+          var dismiss = document.getElementById('dismissSystemBanner');
+          try {
+            if (banner && window.localStorage && localStorage.getItem('aa_hide_system_banner') === '1') {
+              banner.style.display = 'none';
+            }
+          } catch (e) {}
+          if (dismiss && banner) {
+            dismiss.addEventListener('click', function () {
+              banner.style.display = 'none';
+              try { if (window.localStorage) localStorage.setItem('aa_hide_system_banner', '1'); } catch (e) {}
+            });
+          }
           if (document.body && document.body.getAttribute('data-open-project-settings') === '1') {
             var el = document.getElementById('projectSettingsModal');
             if (el && window.bootstrap) {
@@ -998,21 +969,61 @@
       (function () {
         var btn = document.getElementById('editSelectedWritingPromptBtn');
         var sel = document.getElementById('projectPromptSelect');
-        if (!btn || !sel) return;
+        var dataEl = document.getElementById('project-prompts-data');
+        if (!btn || !sel || !dataEl) return;
+        function parsePrompts() {
+          try { return JSON.parse(dataEl.textContent || '[]'); } catch (e) { return []; }
+        }
+        function openEditPrompt(promptId) {
+          var prompts = parsePrompts();
+          var p = prompts.find(function (x) { return x && x.id === promptId; });
+          if (!p) return;
+          var defaultId = dataEl.getAttribute('data-default-id') || '';
+          var hid = document.getElementById('editPromptId');
+          var nm = document.getElementById('editPromptName');
+          var tx = document.getElementById('editPromptText');
+          var cb = document.getElementById('editSetAsDefault');
+          if (hid) hid.value = promptId;
+          if (nm) nm.value = p.name || '';
+          if (tx) tx.value = p.text || '';
+          if (cb) cb.checked = promptId === defaultId;
+          var modalEl = document.getElementById('editPromptModal');
+          if (modalEl && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+        }
         btn.addEventListener('click', function () {
-          var id = sel.value || '';
-          var rowBtn = document.querySelector('[data-edit-prompt][data-prompt-id=\"' + id.replace(/\"/g, '') + '\"]');
-          if (rowBtn) rowBtn.click();
+          var id = (sel.value || '').toString();
+          if (!id) return;
+          openEditPrompt(id);
         });
       })();
       (function () {
         var btn = document.getElementById('editSelectedImagePromptBtn');
         var sel = document.getElementById('projectImagePromptSelect');
-        if (!btn || !sel) return;
+        var dataEl = document.getElementById('project-image-prompts-data');
+        if (!btn || !sel || !dataEl) return;
+        function parsePrompts() {
+          try { return JSON.parse(dataEl.textContent || '[]'); } catch (e) { return []; }
+        }
+        function openEditPrompt(promptId) {
+          var prompts = parsePrompts();
+          var p = prompts.find(function (x) { return x && x.id === promptId; });
+          if (!p) return;
+          var defaultId = dataEl.getAttribute('data-default-id') || '';
+          var hid = document.getElementById('editImagePromptId');
+          var nm = document.getElementById('editImagePromptName');
+          var tx = document.getElementById('editImagePromptText');
+          var cb = document.getElementById('editSetAsDefaultImage');
+          if (hid) hid.value = promptId;
+          if (nm) nm.value = p.name || '';
+          if (tx) tx.value = p.text || '';
+          if (cb) cb.checked = promptId === defaultId;
+          var modalEl = document.getElementById('editImagePromptModal');
+          if (modalEl && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+        }
         btn.addEventListener('click', function () {
-          var id = sel.value || '';
-          var rowBtn = document.querySelector('[data-edit-image-prompt][data-image-prompt-id=\"' + id.replace(/\"/g, '') + '\"]');
-          if (rowBtn) rowBtn.click();
+          var id = (sel.value || '').toString();
+          if (!id) return;
+          openEditPrompt(id);
         });
       })();
       (function () {
@@ -1107,13 +1118,13 @@
             .replace(/'/g, '&#39;');
         }
         function updateArticleRows(articles) {
-          var tbl = document.getElementById('articlesPostsTable');
-          if (!tbl || !articles) return;
+          var root = document.getElementById('articlesList');
+          if (!root || !articles) return;
           var map = {};
           articles.forEach(function (a) {
             if (a && a.id) map[a.id] = a;
           });
-          tbl.querySelectorAll('tbody tr[data-article-id]').forEach(function (tr) {
+          root.querySelectorAll('[data-article-id]').forEach(function (tr) {
             var id = tr.getAttribute('data-article-id');
             var row = map[id];
             if (!row) return;
@@ -1233,14 +1244,10 @@
         }, 3000);
       })();
       (function () {
-        var toggle = document.getElementById('bulkModeToggle');
-        var toolbar = document.getElementById('bulkToolbar');
-        var hint = document.getElementById('bulkHint');
         var countEl = document.getElementById('bulkSelectedCount');
-        var actionSel = document.getElementById('bulkActionSelect');
         var selectAll = document.getElementById('bulkSelectAll');
         var form = document.getElementById('bulkArticlesForm');
-        if (!toggle || !toolbar || !form) return;
+        if (!form) return;
 
         var needProjectImage = false;
         (function initNeedProjectImage() {
@@ -1265,7 +1272,7 @@
         })();
 
         var bulkCols = document.querySelectorAll('.bulk-select-col');
-        var modeOn = false;
+        bulkCols.forEach(function (el) { el.classList.remove('d-none'); });
 
         function selectedBoxes() {
           return Array.prototype.slice.call(document.querySelectorAll('.bulk-article-cb:checked'));
@@ -1274,7 +1281,13 @@
         function updateCount() {
           var n = selectedBoxes().length;
           if (countEl) countEl.textContent = n + ' selected';
-          if (actionSel) actionSel.disabled = n === 0;
+          var sticky = document.getElementById('bulkStickyBar');
+          var stickyCount = document.getElementById('bulkStickyCount');
+          if (stickyCount) stickyCount.textContent = n + ' selected';
+          if (sticky) {
+            if (n > 0) sticky.classList.remove('d-none');
+            else sticky.classList.add('d-none');
+          }
           if (selectAll) {
             var boxes = document.querySelectorAll('.bulk-article-cb');
             selectAll.indeterminate = n > 0 && n < boxes.length;
@@ -1288,32 +1301,6 @@
           }
         }
 
-        function setBulkMode(on) {
-          modeOn = on;
-          toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
-          toggle.textContent = on ? 'Exit bulk actions' : 'Bulk actions';
-          if (hint) hint.hidden = on;
-          bulkCols.forEach(function (el) {
-            if (on) el.classList.remove('d-none');
-            else el.classList.add('d-none');
-          });
-          if (on) {
-            toolbar.classList.remove('d-none');
-            toolbar.classList.add('d-flex');
-          } else {
-            toolbar.classList.add('d-none');
-            toolbar.classList.remove('d-flex');
-            document.querySelectorAll('.bulk-article-cb').forEach(function (cb) { cb.checked = false; });
-            if (selectAll) selectAll.checked = false;
-            if (actionSel) actionSel.value = '';
-            updateCount();
-          }
-        }
-
-        toggle.addEventListener('click', function () {
-          setBulkMode(!modeOn);
-        });
-
         document.querySelectorAll('.bulk-article-cb').forEach(function (cb) {
           cb.addEventListener('change', updateCount);
         });
@@ -1325,6 +1312,40 @@
             updateCount();
           });
         }
+
+        function runBulkAction(v) {
+          var n = selectedBoxes().length;
+          if (!v || n === 0) return;
+          if (v === 'delete') {
+            var dc = document.getElementById('bulkDeleteCount');
+            if (dc) dc.textContent = String(n);
+            var delModal = document.getElementById('bulkDeleteModal');
+            if (delModal && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(delModal).show();
+          } else if (v === 'change_status') {
+            var sc = document.getElementById('bulkStatusCount');
+            if (sc) sc.textContent = String(n);
+            var stModal = document.getElementById('bulkStatusModal');
+            if (stModal && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(stModal).show();
+          } else if (v === 'schedule') {
+            syncBulkScheduleModal();
+            var schModal = document.getElementById('bulkScheduleModal');
+            if (schModal && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(schModal).show();
+          } else if (v === 'publish') {
+            var sc3 = document.getElementById('bulkStatusCount');
+            if (sc3) sc3.textContent = String(n);
+            var sel2 = document.getElementById('bulkStatusSelect');
+            if (sel2) sel2.value = 'published';
+            var stModal2 = document.getElementById('bulkStatusModal');
+            if (stModal2 && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(stModal2).show();
+          }
+        }
+
+        document.querySelectorAll('[data-bulk-act]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            var v = b.getAttribute('data-bulk-act') || '';
+            runBulkAction(v);
+          });
+        });
 
         function toDatetimeLocalValue(d) {
           function pad(x) { return x < 10 ? '0' + x : String(x); }
@@ -1678,30 +1699,6 @@
           });
         }
 
-        if (actionSel) {
-          actionSel.addEventListener('change', function () {
-            var v = actionSel.value;
-            var n = selectedBoxes().length;
-            if (!v || n === 0) return;
-            if (v === 'delete') {
-              var dc = document.getElementById('bulkDeleteCount');
-              if (dc) dc.textContent = String(n);
-              var delModal = document.getElementById('bulkDeleteModal');
-              if (delModal && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(delModal).show();
-            } else if (v === 'change_status') {
-              var sc = document.getElementById('bulkStatusCount');
-              if (sc) sc.textContent = String(n);
-              var stModal = document.getElementById('bulkStatusModal');
-              if (stModal && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(stModal).show();
-            } else if (v === 'schedule') {
-              syncBulkScheduleModal();
-              var schModal = document.getElementById('bulkScheduleModal');
-              if (schModal && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(schModal).show();
-            }
-            actionSel.value = '';
-          });
-        }
-
         var delBtn = document.getElementById('bulkDeleteConfirm');
         if (delBtn) {
           delBtn.addEventListener('click', function () {
@@ -1778,275 +1775,6 @@
         updateCount();
       })();
     </script>
-    {% if articles and articles|length > 0 %}
-    <script>
-      (function () {
-        var table = document.getElementById('articlesPostsTable');
-        var saveBar = document.getElementById('articleStatusSaveBar');
-        var saveBtn = document.getElementById('articleStatusSaveBtn');
-        var discardBtn = document.getElementById('articleStatusDiscardBtn');
-        var batchUrl = table && table.getAttribute('data-status-batch-url');
-        if (!table || !batchUrl || !saveBar) return;
-
-        var pendingAction = null;
-
-        function statusBadgeClass(st) {
-          var s = (st || 'pending').toLowerCase();
-          if (s === 'published') {
-            return 'js-article-status-badge badge rounded-pill flex-shrink-0 article-status-badge article-status-badge--published';
-          }
-          if (s === 'draft') {
-            return 'js-article-status-badge badge rounded-pill flex-shrink-0 article-status-badge article-status-badge--draft';
-          }
-          return 'js-article-status-badge badge rounded-pill flex-shrink-0 article-status-badge article-status-badge--pending';
-        }
-        function statusBadgeLabel(st) {
-          var s = (st || 'pending').toLowerCase();
-          if (s === 'published') return 'Published';
-          if (s === 'draft') return 'Draft';
-          return 'Pending';
-        }
-
-        function rowForSelect(sel) {
-          return sel.closest('tr[data-article-id]');
-        }
-
-        function updateBadgeForRow(tr, st) {
-          var badge = tr && tr.querySelector('.js-article-status-badge');
-          if (!badge) return;
-          badge.className = statusBadgeClass(st);
-          badge.textContent = statusBadgeLabel(st);
-        }
-
-        function isDirty() {
-          var sels = table.querySelectorAll('.js-article-status-select');
-          for (var i = 0; i < sels.length; i++) {
-            var sel = sels[i];
-            var init = (sel.getAttribute('data-initial-status') || 'pending').toLowerCase();
-            var val = (sel.value || 'pending').toLowerCase();
-            if (val !== init) return true;
-          }
-          return false;
-        }
-
-        function updateSaveBar() {
-          var dirty = isDirty();
-          if (dirty) {
-            saveBar.classList.remove('d-none');
-          } else {
-            saveBar.classList.add('d-none');
-          }
-        }
-
-        window.articleStatusRefreshDirty = function () {
-          updateSaveBar();
-        };
-
-        table.addEventListener('change', function (e) {
-          var t = e.target;
-          if (!t || !t.classList || !t.classList.contains('js-article-status-select')) return;
-          var tr = rowForSelect(t);
-          if (tr) updateBadgeForRow(tr, t.value);
-          updateSaveBar();
-        });
-
-        function discardAll() {
-          var sels = table.querySelectorAll('.js-article-status-select');
-          for (var i = 0; i < sels.length; i++) {
-            var sel = sels[i];
-            var init = (sel.getAttribute('data-initial-status') || 'pending').toLowerCase();
-            sel.value = init === 'published' ? 'published' : init === 'draft' ? 'draft' : 'pending';
-            var tr = rowForSelect(sel);
-            if (tr) updateBadgeForRow(tr, sel.value);
-          }
-          updateSaveBar();
-        }
-
-        function collectPayload() {
-          var updates = [];
-          var sels = table.querySelectorAll('.js-article-status-select');
-          for (var i = 0; i < sels.length; i++) {
-            var sel = sels[i];
-            var id = sel.getAttribute('data-article-id');
-            var init = (sel.getAttribute('data-initial-status') || 'pending').toLowerCase();
-            var val = (sel.value || 'pending').toLowerCase();
-            if (val !== init && id) updates.push({ id: id, status: val });
-          }
-          return {
-            updates: updates,
-            date_from: table.getAttribute('data-date-from') || '',
-            date_to: table.getAttribute('data-date-to') || '',
-            filter_status: table.getAttribute('data-status-filter') || '',
-          };
-        }
-
-        function commitSavedToDom() {
-          var sels = table.querySelectorAll('.js-article-status-select');
-          for (var i = 0; i < sels.length; i++) {
-            var sel = sels[i];
-            var val = (sel.value || 'pending').toLowerCase();
-            sel.setAttribute('data-initial-status', val);
-          }
-          updateSaveBar();
-        }
-
-        function saveBatch(done) {
-          var body = collectPayload();
-          if (!body.updates.length) {
-            updateSaveBar();
-            if (done) done(null);
-            return;
-          }
-          fetch(batchUrl, {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-            body: JSON.stringify(body),
-          })
-            .then(function (r) {
-              return r.json().then(function (d) {
-                return { ok: r.ok, data: d };
-              });
-            })
-            .then(function (res) {
-              if (res.ok && res.data && res.data.ok) {
-                commitSavedToDom();
-                if (done) done(null, res.data);
-                else if (res.data.redirect) window.location.href = res.data.redirect;
-              } else {
-                window.alert((res.data && res.data.error) || 'Could not save statuses.');
-                if (done) done(new Error('save'));
-              }
-            })
-            .catch(function () {
-              window.alert('Network error while saving.');
-              if (done) done(new Error('network'));
-            });
-        }
-
-        if (saveBtn) {
-          saveBtn.addEventListener('click', function () {
-            saveBatch(null);
-          });
-        }
-        if (discardBtn) {
-          discardBtn.addEventListener('click', function () {
-            discardAll();
-          });
-        }
-
-        var unsavedModalEl = document.getElementById('unsavedNavModal');
-        var unsavedModal = unsavedModalEl && window.bootstrap ? window.bootstrap.Modal.getOrCreateInstance(unsavedModalEl) : null;
-
-        function proceedPending() {
-          if (!pendingAction) return;
-          var pa = pendingAction;
-          pendingAction = null;
-          if (pa.type === 'nav') {
-            window.location.href = pa.url;
-          } else if (pa.type === 'form') {
-            pa.form.submit();
-          }
-        }
-
-        function openUnsavedModal() {
-          if (unsavedModal) unsavedModal.show();
-        }
-
-        document.getElementById('unsavedNavLeaveBtn') &&
-          document.getElementById('unsavedNavLeaveBtn').addEventListener('click', function () {
-            discardAll();
-            if (unsavedModal) unsavedModal.hide();
-            proceedPending();
-          });
-        document.getElementById('unsavedNavSaveBtn') &&
-          document.getElementById('unsavedNavSaveBtn').addEventListener('click', function () {
-            var pa = pendingAction;
-            saveBatch(function (err, data) {
-              if (err) return;
-              if (unsavedModal) unsavedModal.hide();
-              pendingAction = null;
-              if (pa) {
-                if (pa.type === 'nav') window.location.href = pa.url;
-                else if (pa.type === 'form') pa.form.submit();
-              } else if (data && data.redirect) {
-                window.location.href = data.redirect;
-              }
-            });
-          });
-        if (unsavedModalEl) {
-          unsavedModalEl.addEventListener('hidden.bs.modal', function () {
-            pendingAction = null;
-          });
-        }
-
-        function shouldInterceptAnchor(a) {
-          if (!a || a.getAttribute('data-skip-unsaved') === '1') return false;
-          if (a.closest('[data-bs-toggle]')) return false;
-          var href = a.getAttribute('href');
-          if (!href || href === '#' || href.indexOf('javascript:') === 0) return false;
-          if (a.download) return false;
-          if (a.target === '_blank') return false;
-          try {
-            var u = new URL(href, window.location.href);
-            if (u.origin !== window.location.origin) return false;
-            if (
-              u.pathname === window.location.pathname &&
-              u.search === window.location.search &&
-              u.hash
-            ) {
-              return false;
-            }
-            if (
-              u.pathname === window.location.pathname &&
-              u.search === window.location.search &&
-              !u.hash
-            ) {
-              return false;
-            }
-          } catch (e) {
-            return false;
-          }
-          return true;
-        }
-
-        document.addEventListener(
-          'click',
-          function (e) {
-            if (!isDirty()) return;
-            var a = e.target.closest('a[href]');
-            if (!a || !shouldInterceptAnchor(a)) return;
-            e.preventDefault();
-            e.stopPropagation();
-            pendingAction = { type: 'nav', url: a.href };
-            openUnsavedModal();
-          },
-          true
-        );
-
-        document.addEventListener(
-          'submit',
-          function (e) {
-            if (!isDirty()) return;
-            var form = e.target;
-            if (!form || form.tagName !== 'FORM') return;
-            if (form.getAttribute('data-skip-unsaved') === '1') return;
-            e.preventDefault();
-            e.stopPropagation();
-            pendingAction = { type: 'form', form: form };
-            openUnsavedModal();
-          },
-          true
-        );
-
-        window.addEventListener('beforeunload', function (e) {
-          if (!isDirty()) return;
-          e.preventDefault();
-          e.returnValue = '';
-        });
-      })();
-    </script>
-    {% endif %}
     <script src="{{ url_for('static', filename='page-loading.js') }}"></script>
   </body>
 </html>

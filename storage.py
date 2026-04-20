@@ -413,6 +413,7 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
             wp_id = None
     else:
         wp_id = None
+    updated_at = (d.get("updated_at") or d.get("created_at") or "")[:64]
     return {
         "id": aid,
         "project_id": pid,
@@ -426,6 +427,7 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "generated_at": (d.get("generated_at") or "")[:64],
         "posted_at": (d.get("posted_at") or "")[:64],
         "created_at": (d.get("created_at") or "")[:64],
+        "updated_at": updated_at,
         "featured_image_generated_at": (d.get("featured_image_generated_at") or "")[:64],
         "featured_image_prompt_id": (d.get("featured_image_prompt_id") or "")[:36],
         "featured_image_source": (d.get("featured_image_source") or "")[:32],
@@ -505,6 +507,7 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "generated_at",
             "posted_at",
             "created_at",
+            "updated_at",
             "featured_image_generated_at",
             "featured_image_prompt_id",
             "featured_image_source",
@@ -702,6 +705,9 @@ def insert_articles_batch(articles: list[dict[str, Any]]) -> None:
 
 
 def update_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    u2 = dict(updates or {})
+    u2.setdefault("updated_at", ts)
     if _storage_mode != "mongo":
         with _db_write_lock:
             arts = [_normalize_article_dict(dict(a)) for a in _load_json_list("articles.json")]
@@ -709,7 +715,7 @@ def update_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
             if idx is None:
                 return False
             d = dict(arts[idx])
-            _apply_article_updates_dict(d, updates)
+            _apply_article_updates_dict(d, u2)
             arts[idx] = _normalize_article_dict(d)
             _save_json_articles(arts)
         return True
@@ -719,7 +725,7 @@ def update_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
         if not doc:
             return False
         d = _mongo_doc_to_article(doc)
-        _apply_article_updates_dict(d, updates)
+        _apply_article_updates_dict(d, u2)
         norm = _normalize_article_dict(d)
         new_doc = {**norm, "_id": norm["id"]}
         res = db.articles.replace_one({"id": article_id}, new_doc)

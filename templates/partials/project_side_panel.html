@@ -17,6 +17,8 @@
     </div>
   </div>
 
+  {% include 'partials/project_scheduled_section.html' %}
+
   <div class="app-card app-card--elevated app-side-panel__card p-4">
     <h2 class="h6 mb-3">WordPress status</h2>
     {% if project_settings_incomplete|default(false) %}
