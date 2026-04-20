@@ -2771,6 +2771,11 @@ def delete_project(project_id: str):
     if not pid:
         flash("Invalid project.", "error")
         return redirect(url_for("home"))
+    # Enforce ownership / role scope before deleting.
+    project = _get_project_by_id(pid)
+    if not project:
+        flash("Project not found.", "error")
+        return redirect(url_for("home"))
     if not _storage.delete_project_and_articles(pid):
         flash("Project not found.", "error")
         return redirect(url_for("home"))

@@ -95,6 +95,15 @@ def _save_json_articles(articles: list[dict[str, Any]]) -> None:
         f.write("\n")
 
 
+def _save_json_projects(projects: list[dict[str, Any]]) -> None:
+    """Persist full project list when using JSON storage fallback (see init_storage)."""
+    path = _data_path("projects.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(projects, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
 def storage_mode() -> str:
     return _storage_mode
 
@@ -644,6 +653,14 @@ def save_projects_replace_all(projects: list[dict[str, Any]]) -> None:
 
 def insert_project(project: dict[str, Any]) -> None:
     norm = _normalize_project_dict(project)
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [_normalize_project_dict(dict(p)) for p in _load_json_list("projects.json")]
+            if any((x.get("id") or "") == norm["id"] for x in rows):
+                raise ValueError("project id already exists")
+            rows.append(norm)
+            _save_json_projects(rows)
+        return
     doc = {**norm, "_id": norm["id"]}
     with _db_write_lock:
         res = get_db().projects.insert_one(doc)
@@ -652,6 +669,17 @@ def insert_project(project: dict[str, Any]) -> None:
 
 
 def update_project_fields(project_id: str, updates: dict[str, Any]) -> bool:
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [_normalize_project_dict(dict(p)) for p in _load_json_list("projects.json")]
+            idx = next((i for i, x in enumerate(rows) if (x.get("id") or "") == project_id), None)
+            if idx is None:
+                return False
+            d = dict(rows[idx])
+            _apply_project_updates_dict(d, updates)
+            rows[idx] = _normalize_project_dict(d)
+            _save_json_projects(rows)
+        return True
     with _db_write_lock:
         db = get_db()
         doc = db.projects.find_one({"id": project_id})
@@ -666,6 +694,17 @@ def update_project_fields(project_id: str, updates: dict[str, Any]) -> bool:
 
 
 def delete_project_and_articles(project_id: str) -> bool:
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            projects = [_normalize_project_dict(dict(p)) for p in _load_json_list("projects.json")]
+            if not any((p.get("id") or "") == project_id for p in projects):
+                return False
+            projects = [p for p in projects if (p.get("id") or "") != project_id]
+            _save_json_projects(projects)
+            articles = [_normalize_article_dict(dict(a)) for a in _load_json_list("articles.json")]
+            articles = [a for a in articles if (a.get("project_id") or "") != project_id]
+            _save_json_articles(articles)
+        return True
     with _db_write_lock:
         db = get_db()
         if db.projects.count_documents({"id": project_id}, limit=1) == 0:
