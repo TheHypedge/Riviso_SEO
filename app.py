@@ -133,6 +133,148 @@ _migrate_json_if_db_empty()
 _ensure_initial_admin_user()
 _ARTICLE_IMAGES_DIR = os.path.join(_DATA_DIR, "article_images")
 _MAX_PROJECTS = 9  # 3×3 grid
+_PRIMARY_PROTECTED_ADMIN_EMAIL = "iamakhileshsoni@gmail.com"
+
+_orphan_owner_backfill_lock = threading.Lock()
+_orphan_owner_backfill_done = False
+
+
+def _norm_owner_user_id(val: Any) -> str:
+    """Normalize owner id from session/Mongo (string, ObjectId, etc.)."""
+    if val is None or val == "":
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    return str(val).strip()
+
+
+def _maybe_backfill_orphan_project_owners() -> None:
+    """Assign missing owner_user_id on legacy projects (no owner).
+
+    Order:
+    1) If ORPHAN_PROJECTS_OWNER_EMAIL is set in the environment, assign orphans to that user.
+    2) Else if exactly one user exists in storage, assign orphans to that user (single-tenant).
+    """
+    global _orphan_owner_backfill_done
+    if _orphan_owner_backfill_done:
+        return
+    with _orphan_owner_backfill_lock:
+        if _orphan_owner_backfill_done:
+            return
+        try:
+            if not hasattr(_storage, "list_users"):
+                return
+            target_uid = ""
+            env_email = (os.environ.get("ORPHAN_PROJECTS_OWNER_EMAIL") or "").strip().lower()
+            if env_email and hasattr(_storage, "get_user_by_email"):
+                u = _storage.get_user_by_email(env_email)
+                if u:
+                    target_uid = _norm_owner_user_id(u.get("id"))
+            if not target_uid:
+                users = _storage.list_users()
+                if len(users) == 1:
+                    target_uid = _norm_owner_user_id(users[0].get("id"))
+            if not target_uid:
+                return
+            for p in _storage.load_projects() or []:
+                if not isinstance(p, dict):
+                    continue
+                if _norm_owner_user_id(p.get("owner_user_id")):
+                    continue
+                pid = (p.get("id") or "").strip()
+                if not pid:
+                    continue
+                if _storage.update_project_fields(pid, {"owner_user_id": target_uid}):
+                    app.logger.info("Backfilled owner_user_id on legacy project without owner: %s", pid)
+        except Exception as e:
+            app.logger.warning("Could not backfill orphan project owners: %s", e)
+        finally:
+            _orphan_owner_backfill_done = True
+
+
+# Production sites linked by website URL host (see admin “Connect live projects”).
+_LIVE_CONNECT_META: tuple[tuple[str, str], ...] = (
+    ("Sheokand Legal", "sheokandlegal.com"),
+    ("KCS", "kcsglobe.com"),
+    ("TTSFM", "ttsfm.co.uk"),
+)
+_LIVE_CONNECT_HOSTS: frozenset[str] = frozenset(h for _, h in _LIVE_CONNECT_META)
+
+
+def _normalize_url_host(raw: str) -> str:
+    """Return host without www prefix, lowercase; empty if invalid."""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    try:
+        if not re.match(r"^https?://", s, re.IGNORECASE):
+            s = "https://" + s
+        p = urlparse(s)
+        host = (p.netloc or "").lower()
+        if ":" in host:
+            host = host.split(":")[0]
+        if host.startswith("www."):
+            host = host[4:]
+        return host
+    except Exception:
+        return ""
+
+
+def _project_hosts_for_match(p: dict) -> set[str]:
+    hosts: set[str] = set()
+    for key in ("website_url", "wp_site_url"):
+        h = _normalize_url_host(p.get(key) or "")
+        if h:
+            hosts.add(h)
+    return hosts
+
+
+def _assign_live_projects_to_user_email(target_email: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Set owner_user_id on projects whose URL host matches _LIVE_CONNECT_HOSTS."""
+    warnings: list[str] = []
+    assigned: list[dict[str, Any]] = []
+    email = (target_email or "").strip().lower()
+    if not email:
+        return [], ["Missing email."]
+    if not hasattr(_storage, "get_user_by_email"):
+        return [], ["User lookup is not available."]
+    u = _storage.get_user_by_email(email)
+    if not u:
+        return [], [f"No user found for {email}."]
+    uid = _norm_owner_user_id(u.get("id"))
+    if not uid:
+        return [], ["User id is missing."]
+    try:
+        projs = _storage.load_projects()
+    except Exception as e:
+        return [], [f"Could not load projects: {e}"]
+    found_hosts: set[str] = set()
+    for p in projs or []:
+        if not isinstance(p, dict):
+            continue
+        hosts = _project_hosts_for_match(p)
+        touch = hosts & _LIVE_CONNECT_HOSTS
+        if not touch:
+            continue
+        pid = (p.get("id") or "").strip()
+        if not pid:
+            continue
+        if _storage.update_project_fields(pid, {"owner_user_id": uid}):
+            found_hosts.update(touch)
+            assigned.append(
+                {
+                    "id": pid,
+                    "name": (p.get("name") or "").strip() or "Untitled",
+                    "hosts": sorted(touch),
+                }
+            )
+    missing = sorted(_LIVE_CONNECT_HOSTS - found_hosts)
+    if missing:
+        warnings.append(
+            "No project found matching these host(s) (add or fix website URL on a project): "
+            + ", ".join(missing)
+        )
+    return assigned, warnings
 
 
 def _is_authenticated() -> bool:
@@ -274,7 +416,7 @@ def _article_quota_try_consume(user_id: str, add_count: int) -> tuple[bool, str]
 
 
 def _project_ids_for_owner(user_id: str) -> list[str]:
-    uid = (user_id or "").strip()
+    uid = _norm_owner_user_id(user_id)
     if not uid:
         return []
     try:
@@ -286,7 +428,7 @@ def _project_ids_for_owner(user_id: str) -> list[str]:
     for p in (projs or []):
         if not isinstance(p, dict):
             continue
-        owner = (p.get("owner_user_id") or "").strip()
+        owner = _norm_owner_user_id(p.get("owner_user_id"))
         # Back-compat for legacy JSON snapshots that didn’t store owner_user_id.
         if owner and owner != uid:
             continue
@@ -296,6 +438,23 @@ def _project_ids_for_owner(user_id: str) -> list[str]:
         if pid:
             out.append(pid)
     return out
+
+
+def _purge_user_projects_and_files(user_id: str) -> None:
+    """Remove all projects and articles for user from storage and delete local article image files."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return
+    for pid in list(_project_ids_for_owner(uid)):
+        try:
+            for a in _articles_for_project(pid):
+                aid = (a.get("id") or "").strip()
+                if aid:
+                    _delete_article_featured_image_file(aid)
+        except Exception as e:
+            app.logger.warning("Article image cleanup failed (project %s): %s", pid, e)
+        if not _storage.delete_project_and_articles(pid):
+            app.logger.warning("delete_project_and_articles returned false for project %s", pid)
 
 
 def _articles_counts_for_owner_project_ids(project_ids: list[str]) -> dict[str, int]:
@@ -329,12 +488,98 @@ def _articles_counts_for_owner_project_ids(project_ids: list[str]) -> dict[str, 
     }
 
 
+def _effective_article_usage_from_user(user: dict | None) -> dict[str, int]:
+    """Day/month article counts with the same rollover rules as quota enforcement."""
+    u = user or {}
+    today = _today_key_utc()
+    this_month = _month_key_utc()
+    day_key = (u.get("usage_daily_articles_date") or "").strip()
+    day_used = _int0(u.get("usage_daily_articles_count"), 0)
+    month_key = (u.get("usage_monthly_articles_month") or "").strip()
+    month_used = _int0(u.get("usage_monthly_articles_count"), 0)
+    if day_key != today:
+        day_used = 0
+    if month_key != this_month:
+        month_used = 0
+    return {"day_used": day_used, "month_used": month_used}
+
+
+def _plan_ui_for_project(project: dict, user: dict | None) -> dict[str, Any]:
+    """UI flags for plan limits (Tools modal, side panel)."""
+    limits = _plan_limit_summary(user)
+    uid = ""
+    if user and (user.get("id") or "").strip():
+        uid = (user.get("id") or "").strip()
+    else:
+        uid = (session.get("user_id") or "").strip()
+    pids = _project_ids_for_owner(uid)
+    ac = _articles_counts_for_owner_project_ids(pids)
+    usage = _effective_article_usage_from_user(user)
+    max_art = int(limits.get("max_articles") or 0)
+    max_day = int(limits.get("max_articles_per_day") or 0)
+    max_month = int(limits.get("max_articles_per_month") or 0)
+    max_wp = int(limits.get("max_writing_prompts") or 0)
+    if max_wp <= 0:
+        max_wp = 999999  # 0 = unlimited
+    max_ip = int(limits.get("max_image_prompts") or 0)
+    if max_ip <= 0:
+        max_ip = 999999
+
+    total_articles = int(ac.get("total") or 0)
+    wp_count = len((project or {}).get("prompts") or [])
+    ip_count = len((project or {}).get("image_prompts") or [])
+
+    articles_cap = max_art > 0 and total_articles >= max_art
+    day_cap = max_day > 0 and usage["day_used"] >= max_day
+    month_cap = max_month > 0 and usage["month_used"] >= max_month
+    cannot_add_article = articles_cap or day_cap or month_cap
+
+    allow_bulk = bool(limits.get("allow_bulk_upload", True))
+    lock_bulk = (not allow_bulk) or cannot_add_article
+
+    lock_writing = wp_count >= max_wp
+    lock_image = ip_count >= max_ip
+
+    role = (session.get("role") or "").strip().lower()
+    is_admin = role == "admin"
+    upgrade_href = url_for("home", section="limits") if is_admin else url_for("home")
+
+    reason_bulk = ""
+    if not allow_bulk:
+        reason_bulk = "Bulk upload is disabled on your current plan."
+    elif articles_cap and max_art > 0:
+        reason_bulk = f"Article limit reached ({total_articles}/{max_art})."
+    elif day_cap:
+        reason_bulk = f"Daily article limit reached ({usage['day_used']}/{max_day})."
+    elif month_cap:
+        reason_bulk = f"Monthly article limit reached ({usage['month_used']}/{max_month})."
+
+    return {
+        "limits": limits,
+        "usage": usage,
+        "article_counts": ac,
+        "lock_bulk_panel": lock_bulk,
+        "lock_writing_panel": lock_writing,
+        "lock_image_panel": lock_image,
+        "lock_search_console_panel": False,
+        "allow_scheduling": bool(limits.get("allow_scheduling", True)),
+        "allow_export": bool(limits.get("allow_export", True)),
+        "cannot_add_article": cannot_add_article,
+        "upgrade_href": upgrade_href,
+        "is_admin": is_admin,
+        "reason_bulk": reason_bulk,
+        "reason_writing": f"Writing prompt limit reached ({wp_count}/{max_wp})." if lock_writing else "",
+        "reason_image": f"Image prompt limit reached ({ip_count}/{max_ip})." if lock_image else "",
+    }
+
+
 def _admin_user_profile_snapshot(u: dict[str, Any]) -> dict[str, Any]:
-    uid = (u.get("id") or "").strip()
+    uid = _norm_owner_user_id(u.get("id"))
     project_ids = _project_ids_for_owner(uid)
     articles = _articles_counts_for_owner_project_ids(project_ids)
     writing_prompts: list[dict[str, Any]] = []
     image_prompts: list[dict[str, Any]] = []
+    user_projects: list[dict[str, Any]] = []
     try:
         projs = _storage.load_projects()
     except Exception:
@@ -343,11 +588,20 @@ def _admin_user_profile_snapshot(u: dict[str, Any]) -> dict[str, Any]:
     for p in (projs or []):
         if not isinstance(p, dict):
             continue
-        owner = (p.get("owner_user_id") or "").strip()
+        owner = _norm_owner_user_id(p.get("owner_user_id"))
         if owner and owner != uid:
             continue
         if not owner and sm == "mongo":
             continue
+        pid = (p.get("id") or "").strip()
+        if pid:
+            user_projects.append(
+                {
+                    "id": pid,
+                    "name": (p.get("name") or "").strip() or "Untitled project",
+                    "website_url": (p.get("website_url") or "").strip(),
+                }
+            )
         pname = (p.get("name") or "").strip() or "Untitled project"
         for pr in (p.get("prompts") or []):
             if not isinstance(pr, dict):
@@ -369,9 +623,14 @@ def _admin_user_profile_snapshot(u: dict[str, Any]) -> dict[str, Any]:
                     "chars": len((pr.get("text") or "")),
                 }
             )
+    try:
+        user_projects.sort(key=lambda x: ((x.get("name") or "").strip().lower(), (x.get("id") or "")))
+    except Exception:
+        pass
     return {
         **u,
         "stats_projects_total": len(project_ids),
+        "stats_projects": user_projects,
         "stats_articles": articles,
         "stats_writing_prompts": writing_prompts,
         "stats_image_prompts": image_prompts,
@@ -421,16 +680,16 @@ def _ensure_data_dir() -> None:
 
 
 def _load_projects() -> list[dict]:
+    """Projects visible in the workspace list (current user only, including admins)."""
     projects = _storage.load_projects()
-    user_id = (session.get("user_id") or "").strip()
-    role = (session.get("role") or "").strip().lower()
+    user_id = _norm_owner_user_id(session.get("user_id"))
     if not user_id:
         return []
-    if role == "admin":
-        return projects
     out: list[dict] = []
     for p in projects:
-        if (p.get("owner_user_id") or "").strip() == user_id:
+        if not isinstance(p, dict):
+            continue
+        if _norm_owner_user_id(p.get("owner_user_id")) == user_id:
             out.append(p)
     return out
 
@@ -461,9 +720,18 @@ def _load_articles() -> list[dict]:
 
 def _get_project_by_id(project_id: str) -> dict | None:
     pid = (project_id or "").strip()
-    for p in _load_projects():
-        if (p.get("id") or "") == pid:
-            return p
+    if not pid:
+        return None
+    p = _get_project_by_id_unscoped(pid)
+    if not p:
+        return None
+    user_id = _norm_owner_user_id(session.get("user_id"))
+    role = (session.get("role") or "").strip().lower()
+    owner = _norm_owner_user_id(p.get("owner_user_id"))
+    if owner == user_id:
+        return p
+    if role == "admin":
+        return p
     return None
 
 
@@ -1913,8 +2181,10 @@ def home():
             "auth.html",
             storage_mode=_storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo",
             storage_init_error=_storage.storage_init_error() if hasattr(_storage, "storage_init_error") else None,
+            account_deleted=(request.args.get("account_deleted") or "").strip(),
         )
 
+    _maybe_backfill_orphan_project_owners()
     projects = _load_projects()
     current_user = _current_user() or {}
     is_admin = (current_user.get("role") or "").strip().lower() == "admin"
@@ -1922,7 +2192,8 @@ def home():
     if section not in {"projects", "users", "limits", "profile"}:
         section = "projects"
     if not is_admin:
-        section = "projects"
+        if section in {"users", "limits"}:
+            section = "projects"
     # Client id/secret come from .env (loaded from the app directory at startup).
     cid = (os.environ.get("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
     csec = (os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET") or "").strip()
@@ -1954,6 +2225,8 @@ def home():
         except Exception:
             # Fallback to basic user list if aggregation fails (e.g., DB not connected).
             pass
+    _cu_home = _current_user()
+    show_onboarding_tour = bool(_cu_home and _cu_home.get("pending_product_tour"))
     return render_template(
         "home.html",
         projects=projects,
@@ -1967,8 +2240,12 @@ def home():
         current_user=current_user,
         is_admin=is_admin,
         admin_section=section,
+        home_section=section,
         admin_users=users,
         admin_plans=plans,
+        show_onboarding_tour=show_onboarding_tour,
+        primary_admin_email=_PRIMARY_PROTECTED_ADMIN_EMAIL,
+        live_connect_meta=_LIVE_CONNECT_META,
     )
 
 
@@ -2011,8 +2288,7 @@ def admin_update_user_role():
         return redirect(url_for("home", section="users"))
     try:
         target = _storage.get_user_by_id(uid)
-        seed_email = "iamakhileshsoni@gmail.com"
-        if target and (target.get("email") or "").strip().lower() == seed_email:
+        if target and (target.get("email") or "").strip().lower() == _PRIMARY_PROTECTED_ADMIN_EMAIL:
             flash("The primary admin user role cannot be changed.", "error")
             return redirect(url_for("home", section="users"))
         ok = _storage.update_user_fields(uid, {"role": role}) if hasattr(_storage, "update_user_fields") else False
@@ -2065,6 +2341,41 @@ def admin_update_plan():
     return redirect(url_for("home", section="limits"))
 
 
+@app.post("/admin/projects/connect-live")
+def admin_connect_live_projects():
+    """Assign Sheokand Legal, KCS & TTSFM (by website URL host) to a user account."""
+    if not _is_authenticated() or (session.get("role") or "").strip().lower() != "admin":
+        flash("Unauthorized.", "error")
+        return redirect(url_for("home"))
+    if (request.form.get("confirm") or "").strip() != "1":
+        flash("Please confirm that you want to connect these projects to the selected account.", "error")
+        return redirect(url_for("home", section="limits"))
+    email = (request.form.get("user_email") or "").strip().lower() or _PRIMARY_PROTECTED_ADMIN_EMAIL
+    assigned, warnings = _assign_live_projects_to_user_email(email)
+    fatal = False
+    for w in warnings:
+        low = w.lower()
+        if any(
+            x in low
+            for x in (
+                "no user found",
+                "missing email",
+                "not available",
+                "could not load",
+                "user id is missing",
+            )
+        ):
+            flash(w, "error")
+            fatal = True
+        else:
+            flash(w, "warning")
+    if assigned:
+        flash(f"Connected {len(assigned)} project(s) to {email}.", "success")
+    elif not fatal and not warnings:
+        flash("No projects matched the live site URLs (check website URLs on your projects).", "error")
+    return redirect(url_for("home", section="limits"))
+
+
 @app.post("/profile/update")
 def update_profile():
     if not _is_authenticated():
@@ -2079,6 +2390,68 @@ def update_profile():
         return redirect(url_for("home", section="profile"))
     flash("Profile updated.", "success")
     return redirect(url_for("home", section="profile"))
+
+
+@app.post("/account/delete")
+def account_delete():
+    if not _is_authenticated():
+        return redirect(url_for("home"))
+    pwd = request.form.get("password") or ""
+    uid = (session.get("user_id") or "").strip()
+    user = _storage.get_user_by_id(uid) if uid else None
+    if not user or not (user.get("password_hash") or ""):
+        flash("Could not verify account.", "error")
+        return redirect(url_for("home", section="profile"))
+    if not check_password_hash(user["password_hash"], pwd):
+        flash("Incorrect password. Your account was not deleted.", "error")
+        return redirect(url_for("home", section="profile"))
+    if (user.get("email") or "").strip().lower() == _PRIMARY_PROTECTED_ADMIN_EMAIL:
+        flash("This account cannot be deleted.", "error")
+        return redirect(url_for("home", section="profile"))
+    try:
+        _purge_user_projects_and_files(uid)
+        if not _storage.delete_user(uid):
+            flash("Could not remove your account from the database.", "error")
+            return redirect(url_for("home", section="profile"))
+    except Exception as e:
+        app.logger.exception("account delete")
+        flash(f"Could not delete account: {e}", "error")
+        return redirect(url_for("home", section="profile"))
+    session.clear()
+    return redirect(url_for("home", account_deleted="1"))
+
+
+@app.post("/admin/users/delete")
+def admin_delete_user():
+    if not _is_authenticated() or (session.get("role") or "").strip().lower() != "admin":
+        flash("Unauthorized.", "error")
+        return redirect(url_for("home"))
+    target_id = (request.form.get("user_id") or "").strip()
+    if not target_id:
+        flash("Missing user.", "error")
+        return redirect(url_for("home", section="users"))
+    target = _storage.get_user_by_id(target_id)
+    if not target:
+        flash("User not found.", "error")
+        return redirect(url_for("home", section="users"))
+    if (target.get("email") or "").strip().lower() == _PRIMARY_PROTECTED_ADMIN_EMAIL:
+        flash("The primary admin account cannot be deleted.", "error")
+        return redirect(url_for("home", section="users"))
+    try:
+        _purge_user_projects_and_files(target_id)
+        if not _storage.delete_user(target_id):
+            flash("Could not remove the user record.", "error")
+            return redirect(url_for("home", section="users"))
+    except Exception as e:
+        app.logger.exception("admin delete user")
+        flash(f"Could not delete user: {e}", "error")
+        return redirect(url_for("home", section="users"))
+    flash(f"User {(target.get('email') or target_id).strip()} and all related data were removed.", "success")
+    curr = (session.get("user_id") or "").strip()
+    if curr == target_id:
+        session.clear()
+        return redirect(url_for("home", account_deleted="1"))
+    return redirect(url_for("home", section="users"))
 
 
 @app.post("/auth/login")
@@ -2103,6 +2476,9 @@ def auth_login():
     except Exception:
         pass
     flash("Logged in.", "success")
+    fresh = _storage.get_user_by_id(user["id"])
+    if fresh and fresh.get("pending_product_tour"):
+        return redirect(url_for("home", section="projects"))
     return redirect(url_for("home"))
 
 
@@ -2120,10 +2496,11 @@ def auth_register():
     if existing:
         flash("An account with that email already exists.", "error")
         return redirect(url_for("home"))
+    new_uid = str(uuid.uuid4())
     try:
         _storage.insert_user(
             {
-                "id": str(uuid.uuid4()),
+                "id": new_uid,
                 "email": email,
                 "password_hash": generate_password_hash(password),
                 "role": "user",
@@ -2131,6 +2508,7 @@ def auth_register():
                 "full_name": "",
                 "phone": "",
                 "last_activity_at": "",
+                "pending_product_tour": True,
                 "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             }
         )
@@ -2143,8 +2521,15 @@ def auth_register():
     except Exception:
         flash("Could not create account (database unavailable).", "error")
         return redirect(url_for("home"))
-    flash("Account created. Please log in.", "success")
-    return redirect(url_for("home"))
+    session["user_id"] = new_uid
+    session["role"] = "user"
+    try:
+        if hasattr(_storage, "update_user_fields"):
+            _storage.update_user_fields(new_uid, {"last_activity_at": _utc_now_str()})
+    except Exception:
+        pass
+    flash("Welcome! Here is a quick tour of Auto Articles.", "success")
+    return redirect(url_for("home", section="projects"))
 
 
 @app.post("/auth/logout")
@@ -2152,6 +2537,21 @@ def auth_logout():
     session.clear()
     flash("Logged out.", "success")
     return redirect(url_for("home"))
+
+
+@app.post("/account/onboarding-tour/complete")
+def onboarding_tour_complete():
+    if not _is_authenticated():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    uid = (session.get("user_id") or "").strip()
+    if not uid:
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    try:
+        if hasattr(_storage, "update_user_fields"):
+            _storage.update_user_fields(uid, {"pending_product_tour": False})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True})
 
 
 @app.post("/projects")
@@ -2945,6 +3345,7 @@ def project_detail(project_id: str):
         gsc_google_libs_missing=gsc_google_libs_missing,
         article_stats=article_stats,
         plan_limits=_plan_limit_summary(_current_user()),
+        plan_ui=_plan_ui_for_project(proj, _current_user()),
         storage_mode=_storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo",
         storage_init_error=_storage.storage_init_error() if hasattr(_storage, "storage_init_error") else None,
     )

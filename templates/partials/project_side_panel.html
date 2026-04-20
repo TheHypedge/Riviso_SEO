@@ -1,15 +1,20 @@
 {% set stats = article_stats|default({'total': 0, 'pending': 0, 'draft': 0, 'published': 0, 'scheduled_queue': 0}) %}
+{% set pui = plan_ui if plan_ui is defined else {} %}
+{% set _lim = plan_limits if plan_limits is defined else {} %}
 <aside class="app-side-panel vstack gap-4" aria-label="Project status and quick actions">
   <div class="app-card app-card--elevated app-side-panel__card p-4">
     <div class="d-flex align-items-start justify-content-between gap-2 mb-3">
       <div>
         <h2 class="h6 mb-1">Tools</h2>
         <p class="small text-body-secondary mb-0">Bulk upload, prompts, Search Console, images</p>
+        {% if _lim.get('name') %}
+          <p class="small text-body-secondary mb-0 mt-1"><span class="fw-medium text-body">{{ _lim.get('name') }}</span> — limits apply per system settings.</p>
+        {% endif %}
       </div>
       <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#projectToolsModal">Open</button>
     </div>
     <div class="d-grid gap-2">
-      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#projectToolsModal" data-open-tool="bulk_upload">Bulk Upload</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#projectToolsModal" data-open-tool="bulk_upload" {% if pui.lock_bulk_panel|default(false) %}disabled title="Not available on your plan or article quota reached"{% endif %}>Bulk Upload</button>
       <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#projectToolsModal" data-open-tool="writing_prompts">Writing Prompts</button>
       <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#projectToolsModal" data-open-tool="image_prompts">Image Prompts</button>
       <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#projectToolsModal" data-open-tool="search_console">Search Console</button>
@@ -37,9 +42,9 @@
   <div class="app-card app-card--elevated app-side-panel__card p-4">
     <h2 class="h6 mb-3">Quick actions</h2>
     <div class="d-grid gap-2">
-      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#addPromptModal">Add prompt</button>
-      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#addImagePromptModal">Add image prompt</button>
-      <button type="button" class="btn btn-outline-secondary btn-sm text-start" id="appSidePanelOpenBulkImport">Import data</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#addPromptModal" {% if pui.lock_writing_panel|default(false) %}disabled{% endif %}>Add prompt</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#addImagePromptModal" {% if pui.lock_image_panel|default(false) %}disabled{% endif %}>Add image prompt</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" id="appSidePanelOpenBulkImport" {% if pui.lock_bulk_panel|default(false) %}disabled{% endif %}>Import data</button>
     </div>
     <p class="form-text small mb-0 mt-2">Import opens bulk Excel upload in Tools.</p>
   </div>

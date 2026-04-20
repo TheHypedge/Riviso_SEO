@@ -11,22 +11,43 @@
     <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet" />
   </head>
   <body class="auth-page">
+    <div class="auth-page__gradient" aria-hidden="true"></div>
     <a href="#auth-main-content" class="auth-skip-link">Skip to sign in</a>
 
-    <div class="auth-split" id="auth-main-content">
-      <aside class="auth-split__visual" aria-hidden="true">
-        <div class="auth-split__visual-inner">
-          <p class="auth-split__brand">Auto Articles</p>
-          <div class="auth-split__visual-body">
-            <p class="auth-split__eyebrow">You can easily</p>
-            <h1 class="auth-split__headline">
-              Get access your personal hub for clarity and productivity.
-            </h1>
-          </div>
-        </div>
-      </aside>
+    <div class="auth-stage">
+      <div class="auth-shell" id="auth-main-content">
+        <div class="auth-split">
+          <aside class="auth-split__visual" aria-hidden="true">
+            <div class="auth-split__visual-inner">
+              <div class="auth-split__brand-row">
+                <span class="auth-split__brand-icon" aria-hidden="true">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path
+                      d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z"
+                      stroke="currentColor"
+                      stroke-width="1.75"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                    <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </span>
+                <p class="auth-split__brand">Auto Articles</p>
+              </div>
+              <div class="auth-split__visual-body">
+                <p class="auth-split__eyebrow">Why teams choose us</p>
+                <div class="auth-typewriter" aria-live="off">
+                  <p class="auth-typewriter__line">
+                    <span class="auth-typewriter__text" id="authTypewriterText"></span><span class="auth-typewriter__cursor" aria-hidden="true"></span>
+                  </p>
+                </div>
+                <p class="auth-split__tagline">Where your content strategy becomes reality.</p>
+                <p class="auth-split__lede">Embark on a workflow where every article stays on-brand and ready for WordPress.</p>
+              </div>
+            </div>
+          </aside>
 
-      <div class="auth-split__form-wrap">
+          <div class="auth-split__form-wrap">
         <div class="auth-split__form-inner">
           {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -42,6 +63,12 @@
               </div>
             {% endif %}
           {% endwith %}
+
+          {% if account_deleted is defined and account_deleted %}
+            <div class="auth-alert auth-alert--success mb-3" role="status">
+              Your account has been deleted. You can create a new account below if you wish.
+            </div>
+          {% endif %}
 
           {% if storage_init_error is defined and storage_init_error %}
             <div class="auth-alert auth-alert--warning" role="status">
@@ -282,6 +309,8 @@
         </div>
       </div>
     </div>
+  </div>
+</div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
@@ -314,6 +343,57 @@
         var goLog = document.getElementById('go-login');
         if (goReg) goReg.addEventListener('click', function () { showAuthTab('#register-tab'); });
         if (goLog) goLog.addEventListener('click', function () { showAuthTab('#login-tab'); });
+      })();
+    </script>
+    <script>
+      (function () {
+        var el = document.getElementById('authTypewriterText');
+        if (!el) return;
+        var reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        var lines = [
+          'Draft SEO-ready articles in minutes—then publish straight to WordPress.',
+          'Writing prompts, image prompts, and internal links—consistent at scale.',
+          'Less busywork. More clarity for your content and your calendar.',
+          'Turn ideas into polished posts without losing your brand voice.',
+          'One hub to generate, schedule, and ship what matters.',
+        ];
+        if (reduced) {
+          el.textContent = lines[0];
+          return;
+        }
+        var lineIdx = 0;
+        var charIdx = 0;
+        var deleting = false;
+        var typeMs = 38;
+        var deleteMs = 26;
+        var pauseAtEnd = 2600;
+        var pauseBetween = 480;
+        function step() {
+          var line = lines[lineIdx];
+          if (!deleting) {
+            if (charIdx < line.length) {
+              charIdx += 1;
+              el.textContent = line.slice(0, charIdx);
+              window.setTimeout(step, typeMs);
+              return;
+            }
+            window.setTimeout(function () {
+              deleting = true;
+              step();
+            }, pauseAtEnd);
+            return;
+          }
+          if (charIdx > 0) {
+            charIdx -= 1;
+            el.textContent = line.slice(0, charIdx);
+            window.setTimeout(step, deleteMs);
+            return;
+          }
+          deleting = false;
+          lineIdx = (lineIdx + 1) % lines.length;
+          window.setTimeout(step, pauseBetween);
+        }
+        window.setTimeout(step, 400);
       })();
     </script>
   </body>

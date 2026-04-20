@@ -1,0 +1,211 @@
+<div
+  id="aaOnboardingRoot"
+  class="aa-onboarding"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="aaOnboardingTitle"
+  data-complete-url="{{ url_for('onboarding_tour_complete') }}"
+>
+  <div class="aa-onboarding__backdrop" aria-hidden="true"></div>
+  <div class="aa-onboarding__panel">
+    <header class="aa-onboarding__head">
+      <p class="aa-onboarding__eyebrow">Welcome</p>
+      <div class="aa-onboarding__progress" aria-hidden="true">
+        <span class="aa-onboarding__dot is-active" data-step="0"></span>
+        <span class="aa-onboarding__dot" data-step="1"></span>
+        <span class="aa-onboarding__dot" data-step="2"></span>
+        <span class="aa-onboarding__dot" data-step="3"></span>
+        <span class="aa-onboarding__dot" data-step="4"></span>
+      </div>
+    </header>
+
+    <div class="aa-onboarding__steps">
+      <section class="aa-onboarding__step" data-step="0" aria-labelledby="aaOnboardingTitle">
+        <h2 id="aaOnboardingTitle" class="aa-onboarding__title">What is Auto Articles?</h2>
+        <p class="aa-onboarding__lead">
+          Auto Articles helps you plan, draft, and publish SEO-ready posts to WordPress—with AI doing the heavy lifting
+          so you spend minutes instead of hours on each article.
+        </p>
+        <ul class="aa-onboarding__bullets">
+          <li>Generate long-form content from your briefs and prompts</li>
+          <li>Publish and schedule directly to your site</li>
+          <li>Keep tone, keywords, and internal links consistent at scale</li>
+        </ul>
+      </section>
+
+      <section class="aa-onboarding__step d-none" data-step="1" aria-hidden="true">
+        <h2 class="aa-onboarding__title">How to get started</h2>
+        <p class="aa-onboarding__lead">
+          Connect your WordPress site, then layer prompts and context links so every article matches your brand.
+        </p>
+        <ol class="aa-onboarding__numbered">
+          <li>
+            <span class="aa-onboarding__num">a</span>
+            <div>
+              <strong class="aa-onboarding__subhead">Project</strong>
+              <p class="aa-onboarding__copy mb-0">
+                Click <strong>Add project</strong> above to name your site and add its URL. You can add more brands or sites anytime from this workspace.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="aa-onboarding__num">b</span>
+            <div>
+              <strong class="aa-onboarding__subhead">WordPress connector</strong>
+              <p class="aa-onboarding__copy">
+                After you open a project, use <strong>Tools</strong> from the sidebar to download the WordPress plugin ZIP so Yoast meta and REST work securely with Auto Articles.
+              </p>
+              <p class="aa-onboarding__hint small mb-0">
+                WordPress Admin → Plugins → Add New → Upload Plugin → Install → Activate.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="aa-onboarding__num">c</span>
+            <div>
+              <strong class="aa-onboarding__subhead">Application password</strong>
+              <p class="aa-onboarding__copy mb-0">
+                In WordPress, open your user profile and create an <strong>Application Password</strong>. Paste it with
+                your username into <strong>Project settings</strong> on that project (not your regular login password).
+              </p>
+              <p class="aa-onboarding__hint small mb-0 mt-2">
+                Tip: open <strong>Project settings</strong> from the project header after you create a project.
+              </p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section class="aa-onboarding__step d-none" data-step="2" aria-hidden="true">
+        <h2 class="aa-onboarding__title">Article writing prompts</h2>
+        <p class="aa-onboarding__lead">
+          Once your site is connected, add at least one <strong>writing prompt</strong>: it tells the AI how to structure
+          tone, sections, and SEO focus for each article.
+        </p>
+        <p class="aa-onboarding__copy">
+          Open <strong>Tools</strong> from the sidebar → <strong>Writing prompts</strong>, or use
+          <strong>Configuration</strong>. Set a default prompt so “Generate” always knows your house style.
+        </p>
+      </section>
+
+      <section class="aa-onboarding__step d-none" data-step="3" aria-hidden="true">
+        <h2 class="aa-onboarding__title">Featured image prompts</h2>
+        <p class="aa-onboarding__lead">
+          <strong>Image prompts</strong> describe the hero image you want—layout, mood, and how it should relate to the article title and keywords.
+        </p>
+        <p class="aa-onboarding__copy mb-0">
+          Add them under <strong>Tools → Image prompts</strong>. The model uses your prompt to produce on-brand featured images for each post.
+        </p>
+      </section>
+
+      <section class="aa-onboarding__step d-none" data-step="4" aria-hidden="true">
+        <h2 class="aa-onboarding__title">Context links</h2>
+        <p class="aa-onboarding__lead">
+          <strong>Context links</strong> map phrases to URLs on your site. When articles are generated, those phrases can be linked automatically—great for internal linking and pillar pages.
+        </p>
+        <p class="aa-onboarding__copy mb-0">
+          Manage them from <strong>Tools → Context links</strong>. Add the phrase once; reuse it across many articles.
+        </p>
+      </section>
+    </div>
+
+    <footer class="aa-onboarding__footer">
+      <button type="button" class="aa-onboarding__skip btn btn-link">
+        Skip tour
+      </button>
+      <div class="aa-onboarding__nav">
+        <button type="button" class="aa-onboarding__back btn aa-onboarding__btn-secondary" style="visibility: hidden">
+          Back
+        </button>
+        <button type="button" class="aa-onboarding__next btn aa-onboarding__btn-primary">Continue</button>
+      </div>
+    </footer>
+  </div>
+</div>
+<script>
+  (function () {
+    var root = document.getElementById("aaOnboardingRoot");
+    if (!root) return;
+    var completeUrl = root.getAttribute("data-complete-url") || "";
+    var steps = root.querySelectorAll(".aa-onboarding__step");
+    var dots = root.querySelectorAll(".aa-onboarding__dot");
+    var back = root.querySelector(".aa-onboarding__back");
+    var next = root.querySelector(".aa-onboarding__next");
+    var skip = root.querySelector(".aa-onboarding__skip");
+    var n = steps.length;
+    var i = 0;
+
+    function setStep(ix) {
+      if (ix < 0 || ix >= n) return;
+      i = ix;
+      for (var s = 0; s < n; s++) {
+        var on = s === ix;
+        steps[s].classList.toggle("d-none", !on);
+        steps[s].setAttribute("aria-hidden", on ? "false" : "true");
+      }
+      for (var d = 0; d < dots.length; d++) {
+        dots[d].classList.toggle("is-active", d === ix);
+        dots[d].classList.toggle("is-done", d < ix);
+      }
+      if (back) back.style.visibility = ix === 0 ? "hidden" : "visible";
+      if (next) next.textContent = ix === n - 1 ? "Finish" : "Continue";
+    }
+
+    function closeTour() {
+      document.body.style.overflow = "";
+      document.body.classList.remove("aa-onboarding-active");
+      root.remove();
+    }
+
+    function completeTour(cb) {
+      if (!completeUrl) {
+        closeTour();
+        if (cb) cb();
+        return;
+      }
+      fetch(completeUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      })
+        .then(function (r) {
+          return r.ok ? r.json() : Promise.reject(new Error("request failed"));
+        })
+        .then(function (data) {
+          if (data && data.ok) {
+            closeTour();
+            if (cb) cb();
+          } else {
+            throw new Error("bad response");
+          }
+        })
+        .catch(function () {
+          document.body.style.overflow = "";
+          window.alert("Could not save that you finished the tour. Check your connection and try Skip or Finish again.");
+        });
+    }
+
+    document.body.style.overflow = "hidden";
+    setStep(0);
+
+    if (back) {
+      back.addEventListener("click", function () {
+        setStep(i - 1);
+      });
+    }
+    if (next) {
+      next.addEventListener("click", function () {
+        if (i >= n - 1) {
+          completeTour();
+        } else {
+          setStep(i + 1);
+        }
+      });
+    }
+    if (skip) {
+      skip.addEventListener("click", function () {
+        completeTour();
+      });
+    }
+  })();
+</script>

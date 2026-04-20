@@ -69,6 +69,7 @@ def _user_row_to_public(u: dict[str, Any]) -> dict[str, Any]:
         "usage_monthly_articles_month": (u.get("usage_monthly_articles_month") or "").strip(),
         "usage_monthly_articles_count": int(u.get("usage_monthly_articles_count") or 0),
         "created_at": (u.get("created_at") or "").strip(),
+        "pending_product_tour": bool(u.get("pending_product_tour", False)),
     }
 
 
@@ -112,13 +113,22 @@ def storage_init_error() -> str | None:
     return _storage_init_error
 
 
+def _coerce_user_id_str(val: Any) -> str:
+    """Normalize user id from Mongo/JSON (string, ObjectId, etc.) for comparisons."""
+    if val is None or val == "":
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    return str(val).strip()
+
+
 def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
     pid = (d.get("id") or "").strip()
     if not pid:
         raise ValueError("project id is required")
     return {
         "id": pid,
-        "owner_user_id": (d.get("owner_user_id") or "").strip(),
+        "owner_user_id": _coerce_user_id_str(d.get("owner_user_id")),
         "name": (d.get("name") or "")[:500],
         "website_url": (d.get("website_url") or "")[:2048],
         "wp_site_url": (d.get("wp_site_url") or "")[:2048] or "",
@@ -161,6 +171,7 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "usage_monthly_articles_month": (d.get("usage_monthly_articles_month") or "").strip()[:16],
         "usage_monthly_articles_count": int(d.get("usage_monthly_articles_count") or 0),
         "created_at": (d.get("created_at") or "")[:64],
+        "pending_product_tour": bool(d.get("pending_product_tour", False)),
     }
 
 
@@ -345,6 +356,7 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
         "usage_monthly_articles_month": (doc.get("usage_monthly_articles_month") or "").strip(),
         "usage_monthly_articles_count": int(doc.get("usage_monthly_articles_count") or 0),
         "created_at": (doc.get("created_at") or "").strip(),
+        "pending_product_tour": bool(doc.get("pending_product_tour", False)),
     }
 
 
@@ -376,6 +388,7 @@ def get_user_by_email(email: str) -> dict[str, Any] | None:
         "usage_monthly_articles_month": (doc.get("usage_monthly_articles_month") or "").strip(),
         "usage_monthly_articles_count": int(doc.get("usage_monthly_articles_count") or 0),
         "created_at": (doc.get("created_at") or "").strip(),
+        "pending_product_tour": bool(doc.get("pending_product_tour", False)),
     }
 
 
@@ -396,6 +409,26 @@ def insert_user(user: dict[str, Any]) -> None:
         res = get_db().users.insert_one(doc)
         if not res.acknowledged:
             raise RuntimeError("MongoDB insert_user was not acknowledged")
+
+
+def delete_user(user_id: str) -> bool:
+    """Remove a user row only. Caller must delete owned projects and articles first."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return False
+    if _storage_mode == "json":
+        with _db_write_lock:
+            users = _load_json_users()
+            if not any((u.get("id") or "").strip() == uid for u in users):
+                return False
+            users = [u for u in users if (u.get("id") or "").strip() != uid]
+            _save_json_users(users)
+        return True
+    if _storage_mode != "mongo":
+        return False
+    with _db_write_lock:
+        res = get_db().users.delete_one({"id": uid})
+        return bool(res.deleted_count == 1)
 
 
 def _coerce_wp_scheduled_at_str(v: Any, max_len: int = 64) -> str:
@@ -547,7 +580,7 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "id": d.get("id") or "",
         # Required for per-user project lists and access checks (must match _normalize_project_dict).
-        "owner_user_id": (d.get("owner_user_id") or "").strip(),
+        "owner_user_id": _coerce_user_id_str(d.get("owner_user_id")),
         "name": d.get("name") or "",
         "website_url": d.get("website_url") or "",
         "wp_site_url": d.get("wp_site_url") or "",

@@ -7,7 +7,7 @@
   <script type="application/json" id="admin-users-data">{{ admin_users|default([])|tojson }}</script>
 
   <div class="app-card app-card--elevated">
-    <div class="p-3 p-md-4">
+    <div class="p-3 p-md-1">
       {% if not admin_users or admin_users|length == 0 %}
         <p class="text-body-secondary mb-0">No users found.</p>
       {% else %}
@@ -20,6 +20,7 @@
                 <th scope="col">Role</th>
                 <th scope="col">Subscription</th>
                 <th scope="col" class="text-end">Profile</th>
+                <th scope="col" class="text-end">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -56,6 +57,13 @@
                   <td class="text-end">
                     <button type="button" class="btn btn-sm btn-outline-secondary" data-admin-view-user data-user-id="{{ u.id }}">View profile</button>
                   </td>
+                  <td class="text-end">
+                    {% set _em = (u.email or '')|lower %}
+                    <form method="post" action="{{ url_for('admin_delete_user') }}" class="d-inline" onsubmit="return confirm('Permanently delete this user and ALL projects, articles, prompts, and linked data? This cannot be undone.');">
+                      <input type="hidden" name="user_id" value="{{ u.id }}">
+                      <button type="submit" class="btn btn-sm btn-outline-danger" {% if _em == 'iamakhileshsoni@gmail.com' %}disabled title="Primary admin cannot be deleted"{% endif %}>Delete</button>
+                    </form>
+                  </td>
                 </tr>
               {% endfor %}
             </tbody>
@@ -66,7 +74,7 @@
   </div>
 </section>
 
-<div class="modal fade" id="adminUserProfileModal" tabindex="-1" aria-labelledby="adminUserProfileModalLabel" aria-hidden="true">
+<div class="modal fade" id="adminUserProfileModal" tabindex="-1" aria-labelledby="adminUserProfileModalLabel" aria-hidden="true" data-project-detail-url-template="{{ url_for('project_detail', project_id='__PID__') }}">
   <div class="modal-dialog modal-dialog-centered modal-lg">
     <div class="modal-content">
       <div class="modal-header">
@@ -111,6 +119,14 @@
 
         <hr class="my-3">
 
+        <div class="mb-0">
+          <div class="small text-uppercase text-body-secondary fw-semibold mb-2">User projects</div>
+          <ul class="list-unstyled mb-0 vstack gap-2" id="adminUserProjectsList"></ul>
+          <p class="small text-body-secondary mb-0" id="adminUserProjectsEmpty" style="display: none;">No projects for this user.</p>
+        </div>
+
+        <hr class="my-3">
+
         <div class="row g-3">
           <div class="col-12 col-md-6">
             <div class="p-3 rounded-3 border bg-body">
@@ -127,6 +143,12 @@
             </div>
           </div>
         </div>
+      </div>
+      <div class="modal-footer border-0 pt-0">
+        <form method="post" action="{{ url_for('admin_delete_user') }}" id="adminModalDeleteUserForm" class="ms-auto" onsubmit="return confirm('Permanently delete this user and ALL projects, articles, and related data?');">
+          <input type="hidden" name="user_id" value="" id="adminModalDeleteUserId">
+          <button type="submit" class="btn btn-sm btn-outline-danger" id="adminModalDeleteUserBtn">Delete user</button>
+        </form>
       </div>
     </div>
   </div>

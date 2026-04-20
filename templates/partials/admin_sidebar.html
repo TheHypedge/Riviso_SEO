@@ -1,12 +1,4 @@
 <aside class="app-admin-sidebar" aria-label="Admin navigation">
-  <div class="app-card app-card--elevated p-3 p-md-4">
-    <div class="small text-uppercase text-body-secondary fw-semibold mb-2">Admin</div>
-    <nav class="vstack gap-1" aria-label="Admin sections">
-      <a class="app-admin-navlink {% if admin_section == 'projects' %}is-active{% endif %}" href="{{ url_for('home', section='projects') }}">Project management</a>
-      <a class="app-admin-navlink {% if admin_section == 'users' %}is-active{% endif %}" href="{{ url_for('home', section='users') }}">Manage users</a>
-      <a class="app-admin-navlink {% if admin_section == 'limits' %}is-active{% endif %}" href="{{ url_for('home', section='limits') }}">System limitations</a>
-      <a class="app-admin-navlink {% if admin_section == 'profile' %}is-active{% endif %}" href="{{ url_for('home', section='profile') }}">Settings / Profile</a>
-    </nav>
-  </div>
+  {% include 'partials/admin_sidebar_nav.html' %}
 </aside>
 

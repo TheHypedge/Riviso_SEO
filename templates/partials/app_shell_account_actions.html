@@ -1,0 +1,24 @@
+{# Logout + Search Console — used in top bar (lg+) and mobile/tablet offcanvas #}
+<div class="app-shell-account-actions">
+  {% if current_user %}
+    <form method="post" action="{{ url_for('auth_logout') }}" class="app-shell-account-actions__logout">
+      <button type="submit" class="app-shell-btn app-shell-btn--muted">Logout</button>
+    </form>
+  {% endif %}
+  {% if gsc_oauth_env_configured %}
+    {% if gsc_google_libs_missing %}
+      <span class="small text-danger" title="Install requirements from the project folder">Google libraries missing — run <code class="auth-code small">pip install -r requirements.txt</code></span>
+    {% elif gsc_google_connected %}
+      <span class="app-topnav__user text-end app-shell-account-actions__gsc-email">
+        Google: <span class="app-topnav__user-email">{{ gsc_google_email or 'connected' }}</span>
+      </span>
+      <form method="post" action="{{ url_for('google_oauth_disconnect') }}" class="app-shell-account-actions__disconnect">
+        <button type="submit" class="app-shell-btn app-shell-btn--muted">Disconnect Google</button>
+      </form>
+    {% else %}
+      <a class="app-shell-btn app-shell-btn--primary app-shell-account-actions__connect" href="{{ url_for('google_oauth_start') }}">Connect Google (Search Console)</a>
+    {% endif %}
+  {% else %}
+    <span class="app-topnav__hint" title="Add GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET to .env next to app.py">Search Console OAuth not configured</span>
+  {% endif %}
+</div>

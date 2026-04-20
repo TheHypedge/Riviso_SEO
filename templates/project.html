@@ -71,8 +71,11 @@
       {% elif tab == 'tools' %}
         <section class="app-dash-section" aria-label="Tools and integrations">
           <div class="app-card app-card--elevated p-4">
-            <h2 class="h6 mb-3">Tools</h2>
-            {% include 'partials/project_tools_accordion.html' %}
+            <h2 class="h6 mb-2">Tools &amp; integrations</h2>
+            <p class="text-body-secondary small mb-3">
+              Bulk upload, prompts, Search Console, and context links use the same tools panel as the sidebar. There is a single tools dialog to avoid duplicate controls and keep plan limits in sync.
+            </p>
+            <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#projectToolsModal" id="openToolsFromTabBtn">Open tools</button>
           </div>
         </section>
       {% else %}
@@ -97,9 +100,9 @@
                         <svg width="56" height="56" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" class="text-body-secondary opacity-40"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
                       </div>
                       <p class="text-body-secondary mb-3">No articles yet. Start by adding your first post.</p>
-                      <button type="button" class="btn btn-outline-primary px-4" data-bs-toggle="modal" data-bs-target="#addArticleModal">
-                        Add Article/Post
-                      </button>
+                    <button type="button" class="btn btn-outline-primary px-4" data-bs-toggle="modal" data-bs-target="#addArticleModal" {% if plan_ui is defined and plan_ui.cannot_add_article %}disabled title="Article quota reached for your plan."{% endif %}>
+                      Add Article/Post
+                    </button>
                     </div>
                   {% else %}
                     {% if articles|length == 0 %}
@@ -250,7 +253,7 @@
                           <div class="small fw-semibold">Actions to take on selected articles</div>
                           <div class="d-flex flex-wrap gap-2 align-items-center">
                             <button type="button" class="btn btn-sm btn-success" data-bulk-act="publish">Publish</button>
-                            <button type="button" class="btn btn-sm btn-primary" data-bulk-act="schedule">Schedule</button>
+                            <button type="button" class="btn btn-sm btn-primary" data-bulk-act="schedule" {% if plan_ui is defined and plan_ui.allow_scheduling == false %}disabled title="Scheduling is disabled on your current plan."{% endif %}>Schedule</button>
                             <button type="button" class="btn btn-sm btn-outline-secondary" data-bulk-act="change_status">Change status</button>
                             <button type="button" class="btn btn-sm btn-outline-danger" data-bulk-act="delete">Delete</button>
                             <span class="small text-body-secondary ms-1" id="bulkStickyCount">0 selected</span>
@@ -313,6 +316,11 @@
       </div>
     </div>
 
+    {% set _plimits = plan_limits if plan_limits is defined else {} %}
+    {% set writing_char_limit = _plimits.writing_prompt_char_limit|default(100000) %}
+    {% set image_char_limit = _plimits.image_prompt_char_limit|default(100000) %}
+    {% set prompt_name_max = 200 %}
+
     <!-- Modal: Add writing prompt -->
     <div class="modal fade" id="addPromptModal" tabindex="-1" aria-labelledby="addPromptModalLabel" aria-hidden="true">
       <div class="modal-dialog modal-dialog-centered modal-lg">
@@ -325,11 +333,13 @@
             <div class="modal-body">
               <div class="mb-3">
                 <label class="form-label" for="promptName">Prompt name</label>
-                <input class="form-control" id="promptName" name="prompt_name" type="text" placeholder="e.g. Long-form legal explainer" required maxlength="200" autocomplete="off">
+                <input class="form-control" id="promptName" name="prompt_name" type="text" placeholder="e.g. Long-form legal explainer" required maxlength="{{ prompt_name_max }}" autocomplete="off" data-aa-hint="addPromptNameHint" data-aa-max="{{ prompt_name_max }}">
+                <small id="addPromptNameHint" class="form-text d-block text-end mb-0 aa-char-counter text-body-secondary">0 / {{ prompt_name_max }}</small>
               </div>
               <div class="mb-3">
                 <label class="form-label" for="promptText">Prompt (used to write the article/post)</label>
-                <textarea class="form-control" id="promptText" name="prompt_text" rows="10" required placeholder="Example: Write about {article title} for readers searching for {targeting keywords}, focus: {focus keyphrase}."></textarea>
+                <textarea class="form-control" id="promptText" name="prompt_text" rows="10" required maxlength="{{ writing_char_limit }}" placeholder="Example: Write about {article title} for readers searching for {targeting keywords}, focus: {focus keyphrase}." data-aa-hint="addPromptTextHint" data-aa-max="{{ writing_char_limit }}"></textarea>
+                <small id="addPromptTextHint" class="form-text d-block text-end mb-0 aa-char-counter text-body-secondary">0 / {{ writing_char_limit }}</small>
                 <div class="form-text">
                   Optional placeholders: <code class="small">{article title}</code>, <code class="small">{targeting keywords}</code>, <code class="small">{focus keyphrase}</code> (short: <code class="small">{focus_keyphrase}</code>).
                   If you omit them, title, keywords, and focus keyphrase are still added automatically when generating (when provided on the article screen).
@@ -363,11 +373,13 @@
             <div class="modal-body">
               <div class="mb-3">
                 <label class="form-label" for="editPromptName">Prompt name</label>
-                <input class="form-control" id="editPromptName" name="prompt_name" type="text" required maxlength="200" autocomplete="off">
+                <input class="form-control" id="editPromptName" name="prompt_name" type="text" required maxlength="{{ prompt_name_max }}" autocomplete="off" data-aa-hint="editPromptNameHint" data-aa-max="{{ prompt_name_max }}">
+                <small id="editPromptNameHint" class="form-text d-block text-end mb-0 aa-char-counter text-body-secondary">0 / {{ prompt_name_max }}</small>
               </div>
               <div class="mb-3">
                 <label class="form-label" for="editPromptText">Prompt (used to write the article/post)</label>
-                <textarea class="form-control" id="editPromptText" name="prompt_text" rows="10" required></textarea>
+                <textarea class="form-control" id="editPromptText" name="prompt_text" rows="10" required maxlength="{{ writing_char_limit }}" data-aa-hint="editPromptTextHint" data-aa-max="{{ writing_char_limit }}"></textarea>
+                <small id="editPromptTextHint" class="form-text d-block text-end mb-0 aa-char-counter text-body-secondary">0 / {{ writing_char_limit }}</small>
                 <div class="form-text">
                   Placeholders: <code class="small">{article title}</code>, <code class="small">{targeting keywords}</code>, <code class="small">{focus keyphrase}</code>, or short forms <code class="small">{title}</code>, <code class="small">{keywords}</code>, <code class="small">{focus_keyphrase}</code>.
                 </div>
@@ -398,11 +410,13 @@
             <div class="modal-body">
               <div class="mb-3">
                 <label class="form-label" for="imagePromptName">Prompt name</label>
-                <input class="form-control" id="imagePromptName" name="image_prompt_name" type="text" required maxlength="200" autocomplete="off">
+                <input class="form-control" id="imagePromptName" name="image_prompt_name" type="text" required maxlength="{{ prompt_name_max }}" autocomplete="off" data-aa-hint="addImagePromptNameHint" data-aa-max="{{ prompt_name_max }}">
+                <small id="addImagePromptNameHint" class="form-text d-block text-end mb-0 aa-char-counter text-body-secondary">0 / {{ prompt_name_max }}</small>
               </div>
               <div class="mb-3">
                 <label class="form-label" for="imagePromptText">Image prompt (OpenAI Images)</label>
-                <textarea class="form-control" id="imagePromptText" name="image_prompt_text" rows="6" required placeholder="e.g. Professional blog hero image for {article title}, theme: {targeting keywords}, SEO focus: {focus keyphrase}, modern, no text overlay."></textarea>
+                <textarea class="form-control" id="imagePromptText" name="image_prompt_text" rows="6" required maxlength="{{ image_char_limit }}" placeholder="e.g. Professional blog hero image for {article title}, theme: {targeting keywords}, SEO focus: {focus keyphrase}, modern, no text overlay." data-aa-hint="addImagePromptTextHint" data-aa-max="{{ image_char_limit }}"></textarea>
+                <small id="addImagePromptTextHint" class="form-text d-block text-end mb-0 aa-char-counter text-body-secondary">0 / {{ image_char_limit }}</small>
                 <div class="form-text">Placeholders: <code class="small">{article title}</code>, <code class="small">{targeting keywords}</code>, <code class="small">{focus keyphrase}</code> (or <code class="small">{focus_keyphrase}</code>).</div>
               </div>
               <div class="form-check mb-0">
@@ -432,11 +446,13 @@
             <div class="modal-body">
               <div class="mb-3">
                 <label class="form-label" for="editImagePromptName">Prompt name</label>
-                <input class="form-control" id="editImagePromptName" name="image_prompt_name" type="text" required maxlength="200" autocomplete="off">
+                <input class="form-control" id="editImagePromptName" name="image_prompt_name" type="text" required maxlength="{{ prompt_name_max }}" autocomplete="off" data-aa-hint="editImagePromptNameHint" data-aa-max="{{ prompt_name_max }}">
+                <small id="editImagePromptNameHint" class="form-text d-block text-end mb-0 aa-char-counter text-body-secondary">0 / {{ prompt_name_max }}</small>
               </div>
               <div class="mb-3">
                 <label class="form-label" for="editImagePromptText">Image prompt (OpenAI Images)</label>
-                <textarea class="form-control" id="editImagePromptText" name="image_prompt_text" rows="6" required></textarea>
+                <textarea class="form-control" id="editImagePromptText" name="image_prompt_text" rows="6" required maxlength="{{ image_char_limit }}" data-aa-hint="editImagePromptTextHint" data-aa-max="{{ image_char_limit }}"></textarea>
+                <small id="editImagePromptTextHint" class="form-text d-block text-end mb-0 aa-char-counter text-body-secondary">0 / {{ image_char_limit }}</small>
                 <div class="form-text">Placeholders: <code class="small">{article title}</code>, <code class="small">{targeting keywords}</code>, <code class="small">{focus keyphrase}</code> (or <code class="small">{focus_keyphrase}</code>).</div>
               </div>
               <div class="form-check mb-0">
@@ -577,6 +593,8 @@
         </div>
       </div>
     </div>
+
+    {% include 'partials/project_tools_modal.html' %}
 
     <div class="modal fade" id="addArticleModal" tabindex="-1" aria-labelledby="addArticleModalLabel" aria-hidden="true">
       <div class="modal-dialog modal-dialog-centered">
@@ -802,6 +820,52 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
       (function () {
+        function syncPlanCharField(el) {
+          if (!el || !el.getAttribute) return;
+          var hid = el.getAttribute('data-aa-hint');
+          if (!hid) return;
+          var h = document.getElementById(hid);
+          if (!h) return;
+          var max = parseInt(el.getAttribute('data-aa-max') || '0', 10);
+          if (!max) return;
+          var n = (el.value || '').length;
+          h.textContent = n + ' / ' + max;
+          h.classList.toggle('text-danger', n > max);
+          h.classList.toggle('text-body-secondary', n <= max);
+        }
+        function bindPlanCharFields(root) {
+          var scope = root || document;
+          scope.querySelectorAll('[data-aa-hint][data-aa-max]').forEach(function (el) {
+            if (el._aaCharBound) return;
+            el._aaCharBound = true;
+            el.addEventListener('input', function () {
+              syncPlanCharField(el);
+            });
+            el.addEventListener('change', function () {
+              syncPlanCharField(el);
+            });
+            syncPlanCharField(el);
+          });
+        }
+        window.__aaSyncPlanCharFields = function (root) {
+          bindPlanCharFields(root);
+          (root || document).querySelectorAll('[data-aa-hint][data-aa-max]').forEach(syncPlanCharField);
+        };
+        document.addEventListener('DOMContentLoaded', function () {
+          bindPlanCharFields(document);
+          ['addPromptModal', 'editPromptModal', 'addImagePromptModal', 'editImagePromptModal'].forEach(function (mid) {
+            var m = document.getElementById(mid);
+            if (m) {
+              m.addEventListener('shown.bs.modal', function () {
+                window.__aaSyncPlanCharFields(m);
+              });
+            }
+          });
+        });
+      })();
+    </script>
+    <script>
+      (function () {
         document.addEventListener('DOMContentLoaded', function () {
           var banner = document.getElementById('systemBanner');
           var dismiss = document.getElementById('dismissSystemBanner');
@@ -932,6 +996,7 @@
             if (tx) tx.value = p.text || '';
             if (cb) cb.checked = id === defaultPromptId;
             var modalEl = document.getElementById('editPromptModal');
+            if (window.__aaSyncPlanCharFields) window.__aaSyncPlanCharFields(modalEl);
             if (modalEl && window.bootstrap) {
               window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
             }
@@ -960,6 +1025,7 @@
             if (tx) tx.value = p.text || '';
             if (cb) cb.checked = id === defaultImagePromptId;
             var modalEl = document.getElementById('editImagePromptModal');
+            if (window.__aaSyncPlanCharFields) window.__aaSyncPlanCharFields(modalEl);
             if (modalEl && window.bootstrap) {
               window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
             }
@@ -988,6 +1054,7 @@
           if (tx) tx.value = p.text || '';
           if (cb) cb.checked = promptId === defaultId;
           var modalEl = document.getElementById('editPromptModal');
+          if (window.__aaSyncPlanCharFields) window.__aaSyncPlanCharFields(modalEl);
           if (modalEl && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
         }
         btn.addEventListener('click', function () {
@@ -1018,6 +1085,7 @@
           if (tx) tx.value = p.text || '';
           if (cb) cb.checked = promptId === defaultId;
           var modalEl = document.getElementById('editImagePromptModal');
+          if (window.__aaSyncPlanCharFields) window.__aaSyncPlanCharFields(modalEl);
           if (modalEl && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
         }
         btn.addEventListener('click', function () {

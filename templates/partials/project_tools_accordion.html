@@ -1,3 +1,4 @@
+{% set plan_ui = plan_ui if plan_ui is defined else {} %}
             <div class="app-card app-card--elevated project-tools-card border-0 shadow-none">
         <div class="accordion accordion-flush project-tools-accordion" id="projectToolsAccordion">
             <div class="accordion-item border-0 border-bottom project-tools-accordion__item" data-tool-key="bulk_upload">
@@ -17,7 +18,7 @@
               </h2>
               <div id="collapseBulkUpload" class="accordion-collapse collapse" aria-labelledby="headingBulkUpload" data-bs-parent="#projectToolsAccordion">
                 <div class="accordion-body pt-0 pb-3 px-3">
-                  <div class="project-tools-panel rounded-2 p-3">
+                  <div class="project-tools-panel rounded-2 p-3 position-relative">
                     <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
                       {% set _pl = plan_limits if plan_limits is defined else none %}
                       {% set allow_bulk = (_pl.get('allow_bulk_upload', true) if _pl else true) %}
@@ -35,6 +36,16 @@
                     <p class="form-text small mb-0">
                       Required: <span class="fw-semibold">Title</span>. Optional: <span class="fw-semibold">Focus Keyphrase</span> (single phrase), <span class="fw-semibold">Targeting Keywords</span> (comma-separated, max 10). Imports are always <span class="fw-semibold">pending</span>.
                     </p>
+                    {% if plan_ui.lock_bulk_panel|default(false) %}
+                    <div class="project-tool-overlay" role="region" aria-label="Plan limit">
+                      <div class="project-tool-overlay__inner">
+                        <p class="small fw-semibold mb-1">Bulk upload unavailable</p>
+                        <p class="small text-body-secondary mb-3">{{ plan_ui.reason_bulk|default('This action is not available on your current plan.') }}</p>
+                        <a class="btn btn-sm btn-primary" href="{{ plan_ui.upgrade_href|default(url_for('home')) }}">Upgrade Plan</a>
+                        {% if not plan_ui.is_admin|default(false) %}<p class="small text-body-secondary mt-2 mb-0">Ask an administrator to change your subscription.</p>{% endif %}
+                      </div>
+                    </div>
+                    {% endif %}
                   </div>
                 </div>
               </div>
@@ -57,12 +68,18 @@
               <div id="collapseWritingPrompts" class="accordion-collapse collapse" aria-labelledby="headingWritingPrompts" data-bs-parent="#projectToolsAccordion">
                 <div class="accordion-body pt-0 pb-3 px-3">
                   <div class="project-tools-panel rounded-2 p-3">
+                    {% if plan_ui.lock_writing_panel|default(false) %}
+                    <div class="alert alert-warning border-0 small mb-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+                      <span class="mb-0">{{ plan_ui.reason_writing|default('Writing prompt limit reached.') }}</span>
+                      <a class="btn btn-sm btn-primary flex-shrink-0" href="{{ plan_ui.upgrade_href|default(url_for('home')) }}">Upgrade Plan</a>
+                    </div>
+                    {% endif %}
                     <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
                       <p class="small text-body-secondary mb-0 flex-grow-1" style="max-width: 42rem;">
                         Placeholders: <code class="small">{article title}</code>, <code class="small">{targeting keywords}</code>, <code class="small">{focus keyphrase}</code>
                         (<code class="small">{title}</code>, <code class="small">{keywords}</code>, <code class="small">{focus_keyphrase}</code>).
                       </p>
-                      <button type="button" class="btn btn-sm btn-primary text-nowrap" data-bs-toggle="modal" data-bs-target="#addPromptModal">Add prompt</button>
+                      <button type="button" class="btn btn-sm btn-primary text-nowrap" data-bs-toggle="modal" data-bs-target="#addPromptModal" {% if plan_ui.lock_writing_panel|default(false) %}disabled{% endif %}>Add prompt</button>
                     </div>
                     {% if project.prompts and project.prompts|length > 0 %}
                       <div class="table-responsive rounded-2 border bg-white">
@@ -254,12 +271,18 @@
               <div id="collapseImagePrompts" class="accordion-collapse collapse" aria-labelledby="headingImagePrompts" data-bs-parent="#projectToolsAccordion">
                 <div class="accordion-body pt-0 pb-3 px-3">
                   <div class="project-tools-panel rounded-2 p-3">
+                    {% if plan_ui.lock_image_panel|default(false) %}
+                    <div class="alert alert-warning border-0 small mb-3 d-flex flex-wrap align-items-center justify-content-between gap-2">
+                      <span class="mb-0">{{ plan_ui.reason_image|default('Image prompt limit reached.') }}</span>
+                      <a class="btn btn-sm btn-primary flex-shrink-0" href="{{ plan_ui.upgrade_href|default(url_for('home')) }}">Upgrade Plan</a>
+                    </div>
+                    {% endif %}
                     <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
                       <p class="small text-body-secondary mb-0 flex-grow-1" style="max-width: 42rem;">
                         OpenAI Images API (<span class="fw-medium">OPENAI_API_KEY</span>; model via <span class="fw-medium">OPENAI_IMAGE_MODEL</span>).
                         Placeholders: <code class="small">{article title}</code>, <code class="small">{targeting keywords}</code>, <code class="small">{focus keyphrase}</code>.
                       </p>
-                      <button type="button" class="btn btn-sm btn-primary text-nowrap" data-bs-toggle="modal" data-bs-target="#addImagePromptModal">Add prompt</button>
+                      <button type="button" class="btn btn-sm btn-primary text-nowrap" data-bs-toggle="modal" data-bs-target="#addImagePromptModal" {% if plan_ui.lock_image_panel|default(false) %}disabled{% endif %}>Add prompt</button>
                     </div>
                     <form method="post" action="{{ url_for('update_project_featured_image_settings', project_id=project.id) }}" class="border rounded-2 p-3 mb-3 bg-body">
                       <div class="fw-semibold small mb-2">Generation style</div>
