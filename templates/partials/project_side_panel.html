@@ -1,6 +1,23 @@
 {% set stats = article_stats|default({'total': 0, 'pending': 0, 'draft': 0, 'published': 0, 'scheduled_queue': 0}) %}
 <aside class="app-side-panel vstack gap-4" aria-label="Project status and quick actions">
   <div class="app-card app-card--elevated app-side-panel__card p-4">
+    <div class="d-flex align-items-start justify-content-between gap-2 mb-3">
+      <div>
+        <h2 class="h6 mb-1">Tools</h2>
+        <p class="small text-body-secondary mb-0">Bulk upload, prompts, Search Console, images</p>
+      </div>
+      <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#projectToolsModal">Open</button>
+    </div>
+    <div class="d-grid gap-2">
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#projectToolsModal" data-open-tool="bulk_upload">Bulk Upload</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#projectToolsModal" data-open-tool="writing_prompts">Writing Prompts</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#projectToolsModal" data-open-tool="image_prompts">Image Prompts</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#projectToolsModal" data-open-tool="search_console">Search Console</button>
+      <button type="button" class="btn btn-outline-secondary btn-sm text-start" data-bs-toggle="modal" data-bs-target="#projectToolsModal" data-open-tool="context_links">Context Links</button>
+    </div>
+  </div>
+
+  <div class="app-card app-card--elevated app-side-panel__card p-4">
     <h2 class="h6 mb-3">WordPress status</h2>
     {% if project_settings_incomplete|default(false) %}
       <p class="mb-1"><span class="badge rounded-pill text-bg-warning">Not connected</span></p>

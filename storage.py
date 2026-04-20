@@ -60,6 +60,14 @@ def _user_row_to_public(u: dict[str, Any]) -> dict[str, Any]:
         "email": (u.get("email") or "").strip(),
         "password_hash": (u.get("password_hash") or "").strip(),
         "role": (u.get("role") or "user").strip().lower(),
+        "full_name": (u.get("full_name") or "").strip(),
+        "phone": (u.get("phone") or "").strip(),
+        "subscription_type": (u.get("subscription_type") or "beta").strip().lower(),
+        "last_activity_at": (u.get("last_activity_at") or "").strip(),
+        "usage_daily_articles_date": (u.get("usage_daily_articles_date") or "").strip(),
+        "usage_daily_articles_count": int(u.get("usage_daily_articles_count") or 0),
+        "usage_monthly_articles_month": (u.get("usage_monthly_articles_month") or "").strip(),
+        "usage_monthly_articles_count": int(u.get("usage_monthly_articles_count") or 0),
         "created_at": (u.get("created_at") or "").strip(),
     }
 
@@ -135,8 +143,169 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "email": email[:500],
         "password_hash": (d.get("password_hash") or "").strip(),
         "role": ((d.get("role") or "user").strip().lower()[:32]) or "user",
+        "full_name": (d.get("full_name") or "").strip()[:200],
+        "phone": (d.get("phone") or "").strip()[:64],
+        "subscription_type": ((d.get("subscription_type") or "beta").strip().lower()[:64]) or "beta",
+        "last_activity_at": (d.get("last_activity_at") or "").strip()[:64],
+        "usage_daily_articles_date": (d.get("usage_daily_articles_date") or "").strip()[:16],
+        "usage_daily_articles_count": int(d.get("usage_daily_articles_count") or 0),
+        "usage_monthly_articles_month": (d.get("usage_monthly_articles_month") or "").strip()[:16],
+        "usage_monthly_articles_count": int(d.get("usage_monthly_articles_count") or 0),
         "created_at": (d.get("created_at") or "")[:64],
     }
+
+
+def list_users() -> list[dict[str, Any]]:
+    """Admin-only: list all users (public fields; includes password_hash for compatibility with existing code)."""
+    if _storage_mode == "json":
+        return [_user_row_to_public(u) for u in _load_json_users()]
+    if _storage_mode != "mongo":
+        return []
+    cur = get_db().users.find({}).sort("created_at", 1)
+    out: list[dict[str, Any]] = []
+    for doc in cur:
+        out.append(
+            {
+                "id": (doc.get("id") or "").strip(),
+                "email": (doc.get("email") or "").strip(),
+                "password_hash": (doc.get("password_hash") or "").strip(),
+                "role": (doc.get("role") or "user").strip().lower(),
+                "full_name": (doc.get("full_name") or "").strip(),
+                "phone": (doc.get("phone") or "").strip(),
+                "subscription_type": (doc.get("subscription_type") or "beta").strip().lower(),
+                "last_activity_at": (doc.get("last_activity_at") or "").strip(),
+                "created_at": (doc.get("created_at") or "").strip(),
+            }
+        )
+    return out
+
+
+def update_user_fields(user_id: str, updates: dict[str, Any]) -> bool:
+    uid = (user_id or "").strip()
+    if not uid:
+        return False
+    norm_updates = dict(updates or {})
+    if "email" in norm_updates:
+        norm_updates.pop("email", None)
+    if _storage_mode == "json":
+        with _db_write_lock:
+            users = _load_json_users()
+            for i, u in enumerate(users):
+                if (u.get("id") or "").strip() != uid:
+                    continue
+                d = dict(u)
+                d.update(norm_updates)
+                users[i] = _normalize_user_dict(d)
+                _save_json_users(users)
+                return True
+        return False
+    if _storage_mode != "mongo":
+        return False
+    with _db_write_lock:
+        db = get_db()
+        doc = db.users.find_one({"id": uid})
+        if not doc:
+            return False
+        d = dict(doc)
+        d.pop("_id", None)
+        d.update(norm_updates)
+        norm = _normalize_user_dict(d)
+        new_doc = {**norm, "_id": norm["id"]}
+        res = db.users.replace_one({"id": uid}, new_doc)
+        return bool(res.acknowledged and res.matched_count == 1)
+
+
+def _plans_json_path() -> str:
+    return _data_path("plans.json")
+
+
+def _default_plans() -> dict[str, Any]:
+    return {
+        "beta": {
+            "name": "Beta Plan",
+            "max_projects": 2,
+            "max_articles": 5,
+            "max_articles_per_day": 0,
+            "max_articles_per_month": 0,
+            "max_writing_prompts": 1,
+            "writing_prompt_char_limit": 4000,
+            "max_image_prompts": 1,
+            "image_prompt_char_limit": 2000,
+            "allow_scheduling": True,
+            "allow_export": True,
+            "allow_bulk_upload": True,
+        }
+    }
+
+
+def load_plans() -> dict[str, Any]:
+    """Return dict of plan_key -> plan data."""
+    if _storage_mode == "json":
+        path = _plans_json_path()
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict) and raw:
+                return raw
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+        out = _default_plans()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        return out
+    if _storage_mode != "mongo":
+        return _default_plans()
+    db = get_db()
+    cur = db.plans.find({})
+    out: dict[str, Any] = {}
+    for doc in cur:
+        key = (doc.get("key") or doc.get("id") or "").strip().lower()
+        if not key:
+            continue
+        d = dict(doc)
+        d.pop("_id", None)
+        d.pop("id", None)
+        d["key"] = key
+        out[key] = d
+    if not out:
+        # Seed defaults
+        for k, v in _default_plans().items():
+            upsert_plan(k, v)
+        return load_plans()
+    return out
+
+
+def upsert_plan(plan_key: str, plan: dict[str, Any]) -> None:
+    key = (plan_key or "").strip().lower()
+    if not key:
+        raise ValueError("plan_key is required")
+    payload = dict(plan or {})
+    payload["key"] = key
+    if _storage_mode == "json":
+        path = _plans_json_path()
+        plans = {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                plans = raw
+        except Exception:
+            plans = {}
+        plans[key] = payload
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(plans, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        return
+    if _storage_mode != "mongo":
+        return
+    with _db_write_lock:
+        doc = {**payload, "_id": key}
+        get_db().plans.replace_one({"_id": key}, doc, upsert=True)
 
 
 def get_user_by_id(user_id: str) -> dict[str, Any] | None:
@@ -158,6 +327,14 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
         "email": (doc.get("email") or "").strip(),
         "password_hash": (doc.get("password_hash") or "").strip(),
         "role": (doc.get("role") or "user").strip().lower(),
+        "full_name": (doc.get("full_name") or "").strip(),
+        "phone": (doc.get("phone") or "").strip(),
+        "subscription_type": (doc.get("subscription_type") or "beta").strip().lower(),
+        "last_activity_at": (doc.get("last_activity_at") or "").strip(),
+        "usage_daily_articles_date": (doc.get("usage_daily_articles_date") or "").strip(),
+        "usage_daily_articles_count": int(doc.get("usage_daily_articles_count") or 0),
+        "usage_monthly_articles_month": (doc.get("usage_monthly_articles_month") or "").strip(),
+        "usage_monthly_articles_count": int(doc.get("usage_monthly_articles_count") or 0),
         "created_at": (doc.get("created_at") or "").strip(),
     }
 
@@ -181,6 +358,14 @@ def get_user_by_email(email: str) -> dict[str, Any] | None:
         "email": (doc.get("email") or "").strip(),
         "password_hash": (doc.get("password_hash") or "").strip(),
         "role": (doc.get("role") or "user").strip().lower(),
+        "full_name": (doc.get("full_name") or "").strip(),
+        "phone": (doc.get("phone") or "").strip(),
+        "subscription_type": (doc.get("subscription_type") or "beta").strip().lower(),
+        "last_activity_at": (doc.get("last_activity_at") or "").strip(),
+        "usage_daily_articles_date": (doc.get("usage_daily_articles_date") or "").strip(),
+        "usage_daily_articles_count": int(doc.get("usage_daily_articles_count") or 0),
+        "usage_monthly_articles_month": (doc.get("usage_monthly_articles_month") or "").strip(),
+        "usage_monthly_articles_count": int(doc.get("usage_monthly_articles_count") or 0),
         "created_at": (doc.get("created_at") or "").strip(),
     }
 

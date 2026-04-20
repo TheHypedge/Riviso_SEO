@@ -68,14 +68,6 @@
         <div class="col-12 col-lg-8 app-workspace-primary">
           {% include 'partials/project_filter_bar.html' %}
 
-          <section class="app-dash-section mb-4" aria-labelledby="tools-heading">
-            <div class="d-flex flex-column flex-sm-row align-items-sm-center justify-content-between gap-2 mb-3">
-              <h2 id="tools-heading" class="h6 mb-0">Tools</h2>
-              <span class="small text-body-secondary">Bulk import, prompts, Search Console, images</span>
-            </div>
-            {% include 'partials/project_tools_cards.html' %}
-          </section>
-
           {% include 'partials/project_scheduled_section.html' %}
         </div>
         <div class="col-12 col-lg-4">
@@ -175,7 +167,53 @@
                 Bulk actions
               </button>
             </div>
-            <div class="table-responsive articles-table-wrap rounded-3 border bg-white">
+            <div class="d-md-none vstack gap-2">
+              {% for a in articles %}
+                {% set st = (a.status or 'pending')|lower %}
+                {% if st == 'published' %}{% set stn = 'published' %}{% elif st == 'draft' %}{% set stn = 'draft' %}{% else %}{% set stn = 'pending' %}{% endif %}
+                <article class="border rounded-3 bg-white p-3">
+                  <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div class="min-w-0">
+                      <div class="fw-semibold text-body text-break">{{ a.title or '(Untitled)' }}</div>
+                      <div class="text-body-secondary mt-1" style="font-size: 0.75rem; line-height: 1.35;">
+                        <span class="text-nowrap">Added {{ a.created_at }}</span>
+                        <span class="text-nowrap"> · Posted {{ a.posted_at or '—' }}</span>
+                      </div>
+                    </div>
+                    <a class="btn btn-sm btn-outline-primary flex-shrink-0" href="{{ url_for('article_edit', project_id=project.id, article_id=a.id) }}">Edit</a>
+                  </div>
+
+                  <div class="d-flex flex-wrap gap-2 mt-2 align-items-center">
+                    <span class="badge rounded-pill {% if stn == 'published' %}text-bg-success{% elif stn == 'draft' %}text-bg-secondary{% else %}text-bg-warning{% endif %}">
+                      {% if stn == 'published' %}Published{% elif stn == 'draft' %}Draft{% else %}Pending{% endif %}
+                    </span>
+                    {% set gs = (a.gsc_status or 'pending')|lower %}
+                    {% if gs in ('requested','inspected') %}
+                      <span class="badge rounded-pill text-bg-light border">GSC: Inspected</span>
+                    {% else %}
+                      <span class="badge rounded-pill text-bg-light border text-body-secondary">GSC: Pending</span>
+                    {% endif %}
+                    {% if (a.wp_link or '').strip() %}
+                      <a class="badge rounded-pill text-bg-light border text-decoration-none" href="{{ a.wp_link }}" target="_blank" rel="noopener noreferrer" title="Open live URL">Live URL</a>
+                    {% endif %}
+                  </div>
+
+                  {% if (a.focus_keyphrase or '').strip() %}
+                    <div class="small mt-2"><span class="text-body-secondary">Focus:</span> {{ (a.focus_keyphrase or '').strip() }}</div>
+                  {% endif %}
+                  {% if a.keywords and a.keywords|length > 0 %}
+                    <div class="small mt-1"><span class="text-body-secondary">Keywords:</span> {{ (a.keywords or []) | join(', ') }}</div>
+                  {% endif %}
+
+                  <div class="text-body-secondary mt-2" style="font-size: 0.75rem; line-height: 1.35;">
+                    <span class="text-nowrap">Sched </span>
+                    <span class="js-article-scheduled-at">{% if a.wp_scheduled_at %}{{ a.wp_scheduled_at }}{% if a.wp_schedule_error %}<span class="d-block text-danger small" title="{{ a.wp_schedule_error }}">Error</span>{% endif %}{% elif a.wp_schedule_error %}<span class="text-danger small" title="{{ a.wp_schedule_error }}">Last schedule failed</span>{% else %}—{% endif %}</span>
+                  </div>
+                </article>
+              {% endfor %}
+            </div>
+
+            <div class="table-responsive articles-table-wrap rounded-3 border bg-white d-none d-md-block">
               <table
                 class="table table-hover align-middle mb-0"
                 id="articlesPostsTable"
@@ -955,6 +993,26 @@
               window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
             }
           });
+        });
+      })();
+      (function () {
+        var btn = document.getElementById('editSelectedWritingPromptBtn');
+        var sel = document.getElementById('projectPromptSelect');
+        if (!btn || !sel) return;
+        btn.addEventListener('click', function () {
+          var id = sel.value || '';
+          var rowBtn = document.querySelector('[data-edit-prompt][data-prompt-id=\"' + id.replace(/\"/g, '') + '\"]');
+          if (rowBtn) rowBtn.click();
+        });
+      })();
+      (function () {
+        var btn = document.getElementById('editSelectedImagePromptBtn');
+        var sel = document.getElementById('projectImagePromptSelect');
+        if (!btn || !sel) return;
+        btn.addEventListener('click', function () {
+          var id = sel.value || '';
+          var rowBtn = document.querySelector('[data-edit-image-prompt][data-image-prompt-id=\"' + id.replace(/\"/g, '') + '\"]');
+          if (rowBtn) rowBtn.click();
         });
       })();
       (function () {

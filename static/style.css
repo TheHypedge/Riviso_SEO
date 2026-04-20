@@ -1172,7 +1172,7 @@ html[data-theme="dark"] .app-dashboard {
     width: 100%;
     min-height: 100vh;
     max-height: none;
-    border-radius: 0 1.25rem 1.25rem 0;
+    border-radius:0px;
     box-shadow: none;
     padding: clamp(2rem, 5vw, 3.5rem);
     justify-content: space-between;
@@ -1228,6 +1228,29 @@ html[data-theme="dark"] .app-dashboard {
   color: #111827;
   -webkit-font-smoothing: antialiased;
   animation: auth-fade-in 0.45s ease forwards;
+}
+
+.app-frame {
+  width: 100%;
+  max-width: 1440px;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+@media (min-width: 768px) {
+  .app-frame {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .app-frame {
+    padding-left: 32px;
+    padding-right: 32px;
+  }
 }
 
 .app-shell-skip {
@@ -1294,7 +1317,7 @@ html[data-theme="dark"] .app-dashboard {
 }
 
 .app-shell-main {
-  max-width: 1200px;
+  max-width: none;
 }
 
 .app-page-head {
@@ -1488,4 +1511,33 @@ html[data-theme="dark"] .app-dashboard {
   .app-page-head__row .app-shell-btn--lg {
     width: 100%;
   }
+}
+
+/* ——— Admin sidebar (Home) ——— */
+.app-admin-sidebar .app-card {
+  position: sticky;
+  top: 1.25rem;
+}
+
+.app-admin-navlink {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 12px;
+  text-decoration: none;
+  color: #374151;
+  font-weight: 600;
+  font-size: 0.875rem;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.app-admin-navlink:hover {
+  background: #f3f4f6;
+  color: #111827;
+}
+
+.app-admin-navlink.is-active {
+  background: rgba(15, 23, 42, 0.06);
+  color: #0f172a;
 }

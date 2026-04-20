@@ -1,0 +1,137 @@
+<section class="app-dash-section" aria-labelledby="admin-limits-heading">
+  <div class="app-section-head">
+    <h2 id="admin-limits-heading" class="app-section-head__title">System limitations</h2>
+    <p class="app-section-head__desc mb-0">Define subscription plans and feature limits.</p>
+  </div>
+
+  {% set plans = admin_plans|default({}) %}
+  {% set plan_items = (plans.items()|list) if plans else [] %}
+
+  <div class="app-card app-card--elevated mb-3">
+    <div class="p-3 p-md-4">
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+        <div class="fw-semibold">Create new plan</div>
+        <div class="small text-body-secondary">Key must be unique (letters/numbers/underscore).</div>
+      </div>
+      <form method="post" action="{{ url_for('admin_update_plan') }}" class="row g-3 align-items-end">
+        <div class="col-12 col-md-3">
+          <label class="form-label fw-medium" for="newPlanKey">Plan key</label>
+          <input class="form-control" id="newPlanKey" name="plan_key" placeholder="e.g. pro" maxlength="40" required>
+        </div>
+        <div class="col-12 col-md-4">
+          <label class="form-label fw-medium" for="newPlanName">Plan name</label>
+          <input class="form-control" id="newPlanName" name="plan_name" placeholder="e.g. Pro Plan" maxlength="100" required>
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label fw-medium" for="newMaxProjects">Max projects</label>
+          <input class="form-control" id="newMaxProjects" name="max_projects" type="number" min="0" value="2">
+        </div>
+        <div class="col-6 col-md-2">
+          <label class="form-label fw-medium" for="newMaxArticles">Max articles</label>
+          <input class="form-control" id="newMaxArticles" name="max_articles" type="number" min="0" value="5">
+        </div>
+        <div class="col-12 col-md-1 d-flex justify-content-end">
+          <button type="submit" class="btn btn-primary w-100">Create</button>
+        </div>
+        <input type="hidden" name="max_writing_prompts" value="1">
+        <input type="hidden" name="writing_prompt_char_limit" value="4000">
+        <input type="hidden" name="max_image_prompts" value="1">
+        <input type="hidden" name="image_prompt_char_limit" value="2000">
+        <input type="hidden" name="allow_scheduling" value="on">
+        <input type="hidden" name="allow_export" value="on">
+        <input type="hidden" name="allow_bulk_upload" value="on">
+      </form>
+    </div>
+  </div>
+
+  {% if not plan_items or plan_items|length == 0 %}
+    <div class="app-card app-card--elevated">
+      <div class="p-3 p-md-4">
+        <div class="text-body-secondary">No plans found. Create one above (recommended key: <span class="fw-semibold">beta</span>).</div>
+      </div>
+    </div>
+  {% else %}
+    {% for key, p in plan_items %}
+      <div class="app-card app-card--elevated mb-3">
+        <div class="p-3 p-md-4">
+          <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+            <div class="fw-semibold">{{ (p.name or key) }}</div>
+            <div class="small text-body-secondary">Key: <span class="fw-semibold">{{ key }}</span></div>
+          </div>
+          <form method="post" action="{{ url_for('admin_update_plan') }}" class="vstack gap-3">
+            <input type="hidden" name="plan_key" value="{{ key }}">
+            <div class="row g-3">
+              <div class="col-12 col-md-6">
+                <label class="form-label fw-medium" for="planName_{{ key }}">Plan name</label>
+                <input class="form-control" id="planName_{{ key }}" name="plan_name" value="{{ p.name if p else key }}" maxlength="100" required>
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label fw-medium" for="maxProjects_{{ key }}">Max projects</label>
+                <input class="form-control" id="maxProjects_{{ key }}" name="max_projects" type="number" min="0" value="{{ p.max_projects if p else 2 }}">
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label fw-medium" for="maxArticles_{{ key }}">Max articles</label>
+                <input class="form-control" id="maxArticles_{{ key }}" name="max_articles" type="number" min="0" value="{{ p.max_articles if p else 5 }}">
+              </div>
+            </div>
+
+            <div class="row g-3">
+              <div class="col-6 col-md-3">
+                <label class="form-label fw-medium" for="maxArticlesDay_{{ key }}">Max articles / day</label>
+                <input class="form-control" id="maxArticlesDay_{{ key }}" name="max_articles_per_day" type="number" min="0" value="{{ p.max_articles_per_day if p is not none else 0 }}">
+                <div class="form-text small">0 = unlimited</div>
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label fw-medium" for="maxArticlesMonth_{{ key }}">Max articles / month</label>
+                <input class="form-control" id="maxArticlesMonth_{{ key }}" name="max_articles_per_month" type="number" min="0" value="{{ p.max_articles_per_month if p is not none else 0 }}">
+                <div class="form-text small">0 = unlimited</div>
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label fw-medium" for="maxWritingPrompts_{{ key }}">Max writing prompts</label>
+                <input class="form-control" id="maxWritingPrompts_{{ key }}" name="max_writing_prompts" type="number" min="0" value="{{ p.max_writing_prompts if p else 1 }}">
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label fw-medium" for="writingCharLimit_{{ key }}">Writing prompt char limit</label>
+                <input class="form-control" id="writingCharLimit_{{ key }}" name="writing_prompt_char_limit" type="number" min="0" value="{{ p.writing_prompt_char_limit if p else 4000 }}">
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label fw-medium" for="maxImagePrompts_{{ key }}">Max image prompts</label>
+                <input class="form-control" id="maxImagePrompts_{{ key }}" name="max_image_prompts" type="number" min="0" value="{{ p.max_image_prompts if p else 1 }}">
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label fw-medium" for="imageCharLimit_{{ key }}">Image prompt char limit</label>
+                <input class="form-control" id="imageCharLimit_{{ key }}" name="image_prompt_char_limit" type="number" min="0" value="{{ p.image_prompt_char_limit if p else 2000 }}">
+              </div>
+            </div>
+
+            <div class="row g-3">
+              <div class="col-12 col-lg-4">
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" role="switch" id="allowScheduling_{{ key }}" name="allow_scheduling" {% if (p.allow_scheduling if p is not none else true) %}checked{% endif %}>
+                  <label class="form-check-label" for="allowScheduling_{{ key }}">Enable scheduling</label>
+                </div>
+              </div>
+              <div class="col-12 col-lg-4">
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" role="switch" id="allowExport_{{ key }}" name="allow_export" {% if (p.allow_export if p is not none else true) %}checked{% endif %}>
+                  <label class="form-check-label" for="allowExport_{{ key }}">Enable export articles</label>
+                </div>
+              </div>
+              <div class="col-12 col-lg-4">
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" role="switch" id="allowBulkUpload_{{ key }}" name="allow_bulk_upload" {% if (p.allow_bulk_upload if p is not none else true) %}checked{% endif %}>
+                  <label class="form-check-label" for="allowBulkUpload_{{ key }}">Enable bulk upload</label>
+                </div>
+              </div>
+            </div>
+
+            <div class="d-flex justify-content-end">
+              <button type="submit" class="btn btn-primary">Save plan</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+  {% endif %}
+</section>
+

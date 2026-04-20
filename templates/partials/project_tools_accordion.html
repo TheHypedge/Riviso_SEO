@@ -19,11 +19,16 @@
                 <div class="accordion-body pt-0 pb-3 px-3">
                   <div class="project-tools-panel rounded-2 p-3">
                     <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
-                      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('bulk_upload_sample', project_id=project.id) }}">Download sample sheet</a>
-                      <form method="post" action="{{ url_for('bulk_upload_articles', project_id=project.id) }}" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 align-items-center flex-grow-1" style="min-width: 12rem;">
-                        <input class="form-control form-control-sm flex-grow-1" style="min-width: 10rem;" type="file" name="file" accept=".xlsx" required>
-                        <button type="submit" class="btn btn-sm btn-primary text-nowrap">Upload &amp; import</button>
-                      </form>
+                      {% if plan_limits|default({}).allow_bulk_upload|default(true) %}
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('bulk_upload_sample', project_id=project.id) }}">Download sample sheet</a>
+                        <form method="post" action="{{ url_for('bulk_upload_articles', project_id=project.id) }}" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 align-items-center flex-grow-1" style="min-width: 12rem;">
+                          <input class="form-control form-control-sm flex-grow-1" style="min-width: 10rem;" type="file" name="file" accept=".xlsx" required>
+                          <button type="submit" class="btn btn-sm btn-primary text-nowrap">Upload &amp; import</button>
+                        </form>
+                      {% else %}
+                        <button type="button" class="btn btn-sm btn-outline-secondary" disabled title="Disabled on your current plan">Download sample sheet</button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" disabled title="Disabled on your current plan">Upload &amp; import</button>
+                      {% endif %}
                     </div>
                     <p class="form-text small mb-0">
                       Required: <span class="fw-semibold">Title</span>. Optional: <span class="fw-semibold">Focus Keyphrase</span> (single phrase), <span class="fw-semibold">Targeting Keywords</span> (comma-separated, max 10). Imports are always <span class="fw-semibold">pending</span>.

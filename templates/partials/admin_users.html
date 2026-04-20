@@ -1,0 +1,134 @@
+<section class="app-dash-section" aria-labelledby="admin-users-heading">
+  <div class="app-section-head">
+    <h2 id="admin-users-heading" class="app-section-head__title">Manage users</h2>
+    <p class="app-section-head__desc mb-0">View users, open profile, and change subscription plan.</p>
+  </div>
+
+  <script type="application/json" id="admin-users-data">{{ admin_users|default([])|tojson }}</script>
+
+  <div class="app-card app-card--elevated">
+    <div class="p-3 p-md-4">
+      {% if not admin_users or admin_users|length == 0 %}
+        <p class="text-body-secondary mb-0">No users found.</p>
+      {% else %}
+        <div class="table-responsive rounded-3 border bg-white">
+          <table class="table table-hover align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th scope="col">Full name</th>
+                <th scope="col">Email</th>
+                <th scope="col">Role</th>
+                <th scope="col">Subscription</th>
+                <th scope="col" class="text-end">Profile</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for u in admin_users %}
+                <tr>
+                  <td class="fw-medium">{{ (u.full_name or '').strip() or '—' }}</td>
+                  <td class="small text-body-secondary">{{ u.email }}</td>
+                  <td style="min-width: 11rem;">
+                    <form method="post" action="{{ url_for('admin_update_user_role') }}" class="d-flex gap-2 align-items-center justify-content-between">
+                      <input type="hidden" name="user_id" value="{{ u.id }}">
+                      {% set _em = (u.email or '')|lower %}
+                      <select class="form-select form-select-sm" name="role" aria-label="Role for {{ u.email }}" {% if _em == 'iamakhileshsoni@gmail.com' %}disabled{% endif %}>
+                        <option value="user" {% if (u.role or 'user')|lower == 'user' %}selected{% endif %}>User</option>
+                        <option value="editor" {% if (u.role or '')|lower == 'editor' %}selected{% endif %}>Editor</option>
+                        <option value="admin" {% if (u.role or '')|lower == 'admin' %}selected{% endif %}>Admin</option>
+                      </select>
+                      <button type="submit" class="btn btn-sm btn-outline-primary" {% if _em == 'iamakhileshsoni@gmail.com' %}disabled title="Primary admin cannot be changed"{% endif %}>Save</button>
+                    </form>
+                  </td>
+                  <td style="min-width: 12rem;">
+                    <form method="post" action="{{ url_for('admin_update_user_subscription') }}" class="d-flex gap-2 align-items-center justify-content-between">
+                      <input type="hidden" name="user_id" value="{{ u.id }}">
+                      <select class="form-select form-select-sm" name="subscription_type" aria-label="Subscription for {{ u.email }}">
+                        {% for k, p in (admin_plans|default({})).items() %}
+                          <option value="{{ k }}" {% if (u.subscription_type or 'beta')|lower == k %}selected{% endif %}>{{ p.name or k }}</option>
+                        {% endfor %}
+                        {% if (admin_plans|default({}))|length == 0 %}
+                          <option value="beta" {% if (u.subscription_type or 'beta')|lower == 'beta' %}selected{% endif %}>Beta Plan</option>
+                        {% endif %}
+                      </select>
+                      <button type="submit" class="btn btn-sm btn-outline-primary">Save</button>
+                    </form>
+                  </td>
+                  <td class="text-end">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-admin-view-user data-user-id="{{ u.id }}">View profile</button>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+<div class="modal fade" id="adminUserProfileModal" tabindex="-1" aria-labelledby="adminUserProfileModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title h5" id="adminUserProfileModalLabel">User profile</h2>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="vstack gap-2">
+          <div><span class="text-body-secondary">Full name:</span> <span class="fw-medium" id="adminUserProfileFullName">—</span></div>
+          <div><span class="text-body-secondary">Email:</span> <span class="fw-medium" id="adminUserProfileEmail">—</span></div>
+          <div><span class="text-body-secondary">Subscription:</span> <span class="fw-medium" id="adminUserProfilePlan">—</span></div>
+          <div><span class="text-body-secondary">Joined on:</span> <span class="fw-medium" id="adminUserProfileJoined">—</span></div>
+          <div><span class="text-body-secondary">Last activity:</span> <span class="fw-medium" id="adminUserProfileLastActivity">—</span></div>
+        </div>
+
+        <hr class="my-3">
+
+        <div class="row g-3">
+          <div class="col-12 col-md-6">
+            <div class="p-3 rounded-3 border bg-body">
+              <div class="small text-uppercase text-body-secondary fw-semibold mb-2">Projects</div>
+              <div class="d-flex align-items-baseline gap-2">
+                <div class="h4 mb-0" id="adminUserStatsProjectsTotal">0</div>
+                <div class="text-body-secondary">total</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-md-6">
+            <div class="p-3 rounded-3 border bg-body">
+              <div class="small text-uppercase text-body-secondary fw-semibold mb-2">Articles</div>
+              <div class="d-flex flex-wrap gap-2 align-items-center">
+                <span class="badge text-bg-dark">Total <span id="adminUserStatsArticlesTotal">0</span></span>
+                <span class="badge text-bg-secondary">Active <span id="adminUserStatsArticlesActive">0</span></span>
+                <span class="badge text-bg-warning">Pending <span id="adminUserStatsArticlesPending">0</span></span>
+                <span class="badge text-bg-info">Draft <span id="adminUserStatsArticlesDraft">0</span></span>
+                <span class="badge text-bg-success">Published <span id="adminUserStatsArticlesPublished">0</span></span>
+              </div>
+              <p class="small text-body-secondary mb-0 mt-2">Active = Pending + Draft</p>
+            </div>
+          </div>
+        </div>
+
+        <hr class="my-3">
+
+        <div class="row g-3">
+          <div class="col-12 col-md-6">
+            <div class="p-3 rounded-3 border bg-body">
+              <div class="small text-uppercase text-body-secondary fw-semibold mb-2">Writing prompts</div>
+              <ul class="mb-0 ps-3 small" id="adminUserWritingPromptsList"></ul>
+              <div class="small text-body-secondary" id="adminUserWritingPromptsEmpty">No writing prompts found.</div>
+            </div>
+          </div>
+          <div class="col-12 col-md-6">
+            <div class="p-3 rounded-3 border bg-body">
+              <div class="small text-uppercase text-body-secondary fw-semibold mb-2">Image prompts</div>
+              <ul class="mb-0 ps-3 small" id="adminUserImagePromptsList"></ul>
+              <div class="small text-body-secondary" id="adminUserImagePromptsEmpty">No image prompts found.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+

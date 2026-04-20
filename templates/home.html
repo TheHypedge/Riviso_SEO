@@ -13,7 +13,7 @@
   <body class="app-shell">
     <a href="#app-main" class="app-shell-skip">Skip to content</a>
     <header class="app-topnav">
-      <div class="container app-topnav__inner">
+      <div class="app-frame app-topnav__inner">
         <a class="app-topnav__brand" href="{{ url_for('home') }}">Auto Articles</a>
         <div class="app-topnav__actions">
           {% if current_user %}
@@ -44,7 +44,7 @@
       </div>
     </header>
 
-    <main id="app-main" class="app-shell-main container py-4 py-lg-5">
+    <main id="app-main" class="app-shell-main app-frame py-4 py-lg-5">
       {% if storage_mode|default('mongo') != 'mongo' %}
         <div class="auth-alert auth-alert--warning mb-4" role="alert">
           <div class="auth-alert__title">Database offline — showing local snapshot</div>
@@ -61,20 +61,29 @@
         </div>
       {% endif %}
 
-      <div class="app-page-head mb-4">
-        <p class="app-page-eyebrow">Workspace</p>
-        <div class="app-page-head__row">
-          <div class="app-page-head__titles">
-            <h1 class="app-page-title">Projects</h1>
-            <p class="app-page-subtitle">Brands and websites in your workspace (up to {{ max_projects }} in a 3×3 grid).</p>
+      <div class="row g-4">
+        {% if is_admin|default(false) %}
+          <div class="col-12 col-lg-3">
+            {% include 'partials/admin_sidebar.html' %}
           </div>
-          {% if projects|length < max_projects %}
-            <button type="button" class="app-shell-btn app-shell-btn--primary app-shell-btn--lg" data-bs-toggle="modal" data-bs-target="#addProjectModal">
-              Add project
-            </button>
-          {% endif %}
-        </div>
-      </div>
+          <div class="col-12 col-lg-9">
+        {% endif %}
+
+        {% if (not is_admin|default(false)) or (admin_section|default('projects') == 'projects') %}
+          <div class="app-page-head mb-4">
+            <p class="app-page-eyebrow">Workspace</p>
+            <div class="app-page-head__row">
+              <div class="app-page-head__titles">
+                <h1 class="app-page-title">Projects</h1>
+                <p class="app-page-subtitle">Brands and websites in your workspace (up to {{ max_projects }} in a 3×3 grid).</p>
+              </div>
+              {% if projects|length < max_projects %}
+                <button type="button" class="app-shell-btn app-shell-btn--primary app-shell-btn--lg" data-bs-toggle="modal" data-bs-target="#addProjectModal">
+                  Add project
+                </button>
+              {% endif %}
+            </div>
+          </div>
 
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
@@ -118,6 +127,18 @@
           {% endfor %}
         </div>
       {% endif %}
+        {% elif is_admin|default(false) and admin_section == 'users' %}
+          {% include 'partials/admin_users.html' %}
+        {% elif is_admin|default(false) and admin_section == 'limits' %}
+          {% include 'partials/admin_limits.html' %}
+        {% elif is_admin|default(false) and admin_section == 'profile' %}
+          {% include 'partials/admin_profile.html' %}
+        {% endif %}
+
+        {% if is_admin|default(false) %}
+          </div>
+        {% endif %}
+      </div>
     </main>
 
     <!-- Modal: Add project -->
@@ -151,5 +172,75 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='page-loading.js') }}"></script>
+    {% if is_admin|default(false) %}
+    <script>
+      (function () {
+        var dataEl = document.getElementById('admin-users-data');
+        if (!dataEl) return;
+        var users = [];
+        try { users = JSON.parse(dataEl.textContent || '[]'); } catch (e) {}
+        function byId(id) { return users.find(function (u) { return u && u.id === id; }); }
+        document.querySelectorAll('[data-admin-view-user]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var id = btn.getAttribute('data-user-id') || '';
+            var u = byId(id);
+            if (!u) return;
+            var full = document.getElementById('adminUserProfileFullName');
+            var em = document.getElementById('adminUserProfileEmail');
+            var plan = document.getElementById('adminUserProfilePlan');
+            var joined = document.getElementById('adminUserProfileJoined');
+            var last = document.getElementById('adminUserProfileLastActivity');
+            var projTotal = document.getElementById('adminUserStatsProjectsTotal');
+            var artTotal = document.getElementById('adminUserStatsArticlesTotal');
+            var artActive = document.getElementById('adminUserStatsArticlesActive');
+            var artPending = document.getElementById('adminUserStatsArticlesPending');
+            var artDraft = document.getElementById('adminUserStatsArticlesDraft');
+            var artPublished = document.getElementById('adminUserStatsArticlesPublished');
+            var wList = document.getElementById('adminUserWritingPromptsList');
+            var wEmpty = document.getElementById('adminUserWritingPromptsEmpty');
+            var iList = document.getElementById('adminUserImagePromptsList');
+            var iEmpty = document.getElementById('adminUserImagePromptsEmpty');
+            if (full) full.textContent = (u.full_name || '').trim() || '—';
+            if (em) em.textContent = (u.email || '').trim() || '—';
+            if (plan) plan.textContent = (u.subscription_type || 'beta').toString();
+            if (joined) joined.textContent = (u.created_at || '').trim() || '—';
+            if (last) last.textContent = (u.last_activity_at || '').trim() || '—';
+            if (projTotal) projTotal.textContent = String(u.stats_projects_total || 0);
+
+            var a = u.stats_articles || {};
+            if (artTotal) artTotal.textContent = String(a.total || 0);
+            if (artActive) artActive.textContent = String(a.active || 0);
+            if (artPending) artPending.textContent = String(a.pending || 0);
+            if (artDraft) artDraft.textContent = String(a.draft || 0);
+            if (artPublished) artPublished.textContent = String(a.published || 0);
+
+            function fillPromptList(listEl, emptyEl, items) {
+              if (!listEl) return;
+              listEl.innerHTML = '';
+              var arr = Array.isArray(items) ? items : [];
+              if (emptyEl) emptyEl.style.display = arr.length ? 'none' : 'block';
+              if (!arr.length) return;
+              arr.slice(0, 30).forEach(function (p) {
+                var li = document.createElement('li');
+                var proj = (p && p.project) ? String(p.project) : '';
+                var nm = (p && p.name) ? String(p.name) : '—';
+                li.textContent = (proj ? (proj + ': ') : '') + nm;
+                listEl.appendChild(li);
+              });
+              if (arr.length > 30) {
+                var li = document.createElement('li');
+                li.textContent = '… and ' + String(arr.length - 30) + ' more';
+                listEl.appendChild(li);
+              }
+            }
+            fillPromptList(wList, wEmpty, u.stats_writing_prompts);
+            fillPromptList(iList, iEmpty, u.stats_image_prompts);
+            var modalEl = document.getElementById('adminUserProfileModal');
+            if (modalEl && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+          });
+        });
+      })();
+    </script>
+    {% endif %}
   </body>
 </html>

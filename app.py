@@ -53,6 +53,12 @@ def _ensure_initial_admin_user() -> None:
     try:
         existing = _storage.get_user_by_email(email)
         if existing:
+            # Ensure the seed email stays admin even if older data was created differently.
+            try:
+                if (existing.get("role") or "").strip().lower() != "admin" and hasattr(_storage, "update_user_fields"):
+                    _storage.update_user_fields(existing["id"], {"role": "admin"})
+            except Exception:
+                pass
             return
         _storage.insert_user(
             {
@@ -138,6 +144,263 @@ def _current_user() -> dict | None:
     if not uid:
         return None
     return _storage.get_user_by_id(uid)
+
+
+def _utc_now_str() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _load_plans_safe() -> dict[str, Any]:
+    try:
+        return _storage.load_plans() if hasattr(_storage, "load_plans") else {}
+    except Exception:
+        return {}
+
+
+def _plan_for_user(user: dict | None) -> dict[str, Any]:
+    u = user or {}
+    plans = _load_plans_safe()
+    key = (u.get("subscription_type") or "beta").strip().lower() or "beta"
+    plan = plans.get(key) if isinstance(plans, dict) else None
+    if isinstance(plan, dict) and plan:
+        return plan
+    fallback = plans.get("beta") if isinstance(plans, dict) else None
+    return fallback if isinstance(fallback, dict) else {}
+
+
+def _plan_int(plan: dict[str, Any], key: str, default: int) -> int:
+    try:
+        v = int(plan.get(key, default))
+        return v if v >= 0 else default
+    except Exception:
+        return default
+
+
+def _plan_bool(plan: dict[str, Any], key: str, default: bool) -> bool:
+    v = plan.get(key, default)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _plan_limit_summary(user: dict | None) -> dict[str, Any]:
+    plan = _plan_for_user(user)
+    return {
+        "name": (plan.get("name") or "").strip() or "Plan",
+        "max_projects": _plan_int(plan, "max_projects", 9999),
+        "max_articles": _plan_int(plan, "max_articles", 999999),
+        # 0 means unlimited for the period.
+        "max_articles_per_day": _plan_int(plan, "max_articles_per_day", 0),
+        "max_articles_per_month": _plan_int(plan, "max_articles_per_month", 0),
+        "max_writing_prompts": _plan_int(plan, "max_writing_prompts", 9999),
+        "writing_prompt_char_limit": _plan_int(plan, "writing_prompt_char_limit", 100_000),
+        "max_image_prompts": _plan_int(plan, "max_image_prompts", 9999),
+        "image_prompt_char_limit": _plan_int(plan, "image_prompt_char_limit", 100_000),
+        "allow_scheduling": _plan_bool(plan, "allow_scheduling", True),
+        "allow_export": _plan_bool(plan, "allow_export", True),
+        "allow_bulk_upload": _plan_bool(plan, "allow_bulk_upload", True),
+    }
+
+
+def _today_key_utc() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+
+def _month_key_utc() -> str:
+    return datetime.utcnow().strftime("%Y-%m")
+
+
+def _int0(v: Any, default: int = 0) -> int:
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def _article_quota_try_consume(user_id: str, add_count: int) -> tuple[bool, str]:
+    """Return (ok, error_message). If ok, persists updated counters for day/month."""
+    uid = (user_id or "").strip()
+    n = int(add_count or 0)
+    if not uid or n <= 0:
+        return True, ""
+    u = _storage.get_user_by_id(uid) or {}
+    limits = _plan_limit_summary(u)
+    day_limit = int(limits.get("max_articles_per_day") or 0)
+    month_limit = int(limits.get("max_articles_per_month") or 0)
+    if day_limit <= 0 and month_limit <= 0:
+        return True, ""
+
+    today = _today_key_utc()
+    this_month = _month_key_utc()
+    day_key = (u.get("usage_daily_articles_date") or "").strip()
+    day_used = _int0(u.get("usage_daily_articles_count"), 0)
+    month_key = (u.get("usage_monthly_articles_month") or "").strip()
+    month_used = _int0(u.get("usage_monthly_articles_count"), 0)
+
+    if day_key != today:
+        day_key = today
+        day_used = 0
+    if month_key != this_month:
+        month_key = this_month
+        month_used = 0
+
+    if day_limit > 0 and (day_used + n) > day_limit:
+        return False, f"Daily article limit reached ({day_limit}/day). Try again tomorrow."
+    if month_limit > 0 and (month_used + n) > month_limit:
+        return False, f"Monthly article limit reached ({month_limit}/month). Try again next month."
+
+    try:
+        if hasattr(_storage, "update_user_fields"):
+            _storage.update_user_fields(
+                uid,
+                {
+                    "usage_daily_articles_date": day_key,
+                    "usage_daily_articles_count": day_used + n,
+                    "usage_monthly_articles_month": month_key,
+                    "usage_monthly_articles_count": month_used + n,
+                },
+            )
+    except Exception:
+        # If we can't persist usage, fail closed so limits are respected.
+        return False, "Could not update usage counters (database unavailable)."
+    return True, ""
+
+
+def _project_ids_for_owner(user_id: str) -> list[str]:
+    uid = (user_id or "").strip()
+    if not uid:
+        return []
+    try:
+        projs = _storage.load_projects()
+    except Exception:
+        return []
+    sm = _storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo"
+    out: list[str] = []
+    for p in (projs or []):
+        if not isinstance(p, dict):
+            continue
+        owner = (p.get("owner_user_id") or "").strip()
+        # Back-compat for legacy JSON snapshots that didn’t store owner_user_id.
+        if owner and owner != uid:
+            continue
+        if not owner and sm == "mongo":
+            continue
+        pid = (p.get("id") or "").strip()
+        if pid:
+            out.append(pid)
+    return out
+
+
+def _articles_counts_for_owner_project_ids(project_ids: list[str]) -> dict[str, int]:
+    pid_set = {x for x in (project_ids or []) if (x or "").strip()}
+    if not pid_set:
+        return {"total": 0, "pending": 0, "draft": 0, "published": 0, "active": 0}
+    try:
+        arts = _storage.load_articles()
+    except Exception:
+        arts = []
+    pending = draft = published = total = 0
+    for a in (arts or []):
+        if not isinstance(a, dict):
+            continue
+        if (a.get("project_id") or "").strip() not in pid_set:
+            continue
+        total += 1
+        st = (a.get("status") or "pending").strip().lower()
+        if st == "published":
+            published += 1
+        elif st == "draft":
+            draft += 1
+        else:
+            pending += 1
+    return {
+        "total": total,
+        "pending": pending,
+        "draft": draft,
+        "published": published,
+        "active": pending + draft,
+    }
+
+
+def _admin_user_profile_snapshot(u: dict[str, Any]) -> dict[str, Any]:
+    uid = (u.get("id") or "").strip()
+    project_ids = _project_ids_for_owner(uid)
+    articles = _articles_counts_for_owner_project_ids(project_ids)
+    writing_prompts: list[dict[str, Any]] = []
+    image_prompts: list[dict[str, Any]] = []
+    try:
+        projs = _storage.load_projects()
+    except Exception:
+        projs = []
+    sm = _storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo"
+    for p in (projs or []):
+        if not isinstance(p, dict):
+            continue
+        owner = (p.get("owner_user_id") or "").strip()
+        if owner and owner != uid:
+            continue
+        if not owner and sm == "mongo":
+            continue
+        pname = (p.get("name") or "").strip() or "Untitled project"
+        for pr in (p.get("prompts") or []):
+            if not isinstance(pr, dict):
+                continue
+            writing_prompts.append(
+                {
+                    "project": pname,
+                    "name": (pr.get("name") or "").strip() or "—",
+                    "chars": len((pr.get("text") or "")),
+                }
+            )
+        for pr in (p.get("image_prompts") or []):
+            if not isinstance(pr, dict):
+                continue
+            image_prompts.append(
+                {
+                    "project": pname,
+                    "name": (pr.get("name") or "").strip() or "—",
+                    "chars": len((pr.get("text") or "")),
+                }
+            )
+    return {
+        **u,
+        "stats_projects_total": len(project_ids),
+        "stats_articles": articles,
+        "stats_writing_prompts": writing_prompts,
+        "stats_image_prompts": image_prompts,
+    }
+
+
+@app.before_request
+def _touch_last_activity():
+    if not _is_authenticated():
+        return None
+    uid = (session.get("user_id") or "").strip()
+    if not uid:
+        return None
+    last = session.get("_last_activity_touch") or ""
+    now_ts = int(time.time())
+    try:
+        last_ts = int(last) if str(last).isdigit() else 0
+    except Exception:
+        last_ts = 0
+    # Avoid writing to storage on every request.
+    if now_ts - last_ts < 300:
+        return None
+    session["_last_activity_touch"] = str(now_ts)
+    try:
+        if hasattr(_storage, "update_user_fields"):
+            _storage.update_user_fields(uid, {"last_activity_at": _utc_now_str()})
+    except Exception:
+        pass
+    return None
 
 
 @app.before_request
@@ -1631,6 +1894,13 @@ def home():
         )
 
     projects = _load_projects()
+    current_user = _current_user() or {}
+    is_admin = (current_user.get("role") or "").strip().lower() == "admin"
+    section = (request.args.get("section") or "projects").strip().lower()
+    if section not in {"projects", "users", "limits", "profile"}:
+        section = "projects"
+    if not is_admin:
+        section = "projects"
     # Client id/secret come from .env (loaded from the app directory at startup).
     cid = (os.environ.get("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
     csec = (os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET") or "").strip()
@@ -1645,6 +1915,23 @@ def home():
         gsc_google_connected = gi.get_valid_credentials() is not None
     except ImportError:
         gsc_google_libs_missing = True
+
+    users = []
+    plans = {}
+    if is_admin:
+        try:
+            users = _storage.list_users() if hasattr(_storage, "list_users") else []
+        except Exception:
+            users = []
+        try:
+            plans = _storage.load_plans() if hasattr(_storage, "load_plans") else {}
+        except Exception:
+            plans = {}
+        try:
+            users = [_admin_user_profile_snapshot(u) for u in users if isinstance(u, dict)]
+        except Exception:
+            # Fallback to basic user list if aggregation fails (e.g., DB not connected).
+            pass
     return render_template(
         "home.html",
         projects=projects,
@@ -1655,8 +1942,121 @@ def home():
         gsc_google_libs_missing=gsc_google_libs_missing,
         storage_mode=_storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo",
         storage_init_error=_storage.storage_init_error() if hasattr(_storage, "storage_init_error") else None,
-        current_user=_current_user(),
+        current_user=current_user,
+        is_admin=is_admin,
+        admin_section=section,
+        admin_users=users,
+        admin_plans=plans,
     )
+
+
+@app.post("/admin/users/subscription")
+def admin_update_user_subscription():
+    if not _is_authenticated() or (session.get("role") or "").strip().lower() != "admin":
+        return redirect(url_for("home"))
+    uid = (request.form.get("user_id") or "").strip()
+    plan = (request.form.get("subscription_type") or "").strip().lower()
+    if not uid or not plan:
+        flash("Missing user or plan.", "error")
+        return redirect(url_for("home", section="users"))
+    try:
+        plans = _storage.load_plans() if hasattr(_storage, "load_plans") else {}
+        if plans and plan not in plans:
+            flash("Unknown subscription plan.", "error")
+            return redirect(url_for("home", section="users"))
+        ok = _storage.update_user_fields(uid, {"subscription_type": plan}) if hasattr(_storage, "update_user_fields") else False
+        if not ok:
+            flash("User not found.", "error")
+            return redirect(url_for("home", section="users"))
+    except Exception as e:
+        flash(f"Could not update user plan: {e}", "error")
+        return redirect(url_for("home", section="users"))
+    flash("Subscription updated.", "success")
+    return redirect(url_for("home", section="users"))
+
+
+@app.post("/admin/users/role")
+def admin_update_user_role():
+    if not _is_authenticated() or (session.get("role") or "").strip().lower() != "admin":
+        return redirect(url_for("home"))
+    uid = (request.form.get("user_id") or "").strip()
+    role = (request.form.get("role") or "").strip().lower()
+    if not uid or not role:
+        flash("Missing user or role.", "error")
+        return redirect(url_for("home", section="users"))
+    if role not in {"user", "admin", "editor"}:
+        flash("Invalid role.", "error")
+        return redirect(url_for("home", section="users"))
+    try:
+        target = _storage.get_user_by_id(uid)
+        seed_email = "iamakhileshsoni@gmail.com"
+        if target and (target.get("email") or "").strip().lower() == seed_email:
+            flash("The primary admin user role cannot be changed.", "error")
+            return redirect(url_for("home", section="users"))
+        ok = _storage.update_user_fields(uid, {"role": role}) if hasattr(_storage, "update_user_fields") else False
+        if not ok:
+            flash("User not found.", "error")
+            return redirect(url_for("home", section="users"))
+    except Exception as e:
+        flash(f"Could not update user role: {e}", "error")
+        return redirect(url_for("home", section="users"))
+    flash("Role updated.", "success")
+    return redirect(url_for("home", section="users"))
+
+
+@app.post("/admin/plans/update")
+def admin_update_plan():
+    if not _is_authenticated() or (session.get("role") or "").strip().lower() != "admin":
+        return redirect(url_for("home"))
+    key = (request.form.get("plan_key") or "").strip().lower()
+    if not key:
+        flash("Missing plan.", "error")
+        return redirect(url_for("home", section="limits"))
+    if not re.fullmatch(r"[a-z0-9_]{2,40}", key or ""):
+        flash("Plan key must be 2-40 chars: lowercase letters, numbers, underscore.", "error")
+        return redirect(url_for("home", section="limits"))
+    def _int(name: str, default: int) -> int:
+        try:
+            return int((request.form.get(name) or "").strip() or default)
+        except Exception:
+            return default
+    payload = {
+        "name": (request.form.get("plan_name") or key).strip()[:100],
+        "max_projects": _int("max_projects", 2),
+        "max_articles": _int("max_articles", 5),
+        "max_articles_per_day": _int("max_articles_per_day", 0),
+        "max_articles_per_month": _int("max_articles_per_month", 0),
+        "max_writing_prompts": _int("max_writing_prompts", 1),
+        "writing_prompt_char_limit": _int("writing_prompt_char_limit", 4000),
+        "max_image_prompts": _int("max_image_prompts", 1),
+        "image_prompt_char_limit": _int("image_prompt_char_limit", 2000),
+        "allow_scheduling": (request.form.get("allow_scheduling") or "") == "on",
+        "allow_export": (request.form.get("allow_export") or "") == "on",
+        "allow_bulk_upload": (request.form.get("allow_bulk_upload") or "") == "on",
+    }
+    try:
+        _storage.upsert_plan(key, payload) if hasattr(_storage, "upsert_plan") else None
+    except Exception as e:
+        flash(f"Could not save plan: {e}", "error")
+        return redirect(url_for("home", section="limits"))
+    flash("Plan saved.", "success")
+    return redirect(url_for("home", section="limits"))
+
+
+@app.post("/profile/update")
+def update_profile():
+    if not _is_authenticated():
+        return redirect(url_for("home"))
+    uid = (session.get("user_id") or "").strip()
+    full_name = (request.form.get("full_name") or "").strip()
+    phone = (request.form.get("phone") or "").strip()
+    try:
+        _storage.update_user_fields(uid, {"full_name": full_name, "phone": phone}) if hasattr(_storage, "update_user_fields") else None
+    except Exception as e:
+        flash(f"Could not update profile: {e}", "error")
+        return redirect(url_for("home", section="profile"))
+    flash("Profile updated.", "success")
+    return redirect(url_for("home", section="profile"))
 
 
 @app.post("/auth/login")
@@ -1675,6 +2075,11 @@ def auth_login():
         return redirect(url_for("home"))
     session["user_id"] = user["id"]
     session["role"] = (user.get("role") or "user").strip().lower()
+    try:
+        if hasattr(_storage, "update_user_fields"):
+            _storage.update_user_fields(user["id"], {"last_activity_at": _utc_now_str()})
+    except Exception:
+        pass
     flash("Logged in.", "success")
     return redirect(url_for("home"))
 
@@ -1700,6 +2105,10 @@ def auth_register():
                 "email": email,
                 "password_hash": generate_password_hash(password),
                 "role": "user",
+                "subscription_type": "beta",
+                "full_name": "",
+                "phone": "",
+                "last_activity_at": "",
                 "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             }
         )
@@ -1738,8 +2147,20 @@ def add_project():
         flash(str(e), "error")
         return redirect(url_for("home"))
     projects = _load_projects()
-    if len(projects) >= _MAX_PROJECTS:
-        flash(f"Maximum {_MAX_PROJECTS} projects reached (3×3 grid). Remove a project to add another.", "error")
+    limits = _plan_limit_summary(_current_user())
+    plan_max = limits.get("max_projects", _MAX_PROJECTS)
+    try:
+        eff_max = min(int(plan_max), int(_MAX_PROJECTS))
+    except Exception:
+        eff_max = _MAX_PROJECTS
+    if len(projects) >= eff_max:
+        if eff_max != _MAX_PROJECTS:
+            flash(
+                f"Your plan allows a maximum of {eff_max} project(s). Upgrade or remove a project to add another.",
+                "error",
+            )
+        else:
+            flash(f"Maximum {_MAX_PROJECTS} projects reached (3×3 grid). Remove a project to add another.", "error")
         return redirect(url_for("home"))
     new_id = str(uuid.uuid4())
     _storage.insert_project(
@@ -1851,6 +2272,19 @@ def add_project_prompt(project_id: str):
     proj = dict(project)
     _normalize_project_prompts(proj)
     prompts = list(proj.get("prompts") or [])
+    limits = _plan_limit_summary(_current_user())
+    if len(prompts) >= int(limits.get("max_writing_prompts", 9999)):
+        flash(
+            f"Your plan allows a maximum of {limits.get('max_writing_prompts')} writing prompt(s) per project.",
+            "error",
+        )
+        return redirect(url_for("project_detail", project_id=project_id, open_settings=1))
+    if len(text) > int(limits.get("writing_prompt_char_limit", 100_000)):
+        flash(
+            f"Writing prompt is too long (max {limits.get('writing_prompt_char_limit')} characters).",
+            "error",
+        )
+        return redirect(url_for("project_detail", project_id=project_id, open_settings=1))
     new_id = str(uuid.uuid4())
     prompts.append({"id": new_id, "name": name[:200], "text": text[:100_000]})
     updates: dict = {"prompts": prompts}
@@ -1901,6 +2335,13 @@ def update_project_prompt(project_id: str):
     proj = dict(project)
     _normalize_project_prompts(proj)
     prompts = list(proj.get("prompts") or [])
+    limits = _plan_limit_summary(_current_user())
+    if len(text) > int(limits.get("writing_prompt_char_limit", 100_000)):
+        flash(
+            f"Writing prompt is too long (max {limits.get('writing_prompt_char_limit')} characters).",
+            "error",
+        )
+        return redirect(url_for("project_detail", project_id=project_id, open_settings=1))
     found = False
     for i, p in enumerate(prompts):
         if isinstance(p, dict) and (p.get("id") or "") == prompt_id:
@@ -1964,6 +2405,19 @@ def add_project_image_prompt(project_id: str):
     proj = dict(project)
     _normalize_project_image_prompts(proj)
     prompts = list(proj.get("image_prompts") or [])
+    limits = _plan_limit_summary(_current_user())
+    if len(prompts) >= int(limits.get("max_image_prompts", 9999)):
+        flash(
+            f"Your plan allows a maximum of {limits.get('max_image_prompts')} image prompt(s) per project.",
+            "error",
+        )
+        return redirect(url_for("project_detail", project_id=project_id, open_settings=1))
+    if len(text) > int(limits.get("image_prompt_char_limit", 100_000)):
+        flash(
+            f"Image prompt is too long (max {limits.get('image_prompt_char_limit')} characters).",
+            "error",
+        )
+        return redirect(url_for("project_detail", project_id=project_id, open_settings=1))
     new_id = str(uuid.uuid4())
     prompts.append({"id": new_id, "name": name[:200], "text": text[:100_000]})
     updates: dict = {"image_prompts": prompts}
@@ -2035,6 +2489,13 @@ def update_project_image_prompt(project_id: str):
     proj = dict(project)
     _normalize_project_image_prompts(proj)
     prompts = list(proj.get("image_prompts") or [])
+    limits = _plan_limit_summary(_current_user())
+    if len(text) > int(limits.get("image_prompt_char_limit", 100_000)):
+        flash(
+            f"Image prompt is too long (max {limits.get('image_prompt_char_limit')} characters).",
+            "error",
+        )
+        return redirect(url_for("project_detail", project_id=project_id, open_settings=1))
     found = False
     for i, p in enumerate(prompts):
         if isinstance(p, dict) and (p.get("id") or "") == prompt_id:
@@ -2426,6 +2887,7 @@ def project_detail(project_id: str):
         gsc_google_email=gsc_google_email,
         gsc_google_libs_missing=gsc_google_libs_missing,
         article_stats=article_stats,
+        plan_limits=_plan_limit_summary(_current_user()),
         storage_mode=_storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo",
         storage_init_error=_storage.storage_init_error() if hasattr(_storage, "storage_init_error") else None,
     )
@@ -2487,6 +2949,10 @@ def export_project_articles(project_id: str):
     if not project:
         flash("Project not found.", "error")
         return redirect(url_for("home"))
+    limits = _plan_limit_summary(_current_user())
+    if not limits.get("allow_export", True):
+        flash("Export is disabled for your current plan.", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
     date_from = request.args.get("date_from", "").strip()
     date_to = request.args.get("date_to", "").strip()
     status_filter = request.args.get("status", "").strip().lower()
@@ -2512,6 +2978,10 @@ def bulk_upload_sample(project_id: str):
     if not project:
         flash("Project not found.", "error")
         return redirect(url_for("home"))
+    limits = _plan_limit_summary(_current_user())
+    if not limits.get("allow_bulk_upload", True):
+        flash("Bulk upload is disabled for your current plan.", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
     safe_name = re.sub(r"[^a-zA-Z0-9\-_]+", "_", project.get("name") or "project")[:60] or "project"
     filename = f"{safe_name}_bulk_upload_sample.xlsx"
     data = _build_bulk_upload_sample_bytes()
@@ -2559,6 +3029,10 @@ def bulk_upload_articles(project_id: str):
     if not project:
         flash("Project not found.", "error")
         return redirect(url_for("home"))
+    limits = _plan_limit_summary(_current_user())
+    if not limits.get("allow_bulk_upload", True):
+        flash("Bulk upload is disabled for your current plan.", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
 
     file = request.files.get("file")
     if not file or not getattr(file, "filename", ""):
@@ -2642,6 +3116,22 @@ def bulk_upload_articles(project_id: str):
 
         if not to_add:
             flash("No valid rows found to import.", "error")
+            return redirect(url_for("project_detail", project_id=project_id))
+
+        max_articles = int(limits.get("max_articles", 999999))
+        owner_pid = _project_ids_for_owner((session.get("user_id") or "").strip())
+        cur_total = _articles_counts_for_owner_project_ids(owner_pid).get("total", 0)
+        if cur_total + len(to_add) > max_articles:
+            flash(
+                f"Bulk upload would exceed your plan’s total article limit ({max_articles}). "
+                f"You currently have {cur_total} article(s).",
+                "error",
+            )
+            return redirect(url_for("project_detail", project_id=project_id))
+
+        ok, err = _article_quota_try_consume((session.get("user_id") or "").strip(), len(to_add))
+        if not ok:
+            flash(err or "Article limit reached for your plan.", "error")
             return redirect(url_for("project_detail", project_id=project_id))
 
         _storage.insert_articles_batch(to_add)
@@ -2731,6 +3221,10 @@ def cancel_article_schedule(project_id: str, article_id: str):
     if not project or not article or (article.get("project_id") or "") != project_id:
         flash("Article not found.", "error")
         return redirect(url_for("home"))
+    limits = _plan_limit_summary(_current_user())
+    if not limits.get("allow_scheduling", True):
+        flash("Scheduling is disabled for your current plan.", "error")
+        return _redirect_project_detail_with_dates(project_id)
     if article.get("wp_post_id"):
         flash("This article is already posted to WordPress.", "error")
         return _redirect_project_detail_with_dates(project_id)
@@ -2749,6 +3243,10 @@ def update_article_schedule(project_id: str, article_id: str):
     if not project or not article or (article.get("project_id") or "") != project_id:
         flash("Article not found.", "error")
         return redirect(url_for("home"))
+    limits = _plan_limit_summary(_current_user())
+    if not limits.get("allow_scheduling", True):
+        flash("Scheduling is disabled for your current plan.", "error")
+        return _redirect_project_detail_with_dates(project_id)
     if article.get("wp_post_id"):
         flash("This article is already posted to WordPress.", "error")
         return _redirect_project_detail_with_dates(project_id)
@@ -2828,6 +3326,10 @@ def bulk_articles_action(project_id: str):
         return _redirect_project_detail_with_dates(project_id)
 
     if action == "schedule":
+        limits = _plan_limit_summary(_current_user())
+        if not limits.get("allow_scheduling", True):
+            flash("Scheduling is disabled for your current plan.", "error")
+            return _redirect_project_detail_with_dates(project_id)
         if not _is_project_wordpress_configured(project):
             flash("Configure WordPress for this project before scheduling posts.", "error")
             return _redirect_project_detail_with_dates(project_id)
@@ -2896,6 +3398,20 @@ def add_project_article(project_id: str):
     if not project:
         flash("Project not found.", "error")
         return redirect(url_for("home"))
+    limits = _plan_limit_summary(_current_user())
+    max_articles = int(limits.get("max_articles", 999999))
+    owner_pid = _project_ids_for_owner((session.get("user_id") or "").strip())
+    cur_total = _articles_counts_for_owner_project_ids(owner_pid).get("total", 0)
+    if cur_total >= max_articles:
+        flash(
+            f"Your plan allows a maximum of {max_articles} total article(s). Delete an article or upgrade to add more.",
+            "error",
+        )
+        return redirect(url_for("project_detail", project_id=project_id))
+    ok, err = _article_quota_try_consume((session.get("user_id") or "").strip(), 1)
+    if not ok:
+        flash(err or "Article limit reached for your plan.", "error")
+        return redirect(url_for("project_detail", project_id=project_id))
     title = (request.form.get("title") or "").strip()
     keywords_raw = request.form.get("keywords") or ""
     if not title:
@@ -3939,5 +4455,9 @@ _start_wp_schedule_scheduler()
 
 
 if __name__ == "__main__":
-    app.run()
+    try:
+        port = int((os.environ.get("PORT") or "").strip() or "5000")
+    except Exception:
+        port = 5000
+    app.run(host="127.0.0.1", port=port)
 

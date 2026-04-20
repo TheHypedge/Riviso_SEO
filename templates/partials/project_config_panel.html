@@ -8,7 +8,10 @@
         {% if project.prompts and project.prompts|length > 0 %}
           <form method="post" action="{{ url_for('set_project_default_prompt', project_id=project.id) }}" id="formProjectDefaultPrompt" class="vstack gap-3" data-default-prompt-id="{{ project.default_prompt_id or '' }}">
             <div>
-              <label class="form-label fw-medium mb-1" for="projectPromptSelect">Writing prompt</label>
+              <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                <label class="form-label fw-medium mb-1" for="projectPromptSelect">Writing prompt</label>
+                <button type="button" class="btn btn-link btn-sm px-0" id="editSelectedWritingPromptBtn">Edit selected</button>
+              </div>
               <p class="form-text small mb-2 mt-0">Defines how long-form articles are generated when you use Generate on an article.</p>
               <select class="form-select app-form-control" id="projectPromptSelect" name="prompt_id" aria-label="Writing prompt for generation">
                 {% for pr in project.prompts %}
@@ -36,7 +39,10 @@
         {% if project.image_prompts and project.image_prompts|length > 0 %}
           <form method="post" action="{{ url_for('set_project_default_image_prompt', project_id=project.id) }}" id="formProjectDefaultImagePrompt" class="vstack gap-3" data-default-image-prompt-id="{{ project.default_image_prompt_id or '' }}">
             <div>
-              <label class="form-label fw-medium mb-1" for="projectImagePromptSelect">Image prompt</label>
+              <div class="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                <label class="form-label fw-medium mb-1" for="projectImagePromptSelect">Image prompt</label>
+                <button type="button" class="btn btn-link btn-sm px-0" id="editSelectedImagePromptBtn">Edit selected</button>
+              </div>
               <p class="form-text small mb-2 mt-0">Hero image style for OpenAI Images and featured image generation.</p>
               <select class="form-select app-form-control" id="projectImagePromptSelect" name="image_prompt_id" aria-label="Default image prompt">
                 {% for pr in project.image_prompts %}
