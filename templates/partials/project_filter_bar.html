@@ -17,7 +17,10 @@
         </div>
         <div class="col-12 col-md-auto d-flex flex-wrap gap-2">
           <button type="submit" class="btn btn-primary btn-sm px-4">Apply filter</button>
-          {% if plan_limits|default({}).allow_export|default(true) %}
+          {# Avoid dict literals here for older Jinja compatibility on VPS. #}
+          {% set _pl = plan_limits if plan_limits is defined else none %}
+          {% set allow_export = (_pl.get('allow_export', true) if _pl else true) %}
+          {% if allow_export %}
             <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('export_project_articles', project_id=project.id, date_from=date_from|default(''), date_to=date_to|default(''), status=status_filter|default('')) }}">Export</a>
           {% else %}
             <button type="button" class="btn btn-outline-secondary btn-sm" disabled title="Disabled on your current plan">Export</button>

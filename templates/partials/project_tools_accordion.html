@@ -19,7 +19,9 @@
                 <div class="accordion-body pt-0 pb-3 px-3">
                   <div class="project-tools-panel rounded-2 p-3">
                     <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
-                      {% if plan_limits|default({}).allow_bulk_upload|default(true) %}
+                      {% set _pl = plan_limits if plan_limits is defined else none %}
+                      {% set allow_bulk = (_pl.get('allow_bulk_upload', true) if _pl else true) %}
+                      {% if allow_bulk %}
                         <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('bulk_upload_sample', project_id=project.id) }}">Download sample sheet</a>
                         <form method="post" action="{{ url_for('bulk_upload_articles', project_id=project.id) }}" enctype="multipart/form-data" class="d-flex flex-wrap gap-2 align-items-center flex-grow-1" style="min-width: 12rem;">
                           <input class="form-control form-control-sm flex-grow-1" style="min-width: 10rem;" type="file" name="file" accept=".xlsx" required>

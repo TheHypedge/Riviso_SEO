@@ -25,9 +25,9 @@ _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(_APP_DIR, ".env"))
 
 # Google OAuth local dev: oauthlib rejects http:// callback URLs unless this is set.
-# In production, use HTTPS and set OAUTHLIB_INSECURE_TRANSPORT=0 (or remove) in .env.
-if "OAUTHLIB_INSECURE_TRANSPORT" not in os.environ:
-    os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
+# In production, use HTTPS (and do NOT set OAUTHLIB_INSECURE_TRANSPORT).
+if (os.environ.get("FLASK_ENV") or "").strip().lower() != "production":
+    os.environ.setdefault("OAUTHLIB_INSECURE_TRANSPORT", "1")
 
 from wordpress_module import (
     WordPressConfig,
