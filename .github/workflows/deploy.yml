@@ -26,17 +26,19 @@ jobs:
           # Optional: set `port: 2222` here if SSH is not on 22
           command_timeout: 15m
           script_stop: true
+          debug: true
           script: |
             set -euo pipefail
             APP_DIR="/var/www/auto-articles"
             PARENT_DIR="/var/www"
-            # Prefer existing origin; fallback to HTTPS.
-            FALLBACK_REPO_URL="https://github.com/TheHypedge/Auto-Article-Generator.git"
+            # Prefer existing origin; fallback to SSH (avoid HTTPS username/password prompts).
+            FALLBACK_REPO_URL="git@github.com:TheHypedge/Auto-Article-Generator.git"
 
             # Git 2.35+ refuses repos owned by another user (e.g. root SSH vs www-data files)
             git config --global --add safe.directory "$APP_DIR" || true
 
             reclone() {
+              local url="${1:-$FALLBACK_REPO_URL}"
               echo "Repo appears corrupted. Re-cloning into $APP_DIR"
               cd "$PARENT_DIR"
               local tmp="/tmp/aa_deploy_backup_$$"
@@ -46,8 +48,6 @@ jobs:
               if [[ -d "$APP_DIR/data" ]]; then cp -a "$APP_DIR/data" "$tmp/data"; fi
               # Replace working tree.
               rm -rf "$APP_DIR"
-              local url="$FALLBACK_REPO_URL"
-              if [[ -f "$tmp/origin_url" ]]; then url="$(cat "$tmp/origin_url")"; fi
               git clone --depth 1 --branch main "$url" "$APP_DIR"
               # Restore preserved data.
               if [[ -f "$tmp/.env" ]]; then cp -f "$tmp/.env" "$APP_DIR/.env"; fi
@@ -59,18 +59,18 @@ jobs:
             }
 
             if [[ ! -d "$APP_DIR/.git" ]]; then
-              reclone
+              reclone "$FALLBACK_REPO_URL"
             else
               cd "$APP_DIR"
-              # Capture origin URL for recovery, if possible.
-              (git remote get-url origin > /tmp/aa_origin_url_$$ 2>/dev/null && mkdir -p /tmp/aa_deploy_backup_$$ && mv /tmp/aa_origin_url_$$ /tmp/aa_deploy_backup_$$/origin_url) || true
+              ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+              if [[ -z "${ORIGIN_URL:-}" ]]; then ORIGIN_URL="$FALLBACK_REPO_URL"; fi
               # Detect corruption early.
               if ! git fsck --no-reflogs --full >/dev/null 2>&1; then
-                reclone
+                reclone "$ORIGIN_URL"
               else
                 # Fetch may still fail if objects are corrupted; fall back to reclone.
                 if ! git fetch origin main; then
-                  reclone
+                  reclone "$ORIGIN_URL"
                 else
                   # Force local main to match GitHub (no diverged-branch fast-forward issues)
                   git checkout -B main origin/main
