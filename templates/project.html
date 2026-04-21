@@ -275,7 +275,7 @@
 
     <!-- Modal: WordPress defaults -->
     <div class="modal fade" id="wpDefaultsModal" tabindex="-1" aria-labelledby="wpDefaultsModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
           <form method="post" action="{{ url_for('set_project_wp_defaults', project_id=project.id) }}">
             <div class="modal-header">
@@ -323,7 +323,7 @@
 
     <!-- Modal: Add writing prompt -->
     <div class="modal fade" id="addPromptModal" tabindex="-1" aria-labelledby="addPromptModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="addPromptModalLabel">Add writing prompt</h2>
@@ -362,7 +362,7 @@
 
     <!-- Modal: Edit writing prompt -->
     <div class="modal fade" id="editPromptModal" tabindex="-1" aria-labelledby="editPromptModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="editPromptModalLabel">Edit writing prompt</h2>
@@ -400,7 +400,7 @@
 
     <!-- Modal: Add featured image prompt -->
     <div class="modal fade" id="addImagePromptModal" tabindex="-1" aria-labelledby="addImagePromptModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="addImagePromptModalLabel">Add featured image prompt</h2>
@@ -435,7 +435,7 @@
 
     <!-- Modal: Edit featured image prompt -->
     <div class="modal fade" id="editImagePromptModal" tabindex="-1" aria-labelledby="editImagePromptModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="editImagePromptModalLabel">Edit featured image prompt</h2>
@@ -471,7 +471,7 @@
 
     <!-- Modal: Add context link -->
     <div class="modal fade" id="addContextLinkModal" tabindex="-1" aria-labelledby="addContextLinkModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="addContextLinkModalLabel">Add context link</h2>
@@ -501,7 +501,7 @@
 
     <!-- Modal: Edit context link -->
     <div class="modal fade" id="editContextLinkModal" tabindex="-1" aria-labelledby="editContextLinkModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="editContextLinkModalLabel">Edit context link</h2>
@@ -531,7 +531,7 @@
 
     <!-- Modal: Project settings -->
     <div class="modal fade" id="projectSettingsModal" tabindex="-1" aria-labelledby="projectSettingsModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="projectSettingsModalLabel">Project settings</h2>
@@ -540,7 +540,7 @@
           <form method="post" action="{{ url_for('update_project_settings', project_id=project.id) }}">
             <div class="modal-body">
               <div class="mb-3 p-3 border rounded-3 bg-body-tertiary">
-                <div class="d-flex align-items-start justify-content-between gap-3">
+                <div class="d-flex align-items-start justify-content-between gap-3 flex-wrap">
                   <div class="min-w-0">
                     <div class="fw-semibold">WordPress plugin (required for Yoast + REST)</div>
                     <div class="small text-body-secondary">
@@ -597,7 +597,7 @@
     {% include 'partials/project_tools_modal.html' %}
 
     <div class="modal fade" id="addArticleModal" tabindex="-1" aria-labelledby="addArticleModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="addArticleModalLabel">Add article/post</h2>
@@ -679,7 +679,7 @@
       data-default-wp-status="{{ project.default_wp_status or 'draft' }}"
       data-default-wp-rest-base="{{ project.default_wp_rest_base or 'posts' }}"
     >
-      <div class="modal-dialog modal-dialog-centered modal-lg">
+      <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="bulkScheduleModalLabel">Schedule post</h2>
@@ -728,7 +728,7 @@
             </div>
             <div id="bulkSchedulePerArticleWrap" class="mb-3">
               <p class="small text-body-secondary mb-2" id="bulkSchedulePerArticleHint"></p>
-              <div id="bulkSchedulePerArticleList" class="d-flex flex-column gap-2" style="max-height: 50vh; overflow-y: auto;"></div>
+              <div id="bulkSchedulePerArticleList" class="d-flex flex-column gap-2 aa-bulk-schedule-scroll"></div>
             </div>
             <div class="row g-2 mb-2">
               <div class="col-12 col-md-6">
@@ -768,7 +768,7 @@
     </div>
 
     <div class="modal fade" id="editScheduleModal" tabindex="-1" aria-labelledby="editScheduleModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
           <form method="post" id="editScheduleForm" action="#" data-url-pattern="{{ url_for('update_article_schedule', project_id=project.id, article_id='__ARTICLE_ID__') }}">
             <div class="modal-header">

@@ -1825,6 +1825,82 @@ html[data-theme="dark"] .app-dashboard {
   gap: 0.5rem;
 }
 
+/* ——— Responsive Bootstrap modals (all pages) ——— */
+.modal {
+  padding-left: env(safe-area-inset-left, 0);
+  padding-right: env(safe-area-inset-right, 0);
+}
+@media (max-width: 991.98px) {
+  .modal-dialog:not(.modal-lg):not(.modal-xl) {
+    max-width: min(36rem, calc(100vw - 1.25rem));
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .modal-dialog.modal-lg,
+  .modal-dialog.modal-xl {
+    max-width: calc(100vw - 1.25rem);
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+@media (max-width: 575.98px) {
+  .modal-dialog {
+    max-width: calc(100vw - 1rem) !important;
+    margin: 0.5rem auto;
+  }
+  .modal-header {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .modal-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    word-break: break-word;
+  }
+  .modal-footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+    padding-top: 0.75rem;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0));
+  }
+  .modal-footer > * {
+    margin: 0 !important;
+    width: 100%;
+  }
+}
+
+/* Tall modals: keep scrollable dialogs inside mobile viewports (Bootstrap scrollable body) */
+.modal-dialog-scrollable .modal-body {
+  -webkit-overflow-scrolling: touch;
+  overflow-x: hidden;
+}
+@media (max-width: 575.98px) {
+  .modal .modal-dialog.modal-dialog-scrollable {
+    max-height: min(92dvh, calc(100vh - 1.25rem));
+  }
+}
+
+.aa-generate-loading-card {
+  width: 100%;
+  max-width: min(24rem, calc(100vw - 2rem));
+}
+
+/* Bulk schedule: article list inside modal */
+.aa-bulk-schedule-scroll {
+  max-height: min(50vh, 22rem);
+}
+@media (max-width: 767.98px) {
+  .aa-bulk-schedule-scroll {
+    max-height: min(38dvh, 14rem);
+  }
+}
+@media (max-width: 575.98px) {
+  .aa-bulk-schedule-scroll {
+    max-height: min(35dvh, 12rem);
+  }
+}
+
 @media (max-width: 575px) {
   .app-page-head__row {
     flex-direction: column;

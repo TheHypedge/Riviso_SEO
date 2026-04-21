@@ -375,7 +375,7 @@
       aria-labelledby="articleGenerateLoadingTitle"
       aria-busy="true"
     >
-      <div class="bg-white rounded-3 shadow-lg p-4 text-center mx-3" style="max-width: 24rem;">
+      <div class="bg-white rounded-3 shadow-lg p-4 text-center mx-3 aa-generate-loading-card">
         <div class="spinner-border text-primary mb-3" role="status" aria-hidden="true"></div>
         <span class="visually-hidden">Generation in progress</span>
         <div id="articleGenerateLoadingTitle" class="fw-semibold mb-2">Generating…</div>
@@ -386,7 +386,7 @@
 
     {% if last and last.article %}
     <div class="modal fade" id="unsavedArticleModal" tabindex="-1" aria-labelledby="unsavedArticleModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="unsavedArticleModalLabel">Save required</h2>
@@ -404,7 +404,7 @@
     </div>
     {% if not has_featured_image %}
     <div class="modal fade" id="noFeaturedImageModal" tabindex="-1" aria-labelledby="noFeaturedImageModalLabel" aria-hidden="true">
-      <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
           <div class="modal-header">
             <h2 class="modal-title h5" id="noFeaturedImageModalLabel">No featured image</h2>
