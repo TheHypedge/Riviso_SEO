@@ -222,6 +222,17 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='page-loading.js') }}"></script>
+    <script>
+      (function () {
+        // Enable Bootstrap tooltips site-wide (used in Admin → System limitations).
+        document.addEventListener('DOMContentLoaded', function () {
+          if (!window.bootstrap || !window.bootstrap.Tooltip) return;
+          document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+            window.bootstrap.Tooltip.getOrCreateInstance(el);
+          });
+        });
+      })();
+    </script>
     {% if is_admin|default(false) %}
     <script>
       (function () {

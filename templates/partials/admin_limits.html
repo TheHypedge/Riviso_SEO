@@ -1,4 +1,18 @@
 <section class="app-dash-section" aria-labelledby="admin-limits-heading">
+  {% macro info_tip(text) -%}
+    <button
+      type="button"
+      class="btn btn-link p-0 ms-1 align-baseline text-body-secondary"
+      style="text-decoration: none;"
+      data-bs-toggle="tooltip"
+      data-bs-placement="top"
+      data-bs-title="{{ text }}"
+      aria-label="{{ text }}"
+    >
+      <span class="d-inline-flex align-items-center justify-content-center border rounded-circle" style="width: 16px; height: 16px; font-size: 11px; line-height: 1; font-weight: 700;">i</span>
+    </button>
+  {%- endmacro %}
+
   <div class="app-section-head">
     <h2 id="admin-limits-heading" class="app-section-head__title">System limitations</h2>
     <p class="app-section-head__desc mb-0">Define subscription plans and feature limits.</p>
@@ -23,7 +37,7 @@
           <input class="form-control" id="newPlanName" name="plan_name" placeholder="e.g. Pro Plan" maxlength="100" required>
         </div>
         <div class="col-6 col-md-2">
-          <label class="form-label fw-medium" for="newMaxProjects">Max projects</label>
+          <label class="form-label fw-medium" for="newMaxProjects">Max projects {{ info_tip('Maximum projects that can be added under this plan while the plan exists. Once reached, the user must upgrade or delete a project to add another.') }}</label>
           <input class="form-control" id="newMaxProjects" name="max_projects" type="number" min="0" value="2">
         </div>
         <div class="col-6 col-md-2">
@@ -67,7 +81,7 @@
                 <input class="form-control" id="planName_{{ key }}" name="plan_name" value="{{ p.name if p else key }}" maxlength="100" required>
               </div>
               <div class="col-6 col-md-3">
-                <label class="form-label fw-medium" for="maxProjects_{{ key }}">Max projects</label>
+                <label class="form-label fw-medium" for="maxProjects_{{ key }}">Max projects {{ info_tip('Maximum projects that can be added under this plan while the plan exists. Once reached, the user must upgrade or delete a project to add another.') }}</label>
                 <input class="form-control" id="maxProjects_{{ key }}" name="max_projects" type="number" min="0" value="{{ p.max_projects if p else 2 }}">
               </div>
               <div class="col-6 col-md-3">
@@ -79,17 +93,17 @@
 
             <div class="row g-3">
               <div class="col-6 col-md-3">
-                <label class="form-label fw-medium" for="maxArticlesDay_{{ key }}">Max articles / day</label>
+                <label class="form-label fw-medium" for="maxArticlesDay_{{ key }}">Max articles / day {{ info_tip('Number of articles that can be generated (and then posted to WordPress) per day. When exhausted, the user sees a limit message and must upgrade or wait for the next day.') }}</label>
                 <input class="form-control" id="maxArticlesDay_{{ key }}" name="max_articles_per_day" type="number" min="0" value="{{ p.max_articles_per_day if p is not none else 0 }}">
                 <div class="form-text small">0 = unlimited</div>
               </div>
               <div class="col-6 col-md-3">
-                <label class="form-label fw-medium" for="maxArticlesMonth_{{ key }}">Max articles / month</label>
+                <label class="form-label fw-medium" for="maxArticlesMonth_{{ key }}">Max articles / month {{ info_tip('Number of articles that can be generated (and then posted to WordPress) per month. When exhausted, the user sees a limit message and must upgrade or wait for the next month.') }}</label>
                 <input class="form-control" id="maxArticlesMonth_{{ key }}" name="max_articles_per_month" type="number" min="0" value="{{ p.max_articles_per_month if p is not none else 0 }}">
                 <div class="form-text small">0 = unlimited</div>
               </div>
               <div class="col-6 col-md-3">
-                <label class="form-label fw-medium" for="maxWritingPrompts_{{ key }}">Max writing prompts</label>
+                <label class="form-label fw-medium" for="maxWritingPrompts_{{ key }}">Max writing prompts {{ info_tip('Maximum writing prompts that can be added for projects on this plan while the plan exists. Once reached, the user must upgrade to add more writing prompts.') }}</label>
                 <input class="form-control" id="maxWritingPrompts_{{ key }}" name="max_writing_prompts" type="number" min="0" value="{{ p.max_writing_prompts if p else 1 }}">
               </div>
               <div class="col-6 col-md-3">
@@ -97,7 +111,7 @@
                 <input class="form-control" id="writingCharLimit_{{ key }}" name="writing_prompt_char_limit" type="number" min="0" value="{{ p.writing_prompt_char_limit if p else 4000 }}">
               </div>
               <div class="col-6 col-md-3">
-                <label class="form-label fw-medium" for="maxImagePrompts_{{ key }}">Max image prompts</label>
+                <label class="form-label fw-medium" for="maxImagePrompts_{{ key }}">Max image prompts {{ info_tip('Maximum image generation prompts that can be added for projects on this plan while the plan exists. Once reached, the user must upgrade to add more image prompts.') }}</label>
                 <input class="form-control" id="maxImagePrompts_{{ key }}" name="max_image_prompts" type="number" min="0" value="{{ p.max_image_prompts if p else 1 }}">
               </div>
               <div class="col-6 col-md-3">
@@ -110,19 +124,19 @@
               <div class="col-12 col-lg-4">
                 <div class="form-check form-switch">
                   <input class="form-check-input" type="checkbox" role="switch" id="allowScheduling_{{ key }}" name="allow_scheduling" {% if (p.allow_scheduling if p is not none else true) %}checked{% endif %}>
-                  <label class="form-check-label" for="allowScheduling_{{ key }}">Enable scheduling</label>
+                  <label class="form-check-label" for="allowScheduling_{{ key }}">Enable scheduling {{ info_tip('When enabled, users can schedule WordPress posting from the project page. When disabled, Schedule buttons are visible but disabled with an “Upgrade plan” message.') }}</label>
                 </div>
               </div>
               <div class="col-12 col-lg-4">
                 <div class="form-check form-switch">
                   <input class="form-check-input" type="checkbox" role="switch" id="allowExport_{{ key }}" name="allow_export" {% if (p.allow_export if p is not none else true) %}checked{% endif %}>
-                  <label class="form-check-label" for="allowExport_{{ key }}">Enable export articles</label>
+                  <label class="form-check-label" for="allowExport_{{ key }}">Enable export articles {{ info_tip('When enabled, users can export project articles to Excel. When disabled, Export is shown but disabled with an “Upgrade plan” message.') }}</label>
                 </div>
               </div>
               <div class="col-12 col-lg-4">
                 <div class="form-check form-switch">
                   <input class="form-check-input" type="checkbox" role="switch" id="allowBulkUpload_{{ key }}" name="allow_bulk_upload" {% if (p.allow_bulk_upload if p is not none else true) %}checked{% endif %}>
-                  <label class="form-check-label" for="allowBulkUpload_{{ key }}">Enable bulk upload</label>
+                  <label class="form-check-label" for="allowBulkUpload_{{ key }}">Enable bulk upload {{ info_tip('When enabled, users can bulk import articles via Excel. When disabled, Bulk Upload is shown but disabled with an “Upgrade plan” message.') }}</label>
                 </div>
               </div>
             </div>
