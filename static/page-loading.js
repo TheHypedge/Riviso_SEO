@@ -143,4 +143,19 @@
   };
 
   window.__appPageLoadingHide = hide;
+
+  // If navigation happened while a modal was open (or Bootstrap glitched),
+  // a stale backdrop can leave the new page looking blank/blocked.
+  document.addEventListener('DOMContentLoaded', function () {
+    try {
+      var anyOpen = !!document.querySelector('.modal.show');
+      if (!anyOpen) {
+        document.querySelectorAll('.modal-backdrop').forEach(function (b) { b.remove(); });
+        if (document.body) {
+          document.body.classList.remove('modal-open');
+          document.body.style.removeProperty('padding-right');
+        }
+      }
+    } catch (e) {}
+  });
 })();
