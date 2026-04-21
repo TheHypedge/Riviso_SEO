@@ -26,6 +26,13 @@ source .venv/bin/activate
 python -m pip install --upgrade pip --quiet --disable-pip-version-check
 pip install -r requirements.txt --quiet --disable-pip-version-check
 
-sudo systemctl restart auto-articles
+if ! sudo systemctl restart auto-articles; then
+  echo "auto-articles.service failed to restart. Diagnostics:" >&2
+  sudo systemctl status auto-articles --no-pager || true
+  sudo journalctl -xeu auto-articles --no-pager -n 200 || true
+  df -h || true
+  free -m || true
+  exit 1
+fi
 sleep 2
 sudo systemctl is-active --quiet auto-articles && echo "auto-articles: active"
