@@ -25,11 +25,14 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           # Optional: set `port: 2222` here if SSH is not on 22
           command_timeout: 15m
-          script_stop: true
+          # Run the script as one bash block (allows conditionals/tests without false "failures").
+          script_stop: false
           debug: true
           script: |
+            bash -lc "$(cat <<'EOS'
             set -euo pipefail
             set -x
+
             APP_DIR="/var/www/auto-articles"
             PARENT_DIR="/var/www"
             # Prefer existing origin; fallback to SSH (avoid HTTPS username/password prompts).
@@ -86,3 +89,5 @@ jobs:
             # Fail early with a clear message if sudo needs a password.
             (sudo -n true) || { echo "sudo requires a password for this SSH user. Configure NOPASSWD for systemctl." >&2; exit 1; }
             bash -x deploy/deploy.sh
+EOS
+            )"
