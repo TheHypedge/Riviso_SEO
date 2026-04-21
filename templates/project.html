@@ -2123,11 +2123,14 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
           }
           document.querySelectorAll('[data-bs-target="#addArticleModal"]').forEach(function (btn) {
             btn.addEventListener('click', function (e) {
+              // Prevent Bootstrap's data-api click handler from also running (can break backdrop).
+              e.preventDefault();
+              e.stopPropagation();
               // If Bootstrap gets into a bad state with a leftover backdrop, clean it up.
               document.querySelectorAll('.modal-backdrop').forEach(function (b) { b.remove(); });
               ensureInBody();
               try {
-                window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+                window.bootstrap.Modal.getOrCreateInstance(modalEl, { backdrop: true, focus: true }).show();
               } catch (err) {}
             });
           });
