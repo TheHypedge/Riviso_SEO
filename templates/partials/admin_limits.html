@@ -4,45 +4,6 @@
     <p class="app-section-head__desc mb-0">Define subscription plans and feature limits.</p>
   </div>
 
-  <div class="app-card app-card--elevated mb-3">
-    <div class="p-3 p-md-4">
-      <div class="fw-semibold mb-1">Connect live projects to an account</div>
-      <p class="small text-body-secondary mb-3">
-        Assigns <strong>ownership</strong> (not WordPress credentials) for every project whose website URL matches one of these hosts:
-      </p>
-      <ul class="small mb-3">
-        {% for label, host in (live_connect_meta|default([])) %}
-          <li><span class="fw-medium">{{ label }}</span> — <code class="auth-code small">{{ host }}</code></li>
-        {% endfor %}
-      </ul>
-      <p class="small text-body-secondary mb-3">
-        Duplicate cards (same URL) are all updated. Projects not listed here are unchanged.
-      </p>
-      <form method="post" action="{{ url_for('admin_connect_live_projects') }}" class="vstack gap-3">
-        <div>
-          <label class="form-label fw-medium" for="connectLiveUserEmail">Target account email</label>
-          <input
-            class="form-control"
-            id="connectLiveUserEmail"
-            name="user_email"
-            type="email"
-            autocomplete="email"
-            value="{{ primary_admin_email|default('') }}"
-            maxlength="500"
-            required
-          >
-        </div>
-        <div class="form-check">
-          <input class="form-check-input" type="checkbox" role="switch" id="connectLiveConfirm" name="confirm" value="1" required>
-          <label class="form-check-label" for="connectLiveConfirm">I confirm I want to connect these projects to this account</label>
-        </div>
-        <div>
-          <button type="submit" class="btn btn-dark">Connect Sheokand Legal, KCS &amp; TTSFM</button>
-        </div>
-      </form>
-    </div>
-  </div>
-
   {% set plans = admin_plans|default({}) %}
   {% set plan_items = (plans.items()|list) if plans else [] %}
 
@@ -66,8 +27,9 @@
           <input class="form-control" id="newMaxProjects" name="max_projects" type="number" min="0" value="2">
         </div>
         <div class="col-6 col-md-2">
-          <label class="form-label fw-medium" for="newMaxArticles">Max articles</label>
-          <input class="form-control" id="newMaxArticles" name="max_articles" type="number" min="0" value="5">
+          <div class="form-text small pt-4">
+            <span class="fw-medium">Max projects</span> is enforced while the plan exists.
+          </div>
         </div>
         <div class="col-12 col-md-1 d-flex justify-content-end">
           <button type="submit" class="btn btn-primary w-100">Create</button>
@@ -109,8 +71,9 @@
                 <input class="form-control" id="maxProjects_{{ key }}" name="max_projects" type="number" min="0" value="{{ p.max_projects if p else 2 }}">
               </div>
               <div class="col-6 col-md-3">
-                <label class="form-label fw-medium" for="maxArticles_{{ key }}">Max articles</label>
-                <input class="form-control" id="maxArticles_{{ key }}" name="max_articles" type="number" min="0" value="{{ p.max_articles if p else 5 }}">
+                <div class="form-text small pt-4">
+                  <span class="fw-medium">Max projects</span> is enforced while the plan exists.
+                </div>
               </div>
             </div>
 

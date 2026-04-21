@@ -1,6 +1,7 @@
 [
   {
     "id": "daf93d8f-be5c-474c-ab3b-85fb6c341ae9",
+    "owner_user_id": "fe8831ea-455d-4621-8e88-b4d285814e8f",
     "name": "Sheokand Lega",
     "website_url": "https://sheokandlegal.com",
     "wp_site_url": "https://sheokandlegal.com",
@@ -38,9 +39,8 @@
       }
     ],
     "default_image_prompt_id": "878a1940-d6e5-4c32-9653-217dff581950",
-    "created_at": "2026-04-10 16:00:51",
-    "gsc_property_url": "sc-domain:sheokandlegal.com",
-    "gsc_index_on_publish": true,
+    "image_style": "semi_real",
+    "optimize_image_prompt": true,
     "context_links": [
       {
         "id": "8bde38f8-42bd-43cf-9afb-f8441ddfb5e4",
@@ -128,11 +128,15 @@
         "url": "https://sheokandlegal.com/nri-property-lawyer"
       }
     ],
+    "gsc_property_url": "sc-domain:sheokandlegal.com",
+    "gsc_index_on_publish": true,
     "default_wp_rest_base": "articles",
-    "default_wp_status": "publish"
+    "default_wp_status": "publish",
+    "created_at": "2026-04-10 16:00:51"
   },
   {
     "id": "de8bf7ed-cd1e-4d0b-8954-9fd76ae3ec7a",
+    "owner_user_id": "fe8831ea-455d-4621-8e88-b4d285814e8f",
     "name": "Hypedge",
     "website_url": "https://hypedge.com",
     "wp_site_url": "https://hypedge.com",
@@ -155,6 +159,8 @@
       }
     ],
     "default_image_prompt_id": "e43bc001-6214-41d5-8653-b36e497453e2",
+    "image_style": "semi_real",
+    "optimize_image_prompt": true,
     "context_links": [],
     "gsc_property_url": "",
     "gsc_index_on_publish": true,
@@ -164,6 +170,7 @@
   },
   {
     "id": "37623715-76bf-422c-a914-1d084688b335",
+    "owner_user_id": "fe8831ea-455d-4621-8e88-b4d285814e8f",
     "name": "KCS",
     "website_url": "https://kcsglobe.com",
     "wp_site_url": "https://kcsglobe.com",
@@ -191,6 +198,8 @@
     "context_links": [],
     "gsc_property_url": "",
     "gsc_index_on_publish": true,
+    "default_wp_rest_base": "",
+    "default_wp_status": "",
     "created_at": "2026-04-16 00:34:15"
   }
 ]

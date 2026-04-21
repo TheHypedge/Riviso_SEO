@@ -337,7 +337,6 @@ def _plan_limit_summary(user: dict | None) -> dict[str, Any]:
     return {
         "name": (plan.get("name") or "").strip() or "Plan",
         "max_projects": _plan_int(plan, "max_projects", 9999),
-        "max_articles": _plan_int(plan, "max_articles", 999999),
         # 0 means unlimited for the period.
         "max_articles_per_day": _plan_int(plan, "max_articles_per_day", 0),
         "max_articles_per_month": _plan_int(plan, "max_articles_per_month", 0),
@@ -515,7 +514,6 @@ def _plan_ui_for_project(project: dict, user: dict | None) -> dict[str, Any]:
     pids = _project_ids_for_owner(uid)
     ac = _articles_counts_for_owner_project_ids(pids)
     usage = _effective_article_usage_from_user(user)
-    max_art = int(limits.get("max_articles") or 0)
     max_day = int(limits.get("max_articles_per_day") or 0)
     max_month = int(limits.get("max_articles_per_month") or 0)
     max_wp = int(limits.get("max_writing_prompts") or 0)
@@ -529,13 +527,14 @@ def _plan_ui_for_project(project: dict, user: dict | None) -> dict[str, Any]:
     wp_count = len((project or {}).get("prompts") or [])
     ip_count = len((project or {}).get("image_prompts") or [])
 
-    articles_cap = max_art > 0 and total_articles >= max_art
     day_cap = max_day > 0 and usage["day_used"] >= max_day
     month_cap = max_month > 0 and usage["month_used"] >= max_month
-    cannot_add_article = articles_cap or day_cap or month_cap
+    # "Max articles" (total cap) removed: only day/month generation limits apply.
+    cannot_add_article = day_cap or month_cap
 
     allow_bulk = bool(limits.get("allow_bulk_upload", True))
-    lock_bulk = (not allow_bulk) or cannot_add_article
+    # Bulk upload is controlled only by the feature flag (not generation quota).
+    lock_bulk = not allow_bulk
 
     lock_writing = wp_count >= max_wp
     lock_image = ip_count >= max_ip
@@ -546,13 +545,7 @@ def _plan_ui_for_project(project: dict, user: dict | None) -> dict[str, Any]:
 
     reason_bulk = ""
     if not allow_bulk:
-        reason_bulk = "Bulk upload is disabled on your current plan."
-    elif articles_cap and max_art > 0:
-        reason_bulk = f"Article limit reached ({total_articles}/{max_art})."
-    elif day_cap:
-        reason_bulk = f"Daily article limit reached ({usage['day_used']}/{max_day})."
-    elif month_cap:
-        reason_bulk = f"Monthly article limit reached ({usage['month_used']}/{max_month})."
+        reason_bulk = "Upgrade plan to enable Bulk Upload."
 
     return {
         "limits": limits,
@@ -1420,6 +1413,9 @@ def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict
     proj_check = dict(project)
     _normalize_project_image_prompts(proj_check)
     need_img = len(proj_check.get("image_prompts") or []) > 0
+    # Quota enforcement for bulk generation inside scheduling.
+    # Bulk scheduling may generate multiple articles at once; consume quota per generated article.
+    uid = (project.get("owner_user_id") or "").strip() or (session.get("user_id") or "").strip()
 
     for t in targets:
         aid = (t.get("id") or "").strip()
@@ -1432,6 +1428,9 @@ def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict
         title = (t.get("title") or "").strip()
         if not title:
             return "Cannot generate or schedule: one or more selected articles have no title. Add a title first."
+        ok_quota, quota_err = _article_quota_try_consume(uid, 1)
+        if not ok_quota:
+            return quota_err or "Current limit is exhausted. Upgrade plan to continue."
         kws = _article_keywords_list(t)
         ok, err, img_err = _generate_article_content_core(
             proj_gen,
@@ -1864,6 +1863,34 @@ def _parse_keywords(raw: str) -> list[str]:
     return out
 
 
+def _dedup_case_insensitive(items: list[str]) -> list[str]:
+    """De-dup strings preserving order (case-insensitive)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items or []:
+        s = (it or "").strip()
+        if not s:
+            continue
+        k = s.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(s)
+    return out
+
+
+def _normalize_wp_tags(value: Any) -> list[str]:
+    """
+    Normalize a tags/keywords field into a list of tag names.
+    Accepts list[str] or comma-separated string.
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return _dedup_case_insensitive([str(x).strip() for x in value if str(x).strip()])[:10]
+    return _parse_keywords(str(value))[:10]
+
+
 def _parse_focus_keyphrase_single_field(raw: str) -> tuple[str | None, str | None]:
     """
     Focus keyphrase must be one phrase (no comma-separated list).
@@ -1881,7 +1908,7 @@ def _article_keywords_list(article: dict) -> list[str]:
     """Normalize stored article keywords to a list (max 10)."""
     kw = article.get("keywords") or []
     if isinstance(kw, list):
-        out = [str(x).strip() for x in kw if str(x).strip()]
+        out = _dedup_case_insensitive([str(x).strip() for x in kw if str(x).strip()])
     else:
         out = _parse_keywords(str(kw))
     return out[:10]
@@ -2321,7 +2348,6 @@ def admin_update_plan():
     payload = {
         "name": (request.form.get("plan_name") or key).strip()[:100],
         "max_projects": _int("max_projects", 2),
-        "max_articles": _int("max_articles", 5),
         "max_articles_per_day": _int("max_articles_per_day", 0),
         "max_articles_per_month": _int("max_articles_per_month", 0),
         "max_writing_prompts": _int("max_writing_prompts", 1),
@@ -3409,7 +3435,7 @@ def export_project_articles(project_id: str):
         return redirect(url_for("home"))
     limits = _plan_limit_summary(_current_user())
     if not limits.get("allow_export", True):
-        flash("Export is disabled for your current plan.", "error")
+        flash("Upgrade plan to enable Export articles.", "error")
         return redirect(url_for("project_detail", project_id=project_id))
     date_from = request.args.get("date_from", "").strip()
     date_to = request.args.get("date_to", "").strip()
@@ -3438,7 +3464,7 @@ def bulk_upload_sample(project_id: str):
         return redirect(url_for("home"))
     limits = _plan_limit_summary(_current_user())
     if not limits.get("allow_bulk_upload", True):
-        flash("Bulk upload is disabled for your current plan.", "error")
+        flash("Upgrade plan to enable Bulk Upload.", "error")
         return redirect(url_for("project_detail", project_id=project_id))
     safe_name = re.sub(r"[^a-zA-Z0-9\-_]+", "_", project.get("name") or "project")[:60] or "project"
     filename = f"{safe_name}_bulk_upload_sample.xlsx"
@@ -3489,7 +3515,7 @@ def bulk_upload_articles(project_id: str):
         return redirect(url_for("home"))
     limits = _plan_limit_summary(_current_user())
     if not limits.get("allow_bulk_upload", True):
-        flash("Bulk upload is disabled for your current plan.", "error")
+        flash("Upgrade plan to enable Bulk Upload.", "error")
         return redirect(url_for("project_detail", project_id=project_id))
 
     file = request.files.get("file")
@@ -3574,22 +3600,6 @@ def bulk_upload_articles(project_id: str):
 
         if not to_add:
             flash("No valid rows found to import.", "error")
-            return redirect(url_for("project_detail", project_id=project_id))
-
-        max_articles = int(limits.get("max_articles", 999999))
-        owner_pid = _project_ids_for_owner((session.get("user_id") or "").strip())
-        cur_total = _articles_counts_for_owner_project_ids(owner_pid).get("total", 0)
-        if cur_total + len(to_add) > max_articles:
-            flash(
-                f"Bulk upload would exceed your plan’s total article limit ({max_articles}). "
-                f"You currently have {cur_total} article(s).",
-                "error",
-            )
-            return redirect(url_for("project_detail", project_id=project_id))
-
-        ok, err = _article_quota_try_consume((session.get("user_id") or "").strip(), len(to_add))
-        if not ok:
-            flash(err or "Article limit reached for your plan.", "error")
             return redirect(url_for("project_detail", project_id=project_id))
 
         _storage.insert_articles_batch(to_add)
@@ -3681,7 +3691,7 @@ def cancel_article_schedule(project_id: str, article_id: str):
         return redirect(url_for("home"))
     limits = _plan_limit_summary(_current_user())
     if not limits.get("allow_scheduling", True):
-        flash("Scheduling is disabled for your current plan.", "error")
+        flash("Upgrade plan to enable Scheduling.", "error")
         return _redirect_project_detail_with_dates(project_id)
     if article.get("wp_post_id"):
         flash("This article is already posted to WordPress.", "error")
@@ -3703,7 +3713,7 @@ def update_article_schedule(project_id: str, article_id: str):
         return redirect(url_for("home"))
     limits = _plan_limit_summary(_current_user())
     if not limits.get("allow_scheduling", True):
-        flash("Scheduling is disabled for your current plan.", "error")
+        flash("Upgrade plan to enable Scheduling.", "error")
         return _redirect_project_detail_with_dates(project_id)
     if article.get("wp_post_id"):
         flash("This article is already posted to WordPress.", "error")
@@ -3786,7 +3796,7 @@ def bulk_articles_action(project_id: str):
     if action == "schedule":
         limits = _plan_limit_summary(_current_user())
         if not limits.get("allow_scheduling", True):
-            flash("Scheduling is disabled for your current plan.", "error")
+            flash("Upgrade plan to enable Scheduling.", "error")
             return _redirect_project_detail_with_dates(project_id)
         if not _is_project_wordpress_configured(project):
             flash("Configure WordPress for this project before scheduling posts.", "error")
@@ -3856,20 +3866,6 @@ def add_project_article(project_id: str):
     if not project:
         flash("Project not found.", "error")
         return redirect(url_for("home"))
-    limits = _plan_limit_summary(_current_user())
-    max_articles = int(limits.get("max_articles", 999999))
-    owner_pid = _project_ids_for_owner((session.get("user_id") or "").strip())
-    cur_total = _articles_counts_for_owner_project_ids(owner_pid).get("total", 0)
-    if cur_total >= max_articles:
-        flash(
-            f"Your plan allows a maximum of {max_articles} total article(s). Delete an article or upgrade to add more.",
-            "error",
-        )
-        return redirect(url_for("project_detail", project_id=project_id))
-    ok, err = _article_quota_try_consume((session.get("user_id") or "").strip(), 1)
-    if not ok:
-        flash(err or "Article limit reached for your plan.", "error")
-        return redirect(url_for("project_detail", project_id=project_id))
     title = (request.form.get("title") or "").strip()
     keywords_raw = request.form.get("keywords") or ""
     if not title:
@@ -4149,6 +4145,12 @@ def generate_project_article(project_id: str, article_id: str):
         return redirect(url_for("article_edit", project_id=project_id, article_id=article_id))
     user_fk = (fk_val or "").strip() or None
 
+    # Plan quota: number of articles that can be generated per day/month.
+    ok_quota, quota_err = _article_quota_try_consume((session.get("user_id") or "").strip(), 1)
+    if not ok_quota:
+        flash((quota_err or "Current limit is exhausted. Upgrade plan to continue."), "error")
+        return redirect(url_for("article_edit", project_id=project_id, article_id=article_id))
+
     proj = dict(project)
     ok, err, image_err = _generate_article_content_core(
         proj,
@@ -4379,7 +4381,7 @@ def _post_article_to_wordpress(
 
     site_url = (site_url_override or "").strip() or (project.get("wp_site_url") or project.get("website_url") or "").strip()
     status = wp_status if wp_status in {"draft", "publish"} else "draft"
-    tags = last.get("keywords") or []
+    tags = _normalize_wp_tags(last.get("keywords"))
 
     category_ids: list[int] = []
     cat_raw = (project.get("wp_category_ids") or "").strip()
@@ -4427,6 +4429,11 @@ def _post_article_to_wordpress(
             mid = media.get("id")
             if isinstance(mid, int):
                 featured_media_id = mid
+            else:
+                # If the file exists but WP returns no numeric media ID, treat as failure when images are required.
+                # Otherwise we'd create the post without a featured image and the user wouldn't know why.
+                if need_featured and not allow_without_featured_image:
+                    raise ValueError(f"WordPress media upload returned no numeric id: {mid!r}")
 
         created = create_post(
             cfg,
@@ -4798,6 +4805,9 @@ def _process_due_scheduled_wordpress_posts() -> None:
                 wp_st = (cur.get("wp_schedule_wp_status") or "draft").strip().lower()
                 if wp_st not in ("draft", "publish"):
                     wp_st = "draft"
+                proj_check = dict(project)
+                _normalize_project_image_prompts(proj_check)
+                need_featured = len(proj_check.get("image_prompts") or []) > 0
                 fresh = _get_article_by_id(aid) or cur
                 ok, err, info = _post_article_to_wordpress(
                     project,
@@ -4806,7 +4816,8 @@ def _process_due_scheduled_wordpress_posts() -> None:
                     wp_status=wp_st,
                     rest_base_preference=None,
                     site_url_override=None,
-                    allow_without_featured_image=True,
+                    # Scheduled publishing should not silently post without an image when the project uses image prompts.
+                    allow_without_featured_image=(not need_featured),
                 )
                 if not ok:
                     app.logger.warning(

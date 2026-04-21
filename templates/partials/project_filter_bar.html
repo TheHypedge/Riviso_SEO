@@ -23,7 +23,7 @@
           {% if allow_export %}
             <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('export_project_articles', project_id=project.id, date_from=date_from|default(''), date_to=date_to|default(''), status=status_filter|default('')) }}">Export</a>
           {% else %}
-            <button type="button" class="btn btn-outline-secondary btn-sm" disabled title="Disabled on your current plan">Export</button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" disabled title="Upgrade plan to enable Export article">Export</button>
           {% endif %}
         </div>
         {% if date_from|default('') or date_to|default('') or status_filter|default('') %}
