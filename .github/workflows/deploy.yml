@@ -25,69 +25,15 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           # Optional: set `port: 2222` here if SSH is not on 22
           command_timeout: 15m
-          # Run the script as one bash block (allows conditionals/tests without false "failures").
-          script_stop: false
-          debug: true
+          script_stop: true
           script: |
-            bash -lc "$(cat <<'EOS'
             set -euo pipefail
-            set -x
-
-            APP_DIR="/var/www/auto-articles"
-            PARENT_DIR="/var/www"
-            # Prefer existing origin; fallback to SSH (avoid HTTPS username/password prompts).
-            FALLBACK_REPO_URL="git@github.com:TheHypedge/Auto-Article-Generator.git"
-
             # Git 2.35+ refuses repos owned by another user (e.g. root SSH vs www-data files)
-            git config --global --add safe.directory "$APP_DIR" || true
-
-            reclone() {
-              local url="${1:-$FALLBACK_REPO_URL}"
-              echo "Repo appears corrupted. Re-cloning into $APP_DIR"
-              cd "$PARENT_DIR"
-              local tmp="/tmp/aa_deploy_backup_$$"
-              mkdir -p "$tmp"
-              # Preserve server-only files.
-              if [[ -f "$APP_DIR/.env" ]]; then cp -f "$APP_DIR/.env" "$tmp/.env"; fi
-              if [[ -d "$APP_DIR/data" ]]; then cp -a "$APP_DIR/data" "$tmp/data"; fi
-              # Replace working tree.
-              rm -rf "$APP_DIR"
-              git clone --depth 1 --branch main "$url" "$APP_DIR"
-              # Restore preserved data.
-              if [[ -f "$tmp/.env" ]]; then cp -f "$tmp/.env" "$APP_DIR/.env"; fi
-              if [[ -d "$tmp/data" ]]; then
-                rm -rf "$APP_DIR/data"
-                cp -a "$tmp/data" "$APP_DIR/data"
-              fi
-              rm -rf "$tmp"
-              cd "$APP_DIR"
-            }
-
-            if [[ ! -d "$APP_DIR/.git" ]]; then
-              reclone "$FALLBACK_REPO_URL"
-            else
-              cd "$APP_DIR"
-              ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-              if [[ -z "${ORIGIN_URL:-}" ]]; then ORIGIN_URL="$FALLBACK_REPO_URL"; fi
-              # Detect corruption early.
-              if ! git fsck --no-reflogs --full >/dev/null 2>&1; then
-                reclone "$ORIGIN_URL"
-              else
-                # Fetch may still fail if objects are corrupted; fall back to reclone.
-                if ! git fetch origin main; then
-                  reclone "$ORIGIN_URL"
-                else
-                  # Force local main to match GitHub (no diverged-branch fast-forward issues)
-                  git checkout -B main origin/main
-                fi
-              fi
-            fi
-
-            cd "$APP_DIR"
+            git config --global --add safe.directory /var/www/auto-articles
+            cd /var/www/auto-articles
+            git fetch origin main
+            # Force local main to match GitHub (no diverged-branch fast-forward issues)
+            git checkout -B main origin/main
             # Strip CRLF if present (Windows checkouts break bash: $'\r': command not found)
             sed -i 's/\r$//' deploy/deploy.sh
-            # Fail early with a clear message if sudo needs a password.
-            (sudo -n true) || { echo "sudo requires a password for this SSH user. Configure NOPASSWD for systemctl." >&2; exit 1; }
-            bash -x deploy/deploy.sh
-            EOS
-            )"
+            bash deploy/deploy.sh
