@@ -1,16 +1,20 @@
 <section class="app-dash-section" aria-labelledby="admin-limits-heading">
   {% macro info_tip(text) -%}
-    <button
-      type="button"
+    <span
       class="btn btn-link p-0 ms-1 align-baseline text-body-secondary"
       style="text-decoration: none;"
+      role="button"
+      tabindex="0"
       data-bs-toggle="tooltip"
+      data-bs-trigger="hover focus"
+      data-bs-container="body"
       data-bs-placement="top"
       data-bs-title="{{ text }}"
       aria-label="{{ text }}"
+      onclick="event.preventDefault(); event.stopPropagation();"
     >
       <span class="d-inline-flex align-items-center justify-content-center border rounded-circle" style="width: 16px; height: 16px; font-size: 11px; line-height: 1; font-weight: 700;">i</span>
-    </button>
+    </span>
   {%- endmacro %}
 
   <div class="app-section-head">

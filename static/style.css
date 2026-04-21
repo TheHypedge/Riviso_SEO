@@ -426,6 +426,13 @@ body.app-page-loading-active {
   color: var(--app-text);
 }
 
+/* Prevent horizontal page shift on admin/tools grids */
+.app-dashboard,
+.app-shell,
+body {
+  overflow-x: hidden;
+}
+
 .app-dashboard-nav {
   background: var(--app-surface) !important;
 }

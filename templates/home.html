@@ -228,7 +228,11 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         document.addEventListener('DOMContentLoaded', function () {
           if (!window.bootstrap || !window.bootstrap.Tooltip) return;
           document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
-            window.bootstrap.Tooltip.getOrCreateInstance(el);
+            window.bootstrap.Tooltip.getOrCreateInstance(el, {
+              trigger: 'hover focus',
+              container: 'body',
+              boundary: 'window',
+            });
           });
         });
       })();
