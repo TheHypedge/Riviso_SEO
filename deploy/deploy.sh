@@ -10,13 +10,20 @@ cd "$ROOT"
 git config --global --add safe.directory "$ROOT"
 
 if [[ ! -d .venv ]]; then
-  echo "Missing .venv — create it: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt" >&2
-  exit 1
+  echo "Missing .venv — creating virtualenv"
+  # Ensure venv module exists (Ubuntu may require python3-venv).
+  if ! python3 -m venv .venv >/dev/null 2>&1; then
+    echo "python3 venv not available; installing python3-venv"
+    sudo -n apt-get update -y
+    sudo -n apt-get install -y python3-venv
+    python3 -m venv .venv
+  fi
 fi
 
 # shellcheck source=/dev/null
 source .venv/bin/activate
 
+python -m pip install --upgrade pip --quiet --disable-pip-version-check
 pip install -r requirements.txt --quiet --disable-pip-version-check
 
 sudo systemctl restart auto-articles
