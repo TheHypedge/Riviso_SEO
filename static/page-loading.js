@@ -12,6 +12,14 @@
 
   var overlay = null;
   var fetchDepth = 0;
+  var showTimer = null;
+  var visibleSince = 0;
+  var pendingShowReason = "";
+
+  // Avoid flashing the overlay for fast operations.
+  var SHOW_DELAY_MS = 220;
+  // Once visible, keep it visible briefly to avoid flicker.
+  var MIN_VISIBLE_MS = 260;
 
   function ensureOverlay() {
     if (overlay) return overlay;
@@ -29,20 +37,49 @@
     return overlay;
   }
 
-  function show() {
+  function _showNow(message) {
     var el = ensureOverlay();
     el.classList.add('is-visible');
     document.body.classList.add('app-page-loading-active');
+    visibleSince = Date.now();
+    if (message) {
+      var p = el.querySelector('.app-page-loading-text');
+      if (p) p.textContent = message;
+    }
   }
 
   var DEFAULT_LOADING_TEXT = 'Loading…';
 
   function hide() {
     if (!overlay) return;
+    // Cancel any pending delayed show.
+    if (showTimer) {
+      clearTimeout(showTimer);
+      showTimer = null;
+      pendingShowReason = "";
+    }
+    // If it's not visible yet, nothing else to do.
+    if (!overlay.classList.contains('is-visible')) return;
+    var elapsed = Date.now() - (visibleSince || 0);
+    if (elapsed < MIN_VISIBLE_MS) {
+      setTimeout(hide, MIN_VISIBLE_MS - elapsed);
+      return;
+    }
     overlay.classList.remove('is-visible');
     document.body.classList.remove('app-page-loading-active');
+    visibleSince = 0;
     var p = overlay.querySelector('.app-page-loading-text');
     if (p) p.textContent = DEFAULT_LOADING_TEXT;
+  }
+
+  function showDelayed(message) {
+    pendingShowReason = message || "";
+    if (showTimer) return;
+    showTimer = setTimeout(function () {
+      showTimer = null;
+      _showNow(pendingShowReason || "");
+      pendingShowReason = "";
+    }, SHOW_DELAY_MS);
   }
 
   function shouldSkipForm(form) {
@@ -58,14 +95,14 @@
     function (e) {
       var form = e.target;
       if (shouldSkipForm(form)) return;
-      show();
+      showDelayed();
     },
     true
   );
 
   var origSubmit = HTMLFormElement.prototype.submit;
   HTMLFormElement.prototype.submit = function () {
-    if (!shouldSkipForm(this)) show();
+    if (!shouldSkipForm(this)) showDelayed();
     return origSubmit.apply(this, arguments);
   };
 
@@ -74,7 +111,7 @@
     window.fetch = function () {
       var args = arguments;
       fetchDepth += 1;
-      if (fetchDepth === 1) show();
+      if (fetchDepth === 1) showDelayed();
       return nativeFetch.apply(this, args).finally(function () {
         fetchDepth -= 1;
         if (fetchDepth <= 0) {
@@ -97,11 +134,12 @@
    * @param {string} [message] - Optional label (default "Loading…").
    */
   window.__appPageLoadingShow = function (message) {
-    show();
-    if (overlay && message) {
-      var p = overlay.querySelector('.app-page-loading-text');
-      if (p) p.textContent = message;
+    // Explicit show should not be delayed: used for long-running actions.
+    if (showTimer) {
+      clearTimeout(showTimer);
+      showTimer = null;
     }
+    _showNow(message || '');
   };
 
   window.__appPageLoadingHide = hide;

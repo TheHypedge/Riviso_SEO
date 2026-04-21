@@ -2112,6 +2112,28 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
         updateCount();
       })();
     </script>
+    <script>
+      (function () {
+        // Hardening: ensure "Add Article" modal always opens (no stuck backdrop).
+        document.addEventListener('DOMContentLoaded', function () {
+          var modalEl = document.getElementById('addArticleModal');
+          if (!modalEl || !window.bootstrap) return;
+          function ensureInBody() {
+            if (modalEl.parentNode !== document.body) document.body.appendChild(modalEl);
+          }
+          document.querySelectorAll('[data-bs-target="#addArticleModal"]').forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+              // If Bootstrap gets into a bad state with a leftover backdrop, clean it up.
+              document.querySelectorAll('.modal-backdrop').forEach(function (b) { b.remove(); });
+              ensureInBody();
+              try {
+                window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+              } catch (err) {}
+            });
+          });
+        });
+      })();
+    </script>
     <script src="{{ url_for('static', filename='page-loading.js') }}"></script>
   </body>
 </html>
