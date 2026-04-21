@@ -767,6 +767,104 @@
       </div>
     </div>
 
+    {# Tablet + phone: dedicated bottom-sheet schedule UI (desktop keeps #bulkScheduleModal) #}
+    <div
+      class="modal fade aa-bulk-schedule-modal-mobile"
+      id="bulkScheduleModalMobile"
+      tabindex="-1"
+      aria-labelledby="bulkScheduleModalMobileLabel"
+      aria-hidden="true"
+      data-default-wp-status="{{ project.default_wp_status or 'draft' }}"
+      data-default-wp-rest-base="{{ project.default_wp_rest_base or 'posts' }}"
+    >
+      <div class="modal-dialog aa-modal-bulk-schedule-mobile-dialog">
+        <div class="modal-content aa-modal-bulk-schedule-mobile-content">
+          <div class="modal-header border-bottom py-3">
+            <h2 class="modal-title h5 mb-0" id="bulkScheduleModalMobileLabel">Schedule post</h2>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <p class="small text-body-secondary mb-3" id="bulkScheduleIntroMobile"></p>
+            <div id="bulkSchedulePromptSectionMobile" class="mb-3 border rounded p-3 bg-body-secondary d-none">
+              <p class="small text-body-secondary mb-2" id="bulkSchedulePromptHelpMobile"></p>
+              {% set has_bulk_writing_m = project.prompts and project.prompts|length > 0 %}
+              {% set has_bulk_image_m = project.image_prompts and project.image_prompts|length > 0 %}
+              <p id="bulkSchedulePromptAddLinksMobile" class="small mb-2 {% if has_bulk_writing_m and has_bulk_image_m %}d-none{% endif %}">
+                {% if not has_bulk_writing_m %}
+                <span class="me-3"><a href="#" class="link-primary text-decoration-underline" id="bulkScheduleOpenAddWritingPromptMobile" role="button">Add writing prompt</a></span>
+                {% endif %}
+                {% if not has_bulk_image_m %}
+                <span><a href="#" class="link-primary text-decoration-underline" id="bulkScheduleOpenAddImagePromptMobile" role="button">Add image prompt</a></span>
+                {% endif %}
+              </p>
+              {% if project.prompts and project.prompts|length > 0 %}
+              <div class="mb-2">
+                <label class="form-label mb-1" for="bulkScheduleBulkPromptSelectMobile">Article writing prompt</label>
+                <span class="small text-muted d-block mb-1" id="bulkScheduleWritingPromptStatusMobile" aria-live="polite"></span>
+                <select class="form-select form-select-sm" id="bulkScheduleBulkPromptSelectMobile">
+                  <option value="">Choose prompt ({{ project.prompts|length }} available)…</option>
+                  {% for pr in project.prompts %}
+                  <option value="{{ pr.id }}" {% if pr.id == (project.default_prompt_id or '') %}selected{% endif %}>{{ pr.name }}</option>
+                  {% endfor %}
+                  <option value="__default__">Use project default</option>
+                </select>
+              </div>
+              {% endif %}
+              {% if project.image_prompts and project.image_prompts|length > 0 %}
+              <div class="mb-0">
+                <label class="form-label mb-1" for="bulkScheduleBulkImagePromptSelectMobile">Featured image prompt</label>
+                <span class="small text-muted d-block mb-1" id="bulkScheduleImagePromptStatusMobile" aria-live="polite"></span>
+                <select class="form-select form-select-sm" id="bulkScheduleBulkImagePromptSelectMobile">
+                  <option value="">Choose prompt ({{ project.image_prompts|length }} available)…</option>
+                  {% for pr in project.image_prompts %}
+                  <option value="{{ pr.id }}" {% if pr.id == (project.default_image_prompt_id or '') %}selected{% endif %}>{{ pr.name }}</option>
+                  {% endfor %}
+                  <option value="__default__">Use project default</option>
+                </select>
+              </div>
+              {% endif %}
+            </div>
+            <div id="bulkSchedulePerArticleWrapMobile" class="mb-3">
+              <p class="small text-body-secondary mb-2" id="bulkSchedulePerArticleHintMobile"></p>
+              <div id="bulkSchedulePerArticleListMobile" class="d-flex flex-column gap-2 aa-bulk-schedule-scroll"></div>
+            </div>
+            <div class="row g-2 mb-2">
+              <div class="col-12">
+                <label class="form-label" for="bulkScheduleWpStatusMobile">Post status</label>
+                <select class="form-select" id="bulkScheduleWpStatusMobile" aria-label="WordPress post status for scheduled posts">
+                  <option value="draft" {% if (project.default_wp_status or 'draft') == 'draft' %}selected{% endif %}>Draft</option>
+                  <option value="publish" {% if (project.default_wp_status or 'draft') == 'publish' %}selected{% endif %}>Published</option>
+                </select>
+              </div>
+              <div class="col-12">
+                <label class="form-label" for="bulkScheduleWpRestBaseMobile">Post type</label>
+                <select class="form-select" id="bulkScheduleWpRestBaseMobile" aria-label="WordPress post type for scheduled posts">
+                  {% for pt in wp_post_types|default([]) %}
+                  <option value="{{ pt.rest_base }}" {% if pt.rest_base == (project.default_wp_rest_base or 'posts') %}selected{% endif %}>{{ pt.name }} ({{ pt.rest_base }})</option>
+                  {% endfor %}
+                </select>
+                {% if wp_post_types_error %}
+                <div class="form-text text-warning small">Could not refresh types from WordPress: {{ wp_post_types_error }}. Showing fallback.</div>
+                {% else %}
+                <div class="form-text small">Loaded from <code class="small">/wp/v2/types</code>.</div>
+                {% endif %}
+              </div>
+            </div>
+            <p class="form-text small mb-1">
+              Same as <span class="fw-semibold">WordPress defaults</span> when you open this dialog — adjust only for this schedule.
+            </p>
+            <p class="form-text small mb-0">
+              <button type="button" class="btn btn-link btn-sm p-0 align-baseline" id="bulkScheduleResetWpDefaultsMobile">Reset to WordPress defaults</button>
+            </p>
+          </div>
+          <div class="modal-footer flex-column gap-2 border-top">
+            <button type="button" class="btn btn-primary w-100 py-2" id="bulkScheduleConfirmMobile" title="">Schedule</button>
+            <button type="button" class="btn btn-outline-secondary w-100" data-bs-dismiss="modal">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="modal fade" id="editScheduleModal" tabindex="-1" aria-labelledby="editScheduleModalLabel" aria-hidden="true">
       <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
@@ -1362,7 +1460,11 @@
             selectAll.checked = boxes.length > 0 && n === boxes.length;
           }
           var bem = document.getElementById('bulkScheduleModal');
-          if (bem && bem.classList.contains('show')) {
+          var bemM = document.getElementById('bulkScheduleModalMobile');
+          if (
+            (bem && bem.classList.contains('show')) ||
+            (bemM && bemM.classList.contains('show'))
+          ) {
             updateBulkSchedulePromptVisibility();
             updateBulkSchedulePromptStatusLabels();
             updateBulkScheduleButtonState();
@@ -1396,8 +1498,14 @@
             if (stModal && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(stModal).show();
           } else if (v === 'schedule') {
             syncBulkScheduleModal();
-            var schModal = document.getElementById('bulkScheduleModal');
-            if (schModal && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(schModal).show();
+            var useMobile = useMobileBulkScheduleModal();
+            var schModal = document.getElementById(
+              useMobile ? 'bulkScheduleModalMobile' : 'bulkScheduleModal'
+            );
+            if (schModal && window.bootstrap) {
+              if (useMobile) ensureBulkScheduleMobileModalInBody();
+              window.bootstrap.Modal.getOrCreateInstance(schModal).show();
+            }
           } else if (v === 'publish') {
             var sc3 = document.getElementById('bulkStatusCount');
             if (sc3) sc3.textContent = String(n);
@@ -1415,6 +1523,18 @@
           });
         });
 
+        ['bulkScheduleModal', 'bulkScheduleModalMobile', 'bulkDeleteModal', 'bulkStatusModal'].forEach(function (mid) {
+          var modalEl = document.getElementById(mid);
+          if (!modalEl) return;
+          modalEl.addEventListener('show.bs.modal', function () {
+            var bar = document.getElementById('bulkStickyBar');
+            if (bar) bar.classList.add('d-none');
+          });
+          modalEl.addEventListener('hidden.bs.modal', function () {
+            updateCount();
+          });
+        });
+
         function toDatetimeLocalValue(d) {
           function pad(x) { return x < 10 ? '0' + x : String(x); }
           return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
@@ -1422,12 +1542,9 @@
 
         function setBulkScheduleInputsMin() {
           var minVal = toDatetimeLocalValue(new Date());
-          var list = document.getElementById('bulkSchedulePerArticleList');
-          if (list) {
-            list.querySelectorAll('input[type="datetime-local"].bulk-schedule-row-dt').forEach(function (el) {
-              el.setAttribute('min', minVal);
-            });
-          }
+          document.querySelectorAll('input[type="datetime-local"].bulk-schedule-row-dt').forEach(function (el) {
+            el.setAttribute('min', minVal);
+          });
         }
 
         function bulkScheduleSortSelectedIds(ids) {
@@ -1441,22 +1558,25 @@
           });
         }
 
-        function articleTitleFromTableRow(tr) {
-          if (!tr) return '(Untitled)';
-          var el = tr.querySelector('td .fw-medium');
+        function articleTitleFromTableRow(rowEl) {
+          if (!rowEl) return '(Untitled)';
+          var el =
+            rowEl.querySelector('.articles-row__title') ||
+            rowEl.querySelector('td .fw-medium') ||
+            rowEl.querySelector('.fw-medium');
           return el && el.textContent ? el.textContent.trim() : '(Untitled)';
         }
 
         function applyBulkScheduleWpDefaults() {
           var modal = document.getElementById('bulkScheduleModal');
-          if (!modal) return;
-          var st = (modal.getAttribute('data-default-wp-status') || 'draft').toLowerCase();
+          var modalM = document.getElementById('bulkScheduleModalMobile');
+          var src = modal || modalM;
+          if (!src) return;
+          var st = (src.getAttribute('data-default-wp-status') || 'draft').toLowerCase();
           if (st !== 'draft' && st !== 'publish') st = 'draft';
-          var rb = (modal.getAttribute('data-default-wp-rest-base') || 'posts').trim() || 'posts';
-          var stSel = document.getElementById('bulkScheduleWpStatus');
-          var rbSel = document.getElementById('bulkScheduleWpRestBase');
-          if (stSel) stSel.value = st;
-          if (rbSel) {
+          var rb = (src.getAttribute('data-default-wp-rest-base') || 'posts').trim() || 'posts';
+          function applyToRestBase(rbSel) {
+            if (!rbSel) return;
             var found = false;
             var j;
             for (j = 0; j < rbSel.options.length; j++) {
@@ -1468,6 +1588,14 @@
             }
             if (!found && rbSel.options.length) rbSel.selectedIndex = 0;
           }
+          var stSel = document.getElementById('bulkScheduleWpStatus');
+          var stSelM = document.getElementById('bulkScheduleWpStatusMobile');
+          var rbSel = document.getElementById('bulkScheduleWpRestBase');
+          var rbSelM = document.getElementById('bulkScheduleWpRestBaseMobile');
+          if (stSel) stSel.value = st;
+          if (stSelM) stSelM.value = st;
+          applyToRestBase(rbSel);
+          applyToRestBase(rbSelM);
         }
 
         function bulkScheduleNeedsGeneration() {
@@ -1508,10 +1636,40 @@
           return v;
         }
 
+        function bulkScheduleModalActive() {
+          var mm = document.getElementById('bulkScheduleModalMobile');
+          if (mm && mm.classList.contains('show')) return 'mobile';
+          return 'desktop';
+        }
+
+        function getBulkPromptSelects() {
+          if (bulkScheduleModalActive() === 'mobile') {
+            return {
+              ws: document.getElementById('bulkScheduleBulkPromptSelectMobile'),
+              isel: document.getElementById('bulkScheduleBulkImagePromptSelectMobile'),
+            };
+          }
+          return {
+            ws: document.getElementById('bulkScheduleBulkPromptSelect'),
+            isel: document.getElementById('bulkScheduleBulkImagePromptSelect'),
+          };
+        }
+
+        function useMobileBulkScheduleModal() {
+          return window.matchMedia('(max-width: 991.98px)').matches;
+        }
+
+        function ensureBulkScheduleMobileModalInBody() {
+          var el = document.getElementById('bulkScheduleModalMobile');
+          if (!el || el.parentNode === document.body) return;
+          document.body.appendChild(el);
+        }
+
         function bulkSchedulePromptsValid() {
           if (!bulkScheduleNeedsGeneration()) return true;
-          var ws = document.getElementById('bulkScheduleBulkPromptSelect');
-          var isel = document.getElementById('bulkScheduleBulkImagePromptSelect');
+          var s = getBulkPromptSelects();
+          var ws = s.ws;
+          var isel = s.isel;
           var nw = bulkScheduleNeedsWritingPrompt();
           var ni = bulkScheduleNeedsImagePrompt();
           if (nw && !ws) return false;
@@ -1527,13 +1685,10 @@
         }
 
         function updateBulkSchedulePromptStatusLabels() {
-          var ws = document.getElementById('bulkScheduleBulkPromptSelect');
-          var isel = document.getElementById('bulkScheduleBulkImagePromptSelect');
-          var sw = document.getElementById('bulkScheduleWritingPromptStatus');
-          var si = document.getElementById('bulkScheduleImagePromptStatus');
           var nw = bulkScheduleNeedsWritingPrompt();
           var ni = bulkScheduleNeedsImagePrompt();
-          if (sw && ws) {
+          function applyWriting(ws, sw) {
+            if (!sw || !ws) return;
             if (!nw) {
               sw.textContent =
                 'Not required for this selection (all selected posts already have article text).';
@@ -1552,7 +1707,8 @@
               sw.className = 'small text-success d-block mb-1';
             }
           }
-          if (si && isel) {
+          function applyImage(isel, si) {
+            if (!si || !isel) return;
             if (!ni) {
               si.textContent =
                 'Not required for this selection (featured image present, or project does not require images).';
@@ -1571,53 +1727,83 @@
               si.className = 'small text-success d-block mb-1';
             }
           }
+          applyWriting(
+            document.getElementById('bulkScheduleBulkPromptSelect'),
+            document.getElementById('bulkScheduleWritingPromptStatus')
+          );
+          applyWriting(
+            document.getElementById('bulkScheduleBulkPromptSelectMobile'),
+            document.getElementById('bulkScheduleWritingPromptStatusMobile')
+          );
+          applyImage(
+            document.getElementById('bulkScheduleBulkImagePromptSelect'),
+            document.getElementById('bulkScheduleImagePromptStatus')
+          );
+          applyImage(
+            document.getElementById('bulkScheduleBulkImagePromptSelectMobile'),
+            document.getElementById('bulkScheduleImagePromptStatusMobile')
+          );
         }
 
         function updateBulkScheduleButtonState() {
-          var btn = document.getElementById('bulkScheduleConfirm');
-          if (!btn) return;
           var needGen = bulkScheduleNeedsGeneration();
           var sec = document.getElementById('bulkSchedulePromptSection');
-          var showPrompt = sec && !sec.classList.contains('d-none');
-          if (needGen && showPrompt && !bulkSchedulePromptsValid()) {
-            btn.disabled = true;
-            btn.setAttribute(
-              'title',
-              'Choose the required article and/or image prompts above (counts shown on each line), or add prompts with the links.'
-            );
-          } else {
-            btn.disabled = false;
-            btn.removeAttribute('title');
-          }
+          var secM = document.getElementById('bulkSchedulePromptSectionMobile');
+          var showPrompt =
+            (sec && !sec.classList.contains('d-none')) || (secM && !secM.classList.contains('d-none'));
+          var invalid = needGen && showPrompt && !bulkSchedulePromptsValid();
+          var title = invalid
+            ? 'Choose the required article and/or image prompts above (counts shown on each line), or add prompts with the links.'
+            : '';
+          ['bulkScheduleConfirm', 'bulkScheduleConfirmMobile'].forEach(function (bid) {
+            var btn = document.getElementById(bid);
+            if (!btn) return;
+            if (invalid) {
+              btn.disabled = true;
+              btn.setAttribute('title', title);
+            } else {
+              btn.disabled = false;
+              btn.removeAttribute('title');
+            }
+          });
         }
 
         function updateBulkSchedulePromptVisibility() {
           var sec = document.getElementById('bulkSchedulePromptSection');
+          var secM = document.getElementById('bulkSchedulePromptSectionMobile');
           var help = document.getElementById('bulkSchedulePromptHelp');
-          if (!sec) return;
-          if (bulkScheduleNeedsGeneration()) {
-            sec.classList.remove('d-none');
-            if (help) {
-              var ws = document.getElementById('bulkScheduleBulkPromptSelect');
-              var isel = document.getElementById('bulkScheduleBulkImagePromptSelect');
-              var linkRow = document.getElementById('bulkSchedulePromptAddLinks');
-              var hasLinks = linkRow && !linkRow.classList.contains('d-none');
-              if (hasLinks && !ws && !isel) {
-                help.textContent =
-                  'Some selected articles need article text and/or a featured image before scheduling. Add prompts using the links below (same as on the project page), save, then run Schedule again—or pick prompts here once they exist.';
-              } else if (hasLinks && !ws) {
-                help.textContent =
-                  'Some selected articles need article text before scheduling. Add a writing prompt with the link below, save, then schedule again—or choose it here once it exists.';
-              } else if (hasLinks && !isel) {
-                help.textContent =
-                  'Some selected articles need a featured image before scheduling. Add an image prompt with the link below, save, then schedule again—or choose it here once it exists.';
-              } else {
-                help.textContent =
-                  'Some selected articles need article text and/or a featured image. Use the dropdowns below — each line shows how many prompts you can pick and what is still required. Schedule stays disabled until every required prompt is chosen.';
-              }
+          var helpM = document.getElementById('bulkSchedulePromptHelpMobile');
+          if (!sec && !secM) return;
+          function setHelpText(el, useMobileLinks) {
+            if (!el) return;
+            var ws = document.getElementById('bulkScheduleBulkPromptSelect');
+            var isel = document.getElementById('bulkScheduleBulkImagePromptSelect');
+            var linkRow = document.getElementById(
+              useMobileLinks ? 'bulkSchedulePromptAddLinksMobile' : 'bulkSchedulePromptAddLinks'
+            );
+            var hasLinks = linkRow && !linkRow.classList.contains('d-none');
+            if (hasLinks && !ws && !isel) {
+              el.textContent =
+                'Some selected articles need article text and/or a featured image before scheduling. Add prompts using the links below (same as on the project page), save, then run Schedule again—or pick prompts here once they exist.';
+            } else if (hasLinks && !ws) {
+              el.textContent =
+                'Some selected articles need article text before scheduling. Add a writing prompt with the link below, save, then schedule again—or choose it here once it exists.';
+            } else if (hasLinks && !isel) {
+              el.textContent =
+                'Some selected articles need a featured image before scheduling. Add an image prompt with the link below, save, then schedule again—or choose it here once it exists.';
+            } else {
+              el.textContent =
+                'Some selected articles need article text and/or a featured image. Use the dropdowns below — each line shows how many prompts you can pick and what is still required. Schedule stays disabled until every required prompt is chosen.';
             }
+          }
+          if (bulkScheduleNeedsGeneration()) {
+            if (sec) sec.classList.remove('d-none');
+            if (secM) secM.classList.remove('d-none');
+            setHelpText(help, false);
+            setHelpText(helpM, true);
           } else {
-            sec.classList.add('d-none');
+            if (sec) sec.classList.add('d-none');
+            if (secM) secM.classList.add('d-none');
           }
           updateBulkSchedulePromptStatusLabels();
           updateBulkScheduleButtonState();
@@ -1627,7 +1813,10 @@
 
         function bulkOpenPromptModalFromSchedule(targetModalId) {
           if (!window.bootstrap) return;
-          var bulkEl = document.getElementById('bulkScheduleModal');
+          var useMobile = useMobileBulkScheduleModal();
+          var bulkEl = document.getElementById(
+            useMobile ? 'bulkScheduleModalMobile' : 'bulkScheduleModal'
+          );
           var targetEl = document.getElementById(targetModalId);
           if (!bulkEl || !targetEl) return;
           reopenBulkScheduleAfterNestedPrompt = true;
@@ -1649,8 +1838,14 @@
           el.addEventListener('hidden.bs.modal', function () {
             if (!reopenBulkScheduleAfterNestedPrompt) return;
             reopenBulkScheduleAfterNestedPrompt = false;
-            var b = document.getElementById('bulkScheduleModal');
-            if (b) window.bootstrap.Modal.getOrCreateInstance(b).show();
+            var useM = useMobileBulkScheduleModal();
+            var b = document.getElementById(
+              useM ? 'bulkScheduleModalMobile' : 'bulkScheduleModal'
+            );
+            if (b) {
+              if (useM) ensureBulkScheduleMobileModalInBody();
+              window.bootstrap.Modal.getOrCreateInstance(b).show();
+            }
           });
         });
 
@@ -1681,6 +1876,20 @@
             bulkOpenPromptModalFromSchedule('addImagePromptModal');
           });
         }
+        var wPromptLinkM = document.getElementById('bulkScheduleOpenAddWritingPromptMobile');
+        if (wPromptLinkM) {
+          wPromptLinkM.addEventListener('click', function (e) {
+            e.preventDefault();
+            bulkOpenPromptModalFromSchedule('addPromptModal');
+          });
+        }
+        var iPromptLinkM = document.getElementById('bulkScheduleOpenAddImagePromptMobile');
+        if (iPromptLinkM) {
+          iPromptLinkM.addEventListener('click', function (e) {
+            e.preventDefault();
+            bulkOpenPromptModalFromSchedule('addImagePromptModal');
+          });
+        }
 
         var bulkWpSel = document.getElementById('bulkScheduleBulkPromptSelect');
         if (bulkWpSel) {
@@ -1696,58 +1905,83 @@
             updateBulkScheduleButtonState();
           });
         }
+        var bulkWpSelM = document.getElementById('bulkScheduleBulkPromptSelectMobile');
+        if (bulkWpSelM) {
+          bulkWpSelM.addEventListener('change', function () {
+            updateBulkSchedulePromptStatusLabels();
+            updateBulkScheduleButtonState();
+          });
+        }
+        var bulkImgSelM = document.getElementById('bulkScheduleBulkImagePromptSelectMobile');
+        if (bulkImgSelM) {
+          bulkImgSelM.addEventListener('change', function () {
+            updateBulkSchedulePromptStatusLabels();
+            updateBulkScheduleButtonState();
+          });
+        }
+
+        function appendBulkScheduleRows(list, idPrefix) {
+          if (!list) return;
+          list.innerHTML = '';
+          var ids = selectedBoxes().map(function (cb) {
+            return cb.value;
+          });
+          ids = bulkScheduleSortSelectedIds(ids);
+          var base = new Date(Date.now() + 5 * 60 * 1000);
+          for (var i = 0; i < ids.length; i++) {
+            var id = ids[i];
+            var listRoot = document.getElementById('articlesList');
+            var rowEl = listRoot
+              ? listRoot.querySelector('[data-article-id="' + id + '"]')
+              : document.querySelector('.articles-row[data-article-id="' + id + '"]');
+            var title = articleTitleFromTableRow(rowEl);
+            var inpId = idPrefix ? 'bulkSchedDt_' + idPrefix + id : 'bulkSchedDt_' + id;
+            var row = document.createElement('div');
+            row.className = 'row g-2 align-items-end';
+            var colTitle = document.createElement('div');
+            colTitle.className = 'col-12 col-md-6';
+            var lbl = document.createElement('label');
+            lbl.className = 'form-label small mb-1';
+            lbl.setAttribute('for', inpId);
+            lbl.textContent = title;
+            colTitle.appendChild(lbl);
+            var colDt = document.createElement('div');
+            colDt.className = 'col-12 col-md-6';
+            var inp = document.createElement('input');
+            inp.type = 'datetime-local';
+            inp.id = inpId;
+            inp.className = 'form-control form-control-sm bulk-schedule-row-dt';
+            inp.setAttribute('data-article-id', id);
+            var d = new Date(base.getTime() + i * 60 * 60 * 1000);
+            inp.value = toDatetimeLocalValue(d);
+            colDt.appendChild(inp);
+            row.appendChild(colTitle);
+            row.appendChild(colDt);
+            list.appendChild(row);
+          }
+        }
 
         function syncBulkScheduleModal() {
           var n = selectedBoxes().length;
           var intro = document.getElementById('bulkScheduleIntro');
+          var introM = document.getElementById('bulkScheduleIntroMobile');
           var hint = document.getElementById('bulkSchedulePerArticleHint');
+          var hintM = document.getElementById('bulkSchedulePerArticleHintMobile');
           var list = document.getElementById('bulkSchedulePerArticleList');
+          var listM = document.getElementById('bulkSchedulePerArticleListMobile');
           updateBulkSchedulePromptVisibility();
-          if (intro) {
-            intro.textContent =
-              'Set the date and time for each selected article (server time). Rows are ordered oldest-added first (same order used when posting). If the app stops, remaining posts still run when their time is due. Requires WordPress credentials and a featured image if the project uses image prompts.';
-          }
-          if (hint) {
-            hint.textContent =
-              n === 1
-                ? 'Pick when this post should go to WordPress.'
-                : n + ' articles — one date and time per row (defaults are one hour apart; change as needed).';
-          }
-          if (list) {
-            list.innerHTML = '';
-            var ids = selectedBoxes().map(function (cb) {
-              return cb.value;
-            });
-            ids = bulkScheduleSortSelectedIds(ids);
-            var base = new Date(Date.now() + 5 * 60 * 1000);
-            for (var i = 0; i < ids.length; i++) {
-              var id = ids[i];
-              var tr = document.querySelector('tr[data-article-id="' + id + '"]');
-              var title = articleTitleFromTableRow(tr);
-              var row = document.createElement('div');
-              row.className = 'row g-2 align-items-end';
-              var colTitle = document.createElement('div');
-              colTitle.className = 'col-12 col-md-6';
-              var lbl = document.createElement('label');
-              lbl.className = 'form-label small mb-1';
-              lbl.setAttribute('for', 'bulkSchedDt_' + id);
-              lbl.textContent = title;
-              colTitle.appendChild(lbl);
-              var colDt = document.createElement('div');
-              colDt.className = 'col-12 col-md-6';
-              var inp = document.createElement('input');
-              inp.type = 'datetime-local';
-              inp.id = 'bulkSchedDt_' + id;
-              inp.className = 'form-control form-control-sm bulk-schedule-row-dt';
-              inp.setAttribute('data-article-id', id);
-              var d = new Date(base.getTime() + i * 60 * 60 * 1000);
-              inp.value = toDatetimeLocalValue(d);
-              colDt.appendChild(inp);
-              row.appendChild(colTitle);
-              row.appendChild(colDt);
-              list.appendChild(row);
-            }
-          }
+          var introText =
+            'Set the date and time for each selected article (server time). Rows are ordered oldest-added first (same order used when posting). If the app stops, remaining posts still run when their time is due. Requires WordPress credentials and a featured image if the project uses image prompts.';
+          if (intro) intro.textContent = introText;
+          if (introM) introM.textContent = introText;
+          var hintText =
+            n === 1
+              ? 'Pick when this post should go to WordPress.'
+              : n + ' articles — one date and time per row (defaults are one hour apart; change as needed).';
+          if (hint) hint.textContent = hintText;
+          if (hintM) hintM.textContent = hintText;
+          appendBulkScheduleRows(list, '');
+          appendBulkScheduleRows(listM, 'm_');
           applyBulkScheduleWpDefaults();
           setBulkScheduleInputsMin();
         }
@@ -1758,13 +1992,24 @@
             applyBulkScheduleWpDefaults();
           });
         }
+        var bulkScheduleResetWpBtnM = document.getElementById('bulkScheduleResetWpDefaultsMobile');
+        if (bulkScheduleResetWpBtnM) {
+          bulkScheduleResetWpBtnM.addEventListener('click', function () {
+            applyBulkScheduleWpDefaults();
+          });
+        }
 
+        function onBulkScheduleModalShown() {
+          setBulkScheduleInputsMin();
+          updateBulkSchedulePromptVisibility();
+        }
         var bulkScheduleModalEl = document.getElementById('bulkScheduleModal');
         if (bulkScheduleModalEl) {
-          bulkScheduleModalEl.addEventListener('shown.bs.modal', function () {
-            setBulkScheduleInputsMin();
-            updateBulkSchedulePromptVisibility();
-          });
+          bulkScheduleModalEl.addEventListener('shown.bs.modal', onBulkScheduleModalShown);
+        }
+        var bulkScheduleModalMobileEl = document.getElementById('bulkScheduleModalMobile');
+        if (bulkScheduleModalMobileEl) {
+          bulkScheduleModalMobileEl.addEventListener('shown.bs.modal', onBulkScheduleModalShown);
         }
 
         var delBtn = document.getElementById('bulkDeleteConfirm');
@@ -1792,53 +2037,55 @@
           });
         }
 
-        var schBtn = document.getElementById('bulkScheduleConfirm');
-        if (schBtn) {
-          schBtn.addEventListener('click', function () {
-            if (!bulkSchedulePromptsValid()) {
-              window.alert(
-                'Choose the required article writing and/or featured image prompts above. Each line shows what is selected and how many prompts are available.'
-              );
+        function submitBulkSchedule() {
+          if (!bulkSchedulePromptsValid()) {
+            window.alert(
+              'Choose the required article writing and/or featured image prompts above. Each line shows what is selected and how many prompts are available.'
+            );
+            return;
+          }
+          var compact = bulkScheduleModalActive() === 'mobile';
+          var wpSel = document.getElementById(compact ? 'bulkScheduleWpStatusMobile' : 'bulkScheduleWpStatus');
+          var ai = document.getElementById('bulkActionInput');
+          var swp = document.getElementById('bulkScheduleWpStatusInput');
+          var timesHid = document.getElementById('bulkScheduleTimesJsonInput');
+          if (ai) ai.value = 'schedule';
+          if (swp && wpSel) swp.value = wpSel.value;
+          var wpRbSel = document.getElementById(compact ? 'bulkScheduleWpRestBaseMobile' : 'bulkScheduleWpRestBase');
+          var wpRbHid = document.getElementById('bulkScheduleWpRestBaseHidden');
+          if (wpRbHid && wpRbSel) wpRbHid.value = wpRbSel.value;
+          var needGen = bulkScheduleNeedsGeneration();
+          var ps = getBulkPromptSelects();
+          var bpSel = ps.ws;
+          var biSel = ps.isel;
+          var bph = document.getElementById('bulkPromptIdHidden');
+          if (bph) bph.value = needGen && bpSel ? bulkPromptValueForSubmit(bpSel) : '';
+          var bih = document.getElementById('bulkImagePromptIdHidden');
+          if (bih) bih.value = needGen && biSel ? bulkPromptValueForSubmit(biSel) : '';
+          var map = {};
+          document.querySelectorAll('.bulk-schedule-row-dt').forEach(function (inp) {
+            var aid = inp.getAttribute('data-article-id');
+            if (aid && inp.value) map[aid] = inp.value;
+          });
+          var boxes = selectedBoxes();
+          for (var bi = 0; bi < boxes.length; bi++) {
+            if (!map[boxes[bi].value]) {
+              window.alert('Please set a date and time for every selected article.');
               return;
             }
-            var wpSel = document.getElementById('bulkScheduleWpStatus');
-            var ai = document.getElementById('bulkActionInput');
-            var swp = document.getElementById('bulkScheduleWpStatusInput');
-            var timesHid = document.getElementById('bulkScheduleTimesJsonInput');
-            var list = document.getElementById('bulkSchedulePerArticleList');
-            if (ai) ai.value = 'schedule';
-            if (swp && wpSel) swp.value = wpSel.value;
-            var wpRbSel = document.getElementById('bulkScheduleWpRestBase');
-            var wpRbHid = document.getElementById('bulkScheduleWpRestBaseHidden');
-            if (wpRbHid && wpRbSel) wpRbHid.value = wpRbSel.value;
-            var needGen = bulkScheduleNeedsGeneration();
-            var bpSel = document.getElementById('bulkScheduleBulkPromptSelect');
-            var bph = document.getElementById('bulkPromptIdHidden');
-            if (bph) bph.value = needGen && bpSel ? bulkPromptValueForSubmit(bpSel) : '';
-            var biSel = document.getElementById('bulkScheduleBulkImagePromptSelect');
-            var bih = document.getElementById('bulkImagePromptIdHidden');
-            if (bih) bih.value = needGen && biSel ? bulkPromptValueForSubmit(biSel) : '';
-            var map = {};
-            if (list) {
-              list.querySelectorAll('.bulk-schedule-row-dt').forEach(function (inp) {
-                var aid = inp.getAttribute('data-article-id');
-                if (aid && inp.value) map[aid] = inp.value;
-              });
-            }
-            var boxes = selectedBoxes();
-            for (var bi = 0; bi < boxes.length; bi++) {
-              if (!map[boxes[bi].value]) {
-                window.alert('Please set a date and time for every selected article.');
-                return;
-              }
-            }
-            if (timesHid) timesHid.value = JSON.stringify(map);
-            var m = document.getElementById('bulkScheduleModal');
-            if (m && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(m).hide();
-            form.setAttribute('data-no-loading', '');
-            form.submit();
-          });
+          }
+          if (timesHid) timesHid.value = JSON.stringify(map);
+          var mid = compact ? 'bulkScheduleModalMobile' : 'bulkScheduleModal';
+          var m = document.getElementById(mid);
+          if (m && window.bootstrap) window.bootstrap.Modal.getOrCreateInstance(m).hide();
+          form.setAttribute('data-no-loading', '');
+          form.submit();
         }
+
+        var schBtn = document.getElementById('bulkScheduleConfirm');
+        if (schBtn) schBtn.addEventListener('click', submitBulkSchedule);
+        var schBtnM = document.getElementById('bulkScheduleConfirmMobile');
+        if (schBtnM) schBtnM.addEventListener('click', submitBulkSchedule);
 
         updateCount();
       })();
