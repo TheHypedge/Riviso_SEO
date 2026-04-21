@@ -232,8 +232,17 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
               trigger: 'hover focus',
               container: 'body',
               boundary: 'window',
+              delay: { show: 120, hide: 80 },
             });
           });
+
+          // Prevent tooltip taps/clicks from triggering form behaviors.
+          document.addEventListener('click', function (e) {
+            var tip = e.target && e.target.closest ? e.target.closest('.aa-info-tip') : null;
+            if (!tip) return;
+            e.preventDefault();
+            e.stopPropagation();
+          }, true);
         });
       })();
     </script>

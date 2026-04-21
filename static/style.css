@@ -433,6 +433,17 @@ body {
   overflow-x: hidden;
 }
 
+/* Admin limits tooltip icon */
+.aa-info-tip {
+  cursor: help;
+}
+.aa-info-tip:focus {
+  outline: none;
+}
+.aa-info-tip > span {
+  transform: translateY(-1px);
+}
+
 .app-dashboard-nav {
   background: var(--app-surface) !important;
 }

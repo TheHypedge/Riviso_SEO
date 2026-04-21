@@ -1,7 +1,7 @@
 <section class="app-dash-section" aria-labelledby="admin-limits-heading">
   {% macro info_tip(text) -%}
     <span
-      class="btn btn-link p-0 ms-1 align-baseline text-body-secondary"
+      class="aa-info-tip btn btn-link p-0 ms-1 align-baseline text-body-secondary"
       style="text-decoration: none;"
       role="button"
       tabindex="0"
@@ -10,8 +10,8 @@
       data-bs-container="body"
       data-bs-placement="top"
       data-bs-title="{{ text }}"
+      title="{{ text }}"
       aria-label="{{ text }}"
-      onclick="event.preventDefault(); event.stopPropagation();"
     >
       <span class="d-inline-flex align-items-center justify-content-center border rounded-circle" style="width: 16px; height: 16px; font-size: 11px; line-height: 1; font-weight: 700;">i</span>
     </span>
@@ -132,8 +132,8 @@
                 </div>
               </div>
               <div class="col-12 col-lg-4">
-                <label class="form-label fw-medium" for="maxSchedDay_{{ key }}">Max scheduled articles / day {{ info_tip('Maximum number of articles a user can schedule in a single day on this plan. Once the daily limit is reached, scheduling is blocked until the next day (UTC) or the user upgrades.') }}</label>
-                <input class="form-control" id="maxSchedDay_{{ key }}" name="max_scheduled_articles_per_day" type="number" min="0" value="{{ p.max_scheduled_articles_per_day if p is not none else 0 }}">
+                <label class="form-label fw-medium" for="maxSchedMonth_{{ key }}">Max scheduled articles / month {{ info_tip('Maximum number of articles a user can schedule per month on this plan (resets each month / renewal period). Once reached, scheduling is blocked until next month or the user upgrades.') }}</label>
+                <input class="form-control" id="maxSchedMonth_{{ key }}" name="max_scheduled_articles_per_month" type="number" min="0" value="{{ p.max_scheduled_articles_per_month if p is not none else 0 }}">
                 <div class="form-text small">0 = unlimited</div>
               </div>
               <div class="col-12 col-lg-4">
