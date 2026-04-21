@@ -128,6 +128,11 @@
                 </div>
               </div>
               <div class="col-12 col-lg-4">
+                <label class="form-label fw-medium" for="maxSchedDay_{{ key }}">Max scheduled articles / day {{ info_tip('Maximum number of articles a user can schedule in a single day on this plan. Once the daily limit is reached, scheduling is blocked until the next day (UTC) or the user upgrades.') }}</label>
+                <input class="form-control" id="maxSchedDay_{{ key }}" name="max_scheduled_articles_per_day" type="number" min="0" value="{{ p.max_scheduled_articles_per_day if p is not none else 0 }}">
+                <div class="form-text small">0 = unlimited</div>
+              </div>
+              <div class="col-12 col-lg-4">
                 <div class="form-check form-switch">
                   <input class="form-check-input" type="checkbox" role="switch" id="allowExport_{{ key }}" name="allow_export" {% if (p.allow_export if p is not none else true) %}checked{% endif %}>
                   <label class="form-check-label" for="allowExport_{{ key }}">Enable export articles {{ info_tip('When enabled, users can export project articles to Excel. When disabled, Export is shown but disabled with an “Upgrade plan” message.') }}</label>

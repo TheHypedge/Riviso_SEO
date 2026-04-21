@@ -345,6 +345,8 @@ def _plan_limit_summary(user: dict | None) -> dict[str, Any]:
         "max_image_prompts": _plan_int(plan, "max_image_prompts", 9999),
         "image_prompt_char_limit": _plan_int(plan, "image_prompt_char_limit", 100_000),
         "allow_scheduling": _plan_bool(plan, "allow_scheduling", True),
+        # 0 means unlimited per day.
+        "max_scheduled_articles_per_day": _plan_int(plan, "max_scheduled_articles_per_day", 0),
         "allow_export": _plan_bool(plan, "allow_export", True),
         "allow_bulk_upload": _plan_bool(plan, "allow_bulk_upload", True),
     }
@@ -413,6 +415,48 @@ def _article_quota_try_consume(user_id: str, add_count: int) -> tuple[bool, str]
         return False, "Could not update usage counters (database unavailable)."
     return True, ""
 
+
+def _schedule_quota_try_consume(user_id: str, add_count: int) -> tuple[bool, str]:
+    """
+    Return (ok, error_message). If ok, persists updated scheduling counter for the current day (UTC).
+    This limits how many articles a user can schedule in a single day under their current plan.
+    """
+    uid = (user_id or "").strip()
+    n = int(add_count or 0)
+    if not uid or n <= 0:
+        return True, ""
+    u = _storage.get_user_by_id(uid) or {}
+    limits = _plan_limit_summary(u)
+    day_limit = int(limits.get("max_scheduled_articles_per_day") or 0)
+    if day_limit <= 0:
+        return True, ""
+
+    today = _today_key_utc()
+    day_key = (u.get("usage_daily_scheduled_date") or "").strip()
+    day_used = _int0(u.get("usage_daily_scheduled_count"), 0)
+    if day_key != today:
+        day_key = today
+        day_used = 0
+
+    if (day_used + n) > day_limit:
+        return (
+            False,
+            f"Daily scheduling limit reached ({day_limit}/day). Upgrade plan to schedule more articles today.",
+        )
+
+    try:
+        if hasattr(_storage, "update_user_fields"):
+            _storage.update_user_fields(
+                uid,
+                {
+                    "usage_daily_scheduled_date": day_key,
+                    "usage_daily_scheduled_count": day_used + n,
+                },
+            )
+    except Exception:
+        return False, "Could not update scheduling counters (database unavailable)."
+
+    return True, ""
 
 def _project_ids_for_owner(user_id: str) -> list[str]:
     uid = _norm_owner_user_id(user_id)
@@ -2355,6 +2399,7 @@ def admin_update_plan():
         "max_image_prompts": _int("max_image_prompts", 1),
         "image_prompt_char_limit": _int("image_prompt_char_limit", 2000),
         "allow_scheduling": (request.form.get("allow_scheduling") or "") == "on",
+        "max_scheduled_articles_per_day": _int("max_scheduled_articles_per_day", 0),
         "allow_export": (request.form.get("allow_export") or "") == "on",
         "allow_bulk_upload": (request.form.get("allow_bulk_upload") or "") == "on",
     }
@@ -3801,6 +3846,22 @@ def bulk_articles_action(project_id: str):
         if not _is_project_wordpress_configured(project):
             flash("Configure WordPress for this project before scheduling posts.", "error")
             return _redirect_project_detail_with_dates(project_id)
+
+        # Daily scheduling cap (how many articles can be scheduled today under the plan).
+        sched_limit = int(limits.get("max_scheduled_articles_per_day") or 0)
+        if sched_limit > 0:
+            new_to_schedule = 0
+            for t in targets:
+                if (t.get("wp_post_id") or "").strip():
+                    continue
+                if _article_wp_scheduled_at_str(t):
+                    continue
+                new_to_schedule += 1
+            if new_to_schedule > 0:
+                ok_sched, sched_err = _schedule_quota_try_consume((session.get("user_id") or "").strip(), new_to_schedule)
+                if not ok_sched:
+                    flash(sched_err or "Daily scheduling limit reached. Upgrade plan to continue.", "error")
+                    return _redirect_project_detail_with_dates(project_id)
         wp_st = (request.form.get("schedule_wp_status") or "draft").strip().lower()
         if wp_st not in ("draft", "publish"):
             wp_st = "draft"
