@@ -89,5 +89,5 @@ jobs:
             # Fail early with a clear message if sudo needs a password.
             (sudo -n true) || { echo "sudo requires a password for this SSH user. Configure NOPASSWD for systemctl." >&2; exit 1; }
             bash -x deploy/deploy.sh
-EOS
+            EOS
             )"
