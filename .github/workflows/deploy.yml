@@ -28,12 +28,55 @@ jobs:
           script_stop: true
           script: |
             set -euo pipefail
+            APP_DIR="/var/www/auto-articles"
+            PARENT_DIR="/var/www"
+            # Prefer existing origin; fallback to HTTPS.
+            FALLBACK_REPO_URL="https://github.com/TheHypedge/Auto-Article-Generator.git"
+
             # Git 2.35+ refuses repos owned by another user (e.g. root SSH vs www-data files)
-            git config --global --add safe.directory /var/www/auto-articles
-            cd /var/www/auto-articles
-            git fetch origin main
-            # Force local main to match GitHub (no diverged-branch fast-forward issues)
-            git checkout -B main origin/main
+            git config --global --add safe.directory "$APP_DIR" || true
+
+            reclone() {
+              echo "Repo appears corrupted. Re-cloning into $APP_DIR"
+              cd "$PARENT_DIR"
+              local tmp="/tmp/aa_deploy_backup_$$"
+              mkdir -p "$tmp"
+              # Preserve server-only files.
+              if [[ -f "$APP_DIR/.env" ]]; then cp -f "$APP_DIR/.env" "$tmp/.env"; fi
+              if [[ -d "$APP_DIR/data" ]]; then cp -a "$APP_DIR/data" "$tmp/data"; fi
+              # Replace working tree.
+              rm -rf "$APP_DIR"
+              local url="$FALLBACK_REPO_URL"
+              if [[ -f "$tmp/origin_url" ]]; then url="$(cat "$tmp/origin_url")"; fi
+              git clone --depth 1 --branch main "$url" "$APP_DIR"
+              # Restore preserved data.
+              if [[ -f "$tmp/.env" ]]; then cp -f "$tmp/.env" "$APP_DIR/.env"; fi
+              if [[ -d "$tmp/data" ]]; then
+                rm -rf "$APP_DIR/data"
+                cp -a "$tmp/data" "$APP_DIR/data"
+              fi
+              rm -rf "$tmp"
+            }
+
+            if [[ ! -d "$APP_DIR/.git" ]]; then
+              reclone
+            else
+              cd "$APP_DIR"
+              # Capture origin URL for recovery, if possible.
+              (git remote get-url origin > /tmp/aa_origin_url_$$ 2>/dev/null && mkdir -p /tmp/aa_deploy_backup_$$ && mv /tmp/aa_origin_url_$$ /tmp/aa_deploy_backup_$$/origin_url) || true
+              # Detect corruption early.
+              if ! git fsck --no-reflogs --full >/dev/null 2>&1; then
+                reclone
+              else
+                # Fetch may still fail if objects are corrupted; fall back to reclone.
+                if ! git fetch origin main; then
+                  reclone
+                else
+                  # Force local main to match GitHub (no diverged-branch fast-forward issues)
+                  git checkout -B main origin/main
+                fi
+              fi
+            fi
             # Strip CRLF if present (Windows checkouts break bash: $'\r': command not found)
             sed -i 's/\r$//' deploy/deploy.sh
             bash deploy/deploy.sh
