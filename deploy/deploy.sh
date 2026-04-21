@@ -26,6 +26,28 @@ source .venv/bin/activate
 python -m pip install --upgrade pip --quiet --disable-pip-version-check
 pip install -r requirements.txt --quiet --disable-pip-version-check
 
+# Verify the expected environment file(s) exist for systemd.
+echo "systemd unit (auto-articles):"
+sudo systemctl cat auto-articles --no-pager || true
+
+if [[ ! -f "$ROOT/.env" ]]; then
+  echo "Missing $ROOT/.env on the server. Restore it (or ensure deploy workflow preserves it) before restarting the service." >&2
+  exit 1
+fi
+
+ENV_FILES="$(sudo systemctl cat auto-articles --no-pager 2>/dev/null | sed -n 's/^[[:space:]]*EnvironmentFile=//p' | tr ' ' '\n' | sed 's/^-//g' | sed '/^$/d' || true)"
+if [[ -n "${ENV_FILES:-}" ]]; then
+  while IFS= read -r f; do
+    [[ -z "${f:-}" ]] && continue
+    f="${f%\"}"; f="${f#\"}"
+    if [[ ! -f "$f" ]]; then
+      echo "Creating missing EnvironmentFile: $f"
+      sudo mkdir -p "$(dirname "$f")"
+      sudo install -m 640 "$ROOT/.env" "$f"
+    fi
+  done <<<"$ENV_FILES"
+fi
+
 if ! sudo systemctl restart auto-articles; then
   echo "auto-articles.service failed to restart. Diagnostics:" >&2
   sudo systemctl status auto-articles --no-pager || true
