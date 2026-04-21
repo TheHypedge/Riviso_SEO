@@ -29,6 +29,7 @@ jobs:
           debug: true
           script: |
             set -euo pipefail
+            set -x
             APP_DIR="/var/www/auto-articles"
             PARENT_DIR="/var/www"
             # Prefer existing origin; fallback to SSH (avoid HTTPS username/password prompts).
@@ -78,6 +79,10 @@ jobs:
                 fi
               fi
             fi
+
+            cd "$APP_DIR"
             # Strip CRLF if present (Windows checkouts break bash: $'\r': command not found)
             sed -i 's/\r$//' deploy/deploy.sh
-            bash deploy/deploy.sh
+            # Fail early with a clear message if sudo needs a password.
+            (sudo -n true) || { echo "sudo requires a password for this SSH user. Configure NOPASSWD for systemctl." >&2; exit 1; }
+            bash -x deploy/deploy.sh
