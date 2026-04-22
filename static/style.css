@@ -2083,9 +2083,39 @@ html[data-theme="dark"] .app-dashboard {
 }
 
 /* ——— Admin sidebar (Home) ——— */
-.app-admin-sidebar .app-card {
+.app-admin-sidebar {
+  height: calc(100vh - 5.25rem);
   position: sticky;
-  top: 1.25rem;
+  top: 4.75rem;
+  align-self: stretch;
+}
+
+.app-admin-sidebar__inner {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.app-admin-sidebar__actions {
+  margin-top: auto;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.app-admin-sidebar__actions .app-shell-account-actions {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.6rem;
+}
+
+.app-admin-sidebar__actions .app-shell-btn {
+  width: 100%;
+  justify-content: center;
+  text-align: center;
+}
+
+.app-admin-sidebar .app-card {
   border: 1px solid #5b5b5b40;
   border-radius: 10px;
   background: white;
@@ -2408,5 +2438,76 @@ body.aa-onboarding-active {
   .aa-onboarding__back,
   .aa-onboarding__next {
     flex: 1;
+  }
+}
+
+/* Cookie consent */
+.aa-cookie-consent[hidden] {
+  display: none !important;
+}
+
+.aa-cookie-consent {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 210000;
+  padding: 0.75rem;
+  pointer-events: none;
+}
+
+.aa-cookie-consent__card {
+  pointer-events: auto;
+  margin: 0 auto;
+  max-width: 980px;
+  display: flex;
+  gap: 0.9rem;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 1rem;
+  box-shadow:
+    0 16px 40px rgba(15, 23, 42, 0.12),
+    0 1px 2px rgba(15, 23, 42, 0.06);
+  padding: 0.85rem 1rem;
+}
+
+.aa-cookie-consent__title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+  margin-bottom: 0.15rem;
+}
+
+.aa-cookie-consent__text {
+  font-size: 0.9rem;
+  color: #475569;
+  line-height: 1.35;
+}
+
+.aa-cookie-consent__link {
+  color: #2563eb;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.aa-cookie-consent__link:hover {
+  text-decoration: underline;
+}
+
+.aa-cookie-consent__actions {
+  flex-shrink: 0;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+@media (max-width: 575.98px) {
+  .aa-cookie-consent__card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+  .aa-cookie-consent__actions {
+    justify-content: flex-end;
   }
 }

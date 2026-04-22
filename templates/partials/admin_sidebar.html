@@ -1,4 +1,11 @@
 <aside class="app-admin-sidebar" aria-label="Admin navigation">
-  {% include 'partials/admin_sidebar_nav.html' %}
+  <div class="app-admin-sidebar__inner">
+    {% include 'partials/admin_sidebar_nav.html' %}
+    <div class="app-admin-sidebar__actions mt-3">
+      {% if current_user %}
+        {% include 'partials/app_shell_account_actions.html' %}
+      {% endif %}
+    </div>
+  </div>
 </aside>
 

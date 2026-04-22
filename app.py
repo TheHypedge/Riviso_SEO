@@ -2385,7 +2385,8 @@ def home():
             # Fallback to basic user list if aggregation fails (e.g., DB not connected).
             pass
     _cu_home = _current_user()
-    show_onboarding_tour = bool(_cu_home and _cu_home.get("pending_product_tour"))
+    watch_tour = (request.args.get("watch_tour") or "").strip()
+    show_onboarding_tour = bool((_cu_home and _cu_home.get("pending_product_tour")) or (watch_tour == "1"))
     return render_template(
         "home.html",
         projects=projects,
@@ -2405,6 +2406,30 @@ def home():
         show_onboarding_tour=show_onboarding_tour,
         primary_admin_email=_PRIMARY_PROTECTED_ADMIN_EMAIL,
         live_connect_meta=_LIVE_CONNECT_META,
+    )
+
+
+@app.get("/privacy")
+def privacy_policy():
+    # Public page: show signed-in context if available.
+    current_user = _current_user() if _is_authenticated() else None
+    is_admin = bool(current_user and (current_user.get("role") or "").strip().lower() == "admin")
+    return render_template(
+        "privacy.html",
+        current_user=current_user,
+        is_admin=is_admin,
+    )
+
+
+@app.get("/terms")
+def terms_and_conditions():
+    # Public page: show signed-in context if available.
+    current_user = _current_user() if _is_authenticated() else None
+    is_admin = bool(current_user and (current_user.get("role") or "").strip().lower() == "admin")
+    return render_template(
+        "terms.html",
+        current_user=current_user,
+        is_admin=is_admin,
     )
 
 

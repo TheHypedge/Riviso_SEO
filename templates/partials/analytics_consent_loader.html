@@ -1,0 +1,53 @@
+<script>
+  (function () {
+    // Cookie consent + analytics loader.
+    // Only loads GA/GTM after explicit consent stored in localStorage.
+    var CONSENT_KEY = 'aa_cookie_consent_v1';
+    var GA_ID = 'G-G2X5WMFMHY';
+    var GTM_ID = 'GTM-TZ7WWLSG';
+
+    function hasConsent() {
+      try { return (localStorage.getItem(CONSENT_KEY) || '') === 'accepted'; } catch (e) { return false; }
+    }
+
+    function injectScript(src) {
+      var s = document.createElement('script');
+      s.async = true;
+      s.src = src;
+      document.head.appendChild(s);
+    }
+
+    function enableAnalytics() {
+      if (window.__aaAnalyticsEnabled) return;
+      window.__aaAnalyticsEnabled = true;
+
+      // Google Analytics (gtag.js)
+      window.dataLayer = window.dataLayer || [];
+      window.gtag = window.gtag || function () { window.dataLayer.push(arguments); };
+      injectScript('https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(GA_ID));
+      window.gtag('js', new Date());
+      window.gtag('config', GA_ID);
+
+      // Google Tag Manager
+      (function (w, d, s, l, i) {
+        w[l] = w[l] || [];
+        w[l].push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' });
+        var f = d.getElementsByTagName(s)[0];
+        var j = d.createElement(s);
+        var dl = l !== 'dataLayer' ? '&l=' + l : '';
+        j.async = true;
+        j.src = 'https://www.googletagmanager.com/gtm.js?id=' + i + dl;
+        f.parentNode.insertBefore(j, f);
+      })(window, document, 'script', 'dataLayer', GTM_ID);
+    }
+
+    window.AAAnalytics = window.AAAnalytics || {
+      enable: enableAnalytics,
+      hasConsent: hasConsent,
+      consentKey: CONSENT_KEY,
+    };
+
+    if (hasConsent()) enableAnalytics();
+  })();
+</script>
+

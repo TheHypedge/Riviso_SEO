@@ -1,0 +1,19 @@
+<div class="aa-cookie-consent" id="aaCookieConsent" role="dialog" aria-live="polite" aria-label="Cookie consent" aria-modal="false" hidden>
+  <div class="aa-cookie-consent__card">
+    <div class="aa-cookie-consent__content">
+      <div class="aa-cookie-consent__title">Cookies &amp; privacy</div>
+      <div class="aa-cookie-consent__text">
+        We use cookies to remember preferences and, with your permission, to measure usage. You can change your choice anytime.
+        <a href="{{ url_for('privacy_policy') }}" class="aa-cookie-consent__link">Privacy Policy</a>
+        <span class="mx-1">·</span>
+        <a href="{{ url_for('terms_and_conditions') }}" class="aa-cookie-consent__link">Terms</a>
+      </div>
+    </div>
+    <div class="aa-cookie-consent__actions">
+      <button type="button" class="btn btn-outline-secondary btn-sm" data-aa-cookie="reject">Reject</button>
+      <button type="button" class="btn btn-primary btn-sm" data-aa-cookie="accept">Accept</button>
+    </div>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='cookie-consent.js') }}"></script>
+
