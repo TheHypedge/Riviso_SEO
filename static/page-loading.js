@@ -123,9 +123,32 @@
   if (typeof nativeFetch === 'function') {
     window.fetch = function () {
       var args = arguments;
-      fetchDepth += 1;
-      if (fetchDepth === 1) showDelayed();
-      return nativeFetch.apply(this, args).finally(function () {
+      // Only show the full-page loader for our own app requests.
+      // Third-party scripts (analytics, tag manager, etc.) may use fetch() on page load and
+      // should not block the UI with a modal-like overlay.
+      var url = '';
+      try {
+        url = String(args[0] || '');
+      } catch (e) {}
+      var isSameOrigin = false;
+      try {
+        var u = new URL(url, window.location.href);
+        isSameOrigin = u.origin === window.location.origin;
+      } catch (e2) {
+        // Non-URL fetch arg (Request object) or invalid; assume same-origin to be safe.
+        isSameOrigin = true;
+      }
+
+      var track = !!isSameOrigin;
+      if (track) {
+        fetchDepth += 1;
+        if (fetchDepth === 1) showDelayed();
+      }
+
+      var p = nativeFetch.apply(this, args);
+      if (!track) return p;
+
+      return p.finally(function () {
         fetchDepth -= 1;
         if (fetchDepth <= 0) {
           fetchDepth = 0;

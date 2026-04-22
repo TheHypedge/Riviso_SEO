@@ -1246,6 +1246,11 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
           if (!m) return '';
           return m[1] + 'T' + m[2];
         }
+        function ensureEditScheduleModalInBody() {
+          var el = document.getElementById('editScheduleModal');
+          if (!el || el.parentNode === document.body) return;
+          document.body.appendChild(el);
+        }
         function scheduledRowsFromDom() {
           var dataEl = document.getElementById('scheduled-pending-data');
           if (!dataEl) return [];
@@ -1278,6 +1283,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
           }
           var modalEl = document.getElementById('editScheduleModal');
           if (modalEl && window.bootstrap) {
+            ensureEditScheduleModalInBody();
             window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
           }
         });

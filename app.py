@@ -1563,6 +1563,9 @@ def _earlier_batch_member_blocks(arts: list[dict], article: dict, now: datetime)
         oidx = int(o.get("wp_schedule_batch_index") or 0)
         if oidx >= my_idx:
             continue
+        # Don't let a failed earlier item block the rest of the batch forever.
+        if (o.get("wp_schedule_state") or "").strip().lower() == "error":
+            continue
         if o.get("wp_post_id"):
             continue
         sched_o = _article_wp_scheduled_at_str(o)
@@ -1600,6 +1603,9 @@ def _cleared_wp_schedule_fields() -> dict:
         "wp_schedule_batch_id": "",
         "wp_schedule_batch_index": "",
         "wp_schedule_batch_total": "",
+        "wp_schedule_state": "",
+        "wp_schedule_state_updated_at": "",
+        "wp_schedule_next_retry_at": "",
     }
 
 
@@ -4883,6 +4889,17 @@ def _process_due_scheduled_wordpress_posts() -> None:
                     continue
                 if a.get("wp_post_id"):
                     continue
+                # If the last attempt failed, respect retry delay.
+                st = (a.get("wp_schedule_state") or "").strip().lower()
+                if st == "error":
+                    nr = (a.get("wp_schedule_next_retry_at") or "").strip()
+                    if nr:
+                        try:
+                            dt_nr = datetime.strptime(nr, "%Y-%m-%d %H:%M:%S")
+                            if dt_nr > now:
+                                continue
+                        except ValueError:
+                            pass
                 try:
                     dt = datetime.strptime(sched, "%Y-%m-%d %H:%M:%S")
                 except ValueError:
@@ -4979,14 +4996,15 @@ def _process_due_scheduled_wordpress_posts() -> None:
                     app.logger.warning(
                         "Scheduled WordPress post failed for article %s: %s", aid, err or "unknown"
                     )
+                    # Keep the schedule row intact and retry later instead of dropping the item.
+                    next_retry = (datetime.now() + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
                     _update_article_fields(
                         aid,
                         {
-                            "wp_scheduled_at": "",
-                            "wp_schedule_error": err or "WordPress post failed.",
-                            "wp_schedule_batch_id": "",
-                            "wp_schedule_batch_index": "",
-                            "wp_schedule_batch_total": "",
+                            "wp_schedule_state": "error",
+                            "wp_schedule_state_updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "wp_schedule_next_retry_at": next_retry,
+                            "wp_schedule_error": (err or "WordPress post failed.")[:500],
                         },
                     )
                     continue
@@ -5007,6 +5025,7 @@ def _process_due_scheduled_wordpress_posts() -> None:
                         "wp_schedule_batch_total": "",
                         "wp_schedule_state": "",
                         "wp_schedule_state_updated_at": "",
+                        "wp_schedule_next_retry_at": "",
                     },
                 )
                 proj_fresh = _get_project_by_id_unscoped(project.get("id") or "") or project
