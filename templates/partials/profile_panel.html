@@ -19,6 +19,21 @@
         </div>
         <div class="row g-3">
           <div class="col-12 col-md-6">
+            <label class="form-label fw-medium" for="profileTimezone">Timezone</label>
+            {% set _tz = (current_user.timezone or '') %}
+            <select class="form-select" id="profileTimezone" name="timezone" data-auto-tz="1">
+              {% for tz in all_timezones|default(['UTC']) %}
+                <option value="{{ tz }}" {% if tz == _tz %}selected{% endif %}>{{ tz }}</option>
+              {% endfor %}
+            </select>
+            <div class="form-text">Used for scheduling and posting times.</div>
+          </div>
+          <div class="col-12 col-md-6 d-flex align-items-end">
+            <button type="button" class="btn btn-outline-secondary w-100" id="profileTimezoneAutoBtn">Auto-detect</button>
+          </div>
+        </div>
+        <div class="row g-3">
+          <div class="col-12 col-md-6">
             <label class="form-label fw-medium" for="profileEmail">Email (read-only)</label>
             <input class="form-control" id="profileEmail" value="{{ current_user.email }}" disabled>
           </div>
@@ -55,6 +70,36 @@
   </div>
   {% endif %}
 </section>
+
+<script>
+  (function () {
+    function detectTz() {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      } catch (e) {
+        return '';
+      }
+    }
+    function applyTz(tz) {
+      if (!tz) return;
+      var sel = document.getElementById('profileTimezone');
+      if (!sel) return;
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === tz) {
+          sel.value = tz;
+          return;
+        }
+      }
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+      var btn = document.getElementById('profileTimezoneAutoBtn');
+      if (btn) btn.addEventListener('click', function () { applyTz(detectTz()); });
+      // If timezone isn't set yet, auto-select on first visit.
+      var sel = document.getElementById('profileTimezone');
+      if (sel && !sel.value) applyTz(detectTz());
+    });
+  })();
+</script>
 
 <div class="modal fade" id="deleteAccountModal" tabindex="-1" aria-labelledby="deleteAccountModalLabel" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">

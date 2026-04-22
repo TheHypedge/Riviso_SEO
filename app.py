@@ -14,6 +14,12 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 from urllib.request import urlopen
 
+try:
+    from zoneinfo import ZoneInfo, available_timezones
+except Exception:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
+    available_timezones = None  # type: ignore
+
 from dotenv import load_dotenv
 from flask import Flask, Response, flash, jsonify, redirect, render_template, request, send_file, session, url_for
 from flask_session import Session
@@ -290,6 +296,43 @@ def _current_user() -> dict | None:
 
 def _utc_now_str() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _all_timezones() -> list[str]:
+    if not available_timezones:
+        return ["UTC"]
+    try:
+        out = sorted(list(available_timezones()))
+    except Exception:
+        out = ["UTC"]
+    return out or ["UTC"]
+
+
+def _user_timezone_name(user: dict | None) -> str:
+    u = user or {}
+    tz = (u.get("timezone") or "").strip()
+    if tz and ZoneInfo:
+        try:
+            ZoneInfo(tz)
+            return tz
+        except Exception:
+            pass
+    return "UTC"
+
+
+def _local_to_utc_str(dt_local: datetime, tz_name: str) -> str:
+    """
+    Convert a naive local datetime (picked in user timezone) to UTC schedule string.
+    """
+    if not ZoneInfo:
+        return dt_local.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        tz = ZoneInfo(tz_name)
+        aware = dt_local.replace(tzinfo=tz)
+        utc = aware.astimezone(ZoneInfo("UTC"))
+        return utc.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return dt_local.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _load_plans_safe() -> dict[str, Any]:
@@ -1707,11 +1750,8 @@ def _bulk_set_wp_schedule_fields_now(project_id: str, ids: list[str], form_snaps
     if not times_map:
         return 0, 0, "Please set a date and time for each selected article."
 
-    tz_off = None
-    try:
-        tz_off = int((form_snapshot.get("client_tz_offset_min") or "").strip() or "0")
-    except Exception:
-        tz_off = None
+    owner = _storage.get_user_by_id((project.get("owner_user_id") or "").strip()) if hasattr(_storage, "get_user_by_id") else None
+    tz_name = _user_timezone_name(owner)
 
     arts = _load_articles()
     id_set = set(ids)
@@ -1748,12 +1788,11 @@ def _bulk_set_wp_schedule_fields_now(project_id: str, ids: list[str], form_snaps
         # Stored "wp_scheduled_at" is the user-entered local timestamp (for display),
         # while "wp_scheduled_at_utc" is used for posting.
         dt_local = dt.replace(microsecond=0)
-        dt_utc = None
-        if tz_off is not None:
-            dt_utc = (dt_local + timedelta(minutes=tz_off)).replace(microsecond=0)
-        else:
+        dt_utc_str = _local_to_utc_str(dt_local, tz_name)
+        try:
+            dt_utc = datetime.strptime(dt_utc_str, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
             dt_utc = dt_local
-        # Clamp on UTC for due checks.
         dt_utc = _clamp_future_schedule_dt(dt_utc)
         sched_str = dt_local.strftime("%Y-%m-%d %H:%M:%S")
         sched_utc_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
@@ -1772,7 +1811,7 @@ def _bulk_set_wp_schedule_fields_now(project_id: str, ids: list[str], form_snaps
                     "wp_schedule_batch_id": batch_id,
                     "wp_schedule_batch_index": sched_idx,
                     "wp_schedule_batch_total": len(targets) - skipped,
-                    "wp_schedule_tz_offset_min": tz_off if tz_off is not None else "",
+                    "wp_schedule_tz_offset_min": "",
                 },
             )
         )
@@ -2445,6 +2484,7 @@ def home():
         storage_init_error=_storage.storage_init_error() if hasattr(_storage, "storage_init_error") else None,
         current_user=current_user,
         is_admin=is_admin,
+        all_timezones=_all_timezones(),
         admin_section=section,
         home_section=section,
         admin_users=users,
@@ -2613,8 +2653,12 @@ def update_profile():
     uid = (session.get("user_id") or "").strip()
     full_name = (request.form.get("full_name") or "").strip()
     phone = (request.form.get("phone") or "").strip()
+    timezone = (request.form.get("timezone") or "").strip()
     try:
-        _storage.update_user_fields(uid, {"full_name": full_name, "phone": phone}) if hasattr(_storage, "update_user_fields") else None
+        upd = {"full_name": full_name, "phone": phone}
+        if timezone:
+            upd["timezone"] = timezone
+        _storage.update_user_fields(uid, upd) if hasattr(_storage, "update_user_fields") else None
     except Exception as e:
         flash(f"Could not update profile: {e}", "error")
         return redirect(url_for("home", section="profile"))
@@ -3934,13 +3978,14 @@ def update_article_schedule(project_id: str, article_id: str):
     if not dt:
         flash("Please enter a valid date and time.", "error")
         return _redirect_project_detail_with_dates(project_id)
-    tz_off = None
-    try:
-        tz_off = int((request.form.get("client_tz_offset_min") or "").strip() or "0")
-    except Exception:
-        tz_off = None
+    owner = _storage.get_user_by_id((project.get("owner_user_id") or "").strip()) if hasattr(_storage, "get_user_by_id") else None
+    tz_name = _user_timezone_name(owner)
     dt_local = dt.replace(microsecond=0)
-    dt_utc = (dt_local + timedelta(minutes=tz_off)).replace(microsecond=0) if tz_off is not None else dt_local
+    dt_utc_str = _local_to_utc_str(dt_local, tz_name)
+    try:
+        dt_utc = datetime.strptime(dt_utc_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        dt_utc = dt_local
     dt_utc = _clamp_future_schedule_dt(dt_utc)
     sched_str = dt_local.strftime("%Y-%m-%d %H:%M:%S")
     sched_utc_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
@@ -3959,7 +4004,7 @@ def update_article_schedule(project_id: str, article_id: str):
             "wp_schedule_batch_id": "",
             "wp_schedule_batch_index": "",
             "wp_schedule_batch_total": "",
-            "wp_schedule_tz_offset_min": tz_off if tz_off is not None else "",
+            "wp_schedule_tz_offset_min": "",
         },
     )
     flash("Schedule updated.", "success")
@@ -4959,11 +5004,13 @@ def _process_due_scheduled_wordpress_posts() -> None:
         return
     try:
         with app.app_context():
-            now = datetime.utcnow().replace(microsecond=0)
+            now_utc = datetime.utcnow().replace(microsecond=0)
+            now_local = datetime.now().replace(microsecond=0)
             arts = _load_articles()
             candidates: list[dict] = []
             for a in arts:
-                sched = _article_wp_scheduled_at_utc_str(a) or _article_wp_scheduled_at_str(a)
+                sched_utc = _article_wp_scheduled_at_utc_str(a)
+                sched = sched_utc or _article_wp_scheduled_at_str(a)
                 if not sched:
                     continue
                 aid = (a.get("id") or "").strip()
@@ -4971,6 +5018,7 @@ def _process_due_scheduled_wordpress_posts() -> None:
                     continue
                 if a.get("wp_post_id"):
                     continue
+                now = now_utc if sched_utc else now_local
                 # If the last attempt failed, respect retry delay.
                 st = (a.get("wp_schedule_state") or "").strip().lower()
                 if st == "error":
@@ -5012,13 +5060,15 @@ def _process_due_scheduled_wordpress_posts() -> None:
                 cur = _get_article_by_id(aid)
                 if not cur or cur.get("wp_post_id"):
                     continue
-                sched = _article_wp_scheduled_at_utc_str(cur) or _article_wp_scheduled_at_str(cur)
+                sched_utc = _article_wp_scheduled_at_utc_str(cur)
+                sched = sched_utc or _article_wp_scheduled_at_str(cur)
                 if not sched:
                     continue
                 try:
                     dt = datetime.strptime(sched, "%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     continue
+                now = now_utc if sched_utc else now_local
                 if dt > now:
                     continue
                 if _earlier_batch_member_blocks(arts, cur, now):
