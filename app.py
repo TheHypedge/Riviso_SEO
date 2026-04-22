@@ -1349,6 +1349,30 @@ def _article_wp_scheduled_at_str(article: dict | None) -> str:
     return _storage._coerce_wp_scheduled_at_str(article.get("wp_scheduled_at"))
 
 
+def _article_wp_scheduled_at_utc_str(article: dict | None) -> str:
+    """UTC schedule timestamp (preferred for due checks)."""
+    if not article:
+        return ""
+    v = article.get("wp_scheduled_at_utc")
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    # Back-compat: derive UTC if we have local time + tz offset.
+    local_str = _storage._coerce_wp_scheduled_at_str(article.get("wp_scheduled_at"))
+    if not local_str:
+        return ""
+    off = article.get("wp_schedule_tz_offset_min")
+    try:
+        off_i = int(off)
+    except Exception:
+        return ""
+    try:
+        dt_local = datetime.strptime(local_str, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return ""
+    dt_utc = dt_local + timedelta(minutes=off_i)
+    return dt_utc.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def _app_article_status_from_wp_rest_status(raw) -> str:
     """Map WordPress REST post `status` to our article status (published vs draft)."""
     if isinstance(raw, str) and raw.strip():
@@ -1429,7 +1453,9 @@ def _parse_bulk_schedule_datetime(raw: str) -> datetime | None:
 
 
 def _clamp_future_schedule_dt(dt: datetime) -> datetime:
-    now = datetime.now().replace(microsecond=0)
+    # Clamp using UTC semantics where possible (posting uses wp_scheduled_at_utc).
+    # Here we only ensure the timestamp isn't in the past relative to server time.
+    now = datetime.utcnow().replace(microsecond=0)
     if dt < now:
         return now + timedelta(minutes=1)
     return dt.replace(microsecond=0)
@@ -1568,7 +1594,7 @@ def _earlier_batch_member_blocks(arts: list[dict], article: dict, now: datetime)
             continue
         if o.get("wp_post_id"):
             continue
-        sched_o = _article_wp_scheduled_at_str(o)
+        sched_o = _article_wp_scheduled_at_utc_str(o) or _article_wp_scheduled_at_str(o)
         if not sched_o:
             continue
         try:
@@ -1598,6 +1624,7 @@ def _redirect_project_detail_with_dates(project_id: str, *, watch_schedule: bool
 def _cleared_wp_schedule_fields() -> dict:
     return {
         "wp_scheduled_at": "",
+        "wp_scheduled_at_utc": "",
         "wp_schedule_wp_status": "",
         "wp_schedule_error": "",
         "wp_schedule_batch_id": "",
@@ -1606,6 +1633,7 @@ def _cleared_wp_schedule_fields() -> dict:
         "wp_schedule_state": "",
         "wp_schedule_state_updated_at": "",
         "wp_schedule_next_retry_at": "",
+        "wp_schedule_tz_offset_min": "",
     }
 
 
@@ -1679,6 +1707,12 @@ def _bulk_set_wp_schedule_fields_now(project_id: str, ids: list[str], form_snaps
     if not times_map:
         return 0, 0, "Please set a date and time for each selected article."
 
+    tz_off = None
+    try:
+        tz_off = int((form_snapshot.get("client_tz_offset_min") or "").strip() or "0")
+    except Exception:
+        tz_off = None
+
     arts = _load_articles()
     id_set = set(ids)
     targets = [
@@ -1711,13 +1745,24 @@ def _bulk_set_wp_schedule_fields_now(project_id: str, ids: list[str], form_snaps
         if not dt:
             title_hint = (t.get("title") or "").strip() or "Untitled"
             return 0, 0, f"Invalid date and time for «{title_hint[:80]}»."
-        dt = _clamp_future_schedule_dt(dt)
-        sched_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+        # Stored "wp_scheduled_at" is the user-entered local timestamp (for display),
+        # while "wp_scheduled_at_utc" is used for posting.
+        dt_local = dt.replace(microsecond=0)
+        dt_utc = None
+        if tz_off is not None:
+            dt_utc = (dt_local + timedelta(minutes=tz_off)).replace(microsecond=0)
+        else:
+            dt_utc = dt_local
+        # Clamp on UTC for due checks.
+        dt_utc = _clamp_future_schedule_dt(dt_utc)
+        sched_str = dt_local.strftime("%Y-%m-%d %H:%M:%S")
+        sched_utc_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
         bulk_updates.append(
             (
                 aid,
                 {
                     "wp_scheduled_at": sched_str,
+                    "wp_scheduled_at_utc": sched_utc_str,
                     "wp_schedule_wp_status": wp_st,
                     "wp_rest_base": schedule_rest_base,
                     "wp_schedule_error": "",
@@ -1727,6 +1772,7 @@ def _bulk_set_wp_schedule_fields_now(project_id: str, ids: list[str], form_snaps
                     "wp_schedule_batch_id": batch_id,
                     "wp_schedule_batch_index": sched_idx,
                     "wp_schedule_batch_total": len(targets) - skipped,
+                    "wp_schedule_tz_offset_min": tz_off if tz_off is not None else "",
                 },
             )
         )
@@ -3888,8 +3934,16 @@ def update_article_schedule(project_id: str, article_id: str):
     if not dt:
         flash("Please enter a valid date and time.", "error")
         return _redirect_project_detail_with_dates(project_id)
-    dt = _clamp_future_schedule_dt(dt)
-    sched_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+    tz_off = None
+    try:
+        tz_off = int((request.form.get("client_tz_offset_min") or "").strip() or "0")
+    except Exception:
+        tz_off = None
+    dt_local = dt.replace(microsecond=0)
+    dt_utc = (dt_local + timedelta(minutes=tz_off)).replace(microsecond=0) if tz_off is not None else dt_local
+    dt_utc = _clamp_future_schedule_dt(dt_utc)
+    sched_str = dt_local.strftime("%Y-%m-%d %H:%M:%S")
+    sched_utc_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
 
     wp_st = (request.form.get("schedule_wp_status") or "draft").strip().lower()
     if wp_st not in ("draft", "publish"):
@@ -3899,11 +3953,13 @@ def update_article_schedule(project_id: str, article_id: str):
         article_id,
         {
             "wp_scheduled_at": sched_str,
+            "wp_scheduled_at_utc": sched_utc_str,
             "wp_schedule_wp_status": wp_st,
             "wp_schedule_error": "",
             "wp_schedule_batch_id": "",
             "wp_schedule_batch_index": "",
             "wp_schedule_batch_total": "",
+            "wp_schedule_tz_offset_min": tz_off if tz_off is not None else "",
         },
     )
     flash("Schedule updated.", "success")
@@ -4005,6 +4061,7 @@ def bulk_articles_action(project_id: str):
             "bulk_prompt_id": (request.form.get("bulk_prompt_id") or "").strip(),
             "bulk_image_prompt_id": (request.form.get("bulk_image_prompt_id") or "").strip(),
             "schedule_times_json": request.form.get("schedule_times_json") or "",
+            "client_tz_offset_min": (request.form.get("client_tz_offset_min") or "").strip(),
         }
         # Persist schedule metadata immediately so the Scheduled posts section updates right away.
         n_sched, skipped, sched_err = _bulk_set_wp_schedule_fields_now(project_id, list(ids), form_snapshot)
@@ -4902,11 +4959,11 @@ def _process_due_scheduled_wordpress_posts() -> None:
         return
     try:
         with app.app_context():
-            now = datetime.now()
+            now = datetime.utcnow().replace(microsecond=0)
             arts = _load_articles()
             candidates: list[dict] = []
             for a in arts:
-                sched = _article_wp_scheduled_at_str(a)
+                sched = _article_wp_scheduled_at_utc_str(a) or _article_wp_scheduled_at_str(a)
                 if not sched:
                     continue
                 aid = (a.get("id") or "").strip()
@@ -4930,7 +4987,11 @@ def _process_due_scheduled_wordpress_posts() -> None:
                 except ValueError:
                     _update_article_fields(
                         aid,
-                        {"wp_scheduled_at": "", "wp_schedule_error": "Invalid schedule time stored."},
+                        {
+                            "wp_scheduled_at": "",
+                            "wp_scheduled_at_utc": "",
+                            "wp_schedule_error": "Invalid schedule time stored.",
+                        },
                     )
                     continue
                 if dt > now:
@@ -4941,7 +5002,7 @@ def _process_due_scheduled_wordpress_posts() -> None:
                 key=lambda x: (
                     (x.get("wp_schedule_batch_id") or ""),
                     int(x.get("wp_schedule_batch_index") or 0),
-                    _article_wp_scheduled_at_str(x),
+                    _article_wp_scheduled_at_utc_str(x) or _article_wp_scheduled_at_str(x),
                 )
             )
 
@@ -4951,7 +5012,7 @@ def _process_due_scheduled_wordpress_posts() -> None:
                 cur = _get_article_by_id(aid)
                 if not cur or cur.get("wp_post_id"):
                     continue
-                sched = _article_wp_scheduled_at_str(cur)
+                sched = _article_wp_scheduled_at_utc_str(cur) or _article_wp_scheduled_at_str(cur)
                 if not sched:
                     continue
                 try:

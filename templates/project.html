@@ -119,6 +119,7 @@
                         <input type="hidden" name="schedule_times_json" id="bulkScheduleTimesJsonInput" value="">
                         <input type="hidden" name="schedule_wp_status" id="bulkScheduleWpStatusInput" value="">
                         <input type="hidden" name="schedule_wp_rest_base" id="bulkScheduleWpRestBaseHidden" value="">
+                        <input type="hidden" name="client_tz_offset_min" id="clientTzOffsetMin" value="">
                         <input type="hidden" name="bulk_prompt_id" id="bulkPromptIdHidden" value="">
                         <input type="hidden" name="bulk_image_prompt_id" id="bulkImagePromptIdHidden" value="">
                       </form>
@@ -881,6 +882,7 @@
               <div class="mb-3">
                 <label class="form-label" for="editScheduleAt">Date and time</label>
                 <input class="form-control" type="datetime-local" id="editScheduleAt" name="schedule_at" required autocomplete="off">
+                <input type="hidden" name="client_tz_offset_min" id="editScheduleTzOffsetMin" value="">
                 <div class="form-text">Times in the past are adjusted to a few minutes from now when you save (same as bulk schedule).</div>
               </div>
               <div class="mb-0">
@@ -2114,6 +2116,10 @@
             );
             return;
           }
+          var tzEl = document.getElementById('clientTzOffsetMin');
+          if (tzEl && !tzEl.value) {
+            try { tzEl.value = String(new Date().getTimezoneOffset()); } catch (e) {}
+          }
           var compact = bulkScheduleModalActive() === 'mobile';
           var wpSel = document.getElementById(compact ? 'bulkScheduleWpStatusMobile' : 'bulkScheduleWpStatus');
           var ai = document.getElementById('bulkActionInput');
@@ -2158,6 +2164,18 @@
         if (schBtnM) schBtnM.addEventListener('click', submitBulkSchedule);
 
         updateCount();
+      })();
+    </script>
+    <script>
+      (function () {
+        document.addEventListener('submit', function (e) {
+          var f = e.target;
+          if (!f || f.id !== 'editScheduleForm') return;
+          var tz = document.getElementById('editScheduleTzOffsetMin');
+          if (tz) {
+            try { tz.value = String(new Date().getTimezoneOffset()); } catch (err) {}
+          }
+        }, true);
       })();
     </script>
     <script>
