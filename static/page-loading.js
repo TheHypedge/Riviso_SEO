@@ -20,6 +20,9 @@
   var SHOW_DELAY_MS = 220;
   // Once visible, keep it visible briefly to avoid flicker.
   var MIN_VISIBLE_MS = 260;
+  // Hard safety: never keep the overlay forever (e.g. aborted fetch, navigation race).
+  var MAX_VISIBLE_MS = 15000;
+  var maxVisibleTimer = null;
 
   function ensureOverlay() {
     if (overlay) return overlay;
@@ -42,6 +45,12 @@
     el.classList.add('is-visible');
     document.body.classList.add('app-page-loading-active');
     visibleSince = Date.now();
+    if (maxVisibleTimer) clearTimeout(maxVisibleTimer);
+    maxVisibleTimer = setTimeout(function () {
+      // If something got stuck, unblock the UI.
+      fetchDepth = 0;
+      hide();
+    }, MAX_VISIBLE_MS);
     if (message) {
       var p = el.querySelector('.app-page-loading-text');
       if (p) p.textContent = message;
@@ -68,6 +77,10 @@
     overlay.classList.remove('is-visible');
     document.body.classList.remove('app-page-loading-active');
     visibleSince = 0;
+    if (maxVisibleTimer) {
+      clearTimeout(maxVisibleTimer);
+      maxVisibleTimer = null;
+    }
     var p = overlay.querySelector('.app-page-loading-text');
     if (p) p.textContent = DEFAULT_LOADING_TEXT;
   }
@@ -128,6 +141,17 @@
     if (ev.persisted) hide();
   });
 
+  // If a Bootstrap modal is about to open, never block the UI with the page overlay.
+  // This prevents a stuck "Loading…" overlay from hiding modals/backdrops.
+  document.addEventListener(
+    'show.bs.modal',
+    function () {
+      fetchDepth = 0;
+      hide();
+    },
+    true
+  );
+
   /**
    * For forms that opt out of the capture-phase submit hook (e.g. wpPostForm): call this only
    * after you know the submit will proceed (no preventDefault for unsaved / confirm dialogs).
@@ -143,19 +167,4 @@
   };
 
   window.__appPageLoadingHide = hide;
-
-  // If navigation happened while a modal was open (or Bootstrap glitched),
-  // a stale backdrop can leave the new page looking blank/blocked.
-  document.addEventListener('DOMContentLoaded', function () {
-    try {
-      var anyOpen = !!document.querySelector('.modal.show');
-      if (!anyOpen) {
-        document.querySelectorAll('.modal-backdrop').forEach(function (b) { b.remove(); });
-        if (document.body) {
-          document.body.classList.remove('modal-open');
-          document.body.style.removeProperty('padding-right');
-        }
-      }
-    } catch (e) {}
-  });
 })();

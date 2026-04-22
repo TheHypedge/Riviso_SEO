@@ -1,39 +1,123 @@
-# Deploy Auto Articles to your VPS on every push to `main`.
-# Prerequisites: see deploy/GITHUB_ACTIONS.md
-
 name: Deploy to VPS
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+push:
+branches: [ main ]
+workflow_dispatch:
 
 concurrency:
-  group: deploy-vps
-  cancel-in-progress: true
+group: deploy-vps
+cancel-in-progress: true
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          # Optional: set `port: 2222` here if SSH is not on 22
-          command_timeout: 15m
-          script_stop: true
-          script: |
-            set -euo pipefail
-            # Git 2.35+ refuses repos owned by another user (e.g. root SSH vs www-data files)
-            git config --global --add safe.directory /var/www/auto-articles
-            cd /var/www/auto-articles
-            git fetch origin main
-            # Force local main to match GitHub (no diverged-branch fast-forward issues)
-            git checkout -B main origin/main
-            # Strip CRLF if present (Windows checkouts break bash: $'\r': command not found)
-            sed -i 's/\r$//' deploy/deploy.sh
-            bash deploy/deploy.sh
+deploy:
+runs-on: ubuntu-latest
+
+```
+steps:
+  - name: Deploy via SSH
+    uses: appleboy/ssh-action@v1.2.0
+    with:
+      host: ${{ secrets.VPS_HOST }}
+      username: ${{ secrets.VPS_USER }}
+      key: ${{ secrets.VPS_SSH_KEY }}
+      command_timeout: 20m
+      script_stop: false
+      script: |
+        bash -lc "$(cat <<'EOS'
+        set -Eeuo pipefail
+
+        APP_DIR="/var/www/auto-articles"
+        VENV_DIR="$APP_DIR/venv"
+        BACKUP_ENV="/tmp/auto-articles.env.bak"
+        BACKUP_DATA="/tmp/auto-articles.data.bak"
+
+        echo "🚀 Starting deployment..."
+
+        cd "$APP_DIR"
+
+        # Ensure git trust
+        git config --global --add safe.directory "$APP_DIR" || true
+
+        PREV_COMMIT=$(git rev-parse HEAD)
+
+        # -------------------------------
+        # Backup critical runtime files
+        # -------------------------------
+        echo "📦 Backing up runtime state..."
+        [[ -f ".env" ]] && cp -f .env "$BACKUP_ENV"
+        [[ -d "data" ]] && rm -rf "$BACKUP_DATA" && cp -a data "$BACKUP_DATA"
+
+        # -------------------------------
+        # Pull latest code safely
+        # -------------------------------
+        echo "📥 Fetching latest code..."
+        git fetch --prune origin main
+        git reset --hard origin/main
+
+        # -------------------------------
+        # Restore runtime files
+        # -------------------------------
+        echo "🔐 Restoring environment..."
+        [[ -f "$BACKUP_ENV" ]] && cp -f "$BACKUP_ENV" .env
+        [[ -d "$BACKUP_DATA" ]] && rm -rf data && cp -a "$BACKUP_DATA" data
+        chmod 600 .env 2>/dev/null || true
+
+        # -------------------------------
+        # Activate virtual environment
+        # -------------------------------
+        echo "🐍 Activating virtualenv..."
+        source "$VENV_DIR/bin/activate"
+
+        # -------------------------------
+        # Install dependencies safely
+        # -------------------------------
+        echo "📦 Installing dependencies..."
+        pip install --upgrade pip
+        pip install -r requirements.txt
+
+        # -------------------------------
+        # Normalize scripts
+        # -------------------------------
+        sed -i 's/\r$//' deploy/deploy.sh
+
+        # -------------------------------
+        # Run deployment script
+        # -------------------------------
+        echo "⚙️ Running deploy script..."
+        bash deploy/deploy.sh
+
+        # -------------------------------
+        # Graceful reload (no downtime)
+        # -------------------------------
+        echo "🔄 Reloading Gunicorn..."
+        sudo systemctl reload gunicorn
+
+        echo "🔁 Reloading Nginx..."
+        sudo systemctl reload nginx
+
+        # -------------------------------
+        # Health check
+        # -------------------------------
+        echo "🔍 Running health check..."
+        sleep 3
+
+        curl -fsS http://127.0.0.1:8000 > /dev/null || {
+          echo "❌ Health check failed. Rolling back..."
+
+          git reset --hard "$PREV_COMMIT"
+
+          [[ -f "$BACKUP_ENV" ]] && cp -f "$BACKUP_ENV" .env
+          [[ -d "$BACKUP_DATA" ]] && rm -rf data && cp -a "$BACKUP_DATA" data
+
+          sudo systemctl restart gunicorn
+          sudo systemctl restart nginx
+
+          exit 1
+        }
+
+        echo "✅ Deployment successful"
+
+        EOS
+        )"
+```

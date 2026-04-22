@@ -1361,9 +1361,18 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
             .map(function (row) {
               var st = row.wp_schedule_wp_status === 'publish' ? 'Published' : 'Draft';
               var cancelUrl = pat.replace('__AID__', row.id);
+              var badge = '';
+              if (row.state === 'error' || row.error) {
+                badge = ' <span class="badge text-bg-danger align-text-top ms-2" title="' + esc(row.error || 'Error') + '">Error</span>';
+              } else if (row.ready === false) {
+                badge = ' <span class="badge text-bg-warning align-text-top ms-2">Preparing</span>';
+              } else if (row.ready === true) {
+                badge = ' <span class="badge text-bg-success align-text-top ms-2">Ready</span>';
+              }
               return (
                 '<tr><td class="fw-medium">' +
                 esc(row.title) +
+                badge +
                 '</td><td class="small text-body-secondary text-nowrap">' +
                 esc(row.wp_scheduled_at) +
                 '</td><td class="small text-nowrap">' +
@@ -1395,10 +1404,46 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
             rows +
             '</tbody></table></div>';
         }
+        // Lightweight polling to keep scheduled section + statuses fresh.
+        // Important: pause when modals are open and stop on rate-limit to avoid console spam
+        // and Bootstrap timing/stacking glitches.
+        var pollIv = null;
+        var pollN = 0;
+        var pollMaxN = 80;
+        var pollEveryMs = 6000;
+        var pollStopped = false;
+
+        function shouldPoll() {
+          if (pollStopped) return false;
+          if (document.hidden) return false;
+          // Avoid DOM updates while any modal is open (prevents backdrop/modal race conditions).
+          if (document.body.classList.contains('modal-open')) return false;
+          // If Bootstrap is currently animating a modal, also pause.
+          if (document.querySelector('.modal.show, .modal.fade.show')) return false;
+          return true;
+        }
+
+        function stopPolling(reason) {
+          pollStopped = true;
+          if (pollIv) {
+            clearInterval(pollIv);
+            pollIv = null;
+          }
+          // Keep this silent in UI; just stop background noise.
+          // (Optional) console.debug(reason);
+          void reason;
+        }
+
         function tick() {
+          if (!shouldPoll()) return;
           var xhr = new XMLHttpRequest();
           xhr.open('GET', buildUrl());
           xhr.onload = function () {
+            // Stop on rate limit (prevents repeated 429 spam).
+            if (xhr.status === 429) {
+              stopPolling('rate-limited');
+              return;
+            }
             if (xhr.status < 200 || xhr.status >= 300) return;
             try {
               var d = JSON.parse(xhr.responseText || '{}');
@@ -1417,19 +1462,27 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
               if (Array.isArray(d.scheduled_pending)) renderScheduledSection(d.scheduled_pending);
             } catch (err) {}
           };
+          xhr.onerror = function () {
+            // Network blip: do nothing; next tick will retry.
+          };
           xhr.send();
         }
-        tick();
-        var n = 0;
-        var maxN = 80;
-        var iv = setInterval(function () {
-          n += 1;
-          if (n >= maxN) {
-            clearInterval(iv);
+
+        // Initial tick after the page settles (avoid competing with Bootstrap init).
+        setTimeout(tick, 500);
+
+        pollIv = setInterval(function () {
+          pollN += 1;
+          if (pollN >= pollMaxN) {
+            stopPolling('maxN');
             return;
           }
           tick();
-        }, 3000);
+        }, pollEveryMs);
+
+        document.addEventListener('visibilitychange', function () {
+          if (!document.hidden) tick();
+        });
       })();
       (function () {
         var countEl = document.getElementById('bulkSelectedCount');
@@ -1526,6 +1579,7 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
             );
             if (schModal && window.bootstrap) {
               if (useMobile) ensureBulkScheduleMobileModalInBody();
+              else ensureBulkScheduleModalInBody();
               window.bootstrap.Modal.getOrCreateInstance(schModal).show();
             }
           } else if (v === 'publish') {
@@ -1679,6 +1733,12 @@ height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
 
         function useMobileBulkScheduleModal() {
           return window.matchMedia('(max-width: 991.98px)').matches;
+        }
+
+        function ensureBulkScheduleModalInBody() {
+          var el = document.getElementById('bulkScheduleModal');
+          if (!el || el.parentNode === document.body) return;
+          document.body.appendChild(el);
         }
 
         function ensureBulkScheduleMobileModalInBody() {

@@ -1,6 +1,13 @@
 # GitHub Actions deploy to VPS
 
-Pushing to **`main`** runs `.github/workflows/deploy.yml`, which SSHs into the server, `git pull`s, installs Python deps, and restarts **`auto-articles`**.
+Pushing to **`main`** runs `.github/workflows/deploy.yml`, which SSHs into the server, updates the repo to **`origin/main`**, installs Python deps, and restarts **`auto-articles`**.
+
+## What the workflow preserves (no manual steps)
+
+- **`.env`**: Before `git fetch` / `git checkout`, the workflow copies `/var/www/auto-articles/.env` to a temp file. After checkout, it **restores** that copy so server secrets are never replaced by anything in git (even if `.env` were ever tracked by mistake).
+- **`data/`**: If `/var/www/auto-articles/data` exists, it is backed up the same way and restored after checkout (local DB/files stay on the VPS).
+
+`.env` remains listed in **`.gitignore`**; do not commit real secrets.
 
 ## Prerequisites (one-time)
 
@@ -13,7 +20,7 @@ Pushing to **`main`** runs `.github/workflows/deploy.yml`, which SSHs into the s
 
 - App directory: **`/var/www/auto-articles`**
 - Clone is a **git** checkout of this repo (`origin` points at GitHub).
-- **`.env`** stays on the server only — not committed; Actions never overwrites it.
+- **`.env`** lives only on the server; the workflow restores it after every deploy (see above).
 - **systemd** unit **`auto-articles.service`** runs Gunicorn.
 
 ### 3. SSH access for GitHub Actions
@@ -44,12 +51,14 @@ The deploy user must be able to **`git pull`** without typing a password:
 
 ### 5. `sudo` for systemd
 
-The SSH user must restart the service without a password prompt. Example for user **`deploy`**:
+The workflow runs `sudo -n true` before `deploy/deploy.sh`. The deploy user must be able to run **`sudo` without a password** for the commands in `deploy/deploy.sh` (at minimum **`systemctl restart`** and **`systemctl is-active`**). Example for user **`deploy`**:
 
 ```bash
-echo 'deploy ALL=(ALL) NOPASSWD: /bin/systemctl restart auto-articles, /bin/systemctl is-active auto-articles' | sudo tee /etc/sudoers.d/auto-articles-deploy
+echo 'deploy ALL=(ALL) NOPASSWD: /bin/systemctl restart auto-articles, /bin/systemctl is-active auto-articles, /bin/systemctl status auto-articles, /usr/bin/journalctl' | sudo tee /etc/sudoers.d/auto-articles-deploy
 sudo chmod 440 /etc/sudoers.d/auto-articles-deploy
 ```
+
+(`journalctl` is listed so failure diagnostics in `deploy/deploy.sh` work for a non-root deploy user. Restrict further if your security policy requires it.)
 
 If you SSH as **`root`**, `sudo` in `deploy.sh` is usually fine as-is.
 

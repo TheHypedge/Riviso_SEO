@@ -132,11 +132,23 @@ body.app-page-loading-active {
   .articles-row__actions {
     width: 100%;
     justify-content: flex-start;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 0.25rem;
   }
   .articles-row__actions .btn {
     padding-left: 0.6rem;
     padding-right: 0.6rem;
+    white-space: nowrap;
+  }
+  .articles-row__actions::-webkit-scrollbar {
+    height: 6px;
+  }
+  .articles-row__actions::-webkit-scrollbar-thumb {
+    background: rgba(15, 23, 42, 0.18);
+    border-radius: 999px;
   }
 }
 
@@ -544,6 +556,35 @@ body {
 
 .app-proj-header__inner {
   gap: 1rem;
+}
+
+/* Single project header (mobile UX) */
+.app-proj-header__title {
+  line-height: 1.15;
+}
+.app-proj-header__site {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 767.98px) {
+  .app-proj-header {
+    padding: 0.85rem 1rem;
+    border-radius: 14px;
+  }
+  .app-proj-header.sticky-top {
+    top: 0.4rem;
+  }
+  .app-dash-title.app-proj-header__title {
+    font-size: 1.15rem;
+    margin-bottom: 0.25rem;
+  }
+  .app-proj-header .btn.btn-lg {
+    font-size: 0.95rem;
+    padding-top: 0.65rem;
+    padding-bottom: 0.65rem;
+  }
 }
 
 .app-config-card {

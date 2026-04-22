@@ -788,6 +788,32 @@ def _get_project_by_id_unscoped(project_id: str) -> dict | None:
 _bulk_schedule_error_lock = threading.Lock()
 _bulk_schedule_last_errors: dict[str, str] = {}
 
+def _llm_timeout_seconds() -> int:
+    try:
+        v = int(os.environ.get("LLM_TIMEOUT_SECONDS", "120") or 120)
+        return max(20, min(v, 600))
+    except Exception:
+        return 120
+
+
+def _retry_sleep_seconds(attempt: int) -> float:
+    # Exponential-ish backoff with jitter, capped.
+    base = min(12.0, 1.5 * (2 ** max(0, attempt - 1)))
+    return base + random.random() * 0.6
+
+
+def _with_retries(fn, *, tries: int = 3, label: str = "operation"):
+    last_err: Exception | None = None
+    for i in range(1, tries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            if i >= tries:
+                break
+            time.sleep(_retry_sleep_seconds(i))
+    raise last_err or RuntimeError(f"{label} failed")
+
 
 def _set_bulk_schedule_error(project_id: str, message: str) -> None:
     pid = (project_id or "").strip()
@@ -1279,7 +1305,11 @@ def _generate_featured_image_png_bytes(image_prompt: str) -> tuple[bytes, dict[s
     last_err: Exception | None = None
     for kwargs in attempts:
         try:
-            resp = client.images.generate(**kwargs)
+            def _call():
+                # openai-python supports request timeouts via kwargs; if unsupported, this is ignored.
+                return client.images.generate(**{**kwargs, "timeout": _llm_timeout_seconds()})
+
+            resp = _with_retries(_call, tries=3, label="image generation")
             png_bytes = _decode_openai_image_response(resp)
             meta: dict[str, Any] = {
                 "featured_image_model": model,
@@ -1425,18 +1455,6 @@ def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict
     if not project:
         return "Project not found."
 
-    wp_st = (form_snapshot.get("schedule_wp_status") or "draft").strip().lower()
-    if wp_st not in ("draft", "publish"):
-        wp_st = "draft"
-
-    wp_types, _ = _wp_post_types_for_project(project)
-    allowed_bases = {t["rest_base"] for t in wp_types}
-    raw_schedule_rb = (form_snapshot.get("schedule_wp_rest_base") or "").strip()
-    if raw_schedule_rb:
-        schedule_rest_base = _normalize_wp_rest_base(raw_schedule_rb, allowed_bases)
-    else:
-        schedule_rest_base = _normalize_wp_rest_base(project.get("default_wp_rest_base"), allowed_bases)
-
     bulk_prompt = (form_snapshot.get("bulk_prompt_id") or "").strip()
     bulk_image = (form_snapshot.get("bulk_image_prompt_id") or "").strip()
 
@@ -1469,108 +1487,62 @@ def _bulk_schedule_pipeline(project_id: str, ids: list[str], form_snapshot: dict
         need_img_file = need_img and not os.path.isfile(_article_featured_image_path(aid))
         if not need_body and not need_img_file:
             continue
+        # Mark progress for UI (scheduled items should show "Preparing" until ready).
+        _update_article_fields(
+            aid,
+            {
+                "wp_schedule_state": "preparing",
+                "wp_schedule_state_updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
         title = (t.get("title") or "").strip()
         if not title:
             return "Cannot generate or schedule: one or more selected articles have no title. Add a title first."
-        ok_quota, quota_err = _article_quota_try_consume(uid, 1)
-        if not ok_quota:
-            return quota_err or "Current limit is exhausted. Upgrade plan to continue."
-        kws = _article_keywords_list(t)
-        ok, err, img_err = _generate_article_content_core(
-            proj_gen,
-            aid,
-            title=title,
-            keywords=kws,
-            writing_prompt_id=bulk_prompt,
-            image_prompt_id=bulk_image,
-            user_focus_keyphrase=((t.get("focus_keyphrase") or "").strip() or None),
-        )
-        if not ok:
-            return f"Generation failed for «{title[:80]}»: {err}"
-        if need_img and not os.path.isfile(_article_featured_image_path(aid)):
-            return (
-                f"Featured image missing for «{title[:80]}» after generation. "
-                f"{img_err or 'Check OPENAI_API_KEY and OPENAI_IMAGE_* settings.'}"
+        try:
+            ok_quota, quota_err = _article_quota_try_consume(uid, 1)
+            if not ok_quota:
+                raise ValueError(quota_err or "Current limit is exhausted. Upgrade plan to continue.")
+
+            cur_attempts = _int0((_get_article_by_id(aid) or {}).get("wp_generation_attempts"), 0)
+            _update_article_fields(aid, {"wp_generation_attempts": cur_attempts + 1})
+
+            kws = _article_keywords_list(t)
+            ok, err, img_err = _generate_article_content_core(
+                proj_gen,
+                aid,
+                title=title,
+                keywords=kws,
+                writing_prompt_id=bulk_prompt,
+                image_prompt_id=bulk_image,
+                user_focus_keyphrase=((t.get("focus_keyphrase") or "").strip() or None),
             )
+            if not ok:
+                raise ValueError(err or "Generation failed.")
+            if need_img and not os.path.isfile(_article_featured_image_path(aid)):
+                raise ValueError(
+                    "Featured image missing after generation. "
+                    + (img_err or "Check OPENAI_API_KEY and OPENAI_IMAGE_* settings.")
+                )
 
-    arts_fresh = _load_articles()
-    targets = [
-        a
-        for a in arts_fresh
-        if (a.get("id") or "") in id_set and (a.get("project_id") or "") == project_id
-    ]
-
-    proj_check = dict(project)
-    _normalize_project_image_prompts(proj_check)
-    need_img = len(proj_check.get("image_prompts") or []) > 0
-
-    eligible: list[dict] = []
-    skipped = 0
-    for t in targets:
-        aid = (t.get("id") or "").strip()
-        if not aid:
-            continue
-        if t.get("wp_post_id"):
-            skipped += 1
-            continue
-        if need_img and not os.path.isfile(_article_featured_image_path(aid)):
-            skipped += 1
-            continue
-        if not (t.get("article") or "").strip():
-            skipped += 1
-            continue
-        eligible.append(t)
-
-    eligible.sort(key=lambda x: ((x.get("created_at") or ""), (x.get("id") or "")))
-    n_elig = len(eligible)
-    if n_elig == 0:
-        return (
-            "No articles could be scheduled. "
-            + (f"Skipped {skipped} (already posted, empty body, or missing featured image)." if skipped else "")
-        )
-
-    times_map = _parse_schedule_times_json(form_snapshot.get("schedule_times_json") or "")
-    if not times_map:
-        return "Please set a date and time for each selected article."
-    times: list[datetime] = []
-    for t in eligible:
-        aid = (t.get("id") or "").strip()
-        title_hint = (t.get("title") or "").strip() or "Untitled"
-        raw_dt = times_map.get(aid)
-        if raw_dt is None:
-            return f"Missing schedule time for «{title_hint[:80]}»."
-        dt = _parse_bulk_schedule_datetime(raw_dt)
-        if not dt:
-            return f"Invalid date and time for «{title_hint[:80]}»."
-        times.append(_clamp_future_schedule_dt(dt))
-
-    batch_id = str(uuid.uuid4())
-    bulk_updates: list[tuple[str, dict]] = []
-    for i, t in enumerate(eligible):
-        aid = (t.get("id") or "").strip()
-        if not aid:
-            continue
-        sched_str = times[i].strftime("%Y-%m-%d %H:%M:%S")
-        bulk_updates.append(
-            (
+            _update_article_fields(
                 aid,
                 {
-                    "wp_scheduled_at": sched_str,
-                    "wp_schedule_wp_status": wp_st,
-                    "wp_rest_base": schedule_rest_base,
+                    "wp_schedule_state": "ready",
+                    "wp_schedule_state_updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "wp_schedule_error": "",
-                    "wp_schedule_batch_id": batch_id,
-                    "wp_schedule_batch_index": i,
-                    "wp_schedule_batch_total": n_elig,
                 },
             )
-        )
-    _storage.bulk_update_articles(bulk_updates)
-
-    msg = f"Scheduled {n_elig} article(s) for automatic WordPress posting."
-    if skipped:
-        msg += f" Skipped {skipped} (already posted, empty body, or missing featured image)."
-    app.logger.info(msg)
+        except Exception as e:
+            # Keep schedule intact; surface error and stop background work.
+            _update_article_fields(
+                aid,
+                {
+                    "wp_schedule_state": "error",
+                    "wp_schedule_state_updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "wp_schedule_error": str(e)[:500],
+                },
+            )
+            return f"Generation failed for «{title[:80]}»: {e}"
     return None
 
 
@@ -1634,6 +1606,10 @@ def _cleared_wp_schedule_fields() -> dict:
 def _pending_scheduled_article_rows(project_id: str) -> list[dict]:
     """Articles queued for WordPress (scheduled time set, not yet posted)."""
     pid = (project_id or "").strip()
+    proj = _get_project_by_id_unscoped(pid) or {}
+    proj_check = dict(proj) if isinstance(proj, dict) else {}
+    _normalize_project_image_prompts(proj_check)
+    need_img = len(proj_check.get("image_prompts") or []) > 0
     rows: list[dict] = []
     for a in _articles_for_project(pid):
         if a.get("wp_post_id"):
@@ -1644,12 +1620,23 @@ def _pending_scheduled_article_rows(project_id: str) -> list[dict]:
         wp_st = (a.get("wp_schedule_wp_status") or "draft").strip().lower()
         if wp_st not in ("draft", "publish"):
             wp_st = "draft"
+        aid = (a.get("id") or "").strip()
+        has_body = bool((a.get("article") or "").strip())
+        has_img = bool(aid and os.path.isfile(_article_featured_image_path(aid)))
+        ready = bool(has_body and ((not need_img) or has_img))
+        state = (a.get("wp_schedule_state") or "").strip().lower()
+        if state not in {"queued", "preparing", "ready", "posting", "error"}:
+            state = ""
+        err = (a.get("wp_schedule_error") or "").strip()
         rows.append(
             {
-                "id": (a.get("id") or "").strip(),
+                "id": aid,
                 "title": (a.get("title") or "").strip() or "(Untitled)",
                 "wp_scheduled_at": sched,
                 "wp_schedule_wp_status": wp_st,
+                "ready": ready,
+                "state": state,
+                "error": err,
             }
         )
 
@@ -1659,6 +1646,89 @@ def _pending_scheduled_article_rows(project_id: str) -> list[dict]:
 
     rows.sort(key=_sort_key)
     return rows
+
+
+def _bulk_set_wp_schedule_fields_now(project_id: str, ids: list[str], form_snapshot: dict) -> tuple[int, int, str | None]:
+    """
+    Persist schedule metadata immediately so UI can show queued items right away.
+    Returns (scheduled_count, skipped_count, error_message).
+    """
+    project = _get_project_by_id_unscoped(project_id)
+    if not project:
+        return 0, 0, "Project not found."
+
+    wp_st = (form_snapshot.get("schedule_wp_status") or "draft").strip().lower()
+    if wp_st not in ("draft", "publish"):
+        wp_st = "draft"
+
+    wp_types, _ = _wp_post_types_for_project(project)
+    allowed_bases = {t["rest_base"] for t in wp_types}
+    raw_schedule_rb = (form_snapshot.get("schedule_wp_rest_base") or "").strip()
+    if raw_schedule_rb:
+        schedule_rest_base = _normalize_wp_rest_base(raw_schedule_rb, allowed_bases)
+    else:
+        schedule_rest_base = _normalize_wp_rest_base(project.get("default_wp_rest_base"), allowed_bases)
+
+    times_map = _parse_schedule_times_json(form_snapshot.get("schedule_times_json") or "")
+    if not times_map:
+        return 0, 0, "Please set a date and time for each selected article."
+
+    arts = _load_articles()
+    id_set = set(ids)
+    targets = [
+        a
+        for a in arts
+        if (a.get("id") or "") in id_set and (a.get("project_id") or "") == project_id
+    ]
+    if not targets:
+        return 0, 0, "No matching articles for this project."
+
+    # Stable order for batch semantics (created_at asc).
+    targets.sort(key=lambda x: ((x.get("created_at") or ""), (x.get("id") or "")))
+
+    batch_id = str(uuid.uuid4())
+    bulk_updates: list[tuple[str, dict]] = []
+    skipped = 0
+    sched_idx = 0
+    for t in targets:
+        aid = (t.get("id") or "").strip()
+        if not aid:
+            continue
+        if (t.get("wp_post_id") or "").strip():
+            skipped += 1
+            continue
+        raw_dt = times_map.get(aid)
+        if raw_dt is None:
+            title_hint = (t.get("title") or "").strip() or "Untitled"
+            return 0, 0, f"Missing schedule time for «{title_hint[:80]}»."
+        dt = _parse_bulk_schedule_datetime(raw_dt)
+        if not dt:
+            title_hint = (t.get("title") or "").strip() or "Untitled"
+            return 0, 0, f"Invalid date and time for «{title_hint[:80]}»."
+        dt = _clamp_future_schedule_dt(dt)
+        sched_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+        bulk_updates.append(
+            (
+                aid,
+                {
+                    "wp_scheduled_at": sched_str,
+                    "wp_schedule_wp_status": wp_st,
+                    "wp_rest_base": schedule_rest_base,
+                    "wp_schedule_error": "",
+                    "wp_schedule_state": "queued",
+                    "wp_schedule_state_updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "wp_generation_attempts": 0,
+                    "wp_schedule_batch_id": batch_id,
+                    "wp_schedule_batch_index": sched_idx,
+                    "wp_schedule_batch_total": len(targets) - skipped,
+                },
+            )
+        )
+        sched_idx += 1
+
+    if bulk_updates:
+        _storage.bulk_update_articles(bulk_updates)
+    return len(bulk_updates), skipped, None
 
 
 def _status_display_article(st: str | None) -> str:
@@ -2071,15 +2141,19 @@ User prompt (placeholders already filled):
 Rewrite into one optimized prompt (max ~400 words)."""
 
     try:
-        resp = client.chat.completions.create(
-            model=opt_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user.strip()},
-            ],
-            temperature=0.45,
-            max_tokens=700,
-        )
+        def _call():
+            return client.chat.completions.create(
+                model=opt_model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user.strip()},
+                ],
+                temperature=0.45,
+                max_tokens=700,
+                timeout=_llm_timeout_seconds(),
+            )
+
+        resp = _with_retries(_call, tries=3, label="image prompt optimizer")
         out = (resp.choices[0].message.content or "").strip()
         if not out:
             raise ValueError("Empty optimizer response.")
@@ -2169,14 +2243,18 @@ Mandatory structure (use `##` headings in this order; do not use `#`):
 11) Conclusion – Key takeaways and informational summary
 """
 
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user.strip()},
-        ],
-        temperature=0.7,
-    )
+    def _call():
+        return client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user.strip()},
+            ],
+            temperature=0.7,
+            timeout=_llm_timeout_seconds(),
+        )
+
+    resp = _with_retries(_call, tries=3, label="article generation")
     return (resp.choices[0].message.content or "").strip()
 
 
@@ -2225,14 +2303,18 @@ Return strict JSON with exactly these keys:
 {{"focus_keyphrase":"...","meta_title":"...","meta_description":"..."}}
 """
 
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user.strip()},
-        ],
-        temperature=0.4,
-    )
+    def _call():
+        return client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user.strip()},
+            ],
+            temperature=0.4,
+            timeout=_llm_timeout_seconds(),
+        )
+
+    resp = _with_retries(_call, tries=3, label="yoast fields")
     raw = (resp.choices[0].message.content or "").strip()
     obj = _extract_first_json_object(raw)
     out = {
@@ -3893,15 +3975,16 @@ def bulk_articles_action(project_id: str):
             "bulk_image_prompt_id": (request.form.get("bulk_image_prompt_id") or "").strip(),
             "schedule_times_json": request.form.get("schedule_times_json") or "",
         }
+        # Persist schedule metadata immediately so the Scheduled posts section updates right away.
+        n_sched, skipped, sched_err = _bulk_set_wp_schedule_fields_now(project_id, list(ids), form_snapshot)
+        if sched_err:
+            flash(sched_err, "error")
+            return _redirect_project_detail_with_dates(project_id)
         if not need_any_generation:
-            err = _bulk_schedule_pipeline(project_id, list(ids), form_snapshot)
-            if err:
-                flash(err, "error")
-            else:
-                flash(
-                    "Articles added to the WordPress schedule queue. Due posts are sent automatically when their time is reached.",
-                    "success",
-                )
+            msg = "Articles added to the WordPress schedule queue. Due posts are sent automatically when their time is reached."
+            if skipped:
+                msg += f" Skipped {skipped} (already posted)."
+            flash(msg, "success")
             return _redirect_project_detail_with_dates(project_id, watch_schedule=True)
 
         threading.Thread(
@@ -3910,7 +3993,7 @@ def bulk_articles_action(project_id: str):
             daemon=True,
         ).start()
         flash(
-            "Generating content, then adding to the WordPress schedule. The queue will update shortly. "
+            "Generating content in the background. Scheduled items appear immediately; WordPress posting will run automatically when each time is due. "
             "If something fails, an error will appear when you open this project again. "
             "Past times are adjusted to a few minutes from now.",
             "success",
@@ -4870,6 +4953,18 @@ def _process_due_scheduled_wordpress_posts() -> None:
                 _normalize_project_image_prompts(proj_check)
                 need_featured = len(proj_check.get("image_prompts") or []) > 0
                 fresh = _get_article_by_id(aid) or cur
+                # If the article isn't ready yet (still generating), keep it queued.
+                if not (fresh.get("article") or "").strip():
+                    continue
+                if need_featured and not os.path.isfile(_article_featured_image_path(aid)):
+                    continue
+                _update_article_fields(
+                    aid,
+                    {
+                        "wp_schedule_state": "posting",
+                        "wp_schedule_state_updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    },
+                )
                 ok, err, info = _post_article_to_wordpress(
                     project,
                     fresh,
@@ -4910,6 +5005,8 @@ def _process_due_scheduled_wordpress_posts() -> None:
                         "wp_schedule_batch_id": "",
                         "wp_schedule_batch_index": "",
                         "wp_schedule_batch_total": "",
+                        "wp_schedule_state": "",
+                        "wp_schedule_state_updated_at": "",
                     },
                 )
                 proj_fresh = _get_project_by_id_unscoped(project.get("id") or "") or project
