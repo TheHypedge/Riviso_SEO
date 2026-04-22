@@ -4782,13 +4782,42 @@ def _maybe_request_gsc_url_inspection(
                 url,
                 prop,
             )
+            if article_id:
+                _update_article_fields(
+                    article_id,
+                    {
+                        "gsc_status": "pending",
+                        "gsc_inspection_last_attempt_at": _utc_now_str(),
+                        "gsc_inspection_error": "Inspection API returned no inspectionResult.",
+                        "gsc_inspection_url": url,
+                    },
+                )
             return False
         app.logger.info("Search Console URL Inspection accepted for %s (property %s).", url, prop)
         if article_id:
-            _update_article_fields(article_id, {"gsc_status": "inspected"})
+            _update_article_fields(
+                article_id,
+                {
+                    "gsc_status": "inspected",
+                    "gsc_inspection_requested_at": _utc_now_str(),
+                    "gsc_inspection_last_attempt_at": _utc_now_str(),
+                    "gsc_inspection_error": "",
+                    "gsc_inspection_url": url,
+                },
+            )
         return True
     except Exception as e:
         app.logger.warning("Search Console URL Inspection failed for %s: %s", url, e)
+        if article_id:
+            _update_article_fields(
+                article_id,
+                {
+                    "gsc_status": "pending",
+                    "gsc_inspection_last_attempt_at": _utc_now_str(),
+                    "gsc_inspection_error": str(e)[:500],
+                    "gsc_inspection_url": url,
+                },
+            )
         return False
 
 

@@ -206,10 +206,14 @@
                                 <div class="articles-row__actions d-flex align-items-center gap-2 flex-shrink-0">
                                   {% set gs = (a.gsc_status or 'pending')|lower %}
                                   <span class="small js-article-gsc-cell text-nowrap">
-                                    {% if gs in ('requested','inspected') %}
-                                      <span class="text-success fw-semibold" title="URL Inspection payload received (not guaranteed indexing).">Inspected</span>
+                                    {% if gs in ('requested','inspected') and (a.gsc_inspection_requested_at or '')|trim %}
+                                      <span class="text-success fw-semibold" title="URL Inspection API accepted at {{ (a.gsc_inspection_requested_at or '')|trim }} UTC (this is not a guaranteed indexing request).">Inspection requested</span>
                                     {% else %}
-                                      <span class="text-body-secondary" title="URL Inspection not run (or failed / skipped).">Pending</span>
+                                      {% if (a.gsc_inspection_error or '')|trim %}
+                                        <span class="text-danger fw-semibold" title="{{ (a.gsc_inspection_error or '')|trim }}">Inspection failed</span>
+                                      {% else %}
+                                        <span class="text-body-secondary" title="URL Inspection not run yet (or skipped).">Not requested</span>
+                                      {% endif %}
                                     {% endif %}
                                   </span>
                                   <span class="js-article-status-badge badge rounded-pill flex-shrink-0 {% if stn == 'published' %}article-status-badge article-status-badge--published{% elif stn == 'scheduled' %}article-status-badge article-status-badge--scheduled{% elif stn == 'draft' %}article-status-badge article-status-badge--draft{% else %}article-status-badge article-status-badge--pending{% endif %}">{% if stn == 'published' %}Published{% elif stn == 'scheduled' %}Scheduled{% elif stn == 'draft' %}Draft{% else %}Pending{% endif %}</span>
