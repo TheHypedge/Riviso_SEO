@@ -82,6 +82,7 @@ def init_db() -> None:
     db = get_db()
     db.client.admin.command("ping")
     db.projects.create_index("id", unique=True)
+    db.projects.create_index("owner_user_id")
     db.articles.create_index("id", unique=True)
     db.articles.create_index("project_id")
     db.articles.create_index([("project_id", 1), ("created_at", -1)])

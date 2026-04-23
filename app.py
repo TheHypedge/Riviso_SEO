@@ -514,6 +514,15 @@ def _project_ids_for_owner(user_id: str) -> list[str]:
     uid = _norm_owner_user_id(user_id)
     if not uid:
         return []
+    # Fast path for Mongo: avoid loading all projects.
+    try:
+        if hasattr(_storage, "project_ids_for_owner") and (
+            (_storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo") == "mongo"
+        ):
+            rows = _storage.project_ids_for_owner(uid)  # type: ignore[attr-defined]
+            return [str(x).strip() for x in (rows or []) if str(x).strip()]
+    except Exception:
+        pass
     try:
         projs = _storage.load_projects()
     except Exception:
@@ -556,6 +565,14 @@ def _articles_counts_for_owner_project_ids(project_ids: list[str]) -> dict[str, 
     pid_set = {x for x in (project_ids or []) if (x or "").strip()}
     if not pid_set:
         return {"total": 0, "pending": 0, "draft": 0, "published": 0, "active": 0}
+    # Fast path for Mongo: group counts in the DB (no full collection scan).
+    try:
+        if hasattr(_storage, "count_articles_by_project_ids") and (
+            (_storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo") == "mongo"
+        ):
+            return _storage.count_articles_by_project_ids(sorted(pid_set))  # type: ignore[attr-defined]
+    except Exception:
+        pass
     try:
         arts = _storage.load_articles()
     except Exception:

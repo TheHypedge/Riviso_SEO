@@ -778,6 +778,74 @@ def load_scheduled_pending_for_project_minimal(project_id: str, *, limit: int = 
     return [dict(d) for d in cur]
 
 
+def count_articles_by_project_ids(project_ids: list[str]) -> dict[str, int]:
+    """
+    Fast counts for a set of project_ids. Uses Mongo aggregation when available.
+    Returns {total, pending, draft, published, active}.
+    """
+    pids = [str(x).strip() for x in (project_ids or []) if str(x).strip()]
+    if not pids:
+        return {"total": 0, "pending": 0, "draft": 0, "published": 0, "active": 0}
+    if _storage_mode != "mongo":
+        rows = [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
+        pending = draft = published = total = 0
+        pid_set = set(pids)
+        for a in rows:
+            if (a.get("project_id") or "") not in pid_set:
+                continue
+            total += 1
+            st = (a.get("status") or "pending").strip().lower()
+            if st == "published":
+                published += 1
+            elif st == "draft":
+                draft += 1
+            else:
+                pending += 1
+        return {"total": total, "pending": pending, "draft": draft, "published": published, "active": pending + draft}
+
+    db = get_db()
+    pipeline = [
+        {"$match": {"project_id": {"$in": pids}}},
+        {"$group": {"_id": {"$ifNull": ["$status", "pending"]}, "n": {"$sum": 1}}},
+    ]
+    pending = draft = published = total = 0
+    try:
+        for row in db.articles.aggregate(pipeline, allowDiskUse=False):
+            st = str(row.get("_id") or "pending").strip().lower()
+            n = int(row.get("n") or 0)
+            total += n
+            if st == "published":
+                published += n
+            elif st == "draft":
+                draft += n
+            else:
+                pending += n
+    except Exception:
+        # Fallback: still avoid loading entire collection; count per status.
+        pending = int(db.articles.count_documents({"project_id": {"$in": pids}, "status": {"$nin": ["draft", "published"]}}))
+        draft = int(db.articles.count_documents({"project_id": {"$in": pids}, "status": "draft"}))
+        published = int(db.articles.count_documents({"project_id": {"$in": pids}, "status": "published"}))
+        total = pending + draft + published
+    return {"total": total, "pending": pending, "draft": draft, "published": published, "active": pending + draft}
+
+
+def project_ids_for_owner(user_id: str) -> list[str]:
+    """Fast owner -> project ids lookup (Mongo uses indexed query)."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return []
+    if _storage_mode != "mongo":
+        projs = [_normalize_project_dict(p) for p in _load_json_list("projects.json")]
+        return [(p.get("id") or "").strip() for p in projs if (p.get("owner_user_id") or "").strip() == uid and (p.get("id") or "").strip()]
+    cur = get_db().projects.find({"owner_user_id": uid}, {"_id": 0, "id": 1})
+    out: list[str] = []
+    for d in cur:
+        pid = (d.get("id") or "").strip()
+        if pid:
+            out.append(pid)
+    return out
+
+
 def save_projects_replace_all(projects: list[dict[str, Any]]) -> None:
     """Replace all projects (import/backup only). Deletes all articles first."""
     with _db_write_lock:
