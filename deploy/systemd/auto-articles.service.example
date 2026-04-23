@@ -16,7 +16,7 @@ WorkingDirectory=/var/www/auto-articles
 Environment=HOME=/var/www/auto-articles
 Environment=FLASK_ENV=production
 EnvironmentFile=/var/www/auto-articles/.env
-ExecStart=/var/www/auto-articles/.venv/bin/gunicorn app:app \
+ExecStart=/var/www/auto-articles/.venv/bin/gunicorn wsgi:app \
   --bind 127.0.0.1:8000 \
   --workers 2 \
   --threads 4 \
