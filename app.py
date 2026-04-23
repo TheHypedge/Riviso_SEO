@@ -3509,7 +3509,15 @@ def project_detail(project_id: str):
     tab = (request.args.get("tab") or "articles").strip().lower()
     if tab not in {"articles", "configuration", "tools"}:
         tab = "articles"
-    all_articles = _articles_for_project(project_id)
+    # Avoid loading all articles across the DB; fetch only this project's listing fields.
+    try:
+        all_articles = (
+            _storage.load_articles_listing_for_project(project_id, limit=5000)
+            if hasattr(_storage, "load_articles_listing_for_project")
+            else _articles_for_project(project_id)
+        )
+    except Exception:
+        all_articles = _articles_for_project(project_id)
     article_count_total = len(all_articles)
     all_articles.sort(key=lambda a: (a.get("created_at") or ""), reverse=True)
     filtered_all = _filter_articles_by_date_range(all_articles, date_from, date_to)
@@ -3568,7 +3576,7 @@ def project_detail(project_id: str):
             {
                 "id": aid,
                 "created_at": (a.get("created_at") or "").strip(),
-                "hasBody": bool((a.get("article") or "").strip()),
+                "hasBody": bool(a.get("hasBody")) if "hasBody" in a else bool((a.get("article") or "").strip()),
                 "hasImage": bool(os.path.isfile(_article_featured_image_path(aid))),
             }
         )
@@ -3586,17 +3594,30 @@ def project_detail(project_id: str):
     )
     poll_schedule_ui = bool(poll_articles_wp or watch_sched)
     scheduled_pending_articles = _pending_scheduled_article_rows(project_id)
-    _pending_n = 0
-    _draft_n = 0
-    _published_n = 0
-    for a in all_articles:
-        st = (a.get("status") or "pending").strip().lower()
-        if st == "published":
-            _published_n += 1
-        elif st == "draft":
-            _draft_n += 1
-        else:
-            _pending_n += 1
+    try:
+        counts = (
+            _storage.count_articles_by_project_ids([project_id])
+            if hasattr(_storage, "count_articles_by_project_ids")
+            else None
+        )
+    except Exception:
+        counts = None
+    if counts:
+        _pending_n = int(counts.get("pending") or 0)
+        _draft_n = int(counts.get("draft") or 0)
+        _published_n = int(counts.get("published") or 0)
+    else:
+        _pending_n = 0
+        _draft_n = 0
+        _published_n = 0
+        for a in all_articles:
+            st = (a.get("status") or "pending").strip().lower()
+            if st == "published":
+                _published_n += 1
+            elif st == "draft":
+                _draft_n += 1
+            else:
+                _pending_n += 1
     article_stats = {
         "total": article_count_total,
         "pending": _pending_n,

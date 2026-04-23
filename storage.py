@@ -778,6 +778,72 @@ def load_scheduled_pending_for_project_minimal(project_id: str, *, limit: int = 
     return [dict(d) for d in cur]
 
 
+def load_articles_listing_for_project(
+    project_id: str,
+    *,
+    limit: int = 5000,
+) -> list[dict[str, Any]]:
+    """
+    Return article rows for the project page listing without loading full article bodies.
+    Includes a computed hasBody flag (derived in Mongo) so UI can decide which items need generation.
+    """
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    if _storage_mode != "mongo":
+        rows = [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
+        out = [r for r in rows if (r.get("project_id") or "") == pid]
+        # Compute hasBody locally for JSON fallback
+        for r in out:
+            r["hasBody"] = bool((r.get("article") or "").strip())
+        return out[: max(1, min(int(limit or 5000), 20000))]
+
+    lim = max(1, min(int(limit or 5000), 20000))
+    db = get_db()
+    pipeline = [
+        {"$match": {"project_id": pid}},
+        {
+            "$project": {
+                "_id": 0,
+                "id": 1,
+                "project_id": 1,
+                "title": 1,
+                "keywords": 1,
+                "status": 1,
+                "focus_keyphrase": 1,
+                "meta_title": 1,
+                "meta_description": 1,
+                "generated_at": 1,
+                "posted_at": 1,
+                "created_at": 1,
+                "updated_at": 1,
+                "wp_post_id": 1,
+                "wp_link": 1,
+                "wp_rest_base": 1,
+                "wp_last_wp_status": 1,
+                "wp_scheduled_at": 1,
+                "wp_schedule_wp_status": 1,
+                "wp_schedule_error": 1,
+                "wp_schedule_batch_id": 1,
+                "wp_schedule_batch_index": 1,
+                "wp_schedule_batch_total": 1,
+                "gsc_status": 1,
+                "gsc_inspection_requested_at": 1,
+                "gsc_inspection_error": 1,
+                "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
+            }
+        },
+        {"$sort": {"created_at": -1}},
+        {"$limit": lim},
+    ]
+    out: list[dict[str, Any]] = []
+    for d in db.articles.aggregate(pipeline, allowDiskUse=False):
+        # Normalize a subset (keep strings tidy)
+        d["wp_scheduled_at"] = _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at"))
+        out.append(d)
+    return out
+
+
 def count_articles_by_project_ids(project_ids: list[str]) -> dict[str, int]:
     """
     Fast counts for a set of project_ids. Uses Mongo aggregation when available.
