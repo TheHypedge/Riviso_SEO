@@ -113,6 +113,15 @@ def _migrate_json_if_db_empty() -> None:
 
 app = Flask(__name__)
 
+# Trust reverse-proxy headers (Nginx) so url_for(..., _external=True) generates HTTPS URLs.
+# This is required for Google OAuth redirect_uri to match the Console configuration on production.
+try:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+except Exception:
+    pass
+
 _sk = (os.environ.get("FLASK_SECRET_KEY") or "").strip()
 if os.environ.get("FLASK_ENV", "").lower() == "production" and not _sk:
     raise RuntimeError("FLASK_SECRET_KEY must be set when FLASK_ENV=production")
@@ -1688,7 +1697,15 @@ def _pending_scheduled_article_rows(project_id: str) -> list[dict]:
     _normalize_project_image_prompts(proj_check)
     need_img = len(proj_check.get("image_prompts") or []) > 0
     rows: list[dict] = []
-    for a in _articles_for_project(pid):
+    try:
+        arts = (
+            _storage.load_scheduled_pending_for_project_minimal(pid, limit=300)
+            if hasattr(_storage, "load_scheduled_pending_for_project_minimal")
+            else _articles_for_project(pid)
+        )
+    except Exception:
+        arts = _articles_for_project(pid)
+    for a in arts:
         if a.get("wp_post_id"):
             continue
         sched = _article_wp_scheduled_at_str(a)
@@ -3636,10 +3653,26 @@ def project_articles_status_summary(project_id: str):
     status_filter = request.args.get("status", "").strip().lower()
     if status_filter not in {"pending", "draft", "published"}:
         status_filter = ""
-    all_articles = _articles_for_project(project_id)
+    # Fast path: avoid loading all articles from the DB.
+    try:
+        all_articles = (
+            _storage.load_articles_for_project_minimal(
+                project_id,
+                status=status_filter or None,
+                date_from=date_from or None,
+                date_to=date_to or None,
+                limit=600,
+            )
+            if hasattr(_storage, "load_articles_for_project_minimal")
+            else _articles_for_project(project_id)
+        )
+    except Exception:
+        all_articles = _articles_for_project(project_id)
+    # Keep existing filtering logic (string date comparisons are tricky in Mongo).
     all_articles.sort(key=lambda a: (a.get("created_at") or ""), reverse=True)
     articles = _filter_articles_by_date_range(all_articles, date_from, date_to)
-    articles = _filter_articles_by_status(articles, status_filter)
+    if not hasattr(_storage, "load_articles_for_project_minimal") or not status_filter:
+        articles = _filter_articles_by_status(articles, status_filter)
     out: list[dict] = []
     for a in articles:
         aid = (a.get("id") or "").strip()
@@ -3661,6 +3694,8 @@ def project_articles_status_summary(project_id: str):
                 "wp_scheduled_at": _article_wp_scheduled_at_str(a),
                 "wp_schedule_error": (a.get("wp_schedule_error") or "").strip(),
                 "gsc_status": gs,
+                "gsc_inspection_requested_at": (a.get("gsc_inspection_requested_at") or "").strip(),
+                "gsc_inspection_error": (a.get("gsc_inspection_error") or "").strip(),
             }
         )
     scheduled_pending = _pending_scheduled_article_rows(project_id)

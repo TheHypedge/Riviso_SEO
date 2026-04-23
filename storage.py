@@ -669,6 +669,115 @@ def load_articles() -> list[dict[str, Any]]:
     return [_mongo_doc_to_article(doc) for doc in db.articles.find({})]
 
 
+def load_articles_for_project_minimal(
+    project_id: str,
+    *,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """
+    Fast path for UI polling: returns minimal fields for a project's articles.
+    Uses a projection and query on project_id to avoid full collection scans.
+    """
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    if _storage_mode != "mongo":
+        # JSON fallback is already in-memory file read; keep compatibility.
+        rows = [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
+        out = [r for r in rows if (r.get("project_id") or "") == pid]
+        return out[: max(1, min(int(limit or 500), 2000))]
+
+    q: dict[str, Any] = {"project_id": pid}
+    if status:
+        s = (status or "").strip().lower()
+        if s in {"pending", "draft", "published"}:
+            q["status"] = s
+
+    # Date filtering: use posted_at when available otherwise created_at.
+    # We store these as strings, so range queries are only safe on consistent formats.
+    # Keep filtering in app for correctness; only constrain by project/status here.
+
+    proj = {
+        "_id": 0,
+        "id": 1,
+        "status": 1,
+        "posted_at": 1,
+        "created_at": 1,
+        "updated_at": 1,
+        "wp_scheduled_at": 1,
+        "wp_schedule_error": 1,
+        "gsc_status": 1,
+        "gsc_inspection_requested_at": 1,
+        "gsc_inspection_error": 1,
+    }
+    lim = max(1, min(int(limit or 500), 2000))
+    cur = (
+        get_db()
+        .articles.find(q, proj)
+        .sort("created_at", -1)
+        .limit(lim)
+    )
+    out: list[dict[str, Any]] = []
+    for d in cur:
+        out.append(
+            {
+                "id": (d.get("id") or "").strip(),
+                "project_id": pid,
+                "status": (d.get("status") or "pending"),
+                "posted_at": (d.get("posted_at") or ""),
+                "created_at": (d.get("created_at") or ""),
+                "updated_at": (d.get("updated_at") or ""),
+                "wp_scheduled_at": _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at")),
+                "wp_schedule_error": (d.get("wp_schedule_error") or ""),
+                "gsc_status": (d.get("gsc_status") or "pending"),
+                "gsc_inspection_requested_at": (d.get("gsc_inspection_requested_at") or ""),
+                "gsc_inspection_error": (d.get("gsc_inspection_error") or ""),
+            }
+        )
+    return out
+
+
+def load_scheduled_pending_for_project_minimal(project_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
+    """Fast path: only scheduled + not posted items for sidebar polling."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    if _storage_mode != "mongo":
+        rows = [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
+        out = []
+        for r in rows:
+            if (r.get("project_id") or "") != pid:
+                continue
+            if r.get("wp_post_id"):
+                continue
+            if not _coerce_wp_scheduled_at_str(r.get("wp_scheduled_at")):
+                continue
+            out.append(r)
+        return out[: max(1, min(int(limit or 200), 1000))]
+
+    q: dict[str, Any] = {
+        "project_id": pid,
+        "$and": [{"wp_post_id": {"$in": [None, "", 0]}}],
+        "wp_scheduled_at": {"$exists": True, "$ne": ""},
+    }
+    proj = {
+        "_id": 0,
+        "id": 1,
+        "title": 1,
+        "wp_scheduled_at": 1,
+        "wp_schedule_wp_status": 1,
+        "wp_schedule_state": 1,
+        "wp_schedule_error": 1,
+        "article": 1,
+    }
+    lim = max(1, min(int(limit or 200), 1000))
+    cur = get_db().articles.find(q, proj).sort("wp_scheduled_at", 1).limit(lim)
+    return [dict(d) for d in cur]
+
+
 def save_projects_replace_all(projects: list[dict[str, Any]]) -> None:
     """Replace all projects (import/backup only). Deletes all articles first."""
     with _db_write_lock:

@@ -84,6 +84,9 @@ def init_db() -> None:
     db.projects.create_index("id", unique=True)
     db.articles.create_index("id", unique=True)
     db.articles.create_index("project_id")
+    db.articles.create_index([("project_id", 1), ("created_at", -1)])
+    db.articles.create_index([("project_id", 1), ("status", 1), ("created_at", -1)])
+    db.articles.create_index([("project_id", 1), ("wp_scheduled_at", 1)])
     db.users.create_index("id", unique=True)
     db.users.create_index("email", unique=True)
 
