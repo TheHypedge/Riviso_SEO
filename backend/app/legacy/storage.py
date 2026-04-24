@@ -22,5 +22,15 @@ def get_legacy_storage_module():
     _ensure_repo_root_on_path()
     import storage  # type: ignore
 
+    # Ensure storage is initialized (Mongo if configured, JSON fallback otherwise).
+    # Without this, modules that call into storage (e.g. scheduler) may crash on startup
+    # when MONGODB_URI is not provided on a fresh VPS deployment.
+    try:
+        if hasattr(storage, "init_storage"):
+            storage.init_storage()
+    except Exception:
+        # Fail-open: storage will behave as JSON fallback for most reads/writes.
+        pass
+
     return storage
 
