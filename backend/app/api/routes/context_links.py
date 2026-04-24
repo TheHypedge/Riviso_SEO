@@ -1,0 +1,118 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel, Field
+
+from app.core.deps import get_current_user
+from app.legacy.storage import get_legacy_storage_module
+
+router = APIRouter(prefix="/projects/{project_id}/context-links", tags=["context-links"])
+
+
+class ContextLinkItem(BaseModel):
+    id: str
+    label: str = ""
+    url: str
+
+
+class ContextLinkCreate(BaseModel):
+    label: str = Field(default="", max_length=200)
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class ContextLinkUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=200)
+    url: str | None = Field(default=None, max_length=2048)
+
+
+def _require_project_access(*, st, user: dict, project_id: str) -> dict:
+    pid = (project_id or "").strip()
+    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Project not found")
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    if role != "admin" and (proj.get("owner_user_id") or "").strip() != uid:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return proj
+
+
+def _coerce_links(raw) -> list[dict]:
+    out: list[dict] = []
+    for x in raw or []:
+        if isinstance(x, dict) and (x.get("id") or "").strip() and (x.get("url") or "").strip():
+            # Legacy keys: some older rows used "text"/"phrase" instead of "label".
+            label = (
+                (x.get("label") or "").strip()
+                or (x.get("text") or "").strip()
+                or (x.get("phrase") or "").strip()
+            )
+            out.append(
+                {
+                    "id": (x.get("id") or "").strip(),
+                    "label": label[:200],
+                    "url": (x.get("url") or "").strip()[:2048],
+                }
+            )
+    return out
+
+
+@router.get("", response_model=list[ContextLinkItem])
+async def list_context_links(project_id: str, user: dict = Depends(get_current_user)) -> list[ContextLinkItem]:
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    links = _coerce_links(proj.get("context_links") or [])
+    return [ContextLinkItem(**x) for x in links]
+
+
+@router.post("", response_model=ContextLinkItem, status_code=201)
+async def create_context_link(project_id: str, payload: ContextLinkCreate, user: dict = Depends(get_current_user)) -> ContextLinkItem:
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    links = _coerce_links(proj.get("context_links") or [])
+    # id: simple deterministic-ish for now (safe)
+    new_id = f"cl_{len(links)+1}_{abs(hash(payload.url))%10_000_000}"
+    row = {"id": new_id, "label": payload.label.strip()[:200], "url": payload.url.strip()[:2048]}
+    links.append(row)
+    st.update_project_fields(project_id, {"context_links": links})
+    return ContextLinkItem(**row)
+
+
+@router.patch("/{link_id}", response_model=ContextLinkItem)
+async def update_context_link(
+    project_id: str,
+    link_id: str,
+    payload: ContextLinkUpdate,
+    user: dict = Depends(get_current_user),
+) -> ContextLinkItem:
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    lid = (link_id or "").strip()
+    links = _coerce_links(proj.get("context_links") or [])
+    found = None
+    for x in links:
+        if (x.get("id") or "").strip() == lid:
+            if payload.label is not None:
+                x["label"] = payload.label.strip()[:200]
+            if payload.url is not None:
+                x["url"] = payload.url.strip()[:2048]
+            found = x
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail="Context link not found")
+    st.update_project_fields(project_id, {"context_links": links})
+    return ContextLinkItem(**found)
+
+
+@router.delete("/{link_id}")
+async def delete_context_link(project_id: str, link_id: str, user: dict = Depends(get_current_user)) -> Response:
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    lid = (link_id or "").strip()
+    links = _coerce_links(proj.get("context_links") or [])
+    links2 = [x for x in links if (x.get("id") or "").strip() != lid]
+    if len(links2) == len(links):
+        return Response(status_code=204)
+    st.update_project_fields(project_id, {"context_links": links2})
+    return Response(status_code=204)
+

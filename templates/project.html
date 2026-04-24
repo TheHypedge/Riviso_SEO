@@ -61,7 +61,8 @@
       <div class="app-proj-tabs mb-3">
         {% set tab = active_tab|default('articles') %}
         <nav class="nav nav-pills gap-2" aria-label="Project sections">
-          <a class="nav-link {% if tab == 'articles' %}active{% endif %}" href="{{ url_for('project_detail', project_id=project.id, tab='articles', q=q|default(''), status=status_filter|default(''), date_from=date_from|default(''), date_to=date_to|default('')) }}">Articles</a>
+          <button class="nav-link {% if tab == 'articles' %}active{% endif %}" type="button" id="projectTabArticles">Articles</button>
+          <button class="nav-link" type="button" id="projectTabScheduled" aria-controls="scheduledTabPane">Scheduled Articles</button>
           <a class="nav-link {% if tab == 'configuration' %}active{% endif %}" href="{{ url_for('project_detail', project_id=project.id, tab='configuration') }}">Configuration</a>
           <a class="nav-link {% if tab == 'tools' %}active{% endif %}" href="{{ url_for('project_detail', project_id=project.id, tab='tools') }}">Tools / Integrations</a>
         </nav>
@@ -83,7 +84,7 @@
         <div class="row g-4 app-workspace-row mb-4">
           <div class="col-12 col-lg-8 col-xl-9 app-workspace-primary">
             <!-- Articles — primary view -->
-            <section class="app-dash-list app-dash-section" aria-labelledby="articles-heading">
+            <section class="app-dash-list app-dash-section" aria-labelledby="articles-heading" id="articlesTabPane">
               <div class="app-section-head">
                 <h2 id="articles-heading" class="app-section-head__title">
                   <span class="app-section-head__icon" aria-hidden="true">
@@ -272,6 +273,21 @@
                   {% endif %}
                 </div>
               </div>
+            </section>
+
+            <section class="app-dash-section d-none" aria-label="Scheduled articles" id="scheduledTabPane">
+              <div class="app-section-head">
+                <h2 class="app-section-head__title">
+                  <span class="app-section-head__icon" aria-hidden="true">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                  </span>
+                  Scheduled articles
+                </h2>
+                <p class="app-section-head__desc mb-0">WordPress queue — not live until the scheduled time.</p>
+              </div>
+              {% with scheduled_pending_articles=[] %}
+                {% include 'partials/project_scheduled_section.html' %}
+              {% endwith %}
             </section>
           </div>
           <div class="col-12 col-lg-4 col-xl-3 app-workspace-sidebar">
@@ -913,12 +929,12 @@
     <script type="application/json" id="project-image-prompts-data" data-default-id="{{ project.default_image_prompt_id or '' }}">{{ project.image_prompts|default([])|tojson }}</script>
     <script type="application/json" id="project-context-links-data">{{ project.context_links|default([])|tojson }}</script>
     <script type="application/json" id="bulk-schedule-meta">{{ bulk_schedule_meta|default([])|tojson }}</script>
-    <script type="application/json" id="scheduled-pending-data">{{ scheduled_pending_articles|default([])|tojson }}</script>
+    <script type="application/json" id="scheduled-pending-data">[]</script>
     <div
       id="projectSchedulePoll"
       class="d-none"
       aria-hidden="true"
-      data-enabled="{{ '1' if poll_schedule_ui|default(false) else '0' }}"
+      data-enabled="0"
       data-status-url="{{ url_for('project_articles_status_summary', project_id=project.id) }}"
       data-date-from="{{ date_from|default('') }}"
       data-date-to="{{ date_to|default('') }}"
@@ -1274,6 +1290,166 @@
             ensureEditScheduleModalInBody();
             window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
           }
+        });
+      })();
+      (function () {
+        function setTabActive(key) {
+          var tabArticles = document.getElementById('projectTabArticles');
+          var tabScheduled = document.getElementById('projectTabScheduled');
+          var paneArticles = document.getElementById('articlesTabPane');
+          var paneScheduled = document.getElementById('scheduledTabPane');
+          if (!tabArticles || !tabScheduled || !paneArticles || !paneScheduled) return;
+          var isSched = key === 'scheduled';
+          tabArticles.classList.toggle('active', !isSched);
+          tabScheduled.classList.toggle('active', isSched);
+          paneArticles.classList.toggle('d-none', isSched);
+          paneScheduled.classList.toggle('d-none', !isSched);
+        }
+
+        function buildStatusUrl() {
+          var pollEl = document.getElementById('projectSchedulePoll');
+          if (!pollEl) return '';
+          var baseUrl = pollEl.getAttribute('data-status-url') || '';
+          if (!baseUrl) return '';
+          var q = new URLSearchParams();
+          var df = pollEl.getAttribute('data-date-from') || '';
+          var dt = pollEl.getAttribute('data-date-to') || '';
+          var st = pollEl.getAttribute('data-status-filter') || '';
+          if (df) q.set('date_from', df);
+          if (dt) q.set('date_to', dt);
+          if (st) q.set('status', st);
+          var qs = q.toString();
+          return qs ? baseUrl + '?' + qs : baseUrl;
+        }
+
+        function syncScheduledData(rows) {
+          var dataEl = document.getElementById('scheduled-pending-data');
+          if (!dataEl) return;
+          try {
+            dataEl.textContent = JSON.stringify(Array.isArray(rows) ? rows : []);
+          } catch (e) {
+            dataEl.textContent = '[]';
+          }
+        }
+
+        function esc(s) {
+          return String(s || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+        }
+
+        function renderScheduledSection(pending) {
+          var inner = document.getElementById('scheduledSectionInner');
+          var sectionEl = document.getElementById('scheduledPostsSection');
+          if (!inner || !sectionEl) return;
+          var pat = sectionEl.getAttribute('data-cancel-url-pattern') || '';
+          var df = sectionEl.getAttribute('data-date-from') || '';
+          var dt2 = sectionEl.getAttribute('data-date-to') || '';
+          var fs = sectionEl.getAttribute('data-filter-status') || '';
+          if (!pending || pending.length === 0) {
+            inner.innerHTML =
+              '<div class="app-empty-state text-center py-5 px-3">' +
+              '<div class="app-empty-state__icon mx-auto mb-3" aria-hidden="true">' +
+              '<svg width="48" height="48" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24" class="text-body-secondary opacity-50"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>' +
+              '</div>' +
+              '<p class="text-body-secondary small mb-3 mb-md-2">No scheduled articles</p>' +
+              '<button type="button" class="btn btn-link btn-sm text-decoration-none p-0" data-bs-toggle="modal" data-bs-target="#addArticleModal">Create one</button>' +
+              '</div>';
+            return;
+          }
+          var rows = pending
+            .map(function (row) {
+              var st = row.wp_schedule_wp_status === 'publish' ? 'Published' : 'Draft';
+              var cancelUrl = pat.replace('__AID__', row.id);
+              var badge = '';
+              if (row.state === 'error' || row.error) {
+                badge = ' <span class="badge text-bg-danger align-text-top ms-2" title="' + esc(row.error || 'Error') + '">Error</span>';
+              } else if (row.ready === false) {
+                badge = ' <span class="badge text-bg-warning align-text-top ms-2">Preparing</span>';
+              } else if (row.ready === true) {
+                badge = ' <span class="badge text-bg-success align-text-top ms-2">Ready</span>';
+              }
+              return (
+                '<tr><td class="fw-medium">' +
+                esc(row.title) +
+                badge +
+                '</td><td class="small text-body-secondary text-nowrap">' +
+                esc(row.wp_scheduled_at) +
+                '</td><td class="small text-nowrap">' +
+                st +
+                '</td><td class="text-end text-nowrap">' +
+                '<button type="button" class="btn btn-sm btn-outline-primary" data-edit-schedule data-article-id="' +
+                esc(row.id) +
+                '" title="Change time or draft/publish">Edit</button> ' +
+                '<form method="post" action="' +
+                esc(cancelUrl) +
+                '" class="d-inline" onsubmit="return confirm(\'Cancel scheduling for this article? The post will not be sent automatically until you schedule again.\');">' +
+                '<input type="hidden" name="date_from" value="' +
+                esc(df) +
+                '">' +
+                '<input type="hidden" name="date_to" value="' +
+                esc(dt2) +
+                '">' +
+                '<input type="hidden" name="filter_status" value="' +
+                esc(fs) +
+                '">' +
+                '<button type="submit" class="btn btn-sm btn-outline-danger">Cancel</button></form></td></tr>'
+              );
+            })
+            .join('');
+          inner.innerHTML =
+            '<div class="table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr>' +
+            '<th scope="col">Title</th><th scope="col" class="text-body-secondary small text-nowrap">Scheduled for</th>' +
+            '<th scope="col" class="text-nowrap">Post as</th><th scope="col" class="text-end">Actions</th></tr></thead><tbody>' +
+            rows +
+            '</tbody></table></div>';
+        }
+
+        function loadScheduledOnce() {
+          var paneScheduled = document.getElementById('scheduledTabPane');
+          if (!paneScheduled || paneScheduled.getAttribute('data-loaded') === '1') return Promise.resolve();
+          paneScheduled.setAttribute('data-loaded', '1');
+          var inner = document.getElementById('scheduledSectionInner');
+          if (inner) {
+            inner.innerHTML =
+              '<div class="text-body-secondary small py-4 text-center">Loading scheduled articles…</div>';
+          }
+          var url = buildStatusUrl();
+          if (!url) return Promise.resolve();
+          return fetch(url, { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              var pending = (d && Array.isArray(d.scheduled_pending)) ? d.scheduled_pending : [];
+              syncScheduledData(pending);
+              renderScheduledSection(pending);
+            })
+            .catch(function () {
+              if (inner) {
+                inner.innerHTML =
+                  '<div class="text-danger small py-4 text-center">Could not load scheduled articles.</div>';
+              }
+              syncScheduledData([]);
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+          var tabArticles = document.getElementById('projectTabArticles');
+          var tabScheduled = document.getElementById('projectTabScheduled');
+          if (tabArticles) {
+            tabArticles.addEventListener('click', function () {
+              setTabActive('articles');
+            });
+          }
+          if (tabScheduled) {
+            tabScheduled.addEventListener('click', function () {
+              setTabActive('scheduled');
+              loadScheduledOnce();
+            });
+          }
+          // Default view.
+          setTabActive('articles');
         });
       })();
       (function () {

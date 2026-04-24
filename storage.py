@@ -62,6 +62,8 @@ def _user_row_to_public(u: dict[str, Any]) -> dict[str, Any]:
         "role": (u.get("role") or "user").strip().lower(),
         "full_name": (u.get("full_name") or "").strip(),
         "phone": (u.get("phone") or "").strip(),
+        "timezone": (u.get("timezone") or "").strip(),
+        "address": (u.get("address") or "").strip(),
         "subscription_type": (u.get("subscription_type") or "beta").strip().lower(),
         "last_activity_at": (u.get("last_activity_at") or "").strip(),
         "usage_daily_articles_date": (u.get("usage_daily_articles_date") or "").strip(),
@@ -102,6 +104,15 @@ def _save_json_projects(projects: list[dict[str, Any]]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(projects, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def _save_json_scheduled_jobs(rows: list[dict[str, Any]]) -> None:
+    """Persist scheduled jobs list when using JSON storage fallback."""
+    path = _data_path("scheduled_jobs.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
 
@@ -164,6 +175,8 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "role": ((d.get("role") or "user").strip().lower()[:32]) or "user",
         "full_name": (d.get("full_name") or "").strip()[:200],
         "phone": (d.get("phone") or "").strip()[:64],
+        "timezone": (d.get("timezone") or "").strip()[:64],
+        "address": (d.get("address") or "").strip()[:500],
         "subscription_type": ((d.get("subscription_type") or "beta").strip().lower()[:64]) or "beta",
         "last_activity_at": (d.get("last_activity_at") or "").strip()[:64],
         "usage_daily_articles_date": (d.get("usage_daily_articles_date") or "").strip()[:16],
@@ -192,6 +205,8 @@ def list_users() -> list[dict[str, Any]]:
                 "role": (doc.get("role") or "user").strip().lower(),
                 "full_name": (doc.get("full_name") or "").strip(),
                 "phone": (doc.get("phone") or "").strip(),
+                "timezone": (doc.get("timezone") or "").strip(),
+                "address": (doc.get("address") or "").strip(),
                 "subscription_type": (doc.get("subscription_type") or "beta").strip().lower(),
                 "last_activity_at": (doc.get("last_activity_at") or "").strip(),
                 "created_at": (doc.get("created_at") or "").strip(),
@@ -349,6 +364,8 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
         "role": (doc.get("role") or "user").strip().lower(),
         "full_name": (doc.get("full_name") or "").strip(),
         "phone": (doc.get("phone") or "").strip(),
+        "timezone": (doc.get("timezone") or "").strip(),
+        "address": (doc.get("address") or "").strip(),
         "subscription_type": (doc.get("subscription_type") or "beta").strip().lower(),
         "last_activity_at": (doc.get("last_activity_at") or "").strip(),
         "usage_daily_articles_date": (doc.get("usage_daily_articles_date") or "").strip(),
@@ -381,6 +398,8 @@ def get_user_by_email(email: str) -> dict[str, Any] | None:
         "role": (doc.get("role") or "user").strip().lower(),
         "full_name": (doc.get("full_name") or "").strip(),
         "phone": (doc.get("phone") or "").strip(),
+        "timezone": (doc.get("timezone") or "").strip(),
+        "address": (doc.get("address") or "").strip(),
         "subscription_type": (doc.get("subscription_type") or "beta").strip().lower(),
         "last_activity_at": (doc.get("last_activity_at") or "").strip(),
         "usage_daily_articles_date": (doc.get("usage_daily_articles_date") or "").strip(),
@@ -466,6 +485,8 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "focus_keyphrase": (d.get("focus_keyphrase") or "")[:500],
         "meta_title": (d.get("meta_title") or "")[:500],
         "meta_description": (d.get("meta_description") or "")[:2000],
+        # Generated image can be a data URL (can be large). Keep it for preview + WP publish.
+        "image_url": (d.get("image_url") or "")[:3_000_000],
         "generated_at": (d.get("generated_at") or "")[:64],
         "posted_at": (d.get("posted_at") or "")[:64],
         "created_at": (d.get("created_at") or "")[:64],
@@ -491,6 +512,34 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "wp_schedule_batch_index": str(d.get("wp_schedule_batch_index") or "")[:32],
         "wp_schedule_batch_total": str(d.get("wp_schedule_batch_total") or "")[:32],
         "gsc_status": (d.get("gsc_status") or "pending")[:32],
+    }
+
+
+def _normalize_scheduled_job_dict(d: dict[str, Any]) -> dict[str, Any]:
+    jid = (d.get("id") or "").strip()
+    pid = (d.get("project_id") or "").strip()
+    aid = (d.get("article_id") or "").strip()
+    if not jid or not pid or not aid:
+        raise ValueError("scheduled job id, project_id, and article_id are required")
+    return {
+        "id": jid,
+        "project_id": pid,
+        "article_id": aid,
+        "run_at": (d.get("run_at") or "")[:64],  # "YYYY-MM-DD HH:MM:SS"
+        "post_type": (d.get("post_type") or "posts")[:200],
+        "wp_status": (d.get("wp_status") or "draft")[:16],
+        "category_ids": (d.get("category_ids") or "")[:800],  # comma-separated ints
+        "writing_prompt_id": (d.get("writing_prompt_id") or "")[:100],
+        "image_prompt_id": (d.get("image_prompt_id") or "")[:100],
+        "generate_image": bool(d.get("generate_image", True)),
+        "state": (d.get("state") or "scheduled")[:32],  # scheduled|posting|posted|failed|cancelled
+        "last_error": d.get("last_error") or "",
+        "attempts": int(d.get("attempts") or 0),
+        "last_attempt_at": (d.get("last_attempt_at") or "")[:64],
+        "created_at": (d.get("created_at") or "")[:64],
+        "updated_at": (d.get("updated_at") or d.get("created_at") or "")[:64],
+        "wp_post_id": str(d.get("wp_post_id") or "")[:32],
+        "wp_link": (d.get("wp_link") or "")[:2048],
     }
 
 
@@ -546,6 +595,7 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "focus_keyphrase",
             "meta_title",
             "meta_description",
+            "image_url",
             "generated_at",
             "posted_at",
             "created_at",
@@ -627,6 +677,7 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
         "focus_keyphrase": d.get("focus_keyphrase") or "",
         "meta_title": d.get("meta_title") or "",
         "meta_description": d.get("meta_description") or "",
+        "image_url": d.get("image_url") or "",
         "generated_at": d.get("generated_at") or "",
         "posted_at": d.get("posted_at") or "",
         "created_at": d.get("created_at") or "",
@@ -654,11 +705,22 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
-def load_projects() -> list[dict[str, Any]]:
+def load_projects(owner_user_id: str | None = None) -> list[dict[str, Any]]:
+    """
+    Load projects, optionally filtered by owner_user_id.
+
+    This keeps backward compatibility with callers that previously used load_projects()
+    while enabling efficient per-user queries for the API layer.
+    """
+    owner = (owner_user_id or "").strip()
     if _storage_mode != "mongo":
-        return [_normalize_project_dict(p) for p in _load_json_list("projects.json")]
+        rows = [_normalize_project_dict(p) for p in _load_json_list("projects.json")]
+        if not owner:
+            return rows
+        return [p for p in rows if (p.get("owner_user_id") or "").strip() == owner]
     db = get_db()
-    cur = db.projects.find({}).sort("created_at", 1)
+    q = {"owner_user_id": owner} if owner else {}
+    cur = db.projects.find(q).sort("created_at", 1)
     return [_mongo_doc_to_project(doc) for doc in cur]
 
 
@@ -842,6 +904,98 @@ def load_articles_listing_for_project(
         d["wp_scheduled_at"] = _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at"))
         out.append(d)
     return out
+
+
+# ----------------------------
+# Scheduled jobs (queue table)
+# ----------------------------
+
+
+def load_scheduled_jobs(*, project_id: str | None = None) -> list[dict[str, Any]]:
+    pid = (project_id or "").strip()
+    if _storage_mode != "mongo":
+        rows = [_normalize_scheduled_job_dict(x) for x in _load_json_list("scheduled_jobs.json")]
+        if not pid:
+            return rows
+        return [r for r in rows if (r.get("project_id") or "").strip() == pid]
+    q: dict[str, Any] = {}
+    if pid:
+        q["project_id"] = pid
+    cur = get_db().scheduled_jobs.find(q).sort("run_at", 1)
+    out: list[dict[str, Any]] = []
+    for doc in cur:
+        if isinstance(doc, dict):
+            d = dict(doc)
+            d.pop("_id", None)
+            try:
+                out.append(_normalize_scheduled_job_dict(d))
+            except Exception:
+                continue
+    return out
+
+
+def insert_scheduled_job(job: dict[str, Any]) -> None:
+    norm = _normalize_scheduled_job_dict(job)
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list("scheduled_jobs.json")
+            rows.append(norm)
+            _save_json_scheduled_jobs(rows)
+        return
+    doc = {**norm, "_id": norm["id"]}
+    with _db_write_lock:
+        res = get_db().scheduled_jobs.insert_one(doc)
+        if not res.acknowledged:
+            raise RuntimeError("MongoDB insert_scheduled_job was not acknowledged")
+
+
+def update_scheduled_job_fields(job_id: str, updates: dict[str, Any]) -> bool:
+    jid = (job_id or "").strip()
+    if not jid:
+        return False
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list("scheduled_jobs.json")
+            found = False
+            for r in rows:
+                if isinstance(r, dict) and (r.get("id") or "").strip() == jid:
+                    merged = {**r, **updates}
+                    merged["id"] = jid
+                    rows[rows.index(r)] = _normalize_scheduled_job_dict(merged)
+                    found = True
+                    break
+            if found:
+                _save_json_scheduled_jobs([_normalize_scheduled_job_dict(x) for x in rows if isinstance(x, dict)])
+            return found
+    with _db_write_lock:
+        doc = get_db().scheduled_jobs.find_one({"id": jid})
+        if not doc:
+            return False
+        d = dict(doc)
+        d.pop("_id", None)
+        merged = {**d, **updates, "id": jid}
+        norm = _normalize_scheduled_job_dict(merged)
+        new_doc = {**norm, "_id": norm["id"]}
+        res = get_db().scheduled_jobs.replace_one({"id": jid}, new_doc)
+        return bool(res.acknowledged and res.matched_count == 1)
+
+
+def delete_scheduled_job(job_id: str) -> bool:
+    jid = (job_id or "").strip()
+    if not jid:
+        return False
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list("scheduled_jobs.json")
+            before = len(rows)
+            rows = [r for r in rows if isinstance(r, dict) and (r.get("id") or "").strip() != jid]
+            if len(rows) == before:
+                return False
+            _save_json_scheduled_jobs([_normalize_scheduled_job_dict(x) for x in rows if isinstance(x, dict)])
+            return True
+    with _db_write_lock:
+        res = get_db().scheduled_jobs.delete_one({"id": jid})
+        return bool(res.deleted_count == 1)
 
 
 def count_articles_by_project_ids(project_ids: list[str]) -> dict[str, int]:

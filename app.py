@@ -1808,7 +1808,8 @@ def _bulk_set_wp_schedule_fields_now(project_id: str, ids: list[str], form_snaps
         aid = (t.get("id") or "").strip()
         if not aid:
             continue
-        if (t.get("wp_post_id") or "").strip():
+        wp_post_id = t.get("wp_post_id")
+        if str(wp_post_id).strip() if wp_post_id is not None else "":
             skipped += 1
             continue
         raw_dt = times_map.get(aid)
@@ -3507,7 +3508,7 @@ def project_detail(project_id: str):
         status_filter = ""
     q = (request.args.get("q") or "").strip()
     tab = (request.args.get("tab") or "articles").strip().lower()
-    if tab not in {"articles", "configuration", "tools"}:
+    if tab not in {"articles", "configuration", "tools", "scheduled"}:
         tab = "articles"
     # Avoid loading all articles across the DB; fetch only this project's listing fields.
     try:

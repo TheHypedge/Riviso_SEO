@@ -1,4 +1,4 @@
-# Auto Articles (Flask)
+# Riviso_SEO
 
 Web app for **projects** (brands/sites), **AI-generated articles** (title, focus keyphrase, targeting keywords), **WordPress posting**, **bulk Excel import**, **project-level context links** (auto-link phrases when posting), and optional **Google Search Console** (URL Inspection after live publishes).
 
