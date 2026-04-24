@@ -36,6 +36,7 @@ services:
       - redis
 
   frontend:
+    profiles: ["full"]
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -47,6 +48,7 @@ services:
       - backend
 
   nginx:
+    profiles: ["full"]
     image: nginx:1.27
     ports:
       - "8080:80"
