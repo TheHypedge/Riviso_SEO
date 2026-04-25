@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.core.deps import get_current_user
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobUpdate
+from app.services.scheduler import prepare_article_for_scheduled_job
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 
 
@@ -168,6 +170,44 @@ async def update_scheduled_job(
                 )
     except Exception:
         # Best-effort sync; scheduled job update succeeded already.
+        pass
+
+    # Best-effort: on reschedule or prompt changes, start background preparation again.
+    # This ensures jobs don't show "ready_to_post" unless generation truly finished.
+    try:
+        # Reload job row to get the latest fields
+        rows_after = st.load_scheduled_jobs(project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+        job_after = next((r for r in (rows_after or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
+        aid = (job_after.get("article_id") or "").strip() if isinstance(job_after, dict) else ""
+        if isinstance(job_after, dict) and aid and (job_after.get("state") or "").strip().lower() == "scheduled":
+            proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == (project_id or "").strip()), None)
+            art = _find_article_for_job(st=st, project_id=project_id, article_id=aid)
+            if proj and art:
+
+                async def _prep() -> None:
+                    try:
+                        await prepare_article_for_scheduled_job(st=st, jid=jid, proj=proj, art=art, job=job_after)
+                        st.update_scheduled_job_fields(
+                            jid,
+                            {
+                                "state": "ready_to_post",
+                                "last_error": "",
+                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                            },
+                        )
+                    except Exception as e:
+                        st.update_scheduled_job_fields(
+                            jid,
+                            {
+                                "state": "failed",
+                                "last_error": str(e),
+                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                            },
+                        )
+
+                asyncio.create_task(_prep())
+    except Exception:
+        # Don't fail the update if background prep can't start.
         pass
 
     rows2 = st.load_scheduled_jobs(project_id=project_id)

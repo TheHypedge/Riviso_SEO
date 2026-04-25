@@ -1050,7 +1050,10 @@ export default function ProjectPage() {
 
   function jobStateLabel(s: string) {
     const v = (s || "").toLowerCase();
-    if (v === "scheduled") return "Article is Ready to post";
+    if (v === "scheduled") return "Scheduled";
+    if (v === "content_generating") return "Generating content…";
+    if (v === "image_generating") return "Generating image…";
+    if (v === "ready_to_post") return "Article is ready to post";
     if (v === "posting") return "Posting in progress";
     if (v === "posted") return "Posted";
     if (v === "failed") return "Failed";
