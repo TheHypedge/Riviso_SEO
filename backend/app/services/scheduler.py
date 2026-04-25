@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.legacy.storage import get_legacy_storage_module
 from app.services.wordpress_client import WordpressClient
@@ -122,7 +122,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
         try:
             st = get_legacy_storage_module()
             jobs = st.load_scheduled_jobs(project_id=None) if hasattr(st, "load_scheduled_jobs") else []
-            now = datetime.now()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
 
             for j in jobs or []:
                 if not isinstance(j, dict):

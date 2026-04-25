@@ -4,8 +4,9 @@ import uuid
 import base64
 import binascii
 import html
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import re
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 import markdown as md
@@ -409,18 +410,29 @@ async def schedule_article(
     if not raw:
         raise HTTPException(status_code=400, detail="Missing schedule time")
 
-    # Accept "YYYY-MM-DDTHH:MM" (from datetime-local) or "YYYY-MM-DD HH:MM[:SS]"
-    norm = raw.replace("T", " ").strip()
-    if len(norm) == 16:
-        norm = norm + ":00"
-    norm = norm[:19]
+    # Accept "YYYY-MM-DDTHH:MM" (from datetime-local) or "YYYY-MM-DD HH:MM[:SS]".
+    # Interpret the provided local time in the user's profile timezone, then store UTC for execution.
+    norm_local = raw.replace("T", " ").strip()
+    if len(norm_local) == 16:
+        norm_local = norm_local + ":00"
+    norm_local = norm_local[:19]
 
-    # Enforce minimum gap of 5 minutes from current time.
     try:
-        dt = datetime.strptime(norm, "%Y-%m-%d %H:%M:%S")
+        naive_local = datetime.strptime(norm_local, "%Y-%m-%d %H:%M:%S")
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
-    if dt < (datetime.now() + timedelta(minutes=5)):
+
+    tz_name = (user.get("timezone") or "").strip() or "UTC"
+    try:
+        user_tz = ZoneInfo(tz_name)
+    except Exception:
+        user_tz = ZoneInfo("UTC")
+
+    dt_utc = naive_local.replace(tzinfo=user_tz).astimezone(timezone.utc)
+    norm_utc = dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+    # Enforce minimum gap of 5 minutes from current time (UTC).
+    if dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=5)):
         raise HTTPException(status_code=400, detail="Scheduled time must be at least 5 minutes from now")
 
     wp_status = (payload.wp_status or "draft").strip().lower()
@@ -434,7 +446,8 @@ async def schedule_article(
     st.update_article_fields(
         article_id,
         {
-            "wp_scheduled_at": norm,
+            # Store UTC timestamp string; UI can display in user timezone.
+            "wp_scheduled_at": norm_utc,
             "wp_schedule_wp_status": wp_status,
             "wp_rest_base": post_type,
             "wp_schedule_error": "",
@@ -454,7 +467,7 @@ async def schedule_article(
         job_updates = {
             "project_id": project_id,
             "article_id": article_id,
-            "run_at": norm,
+            "run_at": norm_utc,
             "post_type": post_type,
             "wp_status": wp_status,
             "category_ids": cat_raw,
@@ -480,7 +493,7 @@ async def schedule_article(
         "ok": True,
         "status": "scheduled",
         "message": "Article scheduled successfully.",
-        "wp_scheduled_at": norm,
+        "wp_scheduled_at": norm_utc,
         "post_type": post_type,
         "wp_status": wp_status,
     }

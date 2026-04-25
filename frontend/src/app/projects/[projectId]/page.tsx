@@ -129,6 +129,7 @@ export default function ProjectPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
+  const [profileTz, setProfileTz] = useState<string>("");
 
   // Bulk selection
   const [selected, setSelected] = useState<Record<string, boolean>>({});
@@ -165,8 +166,9 @@ export default function ProjectPage() {
       setError(null);
       setLoading(true);
       try {
-        const [list, ps] = await Promise.all([api.listArticles(projectId), api.getProjectSettings(projectId)]);
+        const [list, ps, prof] = await Promise.all([api.listArticles(projectId), api.getProjectSettings(projectId), api.profileMe()]);
         setArticles(list);
+        setProfileTz((prof?.timezone || "").trim());
         setWpDefaults({
           post_type: (ps.default_wp_rest_base || "posts") as string,
           wp_status: ((ps.default_wp_status || "draft") as "draft" | "publish"),
@@ -199,6 +201,27 @@ export default function ProjectPage() {
       }
     })();
   }, [projectId, router, token]);
+
+  function formatInProfileTz(utcLike: string | null | undefined) {
+    const v = (utcLike || "").trim();
+    if (!v) return "—";
+    const iso = v.includes("T") ? v : v.replace(" ", "T") + "Z";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return v;
+    const tz = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        timeZone: tz,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(d);
+    } catch {
+      return d.toLocaleString();
+    }
+  }
 
   useEffect(() => {
     if (!token) return;
@@ -1135,7 +1158,7 @@ export default function ProjectPage() {
                           <div style={{ marginTop: 4, fontSize: 12, color: "#777" }}>
                             <span>Updated {a.updated_at || a.created_at || "—"}</span>
                             <span> · Posted {a.posted_at || "—"}</span>
-                            <span> · Sched {a.wp_scheduled_at || "—"}</span>
+                            <span> · Sched {formatInProfileTz(a.wp_scheduled_at)}</span>
                             {a.wp_schedule_error ? <span style={{ color: "#ff4d4f" }}> · Schedule error</span> : null}
                           </div>
 
@@ -1562,7 +1585,7 @@ export default function ProjectPage() {
 
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, minWidth: 260 }}>
                     <div style={{ fontSize: 12, color: "#666" }}>
-                      Time: <strong>{j.run_at}</strong>
+                      Time: <strong>{formatInProfileTz(j.run_at)}</strong>
                     </div>
                     <div style={{ fontSize: 12, color: "#666" }}>
                       Post type: <strong>{j.post_type || "posts"}</strong>
