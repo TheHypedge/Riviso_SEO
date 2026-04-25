@@ -21,7 +21,18 @@ class Settings(BaseSettings):
     cookie_samesite: str = "lax"  # lax|strict|none
 
     # CORS (comma-separated)
-    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    # Include local dev + common production domains as safe defaults.
+    # Override via env `CORS_ORIGINS` on deployments that need stricter allowlists.
+    cors_origins: str = ",".join(
+        [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "https://riviso.com",
+            "https://www.riviso.com",
+            "https://riviso.cloud",
+            "https://www.riviso.cloud",
+        ]
+    )
 
     # Datastores
     postgres_dsn: str = "postgresql+asyncpg://app:app@localhost:5432/auto_articles"
