@@ -39,9 +39,17 @@ export default function DashboardPage() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileClockTick, setProfileClockTick] = useState(0);
 
+  function normalizeTimeZoneId(tz: string) {
+    const raw = (tz || "").trim();
+    if (!raw) return "";
+    // Keep frontend display aligned with backend normalization + IANA canonical IDs.
+    if (raw === "Asia/Calcutta") return "Asia/Kolkata";
+    return raw;
+  }
+
   const browserTimeZone = useMemo(() => {
     try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+      return normalizeTimeZoneId(Intl.DateTimeFormat().resolvedOptions().timeZone || "");
     } catch {
       return "";
     }
@@ -105,7 +113,7 @@ export default function DashboardPage() {
           const me = await api.profileMe();
           setProfile({
             ...me,
-            timezone: (me.timezone || browserTimeZone || "").trim() || null,
+            timezone: normalizeTimeZoneId(me.timezone || browserTimeZone || "").trim() || null,
           });
         }
       } catch (e) {
@@ -571,7 +579,7 @@ export default function DashboardPage() {
                             type="button"
                             className={styles.btnSecondary}
                             style={{ padding: "8px 10px", fontSize: 12 }}
-                            onClick={() => setProfile((p) => (p ? { ...p, timezone: browserTimeZone || "UTC" } : p))}
+                            onClick={() => setProfile((p) => (p ? { ...p, timezone: normalizeTimeZoneId(browserTimeZone || "UTC") } : p))}
                             title="Auto-detect your current timezone"
                           >
                             Auto-detect
