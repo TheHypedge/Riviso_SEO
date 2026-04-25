@@ -89,9 +89,14 @@ export default function ProjectPage() {
   const [bulkUploadErrors, setBulkUploadErrors] = useState<string[]>([]);
   const [bulkUploadRows, setBulkUploadRows] = useState<BulkUploadRow[]>([]);
   const [bulkUploading, setBulkUploading] = useState(false);
-  const [bulkMode, setBulkMode] = useState<"root" | "change_status">("root");
+  const [bulkMode, setBulkMode] = useState<"root" | "change_status" | "schedule">("root");
   const [scheduleMin, setScheduleMin] = useState("");
   const [editJobMin, setEditJobMin] = useState("");
+  const [bulkScheduleMin, setBulkScheduleMin] = useState("");
+  const [bulkScheduleRows, setBulkScheduleRows] = useState<Array<{ id: string; title: string; when: string }>>([]);
+  const [bulkScheduleWpStatus, setBulkScheduleWpStatus] = useState<"draft" | "publish">("draft");
+  const [bulkSchedulePostType, setBulkSchedulePostType] = useState("posts");
+  const [bulkScheduling, setBulkScheduling] = useState(false);
 
   // Prompts module state (staged edits; saved on demand)
   const [writingPrompts, setWritingPrompts] = useState<PromptListResponse | null>(null);
@@ -156,6 +161,8 @@ export default function ProjectPage() {
   const [editJobStatus, setEditJobStatus] = useState<"draft" | "publish">("draft");
   const [editJobCats, setEditJobCats] = useState<number[]>([]);
   const [confirmCancelJob, setConfirmCancelJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
+  const [confirmPostNowJob, setConfirmPostNowJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
+  const [postNowBusy, setPostNowBusy] = useState(false);
   const [confirmClearScheduled, setConfirmClearScheduled] = useState(false);
 
   const pageSize = 10;
@@ -253,6 +260,32 @@ export default function ProjectPage() {
       return `${y}-${m}-${day}T${hh}:${mm}`;
     } catch {
       return "";
+    }
+  }
+
+  function toDatetimeLocalFromDateInProfileTz(d: Date) {
+    if (Number.isNaN(d.getTime())) return "";
+    const tz = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    try {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).formatToParts(d);
+      const get = (type: string) => parts.find((p) => p.type === type)?.value || "";
+      const y = get("year");
+      const m = get("month");
+      const day = get("day");
+      const hh = get("hour");
+      const mm = get("minute");
+      if (!y || !m || !day || !hh || !mm) return "";
+      return `${y}-${m}-${day}T${hh}:${mm}`;
+    } catch {
+      return toDatetimeLocalValue(d);
     }
   }
 
@@ -738,10 +771,6 @@ export default function ProjectPage() {
     try {
       const when = scheduleWhen.trim();
       if (!when) throw new Error("Please choose a schedule time");
-      const min = new Date(Date.now() + 5 * 60 * 1000);
-      const picked = new Date(when);
-      if (Number.isNaN(picked.getTime())) throw new Error("Invalid schedule time");
-      if (picked.getTime() < min.getTime()) throw new Error("Scheduled time must be at least 5 minutes from now");
 
       await api.scheduleArticle(projectId, articleId, {
         wp_scheduled_at: when,
@@ -771,6 +800,27 @@ export default function ProjectPage() {
     }
   }
 
+  async function postNowFromScheduledJob() {
+    const j = confirmPostNowJob;
+    if (!j) return;
+    setError(null);
+    setPostNowBusy(true);
+    try {
+      await api.publishArticleToLiveSite(projectId, j.article_id, {
+        post_type: (j.post_type || "posts").trim() || "posts",
+        wp_status: (String(j.wp_status || "draft").toLowerCase() === "publish" ? "publish" : "draft") as "draft" | "publish",
+        category_ids: j.category_ids || [],
+      });
+      setArticles(await api.listArticles(projectId));
+      setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
+      setConfirmPostNowJob(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Post now failed");
+    } finally {
+      setPostNowBusy(false);
+    }
+  }
+
   async function bulkChangeStatus(newStatus: "pending" | "draft" | "published") {
     if (selectedIds.length === 0) return;
     setError(null);
@@ -792,7 +842,57 @@ export default function ProjectPage() {
   }
 
   function bulkSchedule() {
-    alert("Scheduling UI is coming next. For now, use Publish/Delete in this popup.");
+    if (!selectedIds.length) return;
+    const min = new Date(Date.now() + 5 * 60 * 1000);
+    const minStr = toDatetimeLocalFromDateInProfileTz(min);
+    setBulkScheduleMin(minStr);
+    setBulkScheduleWpStatus(wpDefaults?.wp_status || "draft");
+    setBulkSchedulePostType(wpDefaults?.post_type || "posts");
+    setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
+    setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
+    setBulkScheduleRows(
+      selectedIds.map((id) => ({
+        id,
+        title: articles.find((a) => a.id === id)?.title || "(Untitled)",
+        when: minStr,
+      })),
+    );
+    setBulkMode("schedule");
+  }
+
+  async function bulkScheduleSubmit() {
+    if (!bulkScheduleRows.length) return;
+    setError(null);
+    setBulkScheduling(true);
+    try {
+      for (const r of bulkScheduleRows) {
+        const when = (r.when || "").trim();
+        if (!when) throw new Error("Please set date/time for all selected articles");
+        await api.scheduleArticle(projectId, r.id, {
+          wp_scheduled_at: when,
+          wp_status: bulkScheduleWpStatus,
+          post_type: bulkSchedulePostType,
+          writing_prompt_id: scheduleWritingPromptId || null,
+          image_prompt_id: scheduleImagePromptId || null,
+          generate_image: true,
+        });
+      }
+
+      setArticles(await api.listArticles(projectId));
+      try {
+        setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
+      } catch {
+        // ignore
+      }
+      setSelected({});
+      setShowBulkPopup(false);
+      setBulkMode("root");
+      setBulkScheduleRows([]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Bulk schedule failed");
+    } finally {
+      setBulkScheduling(false);
+    }
   }
 
   function openPromptModal(kind: "writing" | "image", id: string) {
@@ -1055,14 +1155,14 @@ export default function ProjectPage() {
                       <button className={styles.button} type="button" onClick={() => setBulkMode("change_status")}>
                         Change status
                       </button>
-                      <button className={styles.button} type="button" onClick={bulkSchedule} title="Schedule flow will be added next">
+                      <button className={styles.button} type="button" onClick={bulkSchedule}>
                         Schedule articles
                       </button>
                       <button className={styles.button} type="button" onClick={bulkDelete}>
                         Delete articles
                       </button>
                     </div>
-                  ) : (
+                  ) : bulkMode === "change_status" ? (
                     <>
                       <div className={styles.row} style={{ paddingTop: 12, justifyContent: "space-between", alignItems: "center" }}>
                         <div className={styles.muted} style={{ fontWeight: 700 }}>
@@ -1081,6 +1181,103 @@ export default function ProjectPage() {
                         </button>
                         <button className={styles.button} type="button" onClick={() => bulkChangeStatus("published")}>
                           Published
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className={styles.row} style={{ paddingTop: 12, justifyContent: "space-between", alignItems: "center" }}>
+                        <div className={styles.muted} style={{ fontWeight: 700 }}>
+                          Schedule {bulkScheduleRows.length} article(s) {profileTz ? <span style={{ fontWeight: 500 }}>(Timezone: {profileTz})</span> : null}
+                        </div>
+                        <button type="button" className={styles.btnSecondary} onClick={() => setBulkMode("root")} disabled={bulkScheduling}>
+                          Back
+                        </button>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, paddingTop: 10 }}>
+                        <label className={styles.label}>
+                          WordPress post type (applies to all)
+                          <select className={styles.input} value={bulkSchedulePostType} onChange={(e) => setBulkSchedulePostType(e.target.value)} disabled={bulkScheduling}>
+                            <option value="posts">Posts</option>
+                            <option value="pages">Pages</option>
+                            {wpTypesForSchedule
+                              .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
+                              .map((t) => (
+                                <option key={t.rest_base} value={t.rest_base}>
+                                  {t.name || t.rest_base}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+                        <label className={styles.label}>
+                          WordPress status (applies to all)
+                          <select className={styles.input} value={bulkScheduleWpStatus} onChange={(e) => setBulkScheduleWpStatus(e.target.value as "draft" | "publish")} disabled={bulkScheduling}>
+                            <option value="draft">Draft</option>
+                            <option value="publish">Publish</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, paddingTop: 10 }}>
+                        <label className={styles.label}>
+                          Writing prompt (applies to all)
+                          <select className={styles.input} value={scheduleWritingPromptId} onChange={(e) => setScheduleWritingPromptId(e.target.value)} disabled={bulkScheduling}>
+                            <option value="">Use project default</option>
+                            {(scheduleWritingPrompts?.items || []).map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name || p.id}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className={styles.label}>
+                          Image prompt (applies to all)
+                          <select className={styles.input} value={scheduleImagePromptId} onChange={(e) => setScheduleImagePromptId(e.target.value)} disabled={bulkScheduling}>
+                            <option value="">Use project default</option>
+                            {(scheduleImagePrompts?.items || []).map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name || p.id}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+
+                      <div style={{ paddingTop: 10, maxHeight: 340, overflow: "auto", borderTop: "1px solid var(--button-secondary-border)", marginTop: 12 }}>
+                        {bulkScheduleRows.map((r, idx) => (
+                          <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr 220px", gap: 10, padding: "10px 0", borderBottom: "1px solid var(--button-secondary-border)" }}>
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontWeight: 800, fontSize: 13, wordBreak: "break-word" }}>{idx + 1}. {r.title}</div>
+                              <div className={styles.muted} style={{ fontSize: 12 }}>{r.id}</div>
+                            </div>
+                            <label className={styles.label} style={{ margin: 0 }}>
+                              Date & time
+                              <input
+                                className={styles.input}
+                                type="datetime-local"
+                                value={r.when}
+                                min={bulkScheduleMin || undefined}
+                                step={60}
+                                disabled={bulkScheduling}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setBulkScheduleRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, when: v } : x)));
+                                }}
+                              />
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+
+                      {error ? <p className={styles.error} style={{ marginTop: 10 }}>{error}</p> : null}
+
+                      <div className={styles.row} style={{ paddingTop: 12, justifyContent: "flex-end", gap: 10 }}>
+                        <button type="button" className={styles.btnSecondary} onClick={() => setBulkMode("root")} disabled={bulkScheduling}>
+                          Cancel
+                        </button>
+                        <button type="button" className={styles.button} onClick={bulkScheduleSubmit} disabled={bulkScheduling || !bulkScheduleRows.length}>
+                          {bulkScheduling ? "Scheduling…" : "Schedule"}
                         </button>
                       </div>
                     </>
@@ -1254,9 +1451,10 @@ export default function ProjectPage() {
                               className={styles.miniBtn}
                               onClick={() => {
                                 const min = new Date(Date.now() + 5 * 60 * 1000);
-                                setScheduleMin(toDatetimeLocalValue(min));
+                                const minStr = toDatetimeLocalFromDateInProfileTz(min);
+                                setScheduleMin(minStr);
                                 setScheduleId(a.id);
-                                setScheduleWhen(toDatetimeLocalValue(min));
+                                setScheduleWhen(minStr);
                                 setScheduleWpStatus(wpDefaults?.wp_status || "draft");
                                 setSchedulePostType(wpDefaults?.post_type || "posts");
                                 setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
@@ -1338,7 +1536,7 @@ export default function ProjectPage() {
                         onChange={(e) => setScheduleWhen(e.target.value)}
                       />
                       <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                        Minimum 5 minutes from current time.
+                        Times are interpreted in your profile timezone ({profileTz || "browser default"}). Minimum 5 minutes from now (enforced on save).
                       </div>
                     </label>
 
@@ -1616,7 +1814,10 @@ export default function ProjectPage() {
                 <div style={{ padding: 14, color: "#666" }}>No scheduled articles yet.</div>
               ) : null}
 
-              {scheduledJobs.map((j) => (
+              {scheduledJobs.map((j) => {
+                const jobState = (j.state || "").toLowerCase();
+                const canPostNow = !["posted", "cancelled", "posting"].includes(jobState);
+                return (
                 <div
                   key={j.id}
                   style={{
@@ -1639,8 +1840,20 @@ export default function ProjectPage() {
                         type="button"
                         className={styles.miniBtn}
                         onClick={() => {
+                          setError(null);
+                          setConfirmPostNowJob(j);
+                        }}
+                        disabled={!canPostNow}
+                        title={canPostNow ? "Publish to WordPress now" : "Not available while posting or after posted/cancelled"}
+                      >
+                        Post Now
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.miniBtn}
+                        onClick={() => {
                           const min = new Date(Date.now() + 5 * 60 * 1000);
-                          setEditJobMin(toDatetimeLocalValue(min));
+                          setEditJobMin(toDatetimeLocalFromDateInProfileTz(min));
                           setEditJob(j);
                           // Show schedule time in the user's profile timezone
                           setEditJobWhen(toDatetimeLocalInProfileTz(j.run_at || ""));
@@ -1684,7 +1897,8 @@ export default function ProjectPage() {
                     <span className={styles.statusPill}>{jobStateLabel(j.state)}</span>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {editJob ? (
@@ -1779,6 +1993,36 @@ export default function ProjectPage() {
                       }}
                     >
                       Save changes
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {confirmPostNowJob ? (
+              <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Post now">
+                <div className={styles.modalPanel}>
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Post now</h3>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmPostNowJob(null)} disabled={postNowBusy}>
+                      Close
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <p style={{ marginTop: 0 }}>
+                      Are you sure you want to post it now? With this, the post will be published to the website now.
+                    </p>
+                    <div className={styles.muted} style={{ fontSize: 12 }}>
+                      {articles.find((a) => a.id === confirmPostNowJob.article_id)?.title || "(Untitled article)"}
+                    </div>
+                    {error ? <p className={styles.error} style={{ marginTop: 10 }}>{error}</p> : null}
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmPostNowJob(null)} disabled={postNowBusy}>
+                      No
+                    </button>
+                    <button type="button" className={styles.button} onClick={postNowFromScheduledJob} disabled={postNowBusy}>
+                      {postNowBusy ? "Publishing…" : "Yes, post now"}
                     </button>
                   </div>
                 </div>

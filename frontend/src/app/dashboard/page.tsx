@@ -37,6 +37,7 @@ export default function DashboardPage() {
   const [plansLoading, setPlansLoading] = useState(false);
   const [profile, setProfile] = useState<ProfilePublic | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [profileClockTick, setProfileClockTick] = useState(0);
 
   const browserTimeZone = useMemo(() => {
     try {
@@ -116,6 +117,33 @@ export default function DashboardPage() {
       }
     })();
   }, [browserTimeZone, section, token]);
+
+  useEffect(() => {
+    if (section !== "profile") return;
+    const id = window.setInterval(() => setProfileClockTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [section]);
+
+  function formatWallClockInTz(tz: string | null | undefined, tick: number) {
+    void tick;
+    const z = ((tz || "").trim() || "UTC").trim();
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: z,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      })
+        .format(new Date())
+        .replace(",", "");
+    } catch {
+      return "—";
+    }
+  }
 
   async function createProject() {
     setError(null);
@@ -560,6 +588,16 @@ export default function DashboardPage() {
                             </option>
                           ))}
                         </select>
+                        <div className={styles.muted} style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
+                          <div>
+                            <strong>Current time</strong> in this timezone:{" "}
+                            <span>{formatWallClockInTz(profile.timezone, profileClockTick)}</span>
+                          </div>
+                          <div style={{ marginTop: 4 }}>
+                            <strong>UTC</strong> (server reference):{" "}
+                            <span>{formatWallClockInTz("UTC", profileClockTick)}</span>
+                          </div>
+                        </div>
                       </div>
                       <label className={styles.label}>
                         Email (read-only)

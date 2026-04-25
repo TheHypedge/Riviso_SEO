@@ -6,7 +6,6 @@ import binascii
 import html
 from datetime import datetime, timedelta, timezone
 import re
-from zoneinfo import ZoneInfo
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
@@ -19,6 +18,7 @@ from app.services.article_generation import generate_article_bundle
 from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient
 from app.services.scheduler import prepare_article_for_scheduled_job
+from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.schemas.articles import (
     ArticleCreate,
     ArticleDetailResponse,
@@ -412,25 +412,16 @@ async def schedule_article(
     if not raw:
         raise HTTPException(status_code=400, detail="Missing schedule time")
 
-    # Accept "YYYY-MM-DDTHH:MM" (from datetime-local) or "YYYY-MM-DD HH:MM[:SS]".
-    # Interpret the provided local time in the user's profile timezone, then store UTC for execution.
-    norm_local = raw.replace("T", " ").strip()
-    if len(norm_local) == 16:
-        norm_local = norm_local + ":00"
-    norm_local = norm_local[:19]
-
+    # Naive datetime-local values are interpreted in the user's profile IANA timezone (normalized for legacy names).
+    # Values with explicit offsets / Z are interpreted as that instant in UTC.
     try:
-        naive_local = datetime.strptime(norm_local, "%Y-%m-%d %H:%M:%S")
+        user_tz = zoneinfo_for_user(user.get("timezone"))
+        dt_utc = parse_schedule_input_to_utc(raw, user_tz=user_tz)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e) or "Invalid schedule time format") from None
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
 
-    tz_name = (user.get("timezone") or "").strip() or "UTC"
-    try:
-        user_tz = ZoneInfo(tz_name)
-    except Exception:
-        user_tz = ZoneInfo("UTC")
-
-    dt_utc = naive_local.replace(tzinfo=user_tz).astimezone(timezone.utc)
     norm_utc = dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
     # Enforce minimum gap of 5 minutes from current time (UTC).
@@ -682,8 +673,42 @@ async def publish_to_live_site(
         "wp_last_wp_status": payload["status"],
         "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") if payload["status"] == "publish" else (a.get("posted_at") or ""),
         "status": "published" if payload["status"] == "publish" else (a.get("status") or "draft"),
+        # Clear schedule marker so the UI shows published, not scheduled (same as scheduler after post).
+        "wp_scheduled_at": "",
+        "wp_schedule_error": "",
     }
     st.update_article_fields(article_id, updates)
+
+    # If this article had a pending scheduled job, mark it posted so Scheduled Articles stays in sync.
+    try:
+        if hasattr(st, "load_scheduled_jobs") and hasattr(st, "update_scheduled_job_fields"):
+            rows = st.load_scheduled_jobs(project_id=project_id) or []
+            candidates = [
+                r
+                for r in rows
+                if isinstance(r, dict)
+                and (r.get("article_id") or "").strip() == article_id
+                and (r.get("state") or "") not in {"posted", "cancelled"}
+            ]
+            if candidates:
+                def _stamp(x: dict) -> str:
+                    return (x.get("updated_at") or x.get("created_at") or "").strip()
+
+                candidates.sort(key=_stamp, reverse=True)
+                jid = (candidates[0].get("id") or "").strip()
+                if jid:
+                    st.update_scheduled_job_fields(
+                        jid,
+                        {
+                            "state": "posted",
+                            "wp_post_id": str(wp_post_id) if wp_post_id is not None else "",
+                            "wp_link": str(wp_link or "")[:2000],
+                            "last_error": "",
+                            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        },
+                    )
+    except Exception:
+        pass
 
     return {
         "ok": True,

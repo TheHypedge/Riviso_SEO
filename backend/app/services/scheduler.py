@@ -13,12 +13,14 @@ from app.services.article_generation import generate_article_bundle
 log = logging.getLogger(__name__)
 
 
-def _parse_dt(s: str) -> datetime | None:
+def _parse_run_at_utc(s: str) -> datetime | None:
+    """Parse stored job run_at as a UTC wall-clock instant (naive string in DB is always UTC)."""
     v = (s or "").strip()
     if not v:
         return None
     try:
-        return datetime.strptime(v[:19], "%Y-%m-%d %H:%M:%S")
+        dt_naive = datetime.strptime(v[:19], "%Y-%m-%d %H:%M:%S")
+        return dt_naive.replace(tzinfo=timezone.utc)
     except Exception:
         return None
 
@@ -196,7 +198,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
         try:
             st = get_legacy_storage_module()
             jobs = st.load_scheduled_jobs(project_id=None) if hasattr(st, "load_scheduled_jobs") else []
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            now = datetime.now(timezone.utc)
 
             for j in jobs or []:
                 if not isinstance(j, dict):
@@ -205,7 +207,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                 # Both states should be eligible once run_at is due.
                 if (j.get("state") or "scheduled") not in {"scheduled", "ready_to_post"}:
                     continue
-                run_at = _parse_dt(j.get("run_at") or "")
+                run_at = _parse_run_at_utc(j.get("run_at") or "")
                 if not run_at or run_at > now:
                     continue
 

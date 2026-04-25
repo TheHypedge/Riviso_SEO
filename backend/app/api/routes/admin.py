@@ -5,11 +5,14 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from app.core.deps import require_admin
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.admin import AdminUserDetails, AdminUserPublic, AdminUserStats, AdminUserUpdate, PlanPublic, PlanUpsert
+from app.services.user_timezone import normalize_user_timezone
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 def _user_to_public(u: dict) -> AdminUserPublic:
+    tz_raw = (u.get("timezone") or "").strip()
+    tz_norm = normalize_user_timezone(tz_raw) if tz_raw else None
     return AdminUserPublic(
         id=(u.get("id") or "").strip(),
         email=(u.get("email") or "").strip(),
@@ -17,7 +20,7 @@ def _user_to_public(u: dict) -> AdminUserPublic:
         subscription_type=((u.get("subscription_type") or "").strip() or None),
         full_name=((u.get("full_name") or "").strip() or None),
         phone=((u.get("phone") or "").strip() or None),
-        timezone=((u.get("timezone") or "").strip() or None),
+        timezone=(tz_norm or None),
         address=((u.get("address") or "").strip() or None),
         created_at=((u.get("created_at") or "").strip() or None),
         last_activity_at=((u.get("last_activity_at") or "").strip() or None),
@@ -44,6 +47,8 @@ async def update_user(user_id: str, payload: AdminUserUpdate, _: dict = Depends(
         raise HTTPException(status_code=400, detail="user_id is required")
 
     updates = payload.model_dump(exclude_unset=True)
+    if "timezone" in updates and isinstance(updates.get("timezone"), str):
+        updates["timezone"] = normalize_user_timezone(updates["timezone"])
     ok = st.update_user_fields(uid, updates)
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")

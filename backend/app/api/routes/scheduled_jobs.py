@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import uuid
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.deps import get_current_user
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobUpdate
+from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 
 
 router = APIRouter(prefix="/projects/{project_id}/scheduled-jobs", tags=["scheduled"])
@@ -109,24 +108,14 @@ async def update_scheduled_job(
         if not raw:
             raise HTTPException(status_code=400, detail="Missing schedule time")
 
-        # Accept "YYYY-MM-DDTHH:MM" (from datetime-local) or "YYYY-MM-DD HH:MM[:SS]".
-        # Interpret provided local time in user's profile timezone; store UTC for execution.
-        norm_local = raw.replace("T", " ").strip()
-        if len(norm_local) == 16:
-            norm_local = norm_local + ":00"
-        norm_local = norm_local[:19]
         try:
-            naive_local = datetime.strptime(norm_local, "%Y-%m-%d %H:%M:%S")
+            user_tz = zoneinfo_for_user(user.get("timezone"))
+            dt_utc = parse_schedule_input_to_utc(raw, user_tz=user_tz)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e) or "Invalid schedule time format") from None
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
 
-        tz_name = (user.get("timezone") or "").strip() or "UTC"
-        try:
-            user_tz = ZoneInfo(tz_name)
-        except Exception:
-            user_tz = ZoneInfo("UTC")
-
-        dt_utc = naive_local.replace(tzinfo=user_tz).astimezone(timezone.utc)
         if dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=5)):
             raise HTTPException(status_code=400, detail="Scheduled time must be at least 5 minutes from now")
 
