@@ -295,6 +295,8 @@ export const api = {
       default_wp_rest_base: string;
       default_wp_status: string;
       default_wp_category_ids: number[];
+      gsc_property_url: string;
+      gsc_index_on_publish: boolean;
     }>,
   ) {
     return apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, { method: "PATCH", body: JSON.stringify(patch) });
