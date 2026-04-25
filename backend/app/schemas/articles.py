@@ -17,6 +17,10 @@ class ArticlePublic(BaseModel):
     wp_schedule_error: str | None = None
     wp_link: str | None = None
     gsc_status: str | None = None
+    gsc_inspection_requested_at: str | None = None
+    gsc_inspection_last_attempt_at: str | None = None
+    gsc_inspection_error: str | None = None
+    gsc_inspection_url: str | None = None
     hasBody: bool | None = None
 
 

@@ -40,6 +40,11 @@ class Settings(BaseSettings):
 
     # External (placeholders; keep secrets only in env)
     public_base_url: AnyUrl | None = None
+    frontend_base_url: AnyUrl | None = None
+
+    # Google OAuth (Search Console)
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
 
     # OpenAI (generation)
     openai_api_key: str = ""

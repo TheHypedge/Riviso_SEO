@@ -17,6 +17,7 @@ from app.legacy.storage import get_legacy_storage_module
 from app.services.article_generation import generate_article_bundle
 from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient
+from app.services.gsc_actions import maybe_request_url_inspection
 from app.services.scheduler import prepare_article_for_scheduled_job
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.schemas.articles import (
@@ -678,6 +679,18 @@ async def publish_to_live_site(
         "wp_schedule_error": "",
     }
     st.update_article_fields(article_id, updates)
+
+    # Best-effort: Search Console URL Inspection after live publish.
+    try:
+        await maybe_request_url_inspection(
+            st=st,
+            proj=proj,
+            live_url=str(wp_link or ""),
+            wp_status=payload["status"],
+            article_id=article_id,
+        )
+    except Exception:
+        pass
 
     # If this article had a pending scheduled job, mark it posted so Scheduled Articles stays in sync.
     try:

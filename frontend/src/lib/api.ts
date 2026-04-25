@@ -80,6 +80,19 @@ export type ProjectSettings = {
   default_wp_rest_base?: string | null;
   default_wp_status?: string | null;
   default_wp_category_ids?: number[];
+  gsc_property_url?: string | null;
+  gsc_index_on_publish?: boolean;
+};
+
+export type GscStatus = {
+  configured: boolean;
+  connected: boolean;
+  email?: string | null;
+};
+
+export type GscSite = {
+  siteUrl: string;
+  permissionLevel?: string;
 };
 
 export type WordpressVerifyResponse = {
@@ -249,6 +262,15 @@ export const api = {
   },
   async updateProfileMe(patch: Partial<{ full_name: string; phone: string; timezone: string }>) {
     return apiFetch<ProfilePublic>("/api/profile/me", { method: "PATCH", body: JSON.stringify(patch) });
+  },
+  async gscStatus() {
+    return apiFetch<GscStatus>("/api/gsc/status");
+  },
+  async gscConnectUrl() {
+    return apiFetch<{ url: string }>("/api/gsc/connect-url");
+  },
+  async gscListSites() {
+    return apiFetch<GscSite[]>("/api/gsc/sites");
   },
   async listProjects() {
     return apiFetch<ProjectPublic[]>("/api/projects");

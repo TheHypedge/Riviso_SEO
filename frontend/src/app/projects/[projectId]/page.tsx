@@ -56,8 +56,14 @@ export default function ProjectPage() {
   const [sWpDefaultPostType, setSWpDefaultPostType] = useState("posts");
   const [sWpDefaultStatus, setSWpDefaultStatus] = useState<"draft" | "publish">("draft");
   const [sWpDefaultCategoryIds, setSWpDefaultCategoryIds] = useState<number[]>([]);
+  const [sGscPropertyUrl, setSGscPropertyUrl] = useState("");
+  const [sGscIndexOnPublish, setSGscIndexOnPublish] = useState(true);
   const [settingsPostTypes, setSettingsPostTypes] = useState<import("@/lib/api").WordpressPostType[]>([]);
   const [settingsCategories, setSettingsCategories] = useState<import("@/lib/api").WordpressCategory[]>([]);
+  const [gscStatus, setGscStatus] = useState<import("@/lib/api").GscStatus | null>(null);
+  const [gscSites, setGscSites] = useState<import("@/lib/api").GscSite[]>([]);
+  const [gscLoading, setGscLoading] = useState(false);
+  const [gscSaveMsg, setGscSaveMsg] = useState<string | null>(null);
   const settingsDirty = useMemo(() => {
     if (!settings) return false;
     return (
@@ -68,9 +74,11 @@ export default function ProjectPage() {
       (sWpDefaultStatus || "") !== ((settings.default_wp_status || "draft") as string) ||
       JSON.stringify((sWpDefaultCategoryIds || []).slice().sort((a,b)=>a-b)) !==
         JSON.stringify(((settings.default_wp_category_ids || []) as number[]).slice().sort((a,b)=>a-b)) ||
+      (sGscPropertyUrl || "") !== (settings.gsc_property_url || "") ||
+      Boolean(sGscIndexOnPublish) !== Boolean(settings.gsc_index_on_publish ?? true) ||
       !!sWpPass.trim()
     );
-  }, [sName, sUrl, sWpUser, sWpPass, settings, sWpDefaultPostType, sWpDefaultStatus, sWpDefaultCategoryIds]);
+  }, [sName, sUrl, sWpUser, sWpPass, settings, sWpDefaultPostType, sWpDefaultStatus, sWpDefaultCategoryIds, sGscPropertyUrl, sGscIndexOnPublish]);
   const [articles, setArticles] = useState<ArticlePublic[]>([]);
   const [scheduledJobs, setScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [scheduledLoading, setScheduledLoading] = useState(false);
@@ -332,9 +340,11 @@ export default function ProjectPage() {
     if (tab !== "project_settings") return;
     (async () => {
       setError(null);
+      setGscSaveMsg(null);
       setSettingsLoading(true);
+      setGscLoading(true);
       try {
-        const s = await api.getProjectSettings(projectId);
+        const [s, gs] = await Promise.all([api.getProjectSettings(projectId), api.gscStatus()]);
         setSettings(s);
         setSName(s.name || "");
         setSUrl(s.wp_site_url || s.website_url || "");
@@ -343,6 +353,9 @@ export default function ProjectPage() {
         setSWpDefaultPostType((s.default_wp_rest_base || "posts") as string);
         setSWpDefaultStatus(((s.default_wp_status || "draft") as "draft" | "publish"));
         setSWpDefaultCategoryIds((s.default_wp_category_ids || []) as number[]);
+        setSGscPropertyUrl((s.gsc_property_url || "") as string);
+        setSGscIndexOnPublish(Boolean(s.gsc_index_on_publish ?? true));
+        setGscStatus(gs);
         setSettingsVerify(null);
 
         // Load WP options for defaults if connected
@@ -357,10 +370,23 @@ export default function ProjectPage() {
           setSettingsPostTypes([]);
           setSettingsCategories([]);
         }
+
+        // Load Search Console properties if connected
+        try {
+          if (gs?.connected) {
+            const sites = await api.gscListSites();
+            setGscSites(sites || []);
+          } else {
+            setGscSites([]);
+          }
+        } catch {
+          setGscSites([]);
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load project settings");
       } finally {
         setSettingsLoading(false);
+        setGscLoading(false);
       }
     })();
   }, [projectId, tab, token]);
@@ -368,6 +394,7 @@ export default function ProjectPage() {
   async function saveSettings() {
     if (!settings) return;
     setError(null);
+    setGscSaveMsg(null);
     setSettingsSaving(true);
     try {
       const saved = await api.updateProjectSettings(projectId, {
@@ -377,10 +404,17 @@ export default function ProjectPage() {
         default_wp_rest_base: sWpDefaultPostType,
         default_wp_status: sWpDefaultStatus,
         default_wp_category_ids: sWpDefaultCategoryIds,
+        gsc_property_url: sGscPropertyUrl,
+        gsc_index_on_publish: sGscIndexOnPublish,
         ...(sWpPass.trim() ? { wp_app_password: sWpPass } : {}),
       });
       setSettings(saved);
       setSWpPass("");
+      setGscSaveMsg(
+        saved.gsc_property_url
+          ? "Google Search Console property linked to this project."
+          : "Google Search Console settings saved.",
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save settings");
     } finally {
@@ -2554,6 +2588,64 @@ export default function ProjectPage() {
                       Hold Cmd/Ctrl to select multiple categories.
                     </div>
                   </label>
+                </div>
+
+                <div style={{ marginTop: 14, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Google Search Console</div>
+                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
+                    Connect Google on the dashboard first, then choose the Search Console property for this project.
+                    After a <strong>live</strong> publish, we automatically request a <strong>URL Inspection</strong> for the post URL.
+                  </div>
+
+                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>
+                    Status:{" "}
+                    <strong>
+                      {gscLoading ? "Loading…" : gscStatus?.connected ? `Connected${gscStatus.email ? ` (${gscStatus.email})` : ""}` : "Not connected"}
+                    </strong>
+                  </div>
+
+                  <label className={styles.label}>
+                    Property for this project
+                    <select
+                      className={styles.input}
+                      value={sGscPropertyUrl}
+                      onChange={(e) => setSGscPropertyUrl(e.target.value)}
+                      disabled={!gscStatus?.connected}
+                    >
+                      <option value="">— None —</option>
+                      {gscSites.map((s) => (
+                        <option key={s.siteUrl} value={s.siteUrl}>
+                          {s.siteUrl}{s.permissionLevel ? ` (${s.permissionLevel})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    {!gscStatus?.connected ? (
+                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                        Go to <Link href="/dashboard">Dashboard</Link> → <strong>Connect Google (Search Console)</strong>.
+                      </div>
+                    ) : gscSites.length === 0 ? (
+                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                        No properties returned. Add/verify a site in Search Console for this Google account, then reload this page.
+                      </div>
+                    ) : null}
+                  </label>
+
+                  <label className={styles.label} style={{ marginTop: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <input
+                        type="checkbox"
+                        checked={sGscIndexOnPublish}
+                        onChange={(e) => setSGscIndexOnPublish(e.target.checked)}
+                      />
+                      <span>Inspect URL after live publish</span>
+                    </div>
+                  </label>
+
+                  {gscSaveMsg ? (
+                    <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }}>
+                      {gscSaveMsg}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className={styles.row} style={{ justifyContent: "space-between", marginTop: 10 }}>

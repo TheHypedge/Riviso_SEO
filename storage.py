@@ -185,6 +185,13 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "usage_monthly_articles_count": int(d.get("usage_monthly_articles_count") or 0),
         "created_at": (d.get("created_at") or "")[:64],
         "pending_product_tour": bool(d.get("pending_product_tour", False)),
+        # Google Search Console OAuth (stored per-user)
+        "gsc_access_token": (d.get("gsc_access_token") or "").strip()[:5000],
+        "gsc_refresh_token": (d.get("gsc_refresh_token") or "").strip()[:5000],
+        "gsc_token_expires_at": str(d.get("gsc_token_expires_at") or "").strip()[:32],
+        "gsc_scope": (d.get("gsc_scope") or "").strip()[:2000],
+        "gsc_email": (d.get("gsc_email") or "").strip()[:500],
+        "gsc_connected_at": (d.get("gsc_connected_at") or "").strip()[:64],
     }
 
 
@@ -512,6 +519,10 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "wp_schedule_batch_index": str(d.get("wp_schedule_batch_index") or "")[:32],
         "wp_schedule_batch_total": str(d.get("wp_schedule_batch_total") or "")[:32],
         "gsc_status": (d.get("gsc_status") or "pending")[:32],
+        "gsc_inspection_requested_at": (d.get("gsc_inspection_requested_at") or "")[:64],
+        "gsc_inspection_last_attempt_at": (d.get("gsc_inspection_last_attempt_at") or "")[:64],
+        "gsc_inspection_error": (d.get("gsc_inspection_error") or "")[:500],
+        "gsc_inspection_url": (d.get("gsc_inspection_url") or "")[:2048],
     }
 
 

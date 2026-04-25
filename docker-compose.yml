@@ -24,8 +24,8 @@ services:
     env_file:
       # Prefer `backend/.env` on machines where you store real secrets.
       # `backend/.env.example` is a tracked template for fresh clones/VPS setups.
-      - ./backend/.env
       - ./backend/.env.example
+      - ./backend/.env
     environment:
       POSTGRES_DSN: postgresql+asyncpg://app:app@postgres:5432/auto_articles
       REDIS_URL: redis://redis:6379/0

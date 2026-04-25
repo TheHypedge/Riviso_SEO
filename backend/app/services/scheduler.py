@@ -8,6 +8,7 @@ from app.legacy.storage import get_legacy_storage_module
 from app.services.wordpress_client import WordpressClient
 from app.services.context_links import apply_context_links_html
 from app.services.article_generation import generate_article_bundle
+from app.services.gsc_actions import maybe_request_url_inspection
 
 
 log = logging.getLogger(__name__)
@@ -289,6 +290,18 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                             "status": "published" if (j.get("wp_status") or "").lower() == "publish" else (art.get("status") or "draft"),
                         },
                     )
+
+                    # Best-effort: Search Console URL Inspection after live publish.
+                    try:
+                        await maybe_request_url_inspection(
+                            st=st,
+                            proj=proj,
+                            live_url=str(wp_link or ""),
+                            wp_status=(j.get("wp_status") or ""),
+                            article_id=aid,
+                        )
+                    except Exception:
+                        pass
                 except Exception as e:
                     log.exception("Scheduled job failed jid=%s", jid)
                     st.update_scheduled_job_fields(

@@ -13,6 +13,7 @@ from app.api.routes import prompts
 from app.api.routes import projects
 from app.api.routes import wordpress
 from app.api.routes import scheduled_jobs
+from app.api.routes import gsc
 
 api_router = APIRouter()
 
@@ -27,4 +28,5 @@ api_router.include_router(context_links.router)
 api_router.include_router(admin.router)
 api_router.include_router(wordpress.router)
 api_router.include_router(scheduled_jobs.router)
+api_router.include_router(gsc.router)
 
