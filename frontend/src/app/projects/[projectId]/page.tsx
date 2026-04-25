@@ -128,6 +128,7 @@ export default function ProjectPage() {
   const [status, setStatus] = useState<StatusFilter>("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [dateOrder, setDateOrder] = useState<"desc" | "asc">("desc");
   const [page, setPage] = useState(1);
   const [profileTz, setProfileTz] = useState<string>("");
 
@@ -154,6 +155,8 @@ export default function ProjectPage() {
   const [editJobPostType, setEditJobPostType] = useState("posts");
   const [editJobStatus, setEditJobStatus] = useState<"draft" | "publish">("draft");
   const [editJobCats, setEditJobCats] = useState<number[]>([]);
+  const [confirmCancelJob, setConfirmCancelJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
+  const [confirmClearScheduled, setConfirmClearScheduled] = useState(false);
 
   const pageSize = 10;
 
@@ -223,6 +226,57 @@ export default function ProjectPage() {
     }
   }
 
+  function toDatetimeLocalInProfileTz(utcLike: string) {
+    const v = (utcLike || "").trim();
+    if (!v) return "";
+    const iso = v.includes("T") ? v : v.replace(" ", "T") + "Z";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const tz = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    try {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).formatToParts(d);
+      const get = (type: string) => parts.find((p) => p.type === type)?.value || "";
+      const y = get("year");
+      const m = get("month");
+      const day = get("day");
+      const hh = get("hour");
+      const mm = get("minute");
+      if (!y || !m || !day || !hh || !mm) return "";
+      return `${y}-${m}-${day}T${hh}:${mm}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function dedupeScheduledJobs(rows: import("@/lib/api").ScheduledJobPublic[]) {
+    const bestByArticle = new Map<string, import("@/lib/api").ScheduledJobPublic>();
+    const score = (j: import("@/lib/api").ScheduledJobPublic) => {
+      const s = (j as any).updated_at || (j as any).created_at || j.run_at || "";
+      return typeof s === "string" ? s : "";
+    };
+    for (const j of rows || []) {
+      const aid = (j.article_id || "").trim();
+      if (!aid) continue;
+      const cur = bestByArticle.get(aid);
+      if (!cur) {
+        bestByArticle.set(aid, j);
+        continue;
+      }
+      if (score(j) > score(cur)) bestByArticle.set(aid, j);
+    }
+    const out = Array.from(bestByArticle.values());
+    out.sort((a, b) => (b.run_at || "").localeCompare(a.run_at || ""));
+    return out;
+  }
+
   useEffect(() => {
     if (!token) return;
     if (tab !== "scheduled_articles") return;
@@ -231,7 +285,7 @@ export default function ProjectPage() {
       setScheduledLoading(true);
       try {
         const jobs = await api.listScheduledJobs(projectId);
-        setScheduledJobs(jobs);
+        setScheduledJobs(dedupeScheduledJobs(jobs));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load scheduled articles");
       } finally {
@@ -600,7 +654,7 @@ export default function ProjectPage() {
     const df = parseDateOnly(dateFrom);
     const dt = parseDateOnly(dateTo);
 
-    return articles.filter((a) => {
+    const out = articles.filter((a) => {
       if (status && (a.status || "").toLowerCase() !== status) return false;
 
       if (qn) {
@@ -623,7 +677,15 @@ export default function ProjectPage() {
       }
       return true;
     });
-  }, [articles, dateFrom, dateTo, q, status]);
+
+    const createdAtMs = (a: { created_at?: string | null }) => {
+      const d = parseCreatedAt(a.created_at);
+      return d ? d.getTime() : 0;
+    };
+
+    out.sort((a, b) => (dateOrder === "asc" ? createdAtMs(a) - createdAtMs(b) : createdAtMs(b) - createdAtMs(a)));
+    return out;
+  }, [articles, dateFrom, dateTo, q, status, dateOrder]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const pageClamped = Math.min(Math.max(1, page), totalPages);
@@ -691,6 +753,13 @@ export default function ProjectPage() {
       });
       const list = await api.listArticles(projectId);
       setArticles(list);
+      // Keep Scheduled Articles tab in sync (so reschedules show immediately on top)
+      try {
+        const jobs = await api.listScheduledJobs(projectId);
+        setScheduledJobs(dedupeScheduledJobs(jobs));
+      } catch {
+        // ignore; scheduled tab can still refresh later
+      }
       setScheduleId(null);
       setScheduleWhen("");
       setScheduleWpStatus("draft");
@@ -1062,7 +1131,7 @@ export default function ProjectPage() {
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 180px 140px 140px", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 180px 140px 140px 180px", gap: 10 }}>
                 <label className={styles.label}>
                   Search
                   <input
@@ -1089,6 +1158,20 @@ export default function ProjectPage() {
                 <label className={styles.label}>
                   To
                   <input className={styles.input} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                </label>
+                <label className={styles.label}>
+                  Date order
+                  <select
+                    className={styles.input}
+                    value={dateOrder}
+                    onChange={(e) => {
+                      setDateOrder(e.target.value as "asc" | "desc");
+                      setPage(1);
+                    }}
+                  >
+                    <option value="desc">Latest → Oldest</option>
+                    <option value="asc">Oldest → Latest</option>
+                  </select>
                 </label>
               </div>
 
@@ -1506,9 +1589,17 @@ export default function ProjectPage() {
                 </div>
                 <button className={styles.button} type="button" onClick={async () => {
                   setScheduledLoading(true);
-                  try { setScheduledJobs(await api.listScheduledJobs(projectId)); } finally { setScheduledLoading(false); }
+                  try { setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId))); } finally { setScheduledLoading(false); }
                 }}>
                   Refresh
+                </button>
+                <button
+                  className={styles.btnSecondary}
+                  type="button"
+                  onClick={() => setConfirmClearScheduled(true)}
+                  style={{ marginLeft: 10 }}
+                >
+                  Clear all
                 </button>
               </div>
               {scheduledLoading ? <div className={styles.muted}>Loading…</div> : null}
@@ -1551,24 +1642,21 @@ export default function ProjectPage() {
                           const min = new Date(Date.now() + 5 * 60 * 1000);
                           setEditJobMin(toDatetimeLocalValue(min));
                           setEditJob(j);
-                          // Convert run_at "YYYY-MM-DD HH:MM:SS" to datetime-local
-                          const local = (j.run_at || "").replace(" ", "T").slice(0, 16);
-                          setEditJobWhen(local);
+                          // Show schedule time in the user's profile timezone
+                          setEditJobWhen(toDatetimeLocalInProfileTz(j.run_at || ""));
                           setEditJobPostType(j.post_type || "posts");
                           setEditJobStatus(((j.wp_status || "draft") as "draft" | "publish"));
                           setEditJobCats(j.category_ids || []);
                         }}
                         disabled={["posted", "cancelled"].includes((j.state || "").toLowerCase())}
                       >
-                        Edit schedule
+                        Re-Schedule
                       </button>
                       <button
                         type="button"
                         className={`${styles.miniBtn} ${styles.miniDanger}`}
                         onClick={async () => {
-                          if (!confirm("Cancel this scheduled article?")) return;
-                          await api.cancelScheduledJob(projectId, j.id);
-                          setScheduledJobs(await api.listScheduledJobs(projectId));
+                          setConfirmCancelJob(j);
                         }}
                         disabled={["posted", "cancelled"].includes((j.state || "").toLowerCase())}
                       >
@@ -1600,17 +1688,17 @@ export default function ProjectPage() {
             </div>
 
             {editJob ? (
-              <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Edit scheduled article">
+              <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Re-schedule article">
                 <div className={styles.modalPanel}>
                   <div className={styles.modalHead}>
-                    <h3 className={styles.modalTitle}>Edit scheduled article</h3>
+                    <h3 className={styles.modalTitle}>Re-schedule article</h3>
                     <button type="button" className={styles.btnSecondary} onClick={() => setEditJob(null)}>
                       Close
                     </button>
                   </div>
                   <div className={styles.modalBody}>
                     <label className={styles.label}>
-                      Schedule time
+                      Schedule time {profileTz ? <span className={styles.muted}>(Timezone: {profileTz})</span> : null}
                       <input
                         className={styles.input}
                         type="datetime-local"
@@ -1675,17 +1763,15 @@ export default function ProjectPage() {
                       onClick={async () => {
                         try {
                           setError(null);
-                          const min = new Date(Date.now() + 5 * 60 * 1000);
-                          const picked = new Date(editJobWhen);
-                          if (Number.isNaN(picked.getTime())) throw new Error("Invalid schedule time");
-                          if (picked.getTime() < min.getTime()) throw new Error("Scheduled time must be at least 5 minutes from now");
+                          if (!editJobWhen.trim()) throw new Error("Invalid schedule time");
                           await api.updateScheduledJob(projectId, editJob.id, {
-                            run_at: editJobWhen.replace("T", " ") + ":00",
+                            // Backend interprets this as local time in the user's profile timezone and stores UTC.
+                            run_at: editJobWhen,
                             post_type: editJobPostType,
                             wp_status: editJobStatus,
                             category_ids: editJobCats,
                           });
-                          setScheduledJobs(await api.listScheduledJobs(projectId));
+                          setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
                           setEditJob(null);
                         } catch (e) {
                           setError(e instanceof Error ? e.message : "Failed to update schedule");
@@ -1693,6 +1779,87 @@ export default function ProjectPage() {
                       }}
                     >
                       Save changes
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {confirmCancelJob ? (
+              <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Cancel scheduled article">
+                <div className={styles.modalPanel}>
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Cancel scheduled article</h3>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmCancelJob(null)}>
+                      Close
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <p style={{ marginTop: 0 }}>
+                      Are you sure you want to cancel this scheduled post?
+                    </p>
+                    <div className={styles.muted} style={{ fontSize: 12 }}>
+                      {articles.find((a) => a.id === confirmCancelJob.article_id)?.title || "(Untitled article)"}
+                    </div>
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmCancelJob(null)}>
+                      Keep scheduled
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.button} ${styles.miniDanger}`}
+                      onClick={async () => {
+                        try {
+                          setError(null);
+                          await api.cancelScheduledJob(projectId, confirmCancelJob.id);
+                          setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
+                          setConfirmCancelJob(null);
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : "Failed to cancel scheduled job");
+                        }
+                      }}
+                    >
+                      Yes, cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {confirmClearScheduled ? (
+              <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Clear scheduled articles">
+                <div className={styles.modalPanel}>
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Clear all scheduled articles</h3>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmClearScheduled(false)}>
+                      Close
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <p style={{ marginTop: 0 }}>
+                      This will remove all scheduled jobs for this project so you can start fresh. Are you sure?
+                    </p>
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmClearScheduled(false)}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.button} ${styles.miniDanger}`}
+                      onClick={async () => {
+                        try {
+                          setError(null);
+                          await api.clearScheduledJobs(projectId);
+                          setScheduledJobs([]);
+                          setConfirmClearScheduled(false);
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : "Failed to clear scheduled articles");
+                        }
+                      }}
+                    >
+                      Yes, clear all
                     </button>
                   </div>
                 </div>

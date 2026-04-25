@@ -7,6 +7,7 @@ import html
 from datetime import datetime, timedelta, timezone
 import re
 from zoneinfo import ZoneInfo
+import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 import markdown as md
@@ -17,6 +18,7 @@ from app.legacy.storage import get_legacy_storage_module
 from app.services.article_generation import generate_article_bundle
 from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient
+from app.services.scheduler import prepare_article_for_scheduled_job
 from app.schemas.articles import (
     ArticleCreate,
     ArticleDetailResponse,
@@ -461,7 +463,22 @@ async def schedule_article(
         existing = None
         try:
             rows = st.load_scheduled_jobs(project_id=project_id)
-            existing = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("article_id") or "").strip() == article_id and (r.get("state") or "scheduled") == "scheduled"), None)
+            # If this article already has a non-completed job, overwrite it instead of creating duplicates.
+            # This makes "reschedule" behave like an update.
+            candidates = [
+                r
+                for r in (rows or [])
+                if isinstance(r, dict)
+                and (r.get("article_id") or "").strip() == article_id
+                and (r.get("state") or "scheduled") not in {"posted", "cancelled"}
+            ]
+            if candidates:
+                # Prefer the most recently updated/created row.
+                def _stamp(x: dict) -> str:
+                    return (x.get("updated_at") or x.get("created_at") or "").strip()
+
+                candidates.sort(key=_stamp, reverse=True)
+                existing = candidates[0]
         except Exception:
             existing = None
         job_updates = {
@@ -475,20 +492,53 @@ async def schedule_article(
             "image_prompt_id": (payload.image_prompt_id or "").strip(),
             "generate_image": bool(payload.generate_image),
             "state": "scheduled",
+            "attempts": 0,
+            "last_attempt_at": "",
+            "last_error": "",
             "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         }
+        job_id = ""
         if existing and hasattr(st, "update_scheduled_job_fields"):
-            st.update_scheduled_job_fields((existing.get("id") or "").strip(), job_updates)
+            job_id = (existing.get("id") or "").strip()
+            st.update_scheduled_job_fields(job_id, job_updates)
         else:
+            job_id = str(uuid.uuid4())
             st.insert_scheduled_job(
                 {
-                    "id": str(uuid.uuid4()),
+                    "id": job_id,
                     **job_updates,
                     "attempts": 0,
                     "last_error": "",
                     "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                 }
             )
+
+        # Start background preparation immediately so the article is ready well before posting.
+        # This is best-effort and does not block the schedule response.
+        try:
+            if job_id:
+                proj2 = proj
+                art2 = a
+                job2 = {"id": job_id, **job_updates}
+
+                async def _prep() -> None:
+                    try:
+                        await prepare_article_for_scheduled_job(st=st, jid=job_id, proj=proj2, art=art2, job=job2)
+                        st.update_scheduled_job_fields(job_id, {"state": "ready_to_post", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
+                    except Exception as e:
+                        st.update_scheduled_job_fields(
+                            job_id,
+                            {
+                                "state": "failed",
+                                "last_error": str(e),
+                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                            },
+                        )
+
+                asyncio.create_task(_prep())
+        except Exception:
+            # Don't fail scheduling if background prep fails to start.
+            pass
     return {
         "ok": True,
         "status": "scheduled",

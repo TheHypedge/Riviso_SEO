@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -59,6 +60,19 @@ def _to_public(row: dict) -> ScheduledJobPublic:
         wp_link=(row.get("wp_link") or "").strip() or None,
     )
 
+def _find_article_for_job(*, st, project_id: str, article_id: str) -> dict | None:
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        return None
+    rows = st.load_articles_listing_for_project(pid, limit=20000) if hasattr(st, "load_articles_listing_for_project") else (st.load_articles() or [])
+    for a in rows or []:
+        if not isinstance(a, dict):
+            continue
+        if (a.get("id") or "").strip() == aid and (a.get("project_id") or "").strip() == pid:
+            return a
+    return None
+
 
 @router.get("", response_model=list[ScheduledJobPublic])
 async def list_scheduled(project_id: str, user: dict = Depends(get_current_user)) -> list[ScheduledJobPublic]:
@@ -66,7 +80,8 @@ async def list_scheduled(project_id: str, user: dict = Depends(get_current_user)
     _require_project_access(st=st, user=user, project_id=project_id)
     rows = st.load_scheduled_jobs(project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
     out = [_to_public(r) for r in (rows or []) if isinstance(r, dict)]
-    out.sort(key=lambda x: x.run_at)
+    # Latest scheduled first
+    out.sort(key=lambda x: x.run_at, reverse=True)
     return out
 
 
@@ -88,8 +103,41 @@ async def update_scheduled_job(
         raise HTTPException(status_code=400, detail="Cannot edit a completed/cancelled job")
 
     updates: dict = {"updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
+    updated_run_at_utc: str | None = None
     if payload.run_at is not None:
-        updates["run_at"] = payload.run_at.strip()[:64]
+        raw = (payload.run_at or "").strip()
+        if not raw:
+            raise HTTPException(status_code=400, detail="Missing schedule time")
+
+        # Accept "YYYY-MM-DDTHH:MM" (from datetime-local) or "YYYY-MM-DD HH:MM[:SS]".
+        # Interpret provided local time in user's profile timezone; store UTC for execution.
+        norm_local = raw.replace("T", " ").strip()
+        if len(norm_local) == 16:
+            norm_local = norm_local + ":00"
+        norm_local = norm_local[:19]
+        try:
+            naive_local = datetime.strptime(norm_local, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
+
+        tz_name = (user.get("timezone") or "").strip() or "UTC"
+        try:
+            user_tz = ZoneInfo(tz_name)
+        except Exception:
+            user_tz = ZoneInfo("UTC")
+
+        dt_utc = naive_local.replace(tzinfo=user_tz).astimezone(timezone.utc)
+        if dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=5)):
+            raise HTTPException(status_code=400, detail="Scheduled time must be at least 5 minutes from now")
+
+        norm_utc = dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+        updates["run_at"] = norm_utc
+        updated_run_at_utc = norm_utc
+        # A reschedule should put the job back into the scheduler queue.
+        updates["state"] = "scheduled"
+        updates["attempts"] = 0
+        updates["last_attempt_at"] = ""
+        updates["last_error"] = ""
     if payload.post_type is not None:
         updates["post_type"] = payload.post_type.strip()[:200]
     if payload.wp_status is not None:
@@ -113,6 +161,26 @@ async def update_scheduled_job(
         updates["generate_image"] = bool(payload.generate_image)
 
     st.update_scheduled_job_fields(jid, updates)
+
+    # Keep the article row in sync so the Articles list can show the latest scheduled time.
+    try:
+        aid = (row.get("article_id") or "").strip()
+        if updated_run_at_utc and aid and hasattr(st, "update_article_fields"):
+            art = _find_article_for_job(st=st, project_id=project_id, article_id=aid)
+            if art:
+                st.update_article_fields(
+                    aid,
+                    {
+                        "wp_scheduled_at": updated_run_at_utc,
+                        "wp_schedule_error": "",
+                        "wp_schedule_wp_status": (updates.get("wp_status") or (row.get("wp_status") or "")).strip()[:16],
+                        "wp_rest_base": (updates.get("post_type") or (row.get("post_type") or "")).strip()[:200],
+                    },
+                )
+    except Exception:
+        # Best-effort sync; scheduled job update succeeded already.
+        pass
+
     rows2 = st.load_scheduled_jobs(project_id=project_id)
     row2 = next((r for r in (rows2 or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
     if not row2:
@@ -125,8 +193,56 @@ async def cancel_scheduled_job(project_id: str, job_id: str, user: dict = Depend
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     jid = (job_id or "").strip()
+    rows = st.load_scheduled_jobs(project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
     ok = st.update_scheduled_job_fields(jid, {"state": "cancelled", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
     if not ok:
         raise HTTPException(status_code=404, detail="Scheduled job not found")
+
+    # Best-effort: clear the article's scheduled marker so Articles list matches.
+    try:
+        aid = ((row or {}).get("article_id") or "").strip()
+        if aid and hasattr(st, "update_article_fields"):
+            art = _find_article_for_job(st=st, project_id=project_id, article_id=aid)
+            if art:
+                st.update_article_fields(
+                    aid,
+                    {
+                        "wp_scheduled_at": "",
+                        "wp_schedule_error": "",
+                    },
+                )
+    except Exception:
+        pass
+
     return {"ok": True}
+
+
+@router.delete("", status_code=200)
+async def clear_scheduled_jobs(project_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """
+    Delete all scheduled-job rows for the project.
+    This is meant as a "start fresh" button for the UI.
+    """
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    if not hasattr(st, "load_scheduled_jobs"):
+        return {"ok": True, "deleted": 0}
+    rows = st.load_scheduled_jobs(project_id=project_id) or []
+    ids = [(r.get("id") or "").strip() for r in rows if isinstance(r, dict)]
+    ids = [x for x in ids if x]
+    deleted = 0
+    for jid in ids:
+        try:
+            if hasattr(st, "delete_scheduled_job") and st.delete_scheduled_job(jid):
+                deleted += 1
+            else:
+                # Fallback: mark cancelled if delete isn't available
+                if hasattr(st, "update_scheduled_job_fields") and st.update_scheduled_job_fields(
+                    jid, {"state": "cancelled", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
+                ):
+                    deleted += 1
+        except Exception:
+            continue
+    return {"ok": True, "deleted": deleted}
 

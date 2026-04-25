@@ -23,6 +23,80 @@ def _parse_dt(s: str) -> datetime | None:
         return None
 
 
+def _resolve_prompt_text(*, prompts: list, pid: str | None) -> str | None:
+    pid = (pid or "").strip()
+    if pid:
+        for p in prompts or []:
+            if isinstance(p, dict) and (p.get("id") or "").strip() == pid:
+                return (p.get("text") or "").strip() or None
+    return None
+
+
+def _fallback_first_prompt_text(prompts: list) -> str | None:
+    for p in prompts or []:
+        if isinstance(p, dict) and (p.get("text") or "").strip():
+            return (p.get("text") or "").strip()
+    return None
+
+
+async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: dict, job: dict) -> dict:
+    """
+    Ensure article has generated content/meta and (optionally) image, saving results to storage.
+    This is used both:
+    - immediately after scheduling (background task)
+    - right before posting in the scheduler loop (safety net)
+    """
+    aid = (art.get("id") or "").strip()
+    if not aid:
+        raise RuntimeError("Article not found")
+
+    needs_content = not (str(art.get("article") or "").strip())
+    needs_image = not (str(art.get("image_url") or "").strip())
+    generate_image = bool(job.get("generate_image", True))
+    if not (needs_content or (generate_image and needs_image)):
+        return art
+
+    st.update_scheduled_job_fields(jid, {"state": "content_generating" if needs_content else "image_generating", "last_error": ""})
+
+    # Resolve prompt texts: job override > project default > first prompt
+    writing_text = _resolve_prompt_text(
+        prompts=(proj.get("prompts") or []),
+        pid=(job.get("writing_prompt_id") or "") or (proj.get("default_prompt_id") or ""),
+    ) or _fallback_first_prompt_text(proj.get("prompts") or [])
+    if not writing_text:
+        raise RuntimeError("No writing prompt available for scheduled generation")
+
+    image_text = _resolve_prompt_text(
+        prompts=(proj.get("image_prompts") or []),
+        pid=(job.get("image_prompt_id") or "") or (proj.get("default_image_prompt_id") or ""),
+    ) or _fallback_first_prompt_text(proj.get("image_prompts") or [])
+
+    gen = await generate_article_bundle(
+        title=(art.get("title") or "").strip(),
+        keywords=[str(x).strip() for x in (art.get("keywords") or []) if str(x).strip()],
+        focus_keyphrase=(art.get("focus_keyphrase") or "").strip(),
+        writing_prompt_text=writing_text,
+        generate_image=generate_image,
+        image_prompt_text=image_text,
+    )
+
+    st.update_article_fields(
+        aid,
+        {
+            "article": gen.get("article") or art.get("article") or "",
+            "meta_title": gen.get("meta_title") or art.get("meta_title") or "",
+            "meta_description": gen.get("meta_description") or art.get("meta_description") or "",
+            "image_url": gen.get("image_url") or art.get("image_url") or "",
+            "generated_at": gen.get("generated_at") or art.get("generated_at") or "",
+            "status": "draft" if (art.get("status") or "pending").lower() != "published" else (art.get("status") or "published"),
+        },
+    )
+
+    # Reload and return updated row (best effort)
+    art2 = next((a for a in (st.load_articles() or []) if isinstance(a, dict) and (a.get("id") or "") == aid), None)
+    return art2 if isinstance(art2, dict) else art
+
+
 async def publish_article_to_wordpress(*, proj: dict, article: dict, post_type: str, wp_status: str, category_ids: list[int]) -> dict:
     wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
     wp_username = (proj.get("wp_username") or "").strip()
@@ -127,7 +201,9 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
             for j in jobs or []:
                 if not isinstance(j, dict):
                     continue
-                if (j.get("state") or "scheduled") != "scheduled":
+                # A job can be "ready_to_post" if background preparation finished early.
+                # Both states should be eligible once run_at is due.
+                if (j.get("state") or "scheduled") not in {"scheduled", "ready_to_post"}:
                     continue
                 run_at = _parse_dt(j.get("run_at") or "")
                 if not run_at or run_at > now:
@@ -161,59 +237,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                         raise RuntimeError("Article not found")
 
                     # If article isn't generated yet, generate it now using scheduled prompts/defaults.
-                    needs_content = not (str(art.get("article") or "").strip())
-                    needs_image = not (str(art.get("image_url") or "").strip())
-                    generate_image = bool(j.get("generate_image", True))
-                    if needs_content or (generate_image and needs_image):
-                        st.update_scheduled_job_fields(jid, {"state": "content_generating" if needs_content else "image_generating"})
-
-                        # Resolve prompt texts: job override > project default > first prompt
-                        def _resolve_prompt(prompts: list, pid: str | None) -> str | None:
-                            pid = (pid or "").strip()
-                            if pid:
-                                for p in prompts or []:
-                                    if isinstance(p, dict) and (p.get("id") or "").strip() == pid:
-                                        return (p.get("text") or "").strip() or None
-                            return None
-
-                        writing_text = _resolve_prompt(proj.get("prompts") or [], (j.get("writing_prompt_id") or "") or (proj.get("default_prompt_id") or ""))
-                        if not writing_text:
-                            # fallback: first writing prompt
-                            for p in (proj.get("prompts") or []):
-                                if isinstance(p, dict) and (p.get("text") or "").strip():
-                                    writing_text = (p.get("text") or "").strip()
-                                    break
-                        if not writing_text:
-                            raise RuntimeError("No writing prompt available for scheduled generation")
-
-                        image_text = _resolve_prompt(proj.get("image_prompts") or [], (j.get("image_prompt_id") or "") or (proj.get("default_image_prompt_id") or ""))
-                        if not image_text:
-                            for p in (proj.get("image_prompts") or []):
-                                if isinstance(p, dict) and (p.get("text") or "").strip():
-                                    image_text = (p.get("text") or "").strip()
-                                    break
-
-                        gen = await generate_article_bundle(
-                            title=(art.get("title") or "").strip(),
-                            keywords=[str(x).strip() for x in (art.get("keywords") or []) if str(x).strip()],
-                            focus_keyphrase=(art.get("focus_keyphrase") or "").strip(),
-                            writing_prompt_text=writing_text,
-                            generate_image=generate_image,
-                            image_prompt_text=image_text,
-                        )
-                        st.update_article_fields(
-                            aid,
-                            {
-                                "article": gen.get("article") or art.get("article") or "",
-                                "meta_title": gen.get("meta_title") or art.get("meta_title") or "",
-                                "meta_description": gen.get("meta_description") or art.get("meta_description") or "",
-                                "image_url": gen.get("image_url") or art.get("image_url") or "",
-                                "generated_at": gen.get("generated_at") or art.get("generated_at") or "",
-                                "status": "draft" if (art.get("status") or "pending").lower() != "published" else (art.get("status") or "published"),
-                            },
-                        )
-                        # Reload local copy
-                        art = next((a for a in (st.load_articles() or []) if isinstance(a, dict) and (a.get("id") or "") == aid and (a.get("project_id") or "") == pid), art)
+                    art = await prepare_article_for_scheduled_job(st=st, jid=jid, proj=proj, art=art, job=j)
 
                     st.update_scheduled_job_fields(jid, {"state": "ready_to_post"})
 
@@ -256,6 +280,9 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                             "wp_link": wp_link,
                             "wp_rest_base": (j.get("post_type") or "posts"),
                             "wp_last_wp_status": (j.get("wp_status") or "draft"),
+                            # Once posted, clear schedule marker so UI shows draft/published instead of scheduled.
+                            "wp_scheduled_at": "",
+                            "wp_schedule_error": "",
                             "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") if (j.get("wp_status") or "").lower() == "publish" else (art.get("posted_at") or ""),
                             "status": "published" if (j.get("wp_status") or "").lower() == "publish" else (art.get("status") or "draft"),
                         },

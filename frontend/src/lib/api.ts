@@ -165,9 +165,21 @@ export type ContextLinkItem = {
   url: string;
 };
 
-const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8001").replace(/\/+$/, "");
+const ENV_API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").trim().replace(/\/+$/, "");
+
+function getApiBaseUrl(): string {
+  if (ENV_API_BASE_URL) return ENV_API_BASE_URL;
+  // SSR / build-time fallback
+  if (typeof window === "undefined") return "http://127.0.0.1:8000";
+
+  const host = (window.location.hostname || "").trim() || "127.0.0.1";
+  const targetHost = host === "localhost" ? "127.0.0.1" : host;
+  const proto = window.location.protocol === "https:" ? "https:" : "http:";
+  return `${proto}//${targetHost}:8000`;
+}
 
 function apiUrl(path: string) {
+  const API_BASE_URL = getApiBaseUrl();
   if (!API_BASE_URL) return path;
   if (/^https?:\/\//.test(path)) return path;
   return `${API_BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
@@ -279,6 +291,9 @@ export const api = {
   },
   async cancelScheduledJob(projectId: string, jobId: string) {
     return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/scheduled-jobs/${jobId}`, { method: "DELETE" });
+  },
+  async clearScheduledJobs(projectId: string) {
+    return apiFetch<{ ok: boolean; deleted: number }>(`/api/projects/${projectId}/scheduled-jobs`, { method: "DELETE" });
   },
   async updateScheduledJob(
     projectId: string,
