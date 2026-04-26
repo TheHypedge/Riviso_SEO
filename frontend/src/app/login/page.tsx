@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 import styles from "../page.module.css";
 import { api, setAccessToken } from "@/lib/api";
@@ -243,6 +244,15 @@ export default function LoginPage() {
             </form>
           </div>
         </section>
+      </div>
+
+      <div style={{ marginTop: 18, display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center" }}>
+        <Link href="/privacy-policy" style={{ color: "rgba(255,255,255,0.72)", fontSize: 12, textDecoration: "none" }}>
+          Privacy Policy
+        </Link>
+        <Link href="/terms" style={{ color: "rgba(255,255,255,0.72)", fontSize: 12, textDecoration: "none" }}>
+          Terms & Conditions
+        </Link>
       </div>
     </div>
   );
