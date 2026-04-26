@@ -23,8 +23,8 @@ services:
       dockerfile: backend/Dockerfile
     env_file:
       # Prefer `backend/.env` on machines where you store real secrets.
-      # `backend/.env.example` is a tracked template for fresh clones/VPS setups.
-      - ./backend/.env.example
+      # NOTE: do NOT load `.env.example` here; it often contains empty placeholders
+      # (e.g. OPENAI_API_KEY=) that can override real values depending on tooling.
       - ./backend/.env
     environment:
       POSTGRES_DSN: postgresql+asyncpg://app:app@postgres:5432/auto_articles

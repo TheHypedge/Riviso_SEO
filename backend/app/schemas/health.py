@@ -7,4 +7,5 @@ class HealthResponse(BaseModel):
     status: str
     service: str
     environment: str
+    openai_configured: bool = False
 

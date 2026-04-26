@@ -10,5 +10,10 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse, tags=["system"])
 async def health() -> HealthResponse:
-    return HealthResponse(status="ok", service=settings.app_name, environment=settings.environment)
+    return HealthResponse(
+        status="ok",
+        service=settings.app_name,
+        environment=settings.environment,
+        openai_configured=bool((settings.openai_api_key or "").strip()),
+    )
 
