@@ -19,10 +19,13 @@ def _public_api_url(path: str) -> str:
     Build an absolute URL for Google OAuth redirect_uri.
     Prefer PUBLIC_BASE_URL because requests may come via internal hostnames (127.0.0.1, docker).
     """
+    p0 = (path or "").strip()
+    if p0.startswith("http://") or p0.startswith("https://"):
+        return p0
     base = (str(settings.public_base_url) if settings.public_base_url else "").strip().rstrip("/")
     if not base:
-        return path
-    p = path if path.startswith("/") else f"/{path}"
+        return p0
+    p = p0 if p0.startswith("/") else f"/{p0}"
     return f"{base}{p}"
 
 
