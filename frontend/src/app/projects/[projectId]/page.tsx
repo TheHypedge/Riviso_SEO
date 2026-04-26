@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import styles from "../../page.module.css";
-import { api, ArticlePublic, BulkUploadRow, clearAccessToken, getAccessToken, PromptListResponse } from "@/lib/api";
+import { api, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse } from "@/lib/api";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 type TabKey = "articles" | "scheduled_articles" | "configuration" | "prompts" | "context_links" | "tools" | "project_settings";
@@ -152,6 +152,9 @@ export default function ProjectPage() {
   // Per-article actions
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [scheduleId, setScheduleId] = useState<string | null>(null);
+  const [requestIndexingId, setRequestIndexingId] = useState<string | null>(null);
+  const [requestIndexingBusy, setRequestIndexingBusy] = useState(false);
+  const [requestIndexingMsg, setRequestIndexingMsg] = useState<string>("");
   const [scheduleWhen, setScheduleWhen] = useState("");
   const [scheduleWpStatus, setScheduleWpStatus] = useState<"draft" | "publish">("draft");
   const [schedulePostType, setSchedulePostType] = useState("posts");
@@ -212,7 +215,7 @@ export default function ProjectPage() {
           setScheduleImagePrompts(null);
         }
       } catch {
-        clearAccessToken();
+        clearAuth();
         router.replace("/login");
       } finally {
         setLoading(false);
@@ -238,6 +241,24 @@ export default function ProjectPage() {
       }).format(d);
     } catch {
       return d.toLocaleString();
+    }
+  }
+
+  async function requestIndexingOne(articleId: string) {
+    setRequestIndexingBusy(true);
+    setRequestIndexingMsg("Submitting URL to Google Search Console…");
+    try {
+      await api.requestIndexing(projectId, articleId);
+      setRequestIndexingMsg("Submitted. Google will process the inspection request.");
+      setArticles((prev) => prev.map((a) => (a.id === articleId ? { ...a, gsc_status: "inspected" } : a)));
+      setTimeout(() => {
+        setRequestIndexingId(null);
+        setRequestIndexingMsg("");
+      }, 650);
+    } catch (e) {
+      setRequestIndexingMsg((e as Error)?.message || "Request failed.");
+    } finally {
+      setRequestIndexingBusy(false);
     }
   }
 
@@ -1444,19 +1465,13 @@ export default function ProjectPage() {
                   ? pageItems.map((a) => (
                       <div
                         key={a.id}
-                        style={{
-                          display: "flex",
-                          gap: 12,
-                          padding: "12px 14px",
-                          borderBottom: "1px solid var(--button-secondary-border)",
-                          alignItems: "flex-start",
-                        }}
+                        className={styles.articleRow}
                       >
                         <input type="checkbox" checked={!!selected[a.id]} onChange={() => toggleOne(a.id)} />
                         <div style={{ minWidth: 0, flex: 1 }}>
                           <Link
                             href={`/projects/${projectId}/articles/${a.id}`}
-                            style={{ fontWeight: 800, wordBreak: "break-word", display: "inline-block" }}
+                            className={styles.articleTitleLink}
                           >
                             {a.title || "(Untitled)"}
                           </Link>
@@ -1479,7 +1494,7 @@ export default function ProjectPage() {
                             {a.wp_schedule_error ? <span style={{ color: "#ff4d4f" }}> · Schedule error</span> : null}
                           </div>
 
-                          <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          <div className={styles.articleActions}>
                             <Link href={`/projects/${projectId}/articles/${a.id}`} className={`${styles.miniBtn} ${styles.miniPrimary}`}>
                               Edit
                             </Link>
@@ -1500,13 +1515,25 @@ export default function ProjectPage() {
                             >
                               Schedule
                             </button>
+                            <button
+                              type="button"
+                              className={styles.miniBtn}
+                              onClick={() => {
+                                setRequestIndexingId(a.id);
+                                setRequestIndexingMsg("");
+                              }}
+                              disabled={!a.wp_link}
+                              title={!a.wp_link ? "Publish first to get a live URL." : "Request indexing (URL Inspection) in Google Search Console."}
+                            >
+                              Request Indexing
+                            </button>
                             <button type="button" className={`${styles.miniBtn} ${styles.miniDanger}`} onClick={() => setConfirmDeleteId(a.id)}>
                               Delete
                             </button>
                           </div>
                         </div>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-                          <span style={{ fontSize: 12, color: "#666" }}>{(a.gsc_status || "").toLowerCase() === "inspected" ? "Inspection requested" : "Not requested"}</span>
+                        <div className={styles.articleMetaCol}>
+                          <span style={{ fontSize: 12, color: "#666" }}>{(a.gsc_status || "").toLowerCase() === "inspected" ? "Requested" : "Not requested"}</span>
                           <span className={statusPillClass(a.status)}>{(a.status || "pending").toUpperCase()}</span>
                         </div>
                       </div>
@@ -1649,6 +1676,46 @@ export default function ProjectPage() {
                     </button>
                     <button type="button" className={styles.button} onClick={() => scheduleOne(scheduleId)}>
                       Schedule
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {requestIndexingId ? (
+              <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Request indexing">
+                <div className={styles.modalPanel}>
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Request indexing</h3>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => {
+                        if (requestIndexingBusy) return;
+                        setRequestIndexingId(null);
+                        setRequestIndexingMsg("");
+                      }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <div style={{ fontSize: 13, color: "#666", lineHeight: 1.5 }}>
+                      This submits the article’s live URL to Google Search Console URL Inspection API. Google may take some time to process it.
+                    </div>
+                    {requestIndexingMsg ? <div style={{ marginTop: 10, fontSize: 13 }}>{requestIndexingMsg}</div> : null}
+                  </div>
+                  <div className={styles.modalFoot}>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setRequestIndexingId(null)} disabled={requestIndexingBusy}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      onClick={() => requestIndexingOne(requestIndexingId)}
+                      disabled={requestIndexingBusy}
+                    >
+                      {requestIndexingBusy ? "Requesting…" : "Request Indexing"}
                     </button>
                   </div>
                 </div>
@@ -1855,24 +1922,15 @@ export default function ProjectPage() {
                 const jobState = (j.state || "").toLowerCase();
                 const canPostNow = !["posted", "cancelled", "posting"].includes(jobState);
                 return (
-                <div
-                  key={j.id}
-                  style={{
-                    display: "flex",
-                    gap: 12,
-                    padding: "12px 14px",
-                    borderBottom: "1px solid var(--button-secondary-border)",
-                    alignItems: "flex-start",
-                  }}
-                >
+                <div key={j.id} className={styles.scheduledRow}>
                   <div style={{ minWidth: 0, flex: 1 }}>
                     <Link
                       href={`/projects/${projectId}/articles/${j.article_id}`}
-                      style={{ fontWeight: 800, wordBreak: "break-word", display: "inline-block" }}
+                      className={styles.articleTitleLink}
                     >
                       {articles.find((a) => a.id === j.article_id)?.title || "(Untitled article)"}
                     </Link>
-                    <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <div className={styles.scheduledActions}>
                       <button
                         type="button"
                         className={styles.miniBtn}
@@ -1921,15 +1979,20 @@ export default function ProjectPage() {
                     {j.last_error ? <div style={{ marginTop: 6, fontSize: 12, color: "#ff4d4f" }}>{j.last_error}</div> : null}
                   </div>
 
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6, minWidth: 260 }}>
-                    <div style={{ fontSize: 12, color: "#666" }}>
-                      Time: <strong>{formatInProfileTz(j.run_at)}</strong>
-                    </div>
-                    <div style={{ fontSize: 12, color: "#666" }}>
-                      Post type: <strong>{j.post_type || "posts"}</strong>
-                    </div>
-                    <div style={{ fontSize: 12, color: "#666" }}>
-                      Status: <strong>{j.wp_status || "draft"}</strong>
+                  <div className={styles.scheduledMeta}>
+                    <div className={styles.scheduledMetaGrid}>
+                      <div className={styles.scheduledMetaItem}>
+                        <span className={styles.scheduledMetaLabel}>Time</span>
+                        <span className={styles.scheduledMetaValue}>{formatInProfileTz(j.run_at)}</span>
+                      </div>
+                      <div className={styles.scheduledMetaItem}>
+                        <span className={styles.scheduledMetaLabel}>Type</span>
+                        <span className={styles.scheduledMetaValue}>{j.post_type || "posts"}</span>
+                      </div>
+                      <div className={styles.scheduledMetaItem}>
+                        <span className={styles.scheduledMetaLabel}>WP</span>
+                        <span className={styles.scheduledMetaValue}>{j.wp_status || "draft"}</span>
+                      </div>
                     </div>
                     <span className={styles.statusPill}>{jobStateLabel(j.state)}</span>
                   </div>
@@ -2649,7 +2712,7 @@ export default function ProjectPage() {
                 </div>
 
                 <div className={styles.row} style={{ justifyContent: "space-between", marginTop: 10 }}>
-                  <a className={styles.btnSecondary} href={settings.plugin_download_url}>
+                  <a className={styles.btnSecondary} href={`${getApiBaseUrl()}${settings.plugin_download_url}`} download>
                     Download plugin
                   </a>
                   <button className={styles.button} type="button" onClick={verifySettings} disabled={settingsVerifying || !sUrl.trim() || !sWpUser.trim()}>

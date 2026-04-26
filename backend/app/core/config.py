@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import AnyUrl
+from pydantic import AnyUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Google OAuth (Search Console)
     google_oauth_client_id: str = ""
     google_oauth_client_secret: str = ""
+
+    # Google Indexing API (service account JSON; raw JSON or base64 JSON)
+    google_indexing_service_account_json: str = Field(default="", validation_alias="GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON")
 
     # OpenAI (generation)
     openai_api_key: str = ""

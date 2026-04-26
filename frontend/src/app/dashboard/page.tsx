@@ -5,12 +5,13 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import styles from "../page.module.css";
-import { api, clearAccessToken, getAccessToken, ProjectPublic, AdminUserPublic, PlanPublic, ProfilePublic, ProjectSettings, WordpressVerifyResponse, AdminUserDetails, GscStatus } from "@/lib/api";
+import { api, clearAuth, getAccessToken, ProjectPublic, AdminUserPublic, PlanPublic, ProfilePublic, ProjectSettings, WordpressVerifyResponse, AdminUserDetails, GscStatus } from "@/lib/api";
 
 type DashSection = "projects" | "users" | "limits" | "profile";
 
 export default function DashboardPage() {
   const router = useRouter();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [meEmail, setMeEmail] = useState<string>("");
   const [projects, setProjects] = useState<ProjectPublic[]>([]);
   const [name, setName] = useState("");
@@ -97,7 +98,7 @@ export default function DashboardPage() {
           setGsc(null);
         }
       } catch (e) {
-        clearAccessToken();
+        clearAuth();
         router.replace("/login");
       } finally {
         setLoading(false);
@@ -109,20 +110,20 @@ export default function DashboardPage() {
     // Handle OAuth callback redirect flags (best-effort).
     try {
       const url = new URL(window.location.href);
-      const flag = (url.searchParams.get("gsc") || "").trim();
-      const msg = (url.searchParams.get("msg") || "").trim();
+      const rawHash = (url.hash || "").replace(/^#/, "");
+      const hashParams = new URLSearchParams(rawHash);
+      const flag = (hashParams.get("gsc") || "").trim();
+      const msg = (hashParams.get("msg") || "").trim();
       if (flag === "connected") {
         setShowGscCongrats(true);
         setGscMsg(null);
         // refresh status
         api.gscStatus().then(setGsc).catch(() => {});
-        url.searchParams.delete("gsc");
-        url.searchParams.delete("msg");
+        url.hash = "";
         window.history.replaceState({}, "", url.toString());
       } else if (flag === "error") {
         setGscMsg(msg || "Google connect failed. Please try again.");
-        url.searchParams.delete("gsc");
-        url.searchParams.delete("msg");
+        url.hash = "";
         window.history.replaceState({}, "", url.toString());
       }
     } catch {
@@ -217,7 +218,7 @@ export default function DashboardPage() {
   }
 
   function logout() {
-    clearAccessToken();
+    clearAuth();
     router.replace("/login");
   }
 
@@ -317,35 +318,61 @@ export default function DashboardPage() {
   return (
     <div className={`${styles.page} ${styles.pageTop}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
+        <div className={styles.mobileTopBar}>
+          <button type="button" className={styles.mobileMenuBtn} onClick={() => setMobileNavOpen(true)} aria-label="Open menu">
+            Menu
+          </button>
+          <div className={styles.mobileTopTitle}>Dashboard</div>
+        </div>
+
         <div className={styles.shell}>
-          <aside className={styles.sidebar}>
+          {mobileNavOpen ? <button type="button" className={styles.sidebarOverlay} aria-label="Close menu" onClick={() => setMobileNavOpen(false)} /> : null}
+          <aside className={`${styles.sidebar} ${mobileNavOpen ? styles.sidebarOpen : ""}`}>
+            <div className={styles.sidebarMobileHead}>
+              <div className={styles.sidebarMobileTitle}>Menu</div>
+              <button type="button" className={styles.sidebarCloseBtn} onClick={() => setMobileNavOpen(false)} aria-label="Close menu">
+                ✕
+              </button>
+            </div>
             <div className={styles.sidebarTitle}>ADMIN</div>
             <div className={styles.navGroup}>
               <button
                 type="button"
                 className={`${styles.navItem} ${section === "projects" ? styles.navItemActive : ""}`}
-                onClick={() => setSection("projects")}
+                onClick={() => {
+                  setSection("projects");
+                  setMobileNavOpen(false);
+                }}
               >
                 Project management
               </button>
               <button
                 type="button"
                 className={`${styles.navItem} ${section === "users" ? styles.navItemActive : ""}`}
-                onClick={() => setSection("users")}
+                onClick={() => {
+                  setSection("users");
+                  setMobileNavOpen(false);
+                }}
               >
                 Manage users
               </button>
               <button
                 type="button"
                 className={`${styles.navItem} ${section === "limits" ? styles.navItemActive : ""}`}
-                onClick={() => setSection("limits")}
+                onClick={() => {
+                  setSection("limits");
+                  setMobileNavOpen(false);
+                }}
               >
                 System limitations
               </button>
               <button
                 type="button"
                 className={`${styles.navItem} ${section === "profile" ? styles.navItemActive : ""}`}
-                onClick={() => setSection("profile")}
+                onClick={() => {
+                  setSection("profile");
+                  setMobileNavOpen(false);
+                }}
               >
                 Settings / Profile
               </button>
@@ -353,7 +380,14 @@ export default function DashboardPage() {
 
             <div className={styles.sidebarTitle}>ACCOUNT</div>
             <div className={styles.navGroup}>
-              <button type="button" className={styles.navItem} onClick={logout}>
+              <button
+                type="button"
+                className={styles.navItem}
+                onClick={() => {
+                  setMobileNavOpen(false);
+                  logout();
+                }}
+              >
                 Logout
               </button>
               <button
@@ -362,7 +396,30 @@ export default function DashboardPage() {
                 onClick={connectGoogleSearchConsole}
                 disabled={gscConnecting}
               >
-                {gscConnecting ? "Connecting Google…" : "Connect Google (Search Console)"}
+                <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, width: "100%" }}>
+                  <span>{gscConnecting ? "Connecting Google…" : "Connect Google (Search Console)"}</span>
+                  {gsc?.connected ? (
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        fontSize: 11,
+                        fontWeight: 900,
+                        padding: "4px 8px",
+                        borderRadius: 999,
+                        background: "rgba(52, 211, 153, 0.16)",
+                        color: "rgba(52, 211, 153, 1)",
+                        border: "1px solid rgba(52, 211, 153, 0.35)",
+                        flexShrink: 0,
+                      }}
+                      title={gsc.email ? `Connected: ${gsc.email}` : "Connected"}
+                    >
+                      <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: 999, background: "rgba(52, 211, 153, 1)" }} />
+                      Connected
+                    </span>
+                  ) : null}
+                </span>
               </button>
               <button
                 type="button"

@@ -18,3 +18,4 @@ certifi==2026.2.25
 python-multipart==0.0.20
 markdown==3.8.2
 slowapi==0.1.9
+google-auth==2.49.2

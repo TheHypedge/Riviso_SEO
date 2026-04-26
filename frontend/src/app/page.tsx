@@ -31,7 +31,7 @@ export default function Home() {
               href="/login"
               style={{
                 border: "1px solid rgba(255,255,255,0.18)",
-                background: "rgba(255,255,255,0.04)",
+                background: "rgb(0, 0, 0)",
                 color: "rgba(255,255,255,0.92)",
                 padding: "12px 16px",
                 borderRadius: 12,

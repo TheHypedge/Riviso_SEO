@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 
 from app.services import gsc
+from app.services import google_indexing
 
 
 async def maybe_request_url_inspection(*, st, proj: dict, live_url: str, wp_status: str | None, article_id: str | None) -> bool:
@@ -28,6 +29,25 @@ async def maybe_request_url_inspection(*, st, proj: dict, live_url: str, wp_stat
     if not gsc.oauth_configured():
         return False
 
+
+async def request_url_inspection_now(*, st, proj: dict, live_url: str, article_id: str | None) -> bool:
+    """
+    Manual trigger for URL Inspection (used by "Request Indexing" button).
+    Unlike `maybe_request_url_inspection`, this does not require wp_status=publish and ignores
+    the per-project toggle. It still requires:
+    - Google OAuth connected for the project owner user
+    - project has a selected Search Console property
+    - a non-empty live_url
+    """
+    url = (live_url or "").strip()
+    if not url:
+        return False
+    prop = (proj.get("gsc_property_url") or "").strip()
+    if not prop:
+        return False
+    if not gsc.oauth_configured():
+        return False
+
     pid_owner = (proj.get("owner_user_id") or "").strip()
     if not pid_owner or not hasattr(st, "get_user_by_id"):
         return False
@@ -43,6 +63,39 @@ async def maybe_request_url_inspection(*, st, proj: dict, live_url: str, wp_stat
             st.update_article_fields(article_id, patch)
 
     try:
+        # Prefer Google Indexing API when configured (service account).
+        if google_indexing.configured():
+            await _mark(
+                {
+                    "gsc_status": "pending",
+                    "gsc_inspection_last_attempt_at": now_str,
+                    "gsc_inspection_error": "",
+                    "gsc_inspection_url": url,
+                }
+            )
+            try:
+                await google_indexing.publish_url_update(url=url)
+                await _mark(
+                    {
+                        "gsc_status": "inspected",
+                        "gsc_inspection_requested_at": now_str,
+                        "gsc_inspection_last_attempt_at": now_str,
+                        "gsc_inspection_error": "",
+                        "gsc_inspection_url": url,
+                    }
+                )
+                return True
+            except Exception as e:
+                # Fall back to Search Console URL Inspection below.
+                await _mark(
+                    {
+                        "gsc_status": "pending",
+                        "gsc_inspection_last_attempt_at": now_str,
+                        "gsc_inspection_error": f"Indexing API failed: {str(e)[:460]}",
+                        "gsc_inspection_url": url,
+                    }
+                )
+
         at = (u.get("gsc_access_token") or "").strip()
         exp_raw = (u.get("gsc_token_expires_at") or "").strip()
         try:

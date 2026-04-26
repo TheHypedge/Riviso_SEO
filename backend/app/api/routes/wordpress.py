@@ -78,7 +78,7 @@ async def download_plugin() -> Response:
                 rel = os.path.relpath(abs_path, os.path.join(repo_root, "wordpress_plugin"))
                 z.write(abs_path, rel)
     data = buf.getvalue()
-    headers = {"content-disposition": 'attachment; filename="auto-articles-connector.zip"'}
+    headers = {"content-disposition": 'attachment; filename="riviso.zip"'}
     return Response(content=data, media_type="application/zip", headers=headers)
 
 
@@ -222,7 +222,25 @@ async def verify_wordpress_connection(
         return WordpressVerifyResponse(ok=False, status="error", message=f"Could not reach WordPress site: {e}")
 
     if res.status_code == 200:
-        return WordpressVerifyResponse(ok=True, status="connected", message="Verified WordPress connection successfully.")
+        # Best-effort: verify that our connector plugin is installed (Yoast REST meta + ping endpoint).
+        plugin_msg = ""
+        try:
+            ping_url = f"{wp_site_url}/wp-json/auto-articles/v1/ping"
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                pres = await client.get(ping_url, headers=headers)
+            if pres.status_code == 200:
+                pdata = pres.json() if pres.content else {}
+                cid = (pdata.get("connector_id") or "").strip() if isinstance(pdata, dict) else ""
+                yoast = None
+                if isinstance(pdata, dict):
+                    yoast = pdata.get("yoast_active")
+                plugin_msg = f"\nPlugin: installed (connector_id={cid or '—'}, yoast_active={yoast})"
+            else:
+                plugin_msg = "\nPlugin: not detected (install Auto Articles Connector plugin, then verify again)."
+        except Exception:
+            plugin_msg = "\nPlugin: not detected (install Auto Articles Connector plugin, then verify again)."
+
+        return WordpressVerifyResponse(ok=True, status="connected", message="Verified WordPress connection successfully." + plugin_msg)
     if res.status_code in {401, 403}:
         return WordpressVerifyResponse(ok=False, status="auth_failed", message="WordPress authentication failed. Check username/app password and site URL.")
     return WordpressVerifyResponse(ok=False, status="failed", message=f"WordPress verification failed ({res.status_code}).")

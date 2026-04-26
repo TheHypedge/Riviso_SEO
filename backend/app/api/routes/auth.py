@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.core.deps import get_current_user
-from app.core.security import create_access_token, create_refresh_token
+from app.core.security import create_access_token, create_refresh_token, decode_token
 from app.core.config import settings
 from app.core.ratelimit import limiter
 from app.legacy.storage import get_legacy_storage_module
@@ -115,4 +115,50 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
 @router.get("/me", response_model=UserPublic)
 async def me(user: dict = Depends(get_current_user)) -> UserPublic:
     return _to_user_public(user)
+
+
+@router.post("/refresh", response_model=TokenPair)
+async def refresh_token(request: Request, response: Response) -> TokenPair:
+    """
+    Exchange a refresh token for a new access token.
+    Accepts refresh token via:
+    - JSON body: {"refresh_token": "..."} (for localStorage-based clients)
+    - httpOnly cookie: aa_refresh (for cookie-based clients)
+    """
+    st = get_legacy_storage_module()
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    rt = (body.get("refresh_token") if isinstance(body, dict) else None) or request.cookies.get("aa_refresh") or ""
+    rt = str(rt or "").strip()
+    if not rt:
+        raise HTTPException(status_code=401, detail="Missing refresh token")
+    try:
+        payload = decode_token(rt)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    if (payload.get("type") or "") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    uid = (payload.get("sub") or "").strip()
+    if not uid:
+        raise HTTPException(status_code=401, detail="Invalid token subject")
+    user = st.get_user_by_id(uid)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    role = (user.get("role") or "user").strip().lower()
+
+    access = create_access_token(subject=uid, extra_claims={"role": role})
+    # Keep refresh token as-is (simple + stable). Could be rotated later if needed.
+    response.set_cookie(
+        "aa_access",
+        access,
+        httponly=True,
+        secure=bool(settings.cookie_secure),
+        samesite=settings.cookie_samesite,
+        domain=settings.cookie_domain,
+        path="/",
+    )
+    return TokenPair(access_token=access, refresh_token=rt)
 

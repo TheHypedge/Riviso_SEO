@@ -17,7 +17,8 @@ from app.legacy.storage import get_legacy_storage_module
 from app.services.article_generation import generate_article_bundle
 from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient
-from app.services.gsc_actions import maybe_request_url_inspection
+from app.services.gsc_actions import maybe_request_url_inspection, request_url_inspection_now
+from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.scheduler import prepare_article_for_scheduled_job
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.schemas.articles import (
@@ -692,6 +693,14 @@ async def publish_to_live_site(
     except Exception:
         pass
 
+    # Best-effort: ping sitemap so crawlers discover the new URL via sitemap updates.
+    # (This is not a guarantee of indexing.)
+    try:
+        if payload["status"] == "publish":
+            asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
+    except Exception:
+        pass
+
     # If this article had a pending scheduled job, mark it posted so Scheduled Articles stays in sync.
     try:
         if hasattr(st, "load_scheduled_jobs") and hasattr(st, "update_scheduled_job_fields"):
@@ -730,4 +739,26 @@ async def publish_to_live_site(
         "wp_post_id": wp_post_id,
         "wp_link": wp_link,
     }
+
+
+@router.post("/{article_id}/gsc/request-indexing", status_code=200)
+async def request_indexing(project_id: str, article_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """
+    Manual trigger: request a Google Search Console URL Inspection for this article's live URL.
+    """
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    a = _get_article_or_404(st=st, project_id=project_id, article_id=article_id)
+    live_url = (a.get("wp_link") or "").strip()
+    if not live_url:
+        raise HTTPException(status_code=400, detail="Article does not have a live URL yet (publish first).")
+    if not (proj.get("gsc_property_url") or "").strip():
+        raise HTTPException(status_code=400, detail="Search Console property is not linked for this project (Project Settings).")
+    ok = await request_url_inspection_now(st=st, proj=proj, live_url=live_url, article_id=article_id)
+    if not ok:
+        # Read back best-effort error message stored on the article.
+        a2 = _get_article_or_404(st=st, project_id=project_id, article_id=article_id)
+        msg = (a2.get("gsc_inspection_error") or "").strip() or "Search Console request failed."
+        raise HTTPException(status_code=400, detail=msg)
+    return {"ok": True, "status": "requested"}
 

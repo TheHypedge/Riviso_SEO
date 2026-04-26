@@ -180,7 +180,7 @@ export type ContextLinkItem = {
 
 const ENV_API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").trim().replace(/\/+$/, "");
 
-function getApiBaseUrl(): string {
+export function getApiBaseUrl(): string {
   if (ENV_API_BASE_URL) return ENV_API_BASE_URL;
   // SSR / build-time fallback
   if (typeof window === "undefined") return "http://127.0.0.1:8000";
@@ -199,6 +199,7 @@ function apiUrl(path: string) {
 }
 
 const TOKEN_KEY = "aa_access_token";
+const REFRESH_KEY = "aa_refresh_token";
 
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -211,6 +212,24 @@ export function setAccessToken(token: string) {
 
 export function clearAccessToken() {
   window.localStorage.removeItem(TOKEN_KEY);
+}
+
+export function getRefreshToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(REFRESH_KEY);
+}
+
+export function setRefreshToken(token: string) {
+  window.localStorage.setItem(REFRESH_KEY, token);
+}
+
+export function clearRefreshToken() {
+  window.localStorage.removeItem(REFRESH_KEY);
+}
+
+export function clearAuth() {
+  clearAccessToken();
+  clearRefreshToken();
 }
 
 function emitGlobalLoading(delta: number) {
@@ -230,7 +249,34 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
   emitGlobalLoading(+1);
   try {
-    const res = await fetch(apiUrl(path), { ...init, headers });
+    const doFetch = async (h: Headers) => fetch(apiUrl(path), { ...init, headers: h, credentials: "include" });
+    let res = await doFetch(headers);
+    if (res.status === 401 && path !== "/api/auth/login" && path !== "/api/auth/register" && path !== "/api/auth/refresh") {
+      // Try silent refresh (once) then retry original request.
+      const rt = getRefreshToken();
+      if (rt) {
+        try {
+          const refreshed = await fetch(apiUrl("/api/auth/refresh"), {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ refresh_token: rt }),
+            credentials: "include",
+          });
+          if (refreshed.ok) {
+            const tokens = (await refreshed.json()) as TokenPair;
+            if (tokens?.access_token) setAccessToken(tokens.access_token);
+            if (tokens?.refresh_token) setRefreshToken(tokens.refresh_token);
+            const headers2 = new Headers(init?.headers);
+            headers2.set("content-type", "application/json");
+            const token2 = getAccessToken();
+            if (token2) headers2.set("authorization", `Bearer ${token2}`);
+            res = await doFetch(headers2);
+          }
+        } catch {
+          // ignore; fall through to normal error handling
+        }
+      }
+    }
     if (!res.ok) {
       const text = await res.text();
       throw new Error(text || `${res.status} ${res.statusText}`);
@@ -246,6 +292,12 @@ export const api = {
     return apiFetch<TokenPair>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
+    });
+  },
+  async refresh(refresh_token: string) {
+    return apiFetch<TokenPair>("/api/auth/refresh", {
+      method: "POST",
+      body: JSON.stringify({ refresh_token }),
     });
   },
   async register(email: string, password: string) {
@@ -577,6 +629,12 @@ export const api = {
     } finally {
       emitGlobalLoading(-1);
     }
+  },
+
+  async requestIndexing(projectId: string, articleId: string) {
+    return apiFetch<{ ok: boolean; status?: string }>(`/api/projects/${projectId}/articles/${articleId}/gsc/request-indexing`, {
+      method: "POST",
+    });
   },
 
   // Admin

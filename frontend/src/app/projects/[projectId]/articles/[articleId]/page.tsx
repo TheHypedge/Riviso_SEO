@@ -8,7 +8,7 @@ import styles from "../../../../page.module.css";
 import {
   api,
   ArticleDetail,
-  clearAccessToken,
+  clearAuth,
   getAccessToken,
   PromptListResponse,
 } from "@/lib/api";
@@ -126,7 +126,7 @@ export default function ArticleEditPage() {
           // ignore; user may not have WP connected yet
         }
       } catch (e) {
-        clearAccessToken();
+        clearAuth();
         router.replace("/login");
       } finally {
         setLoading(false);

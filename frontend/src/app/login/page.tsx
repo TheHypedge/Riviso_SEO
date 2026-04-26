@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import styles from "../page.module.css";
-import { api, setAccessToken } from "@/lib/api";
+import { api, setAccessToken, setRefreshToken } from "@/lib/api";
 
 type AuthTab = "login" | "register";
 
@@ -78,6 +78,7 @@ export default function LoginPage() {
       }
       const tokens = tab === "login" ? await api.login(email, password) : await api.register(email, password);
       setAccessToken(tokens.access_token);
+      setRefreshToken(tokens.refresh_token);
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : tab === "login" ? "Login failed" : "Register failed");

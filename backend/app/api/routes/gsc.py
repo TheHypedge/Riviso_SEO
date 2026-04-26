@@ -19,12 +19,21 @@ def _public_api_url(path: str) -> str:
     Build an absolute URL for Google OAuth redirect_uri.
     Prefer PUBLIC_BASE_URL because requests may come via internal hostnames (127.0.0.1, docker).
     """
-    p0 = (path or "").strip()
-    if p0.startswith("http://") or p0.startswith("https://"):
-        return p0
     base = (str(settings.public_base_url) if settings.public_base_url else "").strip().rstrip("/")
     if not base:
-        return p0
+        return (path or "").strip()
+
+    from urllib.parse import urlparse, urlunparse
+
+    p0 = (path or "").strip()
+    b = urlparse(base)
+    u = urlparse(p0)
+
+    # If already absolute, keep its path/query but force PUBLIC_BASE_URL origin (scheme+host).
+    if u.scheme and u.netloc:
+        return urlunparse((b.scheme, b.netloc, u.path, u.params, u.query, u.fragment))
+
+    # If relative, join onto base.
     p = p0 if p0.startswith("/") else f"/{p0}"
     return f"{base}{p}"
 
@@ -34,14 +43,14 @@ def _frontend_redirect_url(*, ok: bool, message: str | None = None) -> str:
     if not base:
         # Best-effort fallback: many installs serve frontend at the same public origin.
         base = (str(settings.public_base_url) if settings.public_base_url else "").strip().rstrip("/")
-    qs = "gsc=connected" if ok else "gsc=error"
+    frag = "gsc=connected" if ok else "gsc=error"
     if message:
         # Keep it short; frontend can render it.
-        qs += f"&msg={message[:180]}"
+        frag += f"&msg={message[:180]}"
     if not base:
         # Relative redirect (same origin). Avoid `//dashboard` which browsers treat as a hostname.
-        return f"/dashboard?{qs}"
-    return f"{base}/dashboard?{qs}"
+        return f"/dashboard#{frag}"
+    return f"{base}/dashboard#{frag}"
 
 
 @router.get("/status")

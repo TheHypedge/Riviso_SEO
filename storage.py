@@ -72,6 +72,13 @@ def _user_row_to_public(u: dict[str, Any]) -> dict[str, Any]:
         "usage_monthly_articles_count": int(u.get("usage_monthly_articles_count") or 0),
         "created_at": (u.get("created_at") or "").strip(),
         "pending_product_tour": bool(u.get("pending_product_tour", False)),
+        # Google Search Console OAuth (stored per-user)
+        "gsc_access_token": (u.get("gsc_access_token") or "").strip(),
+        "gsc_refresh_token": (u.get("gsc_refresh_token") or "").strip(),
+        "gsc_token_expires_at": str(u.get("gsc_token_expires_at") or "").strip(),
+        "gsc_scope": (u.get("gsc_scope") or "").strip(),
+        "gsc_email": (u.get("gsc_email") or "").strip(),
+        "gsc_connected_at": (u.get("gsc_connected_at") or "").strip(),
     }
 
 
@@ -381,6 +388,13 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
         "usage_monthly_articles_count": int(doc.get("usage_monthly_articles_count") or 0),
         "created_at": (doc.get("created_at") or "").strip(),
         "pending_product_tour": bool(doc.get("pending_product_tour", False)),
+        # Google Search Console OAuth (stored per-user)
+        "gsc_access_token": (doc.get("gsc_access_token") or "").strip(),
+        "gsc_refresh_token": (doc.get("gsc_refresh_token") or "").strip(),
+        "gsc_token_expires_at": str(doc.get("gsc_token_expires_at") or "").strip(),
+        "gsc_scope": (doc.get("gsc_scope") or "").strip(),
+        "gsc_email": (doc.get("gsc_email") or "").strip(),
+        "gsc_connected_at": (doc.get("gsc_connected_at") or "").strip(),
     }
 
 

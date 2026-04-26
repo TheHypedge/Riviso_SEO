@@ -9,6 +9,7 @@ from app.services.wordpress_client import WordpressClient
 from app.services.context_links import apply_context_links_html
 from app.services.article_generation import generate_article_bundle
 from app.services.gsc_actions import maybe_request_url_inspection
+from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 
 
 log = logging.getLogger(__name__)
@@ -300,6 +301,14 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                             wp_status=(j.get("wp_status") or ""),
                             article_id=aid,
                         )
+                    except Exception:
+                        pass
+
+                    # Best-effort: ping sitemap after live publish for discovery.
+                    try:
+                        if (j.get("wp_status") or "").lower() == "publish":
+                            wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
+                            asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
                     except Exception:
                         pass
                 except Exception as e:
