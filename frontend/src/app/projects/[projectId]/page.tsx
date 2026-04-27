@@ -827,7 +827,7 @@ export default function ProjectPage() {
       const when = scheduleWhen.trim();
       if (!when) throw new Error("Please choose a schedule time");
 
-      await api.scheduleArticle(projectId, articleId, {
+      const scheduled = await api.scheduleArticle(projectId, articleId, {
         wp_scheduled_at: when,
         wp_status: scheduleWpStatus,
         post_type: schedulePostType,
@@ -835,15 +835,27 @@ export default function ProjectPage() {
         image_prompt_id: scheduleImagePromptId || null,
         generate_image: true,
       });
-      const list = await api.listArticles(projectId);
-      setArticles(list);
-      // Keep Scheduled Articles tab in sync (so reschedules show immediately on top)
-      try {
-        const jobs = await api.listScheduledJobs(projectId);
-        setScheduledJobs(dedupeScheduledJobs(jobs));
-      } catch {
-        // ignore; scheduled tab can still refresh later
+      // Optimistic UI update: scheduling should not block on re-fetching large lists,
+      // which can time out on production proxies.
+      if (scheduled?.wp_scheduled_at) {
+        const runAt = String(scheduled.wp_scheduled_at || "");
+        setArticles((prev) =>
+          prev.map((a) =>
+            a.id === articleId
+              ? {
+                  ...a,
+                  wp_scheduled_at: runAt,
+                  wp_schedule_error: "",
+                }
+              : a,
+          ),
+        );
       }
+      // Best-effort: refresh Scheduled Articles in the background (don't block UX).
+      api
+        .listScheduledJobs(projectId)
+        .then((jobs) => setScheduledJobs(dedupeScheduledJobs(jobs)))
+        .catch(() => {});
       setScheduleId(null);
       setScheduleWhen("");
       setScheduleWpStatus("draft");
