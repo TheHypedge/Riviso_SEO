@@ -993,7 +993,9 @@ def update_scheduled_job_fields(job_id: str, updates: dict[str, Any]) -> bool:
                 _save_json_scheduled_jobs([_normalize_scheduled_job_dict(x) for x in rows if isinstance(x, dict)])
             return found
     with _db_write_lock:
-        doc = get_db().scheduled_jobs.find_one({"id": jid})
+        # Scheduled jobs are stored with `_id = id` for fast point lookups. Query by `_id`
+        # so we always hit the default index and avoid full collection scans.
+        doc = get_db().scheduled_jobs.find_one({"_id": jid})
         if not doc:
             return False
         d = dict(doc)
@@ -1001,7 +1003,7 @@ def update_scheduled_job_fields(job_id: str, updates: dict[str, Any]) -> bool:
         merged = {**d, **updates, "id": jid}
         norm = _normalize_scheduled_job_dict(merged)
         new_doc = {**norm, "_id": norm["id"]}
-        res = get_db().scheduled_jobs.replace_one({"id": jid}, new_doc)
+        res = get_db().scheduled_jobs.replace_one({"_id": jid}, new_doc)
         return bool(res.acknowledged and res.matched_count == 1)
 
 
@@ -1019,7 +1021,7 @@ def delete_scheduled_job(job_id: str) -> bool:
             _save_json_scheduled_jobs([_normalize_scheduled_job_dict(x) for x in rows if isinstance(x, dict)])
             return True
     with _db_write_lock:
-        res = get_db().scheduled_jobs.delete_one({"id": jid})
+        res = get_db().scheduled_jobs.delete_one({"_id": jid})
         return bool(res.deleted_count == 1)
 
 

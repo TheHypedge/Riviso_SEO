@@ -92,6 +92,12 @@ def init_db() -> None:
     db.users.create_index("id", unique=True)
     db.users.create_index("email", unique=True)
 
+    # Scheduled jobs queue
+    # `_id` is already indexed/unique by MongoDB; we also index fields used by list/sort.
+    db.scheduled_jobs.create_index("project_id")
+    db.scheduled_jobs.create_index([("project_id", 1), ("run_at", 1)])
+    db.scheduled_jobs.create_index([("state", 1), ("run_at", 1)])
+
 
 def remove_scoped_session() -> None:
     """No-op: kept for compatibility with any teardown hooks."""
