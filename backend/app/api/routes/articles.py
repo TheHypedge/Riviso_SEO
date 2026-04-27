@@ -7,6 +7,7 @@ import html
 from datetime import datetime, timedelta, timezone
 import re
 import asyncio
+import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 import markdown as md
@@ -451,29 +452,14 @@ async def schedule_article(
         },
     )
 
-    # Insert or update scheduled job row
-    if hasattr(st, "load_scheduled_jobs") and hasattr(st, "insert_scheduled_job"):
-        existing = None
-        try:
-            rows = st.load_scheduled_jobs(project_id=project_id)
-            # If this article already has a non-completed job, overwrite it instead of creating duplicates.
-            # This makes "reschedule" behave like an update.
-            candidates = [
-                r
-                for r in (rows or [])
-                if isinstance(r, dict)
-                and (r.get("article_id") or "").strip() == article_id
-                and (r.get("state") or "scheduled") not in {"posted", "cancelled"}
-            ]
-            if candidates:
-                # Prefer the most recently updated/created row.
-                def _stamp(x: dict) -> str:
-                    return (x.get("updated_at") or x.get("created_at") or "").strip()
-
-                candidates.sort(key=_stamp, reverse=True)
-                existing = candidates[0]
-        except Exception:
-            existing = None
+    # Insert/update scheduled job row.
+    #
+    # IMPORTANT: avoid loading/scanning all jobs during the request (can be slow on production DBs and cause Nginx 504).
+    # We use a stable job id derived from (project_id, article_id) so reschedules are O(1).
+    if hasattr(st, "insert_scheduled_job") and hasattr(st, "update_scheduled_job_fields"):
+        stable = hashlib.sha1(f"{project_id}:{article_id}".encode("utf-8")).hexdigest()[:20]
+        job_id = f"job_{stable}"
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         job_updates = {
             "project_id": project_id,
             "article_id": article_id,
@@ -488,49 +474,47 @@ async def schedule_article(
             "attempts": 0,
             "last_attempt_at": "",
             "last_error": "",
-            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": now_str,
         }
-        job_id = ""
-        if existing and hasattr(st, "update_scheduled_job_fields"):
-            job_id = (existing.get("id") or "").strip()
-            st.update_scheduled_job_fields(job_id, job_updates)
-        else:
-            job_id = str(uuid.uuid4())
-            st.insert_scheduled_job(
-                {
-                    "id": job_id,
-                    **job_updates,
-                    "attempts": 0,
-                    "last_error": "",
-                    "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                }
-            )
+
+        updated = False
+        try:
+            updated = bool(st.update_scheduled_job_fields(job_id, job_updates))
+        except Exception:
+            updated = False
+        if not updated:
+            try:
+                st.insert_scheduled_job({"id": job_id, **job_updates, "created_at": now_str})
+            except Exception:
+                # If insert races (already exists), just update.
+                try:
+                    st.update_scheduled_job_fields(job_id, job_updates)
+                except Exception:
+                    pass
 
         # Start background preparation immediately so the article is ready well before posting.
         # This is best-effort and does not block the schedule response.
         try:
-            if job_id:
-                proj2 = proj
-                art2 = a
-                job2 = {"id": job_id, **job_updates}
+            proj2 = proj
+            art2 = a
+            job2 = {"id": job_id, **job_updates}
 
-                async def _prep() -> None:
-                    try:
-                        await prepare_article_for_scheduled_job(st=st, jid=job_id, proj=proj2, art=art2, job=job2)
-                        st.update_scheduled_job_fields(job_id, {"state": "ready_to_post", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
-                    except Exception as e:
-                        st.update_scheduled_job_fields(
-                            job_id,
-                            {
-                                "state": "failed",
-                                "last_error": str(e),
-                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                            },
-                        )
+            async def _prep() -> None:
+                try:
+                    await prepare_article_for_scheduled_job(st=st, jid=job_id, proj=proj2, art=art2, job=job2)
+                    st.update_scheduled_job_fields(job_id, {"state": "ready_to_post", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
+                except Exception as e:
+                    st.update_scheduled_job_fields(
+                        job_id,
+                        {
+                            "state": "failed",
+                            "last_error": str(e),
+                            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        },
+                    )
 
-                asyncio.create_task(_prep())
+            asyncio.create_task(_prep())
         except Exception:
-            # Don't fail scheduling if background prep fails to start.
             pass
     return {
         "ok": True,
