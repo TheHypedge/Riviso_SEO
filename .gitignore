@@ -15,3 +15,5 @@ articles.txt
 test.py
 data/
 *.db
+venv/
+REVIEW.md

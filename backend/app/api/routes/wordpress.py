@@ -4,6 +4,7 @@ import base64
 import io
 import os
 import zipfile
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -21,6 +22,26 @@ from app.schemas.project_settings import (
 from app.services import gsc
 
 router = APIRouter(tags=["wordpress"])
+
+_WP_REST_TIMEOUT_S = 45.0
+
+
+async def _wp_get_json(wp: WordpressClient, path: str) -> Any:
+    """Fetch WP REST JSON; never crash the ASGI worker on timeouts / network errors."""
+    try:
+        return await wp.get_json(path, timeout=_WP_REST_TIMEOUT_S)
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=504,
+            detail="WordPress REST API timed out (slow or overloaded site). Retry in a moment.",
+        ) from None
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"WordPress returned HTTP {e.response.status_code}.",
+        ) from None
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=503, detail=f"Could not reach WordPress: {e}") from None
 
 
 def _normalize_url(raw: str | None) -> str:
@@ -251,7 +272,7 @@ async def wordpress_post_types(project_id: str, user: dict = Depends(get_current
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     wp = _get_wp_client_for_project(proj)
-    data = await wp.get_json("/wp-json/wp/v2/types?context=edit", timeout=20.0)
+    data = await _wp_get_json(wp, "/wp-json/wp/v2/types?context=edit")
     out: list[WordpressPostType] = []
     if isinstance(data, dict):
         for _, t in data.items():
@@ -287,7 +308,7 @@ async def wordpress_categories(project_id: str, user: dict = Depends(get_current
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     wp = _get_wp_client_for_project(proj)
-    data = await wp.get_json("/wp-json/wp/v2/categories?per_page=100&context=edit", timeout=20.0)
+    data = await _wp_get_json(wp, "/wp-json/wp/v2/categories?per_page=100&context=edit")
     out: list[WordpressCategory] = []
     if isinstance(data, list):
         for c in data:

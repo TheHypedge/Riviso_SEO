@@ -325,4 +325,3 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
             log.exception("Scheduler loop top-level error")
 
         await asyncio.sleep(poll_seconds)
-

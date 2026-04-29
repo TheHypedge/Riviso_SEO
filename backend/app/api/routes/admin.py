@@ -6,8 +6,32 @@ from app.core.deps import require_admin
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.admin import AdminUserDetails, AdminUserPublic, AdminUserStats, AdminUserUpdate, PlanPublic, PlanUpsert
 from app.services.user_timezone import normalize_user_timezone
+from app.services.to_thread import run_sync
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+@router.get("/storage-status")
+async def storage_status(_: dict = Depends(require_admin)) -> dict:
+    """
+    Quick runtime check to see if persistence is using MongoDB or JSON fallback.
+    """
+    st = get_legacy_storage_module()
+    mode = None
+    err = None
+    if hasattr(st, "storage_mode"):
+        try:
+            mode = await run_sync(st.storage_mode)
+        except Exception as e:
+            mode = None
+            err = str(e)
+    if hasattr(st, "storage_init_error"):
+        try:
+            err2 = await run_sync(st.storage_init_error)
+            if err2:
+                err = err2
+        except Exception:
+            pass
+    return {"storage_mode": mode, "storage_init_error": err}
 
 
 def _user_to_public(u: dict) -> AdminUserPublic:

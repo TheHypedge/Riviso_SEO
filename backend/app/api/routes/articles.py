@@ -22,6 +22,7 @@ from app.services.gsc_actions import maybe_request_url_inspection, request_url_i
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.scheduler import prepare_article_for_scheduled_job
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
+from app.services.to_thread import run_sync
 from app.schemas.articles import (
     ArticleCreate,
     ArticleDetailResponse,
@@ -91,9 +92,10 @@ async def list_articles(project_id: str, user: dict = Depends(get_current_user))
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     if hasattr(st, "load_articles_listing_for_project"):
-        rows = st.load_articles_listing_for_project(project_id, limit=5000)
+        rows = await run_sync(st.load_articles_listing_for_project, project_id, limit=5000)
     else:
-        rows = [a for a in (st.load_articles() or []) if isinstance(a, dict) and (a.get("project_id") or "") == project_id]
+        all_rows = await run_sync(st.load_articles)
+        rows = [a for a in (all_rows or []) if isinstance(a, dict) and (a.get("project_id") or "") == project_id]
     out = [_to_public(a) for a in rows if isinstance(a, dict)]
     out.sort(key=lambda x: (x.created_at or ""), reverse=True)
     return out
@@ -114,7 +116,8 @@ async def create_article(
     keywords = keywords[:10]
 
     aid = str(uuid.uuid4())
-    st.insert_article(
+    await run_sync(
+        st.insert_article,
         {
             "id": aid,
             "project_id": project_id,
@@ -129,7 +132,7 @@ async def create_article(
             "posted_at": "",
             "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             "gsc_status": "pending",
-        }
+        },
     )
 
     # Return minimal created row.
@@ -161,7 +164,10 @@ async def bulk_action(
 
     # Ensure ids belong to this project to avoid cross-project updates.
     allowed = set()
-    rows = st.load_articles_listing_for_project(pid, limit=20000) if hasattr(st, "load_articles_listing_for_project") else (st.load_articles() or [])
+    if hasattr(st, "load_articles_listing_for_project"):
+        rows = await run_sync(st.load_articles_listing_for_project, pid, limit=20000)
+    else:
+        rows = await run_sync(st.load_articles)
     for a in rows:
         if isinstance(a, dict) and (a.get("project_id") or "") == pid:
             aid = (a.get("id") or "").strip()
@@ -172,7 +178,7 @@ async def bulk_action(
         return {"ok": True, "updated": 0}
 
     if payload.action == "delete":
-        st.delete_articles_by_ids(ids)
+        await run_sync(st.delete_articles_by_ids, ids)
         return {"ok": True, "deleted": len(ids)}
 
     if payload.action == "change_status":
@@ -181,10 +187,10 @@ async def bulk_action(
             raise HTTPException(status_code=400, detail="Invalid new_status")
         updates = [(aid, {"status": ns}) for aid in ids]
         if hasattr(st, "bulk_update_articles"):
-            st.bulk_update_articles(updates)
+            await run_sync(st.bulk_update_articles, updates)
         else:
             for aid, u in updates:
-                st.update_article_fields(aid, u)
+                await run_sync(st.update_article_fields, aid, u)
         return {"ok": True, "updated": len(ids), "new_status": ns}
 
     raise HTTPException(status_code=400, detail="Unknown action")
@@ -224,7 +230,8 @@ async def bulk_upload_articles(
         status = "pending"
 
         aid = str(uuid.uuid4())
-        st.insert_article(
+        await run_sync(
+            st.insert_article,
             {
                 "id": aid,
                 "project_id": project_id,
@@ -239,7 +246,7 @@ async def bulk_upload_articles(
                 "posted_at": "",
                 "created_at": now_str,
                 "gsc_status": "pending",
-            }
+            },
         )
 
         created_rows.append(
@@ -265,7 +272,7 @@ async def get_article_detail(
 ) -> ArticleDetailResponse:
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
-    a = _get_article_or_404(st=st, project_id=project_id, article_id=article_id)
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     base = _to_public(a).model_dump()
     return ArticleDetailResponse(
         **base,
@@ -285,7 +292,7 @@ async def update_article(
 ) -> ArticleDetailResponse:
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
-    _ = _get_article_or_404(st=st, project_id=project_id, article_id=article_id)
+    _ = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
     updates: dict = {}
     if payload.title is not None:
@@ -303,9 +310,9 @@ async def update_article(
         updates["meta_description"] = (payload.meta_description or "").strip()[:600]
 
     if updates:
-        st.update_article_fields(article_id, updates)
+        await run_sync(st.update_article_fields, article_id, updates)
 
-    a2 = _get_article_or_404(st=st, project_id=project_id, article_id=article_id)
+    a2 = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     base = _to_public(a2).model_dump()
     return ArticleDetailResponse(
         **base,
@@ -332,7 +339,7 @@ async def generate_article_and_image(
     """
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
-    row = _get_article_or_404(st=st, project_id=project_id, article_id=article_id)
+    row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
     # Resolve prompt ids: explicit override > project default > None
     writing_prompt_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
@@ -378,7 +385,7 @@ async def generate_article_and_image(
         "image_url": gen.get("image_url") or "",
         "status": "draft" if ((row.get("status") or "pending").strip().lower() != "published") else (row.get("status") or "published"),
     }
-    st.update_article_fields(article_id, updates)
+    await run_sync(st.update_article_fields, article_id, updates)
 
     return {
         "ok": True,
@@ -409,7 +416,7 @@ async def schedule_article(
 ) -> dict:
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
-    a = _get_article_or_404(st=st, project_id=project_id, article_id=article_id)
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
     raw = (payload.wp_scheduled_at or "").strip()
     if not raw:
@@ -439,7 +446,8 @@ async def schedule_article(
     # For scheduled jobs, categories default from project settings unless overridden later.
     cat_raw = (proj.get("wp_category_ids") or "").strip()
 
-    st.update_article_fields(
+    await run_sync(
+        st.update_article_fields,
         article_id,
         {
             # Store UTC timestamp string; UI can display in user timezone.
@@ -479,16 +487,16 @@ async def schedule_article(
 
         updated = False
         try:
-            updated = bool(st.update_scheduled_job_fields(job_id, job_updates))
+            updated = bool(await run_sync(st.update_scheduled_job_fields, job_id, job_updates))
         except Exception:
             updated = False
         if not updated:
             try:
-                st.insert_scheduled_job({"id": job_id, **job_updates, "created_at": now_str})
+                await run_sync(st.insert_scheduled_job, {"id": job_id, **job_updates, "created_at": now_str})
             except Exception:
                 # If insert races (already exists), just update.
                 try:
-                    st.update_scheduled_job_fields(job_id, job_updates)
+                    await run_sync(st.update_scheduled_job_fields, job_id, job_updates)
                 except Exception:
                     pass
 
@@ -502,9 +510,14 @@ async def schedule_article(
             async def _prep() -> None:
                 try:
                     await prepare_article_for_scheduled_job(st=st, jid=job_id, proj=proj2, art=art2, job=job2)
-                    st.update_scheduled_job_fields(job_id, {"state": "ready_to_post", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
+                    await run_sync(
+                        st.update_scheduled_job_fields,
+                        job_id,
+                        {"state": "ready_to_post", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")},
+                    )
                 except Exception as e:
-                    st.update_scheduled_job_fields(
+                    await run_sync(
+                        st.update_scheduled_job_fields,
                         job_id,
                         {
                             "state": "failed",
@@ -541,7 +554,7 @@ async def publish_to_live_site(
     """
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
-    a = _get_article_or_404(st=st, project_id=project_id, article_id=article_id)
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
     links = []
     for x in (proj.get("context_links") or []):
@@ -663,7 +676,7 @@ async def publish_to_live_site(
         "wp_scheduled_at": "",
         "wp_schedule_error": "",
     }
-    st.update_article_fields(article_id, updates)
+    await run_sync(st.update_article_fields, article_id, updates)
 
     # Best-effort: Search Console URL Inspection after live publish.
     try:
@@ -688,7 +701,7 @@ async def publish_to_live_site(
     # If this article had a pending scheduled job, mark it posted so Scheduled Articles stays in sync.
     try:
         if hasattr(st, "load_scheduled_jobs") and hasattr(st, "update_scheduled_job_fields"):
-            rows = st.load_scheduled_jobs(project_id=project_id) or []
+            rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) or []
             candidates = [
                 r
                 for r in rows
@@ -703,7 +716,8 @@ async def publish_to_live_site(
                 candidates.sort(key=_stamp, reverse=True)
                 jid = (candidates[0].get("id") or "").strip()
                 if jid:
-                    st.update_scheduled_job_fields(
+                    await run_sync(
+                        st.update_scheduled_job_fields,
                         jid,
                         {
                             "state": "posted",
@@ -732,7 +746,7 @@ async def request_indexing(project_id: str, article_id: str, user: dict = Depend
     """
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
-    a = _get_article_or_404(st=st, project_id=project_id, article_id=article_id)
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     live_url = (a.get("wp_link") or "").strip()
     if not live_url:
         raise HTTPException(status_code=400, detail="Article does not have a live URL yet (publish first).")
@@ -741,7 +755,7 @@ async def request_indexing(project_id: str, article_id: str, user: dict = Depend
     ok = await request_url_inspection_now(st=st, proj=proj, live_url=live_url, article_id=article_id)
     if not ok:
         # Read back best-effort error message stored on the article.
-        a2 = _get_article_or_404(st=st, project_id=project_id, article_id=article_id)
+        a2 = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
         msg = (a2.get("gsc_inspection_error") or "").strip() or "Search Console request failed."
         raise HTTPException(status_code=400, detail=msg)
     return {"ok": True, "status": "requested"}

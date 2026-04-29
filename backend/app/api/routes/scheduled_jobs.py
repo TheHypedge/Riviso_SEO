@@ -10,6 +10,7 @@ from app.legacy.storage import get_legacy_storage_module
 from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobUpdate
 from app.services.scheduler import prepare_article_for_scheduled_job
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
+from app.services.to_thread import run_sync
 
 
 router = APIRouter(prefix="/projects/{project_id}/scheduled-jobs", tags=["scheduled"])
@@ -79,7 +80,7 @@ def _find_article_for_job(*, st, project_id: str, article_id: str) -> dict | Non
 async def list_scheduled(project_id: str, user: dict = Depends(get_current_user)) -> list[ScheduledJobPublic]:
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
-    rows = st.load_scheduled_jobs(project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
     out = [_to_public(r) for r in (rows or []) if isinstance(r, dict)]
     # Latest scheduled first
     out.sort(key=lambda x: x.run_at, reverse=True)
@@ -96,7 +97,7 @@ async def update_scheduled_job(
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     jid = (job_id or "").strip()
-    rows = st.load_scheduled_jobs(project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
     row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
     if not row:
         raise HTTPException(status_code=404, detail="Scheduled job not found")
@@ -151,15 +152,16 @@ async def update_scheduled_job(
     if payload.generate_image is not None:
         updates["generate_image"] = bool(payload.generate_image)
 
-    st.update_scheduled_job_fields(jid, updates)
+    await run_sync(st.update_scheduled_job_fields, jid, updates)
 
     # Keep the article row in sync so the Articles list can show the latest scheduled time.
     try:
         aid = (row.get("article_id") or "").strip()
         if updated_run_at_utc and aid and hasattr(st, "update_article_fields"):
-            art = _find_article_for_job(st=st, project_id=project_id, article_id=aid)
+            art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
             if art:
-                st.update_article_fields(
+                await run_sync(
+                    st.update_article_fields,
                     aid,
                     {
                         "wp_scheduled_at": updated_run_at_utc,
@@ -176,18 +178,20 @@ async def update_scheduled_job(
     # This ensures jobs don't show "ready_to_post" unless generation truly finished.
     try:
         # Reload job row to get the latest fields
-        rows_after = st.load_scheduled_jobs(project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+        rows_after = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
         job_after = next((r for r in (rows_after or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
         aid = (job_after.get("article_id") or "").strip() if isinstance(job_after, dict) else ""
         if isinstance(job_after, dict) and aid and (job_after.get("state") or "").strip().lower() == "scheduled":
-            proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == (project_id or "").strip()), None)
-            art = _find_article_for_job(st=st, project_id=project_id, article_id=aid)
+            prows = await run_sync(st.load_projects)
+            proj = next((p for p in (prows or []) if isinstance(p, dict) and (p.get("id") or "") == (project_id or "").strip()), None)
+            art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
             if proj and art:
 
                 async def _prep() -> None:
                     try:
                         await prepare_article_for_scheduled_job(st=st, jid=jid, proj=proj, art=art, job=job_after)
-                        st.update_scheduled_job_fields(
+                        await run_sync(
+                            st.update_scheduled_job_fields,
                             jid,
                             {
                                 "state": "ready_to_post",
@@ -196,7 +200,8 @@ async def update_scheduled_job(
                             },
                         )
                     except Exception as e:
-                        st.update_scheduled_job_fields(
+                        await run_sync(
+                            st.update_scheduled_job_fields,
                             jid,
                             {
                                 "state": "failed",
@@ -210,7 +215,7 @@ async def update_scheduled_job(
         # Don't fail the update if background prep can't start.
         pass
 
-    rows2 = st.load_scheduled_jobs(project_id=project_id)
+    rows2 = await run_sync(st.load_scheduled_jobs, project_id=project_id)
     row2 = next((r for r in (rows2 or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
     if not row2:
         raise HTTPException(status_code=404, detail="Scheduled job not found")
@@ -222,9 +227,11 @@ async def cancel_scheduled_job(project_id: str, job_id: str, user: dict = Depend
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     jid = (job_id or "").strip()
-    rows = st.load_scheduled_jobs(project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
     row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
-    ok = st.update_scheduled_job_fields(jid, {"state": "cancelled", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")})
+    ok = await run_sync(
+        st.update_scheduled_job_fields, jid, {"state": "cancelled", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="Scheduled job not found")
 
@@ -232,15 +239,9 @@ async def cancel_scheduled_job(project_id: str, job_id: str, user: dict = Depend
     try:
         aid = ((row or {}).get("article_id") or "").strip()
         if aid and hasattr(st, "update_article_fields"):
-            art = _find_article_for_job(st=st, project_id=project_id, article_id=aid)
+            art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
             if art:
-                st.update_article_fields(
-                    aid,
-                    {
-                        "wp_scheduled_at": "",
-                        "wp_schedule_error": "",
-                    },
-                )
+                await run_sync(st.update_article_fields, aid, {"wp_scheduled_at": "", "wp_schedule_error": ""})
     except Exception:
         pass
 
@@ -257,18 +258,18 @@ async def clear_scheduled_jobs(project_id: str, user: dict = Depends(get_current
     _require_project_access(st=st, user=user, project_id=project_id)
     if not hasattr(st, "load_scheduled_jobs"):
         return {"ok": True, "deleted": 0}
-    rows = st.load_scheduled_jobs(project_id=project_id) or []
+    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) or []
     ids = [(r.get("id") or "").strip() for r in rows if isinstance(r, dict)]
     ids = [x for x in ids if x]
     deleted = 0
     for jid in ids:
         try:
-            if hasattr(st, "delete_scheduled_job") and st.delete_scheduled_job(jid):
+            if hasattr(st, "delete_scheduled_job") and await run_sync(st.delete_scheduled_job, jid):
                 deleted += 1
             else:
                 # Fallback: mark cancelled if delete isn't available
-                if hasattr(st, "update_scheduled_job_fields") and st.update_scheduled_job_fields(
-                    jid, {"state": "cancelled", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
+                if hasattr(st, "update_scheduled_job_fields") and await run_sync(
+                    st.update_scheduled_job_fields, jid, {"state": "cancelled", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
                 ):
                     deleted += 1
         except Exception:
