@@ -15,6 +15,7 @@ from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.scheduler import scheduler_loop
+from app.legacy.storage import get_legacy_storage_module
 
 
 def create_app() -> FastAPI:
@@ -46,6 +47,14 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def _start_scheduler() -> None:
+        # Initialize storage early so we can fall back to JSON mode if Mongo is down.
+        st = get_legacy_storage_module()
+        if hasattr(st, "init_storage"):
+            try:
+                await asyncio.to_thread(st.init_storage)
+            except Exception:
+                pass
+
         enable = (os.environ.get("ENABLE_SCHEDULER", "1") or "1").strip()
         if enable not in {"1", "true", "yes", "on"}:
             return

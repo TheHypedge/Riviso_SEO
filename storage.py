@@ -1277,8 +1277,19 @@ def export_tables_to_json() -> tuple[list[dict], list[dict]]:
 
 def init_storage() -> None:
     global _storage_mode, _storage_init_error
+    force_json = (os.environ.get("FORCE_JSON_STORAGE") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if force_json:
+        _storage_mode = "json"
+        _storage_init_error = "FORCE_JSON_STORAGE enabled"
+        return
     try:
         init_db()
+        # Ensure we can actually read from PRIMARY; Atlas issues can allow ping on a node
+        # while PRIMARY is unavailable (ReplicaSetNoPrimary), which would break app reads.
+        try:
+            get_db().users.find_one({}, {"_id": 1})
+        except Exception as e:
+            raise RuntimeError(f"Mongo primary not available: {e}") from e
         _storage_mode = "mongo"
         _storage_init_error = None
     except Exception as e:

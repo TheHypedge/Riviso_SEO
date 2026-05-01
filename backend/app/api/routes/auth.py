@@ -13,6 +13,7 @@ from app.core.security import create_access_token, create_refresh_token, decode_
 from app.core.config import settings
 from app.core.ratelimit import limiter
 from app.legacy.storage import get_legacy_storage_module
+from app.services.to_thread import run_sync
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenPair, UserPublic
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -31,7 +32,11 @@ def _to_user_public(u: dict) -> UserPublic:
 @router.post("/login", response_model=TokenPair)
 async def login(payload: LoginRequest, request: Request, response: Response) -> TokenPair:
     st = get_legacy_storage_module()
-    user = st.get_user_by_email(str(payload.email).strip().lower())
+    try:
+        user = await run_sync(st.get_user_by_email, str(payload.email).strip().lower())
+    except Exception:
+        # Most common cause in local dev: MongoDB/Atlas not reachable.
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
     if not user or not (user.get("password_hash") or ""):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not check_password_hash(user["password_hash"], payload.password):
@@ -68,27 +73,35 @@ async def login(payload: LoginRequest, request: Request, response: Response) -> 
 async def register(payload: RegisterRequest, request: Request, response: Response) -> TokenPair:
     st = get_legacy_storage_module()
     email = str(payload.email).strip().lower()
-    if st.get_user_by_email(email):
+    try:
+        existing = await run_sync(st.get_user_by_email, email)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
+    if existing:
         raise HTTPException(status_code=409, detail="Email already registered")
     # Basic server-side password hygiene (UI already checks; backend enforces too).
     pw = payload.password or ""
     if not re.search(r"[a-zA-Z]", pw) or not re.search(r"\d", pw) or not re.search(r"[^a-zA-Z0-9]", pw):
         raise HTTPException(status_code=400, detail="Password must include letters, numbers, and a special character")
     uid = str(uuid.uuid4())
-    st.insert_user(
-        {
-            "id": uid,
-            "email": email,
-            "password_hash": generate_password_hash(payload.password),
-            "role": "user",
-            "subscription_type": "beta",
-            "full_name": "",
-            "phone": "",
-            "last_activity_at": "",
-            "pending_product_tour": True,
-            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-    )
+    try:
+        await run_sync(
+            st.insert_user,
+            {
+                "id": uid,
+                "email": email,
+                "password_hash": generate_password_hash(payload.password),
+                "role": "user",
+                "subscription_type": "beta",
+                "full_name": "",
+                "phone": "",
+                "last_activity_at": "",
+                "pending_product_tour": True,
+                "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
     access = create_access_token(subject=uid, extra_claims={"role": "user"})
     refresh = create_refresh_token(subject=uid, extra_claims={"role": "user"})
     response.set_cookie(
@@ -144,7 +157,10 @@ async def refresh_token(request: Request, response: Response) -> TokenPair:
     uid = (payload.get("sub") or "").strip()
     if not uid:
         raise HTTPException(status_code=401, detail="Invalid token subject")
-    user = st.get_user_by_id(uid)
+    try:
+        user = await run_sync(st.get_user_by_id, uid)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     role = (user.get("role") or "user").strip().lower()

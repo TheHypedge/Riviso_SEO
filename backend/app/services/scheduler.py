@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 
 from app.legacy.storage import get_legacy_storage_module
@@ -10,6 +11,7 @@ from app.services.context_links import apply_context_links_html
 from app.services.article_generation import generate_article_bundle
 from app.services.gsc_actions import maybe_request_url_inspection
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
+from app.services.to_thread import run_sync
 
 
 log = logging.getLogger(__name__)
@@ -196,10 +198,34 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
     Dev-friendly: polls scheduled_jobs and posts due items.
     For production: move to a dedicated worker.
     """
+    # When Mongo/storage is temporarily unavailable, avoid noisy tracebacks every poll.
+    # Back off with a capped retry delay, and throttle logs.
+    consecutive_storage_failures = 0
+    last_storage_error_log_at = 0.0
+
     while True:
         try:
             st = get_legacy_storage_module()
-            jobs = st.load_scheduled_jobs(project_id=None) if hasattr(st, "load_scheduled_jobs") else []
+            try:
+                jobs = (
+                    await run_sync(st.load_scheduled_jobs, project_id=None)
+                    if hasattr(st, "load_scheduled_jobs")
+                    else []
+                )
+                consecutive_storage_failures = 0
+            except Exception as e:
+                consecutive_storage_failures += 1
+                now_mono = time.monotonic()
+                if now_mono - last_storage_error_log_at >= 60.0:
+                    last_storage_error_log_at = now_mono
+                    log.warning(
+                        "Scheduler storage unavailable (will retry, failures=%s): %s",
+                        consecutive_storage_failures,
+                        str(e),
+                    )
+                delay = min(120.0, max(float(poll_seconds), 2.0) * (2 ** min(consecutive_storage_failures, 6)))
+                await asyncio.sleep(delay)
+                continue
             now = datetime.now(timezone.utc)
 
             for j in jobs or []:
@@ -220,7 +246,8 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                     continue
 
                 # Mark posting
-                st.update_scheduled_job_fields(
+                await run_sync(
+                    st.update_scheduled_job_fields,
                     jid,
                     {
                         "state": "posting",
@@ -233,17 +260,26 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
 
                 try:
                     # Lookup project + article rows
-                    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+                    prows = await run_sync(st.load_projects)
+                    proj = next((p for p in (prows or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
                     if not proj:
                         raise RuntimeError("Project not found")
-                    art = next((a for a in (st.load_articles() or []) if isinstance(a, dict) and (a.get("id") or "") == aid and (a.get("project_id") or "") == pid), None)
+                    arows = await run_sync(st.load_articles)
+                    art = next(
+                        (
+                            a
+                            for a in (arows or [])
+                            if isinstance(a, dict) and (a.get("id") or "") == aid and (a.get("project_id") or "") == pid
+                        ),
+                        None,
+                    )
                     if not art:
                         raise RuntimeError("Article not found")
 
                     # If article isn't generated yet, generate it now using scheduled prompts/defaults.
                     art = await prepare_article_for_scheduled_job(st=st, jid=jid, proj=proj, art=art, job=j)
 
-                    st.update_scheduled_job_fields(jid, {"state": "ready_to_post"})
+                    await run_sync(st.update_scheduled_job_fields, jid, {"state": "ready_to_post"})
 
                     # categories
                     cats: list[int] = []
@@ -268,7 +304,8 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
 
                     wp_post_id = created.get("id")
                     wp_link = created.get("link") or ""
-                    st.update_scheduled_job_fields(
+                    await run_sync(
+                        st.update_scheduled_job_fields,
                         jid,
                         {
                             "state": "posted",
@@ -277,7 +314,8 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                             "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                         },
                     )
-                    st.update_article_fields(
+                    await run_sync(
+                        st.update_article_fields,
                         aid,
                         {
                             "wp_post_id": wp_post_id,
@@ -287,8 +325,12 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                             # Once posted, clear schedule marker so UI shows draft/published instead of scheduled.
                             "wp_scheduled_at": "",
                             "wp_schedule_error": "",
-                            "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") if (j.get("wp_status") or "").lower() == "publish" else (art.get("posted_at") or ""),
-                            "status": "published" if (j.get("wp_status") or "").lower() == "publish" else (art.get("status") or "draft"),
+                            "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                            if (j.get("wp_status") or "").lower() == "publish"
+                            else (art.get("posted_at") or ""),
+                            "status": "published"
+                            if (j.get("wp_status") or "").lower() == "publish"
+                            else (art.get("status") or "draft"),
                         },
                     )
 
@@ -313,7 +355,8 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                         pass
                 except Exception as e:
                     log.exception("Scheduled job failed jid=%s", jid)
-                    st.update_scheduled_job_fields(
+                    await run_sync(
+                        st.update_scheduled_job_fields,
                         jid,
                         {
                             "state": "failed",
