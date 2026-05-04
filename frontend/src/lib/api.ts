@@ -271,7 +271,7 @@ function createTimeoutSignal(ms: number): AbortSignal {
   return c.signal;
 }
 
-function mergeAbortSignals(a: AbortSignal, b: AbortSignal | undefined): AbortSignal {
+function mergeAbortSignals(a: AbortSignal, b: AbortSignal | null | undefined): AbortSignal {
   if (!b) return a;
   if (a.aborted || b.aborted) {
     const c = new AbortController();

@@ -2054,7 +2054,12 @@ export default function ProjectPage() {
                     >
                       Cancel
                     </button>
-                    <button type="button" className={styles.button} onClick={importBulkRows} disabled={bulkUploading || !bulkUploadRows.length}>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      onClick={() => void importBulkRows(false)}
+                      disabled={bulkUploading || !bulkUploadRows.length}
+                    >
                       {bulkUploading ? "Importing…" : "Import"}
                     </button>
                   </div>
