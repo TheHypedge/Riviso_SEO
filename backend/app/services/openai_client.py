@@ -31,7 +31,8 @@ class OpenAIClient:
             "temperature": 0.6,
             "response_format": {"type": "json_object"},
         }
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        # Long SEO articles can exceed 60s; keep below client/proxy long-operation budgets (see frontend LONG_API_TIMEOUT_MS).
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=180.0)) as client:
             res = await client.post("https://api.openai.com/v1/chat/completions", headers=self._headers(), json=payload)
         res.raise_for_status()
         data = res.json()
@@ -54,7 +55,7 @@ class OpenAIClient:
             # Most current image models return base64 in `b64_json`.
         }
         # Image generations can be slow for high-quality renders.
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0)) as client:
             res = await client.post("https://api.openai.com/v1/images/generations", headers=self._headers(), json=payload)
         res.raise_for_status()
         data = res.json()

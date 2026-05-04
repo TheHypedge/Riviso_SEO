@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import styles from "../../page.module.css";
-import { api, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse } from "@/lib/api";
+import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse } from "@/lib/api";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 type TabKey = "articles" | "scheduled_articles" | "configuration" | "prompts" | "context_links" | "tools" | "project_settings";
@@ -36,6 +36,17 @@ function toDatetimeLocalValue(d: Date) {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 }
 
+/** Align with backend: NFKC + trim + lowercase (Python uses casefold server-side). */
+function normalizeArticleTitleKey(s: string): string {
+  const t = (s || "").trim();
+  if (!t) return "";
+  try {
+    return t.normalize("NFKC").toLowerCase();
+  } catch {
+    return t.toLowerCase();
+  }
+}
+
 /** Same title (case-insensitive): keep first row in file order (treated as oldest). */
 function dedupeBulkUploadRowsByTitle(rows: BulkUploadRow[]): {
   rows: BulkUploadRow[];
@@ -44,7 +55,7 @@ function dedupeBulkUploadRowsByTitle(rows: BulkUploadRow[]): {
 } {
   const counts = new Map<string, number>();
   for (const r of rows) {
-    const k = (r.title || "").trim().toLowerCase();
+    const k = normalizeArticleTitleKey(r.title || "");
     if (!k) continue;
     counts.set(k, (counts.get(k) || 0) + 1);
   }
@@ -53,7 +64,7 @@ function dedupeBulkUploadRowsByTitle(rows: BulkUploadRow[]): {
   const firstDisplay = new Map<string, string>();
   for (const r of rows) {
     const raw = (r.title || "").trim();
-    const k = raw.toLowerCase();
+    const k = normalizeArticleTitleKey(raw);
     if (!k) continue;
     if (!firstDisplay.has(k)) firstDisplay.set(k, raw);
     if (seen.has(k)) continue;
@@ -67,6 +78,8 @@ function dedupeBulkUploadRowsByTitle(rows: BulkUploadRow[]): {
   const droppedCount = [...counts.values()].reduce((s, c) => s + Math.max(0, c - 1), 0);
   return { rows: out, duplicateTitles, droppedCount };
 }
+
+type ProjectDupRow = { submitted_title: string; existing_title: string; existing_id: string };
 
 export default function ProjectPage() {
   const router = useRouter();
@@ -131,6 +144,17 @@ export default function ProjectPage() {
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkParseDupTitles, setBulkParseDupTitles] = useState<string[]>([]);
   const [postImportDupTitles, setPostImportDupTitles] = useState<string[] | null>(null);
+  const [postImportProjectSkipped, setPostImportProjectSkipped] = useState(0);
+  const [bulkProjectDupModal, setBulkProjectDupModal] = useState<{
+    projectDuplicates: ProjectDupRow[];
+    inFileDuplicateTitles: string[];
+    wouldCreateCount: number;
+  } | null>(null);
+  const [addArticleDupModal, setAddArticleDupModal] = useState<{
+    message: string;
+    duplicates: ProjectDupRow[];
+  } | null>(null);
+  const [bulkDupExpandList, setBulkDupExpandList] = useState(false);
   const [bulkMode, setBulkMode] = useState<"root" | "change_status" | "schedule">("root");
   const [scheduleMin, setScheduleMin] = useState("");
   const [editJobMin, setEditJobMin] = useState("");
@@ -555,6 +579,7 @@ export default function ProjectPage() {
 
   async function createArticle() {
     setError(null);
+    setAddArticleDupModal(null);
     setCreating(true);
     try {
       const a = await api.createArticle(projectId, title);
@@ -562,6 +587,22 @@ export default function ProjectPage() {
       setTitle("");
       setShowAddArticle(false);
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409 && e.detail && typeof e.detail === "object" && e.detail !== null) {
+        const d = e.detail as Record<string, unknown>;
+        const msg = typeof d.message === "string" ? d.message : e.message;
+        const raw = d.duplicates;
+        const duplicates: ProjectDupRow[] = Array.isArray(raw)
+          ? raw
+              .filter((x): x is Record<string, unknown> => x !== null && typeof x === "object")
+              .map((x) => ({
+                submitted_title: String(x.submitted_title ?? ""),
+                existing_title: String(x.existing_title ?? ""),
+                existing_id: String(x.existing_id ?? ""),
+              }))
+          : [];
+        setAddArticleDupModal({ message: msg, duplicates });
+        return;
+      }
       setError(e instanceof Error ? e.message : "Failed to create article");
     } finally {
       setCreating(false);
@@ -755,22 +796,61 @@ export default function ProjectPage() {
     }
   }
 
-  async function importBulkRows() {
+  async function importBulkRows(confirmSkipProjectDup = false) {
     if (!bulkUploadRows.length) return;
     setError(null);
     setBulkUploading(true);
     try {
-      const res = await api.bulkUploadArticles(projectId, bulkUploadRows);
+      const res = await api.bulkUploadArticles(projectId, bulkUploadRows, {
+        skipProjectDuplicateConflicts: confirmSkipProjectDup,
+      });
       // fastest: refresh list (also ensures ordering latest->oldest)
       setArticles(await api.listArticles(projectId));
+      setBulkProjectDupModal(null);
+      setBulkDupExpandList(false);
       setShowBulkUpload(false);
       setBulkUploadRows([]);
       setBulkUploadErrors([]);
       setBulkParseDupTitles([]);
       const dups = (res.duplicate_titles || []).filter(Boolean);
       if (dups.length) setPostImportDupTitles(dups);
-      if (!res.created) setError("No articles were created from the uploaded file.");
+      else setPostImportDupTitles(null);
+      const ps = res.project_skipped_as_duplicates || 0;
+      setPostImportProjectSkipped(ps);
+      if (!res.created) {
+        if (ps > 0 && !dups.length) {
+          setError("No new articles were added: every import row matched an existing article title in this project.");
+        } else if (!ps && !dups.length) {
+          setError("No articles were created from the uploaded file.");
+        }
+      }
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409 && e.detail && typeof e.detail === "object" && e.detail !== null) {
+        const d = e.detail as Record<string, unknown>;
+        if (d.error === "duplicate_article_titles") {
+          const raw = d.project_duplicates;
+          const projectDuplicates: ProjectDupRow[] = Array.isArray(raw)
+            ? raw
+                .filter((x): x is Record<string, unknown> => x !== null && typeof x === "object")
+                .map((x) => ({
+                  submitted_title: String(x.submitted_title ?? ""),
+                  existing_title: String(x.existing_title ?? ""),
+                  existing_id: String(x.existing_id ?? ""),
+                }))
+            : [];
+          const inRaw = d.in_file_duplicate_titles;
+          const inFileDuplicateTitles = Array.isArray(inRaw)
+            ? inRaw.filter((x): x is string => typeof x === "string")
+            : [];
+          const wc = d.would_create_count;
+          setBulkProjectDupModal({
+            projectDuplicates,
+            inFileDuplicateTitles,
+            wouldCreateCount: typeof wc === "number" ? wc : 0,
+          });
+          return;
+        }
+      }
       setError(e instanceof Error ? e.message : "Bulk upload failed");
     } finally {
       setBulkUploading(false);
@@ -1431,6 +1511,7 @@ export default function ProjectPage() {
                     type="button"
                     onClick={() => {
                       setError(null);
+                      setAddArticleDupModal(null);
                       setShowAddArticle(true);
                     }}
                   >
@@ -1981,29 +2062,204 @@ export default function ProjectPage() {
               </>
             ) : null}
 
-            {postImportDupTitles && postImportDupTitles.length ? (
+            {bulkProjectDupModal ? (
               <>
-                <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setPostImportDupTitles(null)} />
-                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Duplicate titles after import">
+                <button
+                  type="button"
+                  className={styles.modalBackdrop}
+                  aria-label="Close"
+                  onClick={() => {
+                    setBulkProjectDupModal(null);
+                    setBulkDupExpandList(false);
+                  }}
+                />
+                <div
+                  className={styles.modalPanel}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Duplicate articles detected"
+                  style={{ maxWidth: 520 }}
+                >
                   <div className={styles.modalHead}>
-                    <h3 className={styles.modalTitle}>Duplicate article titles</h3>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setPostImportDupTitles(null)}>
+                    <h3 className={styles.modalTitle}>Duplicate articles detected</h3>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => {
+                        setBulkProjectDupModal(null);
+                        setBulkDupExpandList(false);
+                      }}
+                    >
                       Close
                     </button>
                   </div>
                   <div className={styles.modalBody}>
                     <p style={{ marginTop: 0, lineHeight: 1.55 }}>
-                      Your file had more than one row with the same title (case-insensitive). Only the <strong>first</strong> row in the sheet — treated as the older entry — was imported for each duplicate name.
+                      Our system found one or more titles that already exist in this project (comparison is not case-sensitive). Only unique article titles can be added.
                     </p>
-                    <p style={{ marginBottom: 6, fontWeight: 600 }}>Titles that had duplicates:</p>
-                    <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.6 }}>
-                      {postImportDupTitles.map((t) => (
-                        <li key={t}>{t}</li>
-                      ))}
-                    </ul>
+                    {bulkProjectDupModal.wouldCreateCount > 0 ? (
+                      <p style={{ lineHeight: 1.55 }}>
+                        You can continue and import <strong>{bulkProjectDupModal.wouldCreateCount}</strong> unique{" "}
+                        {bulkProjectDupModal.wouldCreateCount === 1 ? "article" : "articles"}, skipping rows that conflict with existing titles.
+                      </p>
+                    ) : (
+                      <p style={{ lineHeight: 1.55 }}>
+                        No rows can be imported without conflicting with articles already in this project. Remove or rename those rows in your file and try again.
+                      </p>
+                    )}
+                    {bulkProjectDupModal.inFileDuplicateTitles.length ? (
+                      <div
+                        style={{
+                          marginTop: 12,
+                          padding: "10px 12px",
+                          borderRadius: 8,
+                          background: "#fff7e6",
+                          border: "1px solid #ffd591",
+                          fontSize: 13,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        <strong>In-file duplicates:</strong> your sheet still had repeated titles; only the first occurrence per title was kept before this check.
+                      </div>
+                    ) : null}
+                    <div style={{ marginTop: 14 }}>
+                      <button
+                        type="button"
+                        className={styles.btnSecondary}
+                        onClick={() => setBulkDupExpandList((v) => !v)}
+                        aria-expanded={bulkDupExpandList}
+                      >
+                        {bulkDupExpandList ? "Hide" : "View"} list of conflicts with existing articles ({bulkProjectDupModal.projectDuplicates.length})
+                      </button>
+                      {bulkDupExpandList ? (
+                        <ul style={{ margin: "10px 0 0", paddingLeft: 20, lineHeight: 1.55, maxHeight: 220, overflow: "auto" }}>
+                          {bulkProjectDupModal.projectDuplicates.map((row, i) => (
+                            <li key={`${row.existing_id}-${i}`}>
+                              <span style={{ fontWeight: 600 }}>{row.submitted_title || "(empty)"}</span>
+                              {" — matches existing: "}
+                              <Link className={styles.articleTitleLink} href={`/projects/${projectId}/articles/${row.existing_id}`}>
+                                {row.existing_title || row.existing_id}
+                              </Link>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
                   </div>
                   <div className={styles.modalFooter}>
-                    <button type="button" className={styles.button} onClick={() => setPostImportDupTitles(null)}>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => {
+                        setBulkProjectDupModal(null);
+                        setBulkDupExpandList(false);
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    {bulkProjectDupModal.wouldCreateCount > 0 ? (
+                      <button
+                        type="button"
+                        className={styles.button}
+                        onClick={() => importBulkRows(true)}
+                        disabled={bulkUploading}
+                      >
+                        {bulkUploading ? "Importing…" : `Continue — import ${bulkProjectDupModal.wouldCreateCount} unique`}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            {addArticleDupModal ? (
+              <>
+                <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setAddArticleDupModal(null)} />
+                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Duplicate article title" style={{ maxWidth: 480 }}>
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Duplicate article</h3>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setAddArticleDupModal(null)}>
+                      Close
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <p style={{ marginTop: 0, lineHeight: 1.55 }}>{addArticleDupModal.message}</p>
+                    {addArticleDupModal.duplicates.length ? (
+                      <ul style={{ margin: "12px 0 0", paddingLeft: 20, lineHeight: 1.55 }}>
+                        {addArticleDupModal.duplicates.map((row) => (
+                          <li key={row.existing_id}>
+                            Matches existing:{" "}
+                            <Link className={styles.articleTitleLink} href={`/projects/${projectId}/articles/${row.existing_id}`}>
+                              {row.existing_title || row.existing_id}
+                            </Link>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button type="button" className={styles.button} onClick={() => setAddArticleDupModal(null)}>
+                      OK
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            {(postImportDupTitles && postImportDupTitles.length) || postImportProjectSkipped > 0 ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.modalBackdrop}
+                  aria-label="Close"
+                  onClick={() => {
+                    setPostImportDupTitles(null);
+                    setPostImportProjectSkipped(0);
+                  }}
+                />
+                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Import summary">
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Import summary</h3>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => {
+                        setPostImportDupTitles(null);
+                        setPostImportProjectSkipped(0);
+                      }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    {postImportDupTitles && postImportDupTitles.length ? (
+                      <>
+                        <p style={{ marginTop: 0, lineHeight: 1.55 }}>
+                          Your file had more than one row with the same title (case-insensitive). Only the <strong>first</strong> row in the sheet — treated as the older entry — was imported for each duplicate name.
+                        </p>
+                        <p style={{ marginBottom: 6, fontWeight: 600 }}>Titles that had duplicates:</p>
+                        <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.6 }}>
+                          {postImportDupTitles.map((t) => (
+                            <li key={t}>{t}</li>
+                          ))}
+                        </ul>
+                      </>
+                    ) : null}
+                    {postImportProjectSkipped > 0 ? (
+                      <p style={{ marginTop: postImportDupTitles && postImportDupTitles.length ? 14 : 0, lineHeight: 1.55 }}>
+                        <strong>{postImportProjectSkipped}</strong> row{postImportProjectSkipped === 1 ? "" : "s"} skipped because the same title already exists in this project.
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      onClick={() => {
+                        setPostImportDupTitles(null);
+                        setPostImportProjectSkipped(0);
+                      }}
+                    >
                       OK
                     </button>
                   </div>

@@ -1,3 +1,5 @@
+"""System routes: health checks for orchestration and uptime probes."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter
@@ -10,6 +12,7 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse, tags=["system"])
 async def health() -> HealthResponse:
+    """Cheap liveness probe; extend with DB pings only if your orchestrator needs readiness separation."""
     return HealthResponse(
         status="ok",
         service=settings.app_name,

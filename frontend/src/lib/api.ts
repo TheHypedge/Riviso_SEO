@@ -241,7 +241,77 @@ function emitGlobalLoading(delta: number) {
   }
 }
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+/** Structured FastAPI `HTTPException` payload when present (e.g. duplicate title responses). */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly detail: unknown;
+
+  constructor(message: string, status: number, detail?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+/** Default budget for typical REST calls (lists, CRUD, login). */
+export const DEFAULT_API_TIMEOUT_MS = 120_000;
+/** OpenAI text+image generation, WordPress publish with upload, schedule-with-generation, large bulk import. */
+export const LONG_API_TIMEOUT_MS = 600_000;
+/** Token refresh must stay snappy so hanging refresh does not block the UI forever. */
+const AUTH_REFRESH_TIMEOUT_MS = 45_000;
+
+function createTimeoutSignal(ms: number): AbortSignal {
+  const AT = AbortSignal as unknown as { timeout?: (n: number) => AbortSignal };
+  if (typeof AT.timeout === "function") {
+    return AT.timeout(ms);
+  }
+  const c = new AbortController();
+  setTimeout(() => c.abort(), ms);
+  return c.signal;
+}
+
+function mergeAbortSignals(a: AbortSignal, b: AbortSignal | undefined): AbortSignal {
+  if (!b) return a;
+  if (a.aborted || b.aborted) {
+    const c = new AbortController();
+    c.abort();
+    return c.signal;
+  }
+  const c = new AbortController();
+  const onAbort = () => c.abort();
+  a.addEventListener("abort", onAbort, { once: true });
+  b.addEventListener("abort", onAbort, { once: true });
+  return c.signal;
+}
+
+function isAbortError(e: unknown): boolean {
+  if (!e || typeof e !== "object") return false;
+  return (e as Error).name === "AbortError";
+}
+
+export type ApiFetchOptions = {
+  /** Override default (see DEFAULT_API_TIMEOUT_MS). */
+  timeoutMs?: number;
+};
+
+async function parseOkJson<T>(res: Response): Promise<T> {
+  if (res.status === 204 || res.status === 205) {
+    return undefined as T;
+  }
+  const text = await res.text();
+  if (!text.trim()) {
+    return undefined as T;
+  }
+  return JSON.parse(text) as T;
+}
+
+/**
+ * Authenticated JSON fetch with timeout, optional 401 refresh, and global loading counter.
+ * Long-running routes should pass ``timeoutMs: LONG_API_TIMEOUT_MS`` via the third argument.
+ */
+async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOptions): Promise<T> {
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
   const headers = new Headers(init?.headers);
   headers.set("content-type", "application/json");
   const token = getAccessToken();
@@ -249,18 +319,36 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 
   emitGlobalLoading(+1);
   try {
-    const doFetch = async (h: Headers) => fetch(apiUrl(path), { ...init, headers: h, credentials: "include" });
-    let res = await doFetch(headers);
+    const doFetch = async (h: Headers) => {
+      const signal = mergeAbortSignals(createTimeoutSignal(timeoutMs), init?.signal);
+      return fetch(apiUrl(path), { ...init, headers: h, credentials: "include", signal });
+    };
+
+    let res: Response;
+    try {
+      res = await doFetch(headers);
+    } catch (e) {
+      if (isAbortError(e)) {
+        throw new ApiError(
+          `Request timed out after ${Math.round(timeoutMs / 1000)}s. Check your connection, or increase proxy timeouts (nginx) for long tasks.`,
+          408,
+          { code: "client_timeout", timeoutMs },
+        );
+      }
+      throw e;
+    }
+
     if (res.status === 401 && path !== "/api/auth/login" && path !== "/api/auth/register" && path !== "/api/auth/refresh") {
-      // Try silent refresh (once) then retry original request.
       const rt = getRefreshToken();
       if (rt) {
         try {
+          const refreshSignal = createTimeoutSignal(AUTH_REFRESH_TIMEOUT_MS);
           const refreshed = await fetch(apiUrl("/api/auth/refresh"), {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ refresh_token: rt }),
             credentials: "include",
+            signal: refreshSignal,
           });
           if (refreshed.ok) {
             const tokens = (await refreshed.json()) as TokenPair;
@@ -270,18 +358,74 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
             headers2.set("content-type", "application/json");
             const token2 = getAccessToken();
             if (token2) headers2.set("authorization", `Bearer ${token2}`);
-            res = await doFetch(headers2);
+            try {
+              res = await doFetch(headers2);
+            } catch (e) {
+              if (isAbortError(e)) {
+                throw new ApiError(
+                  `Request timed out after ${Math.round(timeoutMs / 1000)}s. Check your connection, or increase proxy timeouts (nginx) for long tasks.`,
+                  408,
+                  { code: "client_timeout", timeoutMs },
+                );
+              }
+              throw e;
+            }
           }
-        } catch {
-          // ignore; fall through to normal error handling
+        } catch (e) {
+          if (e instanceof ApiError) throw e;
+          // Fall through to normal error handling
         }
       }
     }
+
     if (!res.ok) {
       const text = await res.text();
-      throw new Error(text || `${res.status} ${res.statusText}`);
+      let detail: unknown;
+      let msg = text || `${res.status} ${res.statusText}`;
+      try {
+        const parsed = JSON.parse(text) as { detail?: unknown };
+        if (parsed && typeof parsed === "object" && "detail" in parsed) {
+          detail = parsed.detail;
+          if (typeof detail === "string") {
+            msg = detail;
+          } else if (detail && typeof detail === "object" && detail !== null && "message" in detail) {
+            const m = (detail as { message?: unknown }).message;
+            if (typeof m === "string" && m.trim()) msg = m;
+          }
+        }
+      } catch {
+        // use raw text as message
+      }
+      throw new ApiError(msg, res.status, detail);
     }
-    return (await res.json()) as T;
+    return parseOkJson<T>(res);
+  } finally {
+    emitGlobalLoading(-1);
+  }
+}
+
+/** Form upload or non-JSON body: same timeout and loading behavior as apiFetch. */
+async function apiFetchRaw(path: string, init: RequestInit, opts?: ApiFetchOptions): Promise<Response> {
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
+  const token = getAccessToken();
+  const headers = new Headers(init.headers);
+  if (token) headers.set("authorization", `Bearer ${token}`);
+  const signal = mergeAbortSignals(createTimeoutSignal(timeoutMs), init.signal);
+
+  emitGlobalLoading(+1);
+  try {
+    try {
+      return await fetch(apiUrl(path), { ...init, headers, credentials: "include", signal });
+    } catch (e) {
+      if (isAbortError(e)) {
+        throw new ApiError(
+          `Request timed out after ${Math.round(timeoutMs / 1000)}s. Try again or increase proxy read timeouts for large uploads.`,
+          408,
+          { code: "client_timeout", timeoutMs },
+        );
+      }
+      throw e;
+    }
   } finally {
     emitGlobalLoading(-1);
   }
@@ -354,7 +498,11 @@ export const api = {
     return apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, { method: "PATCH", body: JSON.stringify(patch) });
   },
   async verifyWordpress(projectId: string, payload: Partial<{ wp_site_url: string; wp_username: string; wp_app_password: string }>) {
-    return apiFetch<WordpressVerifyResponse>(`/api/projects/${projectId}/wordpress/verify`, { method: "POST", body: JSON.stringify(payload) });
+    return apiFetch<WordpressVerifyResponse>(
+      `/api/projects/${projectId}/wordpress/verify`,
+      { method: "POST", body: JSON.stringify(payload) },
+      { timeoutMs: LONG_API_TIMEOUT_MS },
+    );
   },
   async wordpressPostTypes(projectId: string) {
     return apiFetch<WordpressPostType[]>(`/api/projects/${projectId}/wordpress/post-types`);
@@ -400,7 +548,11 @@ export const api = {
     });
   },
 
-  async bulkUploadArticles(projectId: string, rows: BulkUploadRow[]) {
+  async bulkUploadArticles(
+    projectId: string,
+    rows: BulkUploadRow[],
+    opts?: { skipProjectDuplicateConflicts?: boolean },
+  ) {
     return apiFetch<{
       ok: true;
       created: number;
@@ -408,10 +560,18 @@ export const api = {
       articles: ArticlePublic[];
       duplicate_titles?: string[];
       duplicate_rows_dropped?: number;
-    }>(`/api/projects/${projectId}/articles/bulk-upload`, {
-      method: "POST",
-      body: JSON.stringify({ rows }),
-    });
+      project_skipped_as_duplicates?: number;
+    }>(
+      `/api/projects/${projectId}/articles/bulk-upload`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          rows,
+          skip_project_duplicate_conflicts: opts?.skipProjectDuplicateConflicts === true,
+        }),
+      },
+      { timeoutMs: LONG_API_TIMEOUT_MS },
+    );
   },
 
   async getArticle(projectId: string, articleId: string) {
@@ -462,21 +622,8 @@ export const api = {
   },
 
   async deleteWritingPrompt(projectId: string, promptId: string) {
-    const headers = new Headers();
-    headers.set("content-type", "application/json");
-    const token = getAccessToken();
-    if (token) headers.set("authorization", `Bearer ${token}`);
-    emitGlobalLoading(+1);
-    try {
-      const res = await fetch(apiUrl(`/api/projects/${projectId}/prompts/${promptId}`), { method: "DELETE", headers });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `${res.status} ${res.statusText}`);
-      }
-      return { ok: true as const };
-    } finally {
-      emitGlobalLoading(-1);
-    }
+    await apiFetch<unknown>(`/api/projects/${projectId}/prompts/${promptId}`, { method: "DELETE" });
+    return { ok: true as const };
   },
 
   async listImagePrompts(projectId: string) {
@@ -505,21 +652,8 @@ export const api = {
   },
 
   async deleteImagePrompt(projectId: string, promptId: string) {
-    const headers = new Headers();
-    headers.set("content-type", "application/json");
-    const token = getAccessToken();
-    if (token) headers.set("authorization", `Bearer ${token}`);
-    emitGlobalLoading(+1);
-    try {
-      const res = await fetch(apiUrl(`/api/projects/${projectId}/image-prompts/${promptId}`), { method: "DELETE", headers });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `${res.status} ${res.statusText}`);
-      }
-      return { ok: true as const };
-    } finally {
-      emitGlobalLoading(-1);
-    }
+    await apiFetch<unknown>(`/api/projects/${projectId}/image-prompts/${promptId}`, { method: "DELETE" });
+    return { ok: true as const };
   },
 
   // Context links
@@ -539,21 +673,8 @@ export const api = {
     });
   },
   async deleteContextLink(projectId: string, linkId: string) {
-    const headers = new Headers();
-    headers.set("content-type", "application/json");
-    const token = getAccessToken();
-    if (token) headers.set("authorization", `Bearer ${token}`);
-    emitGlobalLoading(+1);
-    try {
-      const res = await fetch(apiUrl(`/api/projects/${projectId}/context-links/${linkId}`), { method: "DELETE", headers });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `${res.status} ${res.statusText}`);
-      }
-      return { ok: true as const };
-    } finally {
-      emitGlobalLoading(-1);
-    }
+    await apiFetch<unknown>(`/api/projects/${projectId}/context-links/${linkId}`, { method: "DELETE" });
+    return { ok: true as const };
   },
 
   async generateArticle(
@@ -578,10 +699,14 @@ export const api = {
         meta_description?: string;
         image_url?: string | null;
       };
-    }>(`/api/projects/${projectId}/articles/${articleId}/generate`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    }>(
+      `/api/projects/${projectId}/articles/${articleId}/generate`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+      { timeoutMs: LONG_API_TIMEOUT_MS },
+    );
   },
 
   async scheduleArticle(
@@ -599,6 +724,7 @@ export const api = {
     return apiFetch<{ ok: boolean; status: string; message: string; wp_scheduled_at?: string; post_type?: string; wp_status?: string }>(
       `/api/projects/${projectId}/articles/${articleId}/schedule`,
       { method: "POST", body: JSON.stringify(payload) },
+      { timeoutMs: LONG_API_TIMEOUT_MS },
     );
   },
 
@@ -607,35 +733,40 @@ export const api = {
     articleId: string,
     payload: { image_file?: File | null; post_type: string; wp_status: "draft" | "publish"; category_ids: number[] },
   ) {
-    const token = getAccessToken();
-    const headers = new Headers();
-    if (token) headers.set("authorization", `Bearer ${token}`);
     const fd = new FormData();
     if (payload.image_file) fd.set("image_file", payload.image_file);
     fd.set("post_type", payload.post_type);
     fd.set("wp_status", payload.wp_status);
     fd.set("category_ids", payload.category_ids.join(","));
-    emitGlobalLoading(+1);
-    try {
-      const res = await fetch(apiUrl(`/api/projects/${projectId}/articles/${articleId}/publish`), {
-        method: "POST",
-        headers,
-        body: fd,
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `${res.status} ${res.statusText}`);
+    const res = await apiFetchRaw(
+      `/api/projects/${projectId}/articles/${articleId}/publish`,
+      { method: "POST", body: fd },
+      { timeoutMs: LONG_API_TIMEOUT_MS },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      let msg = text || `${res.status} ${res.statusText}`;
+      try {
+        const parsed = JSON.parse(text) as { detail?: unknown };
+        if (parsed && typeof parsed === "object" && "detail" in parsed) {
+          const d = parsed.detail;
+          if (typeof d === "string") msg = d;
+          else if (d && typeof d === "object" && d !== null && "message" in d && typeof (d as { message?: unknown }).message === "string") {
+            msg = (d as { message: string }).message;
+          }
+        }
+      } catch {
+        // keep msg
       }
-      return (await res.json()) as {
-        ok: boolean;
-        status: string;
-        message: string;
-        wp_post_id?: number;
-        wp_link?: string | null;
-      };
-    } finally {
-      emitGlobalLoading(-1);
+      throw new ApiError(msg, res.status);
     }
+    return (await res.json()) as {
+      ok: boolean;
+      status: string;
+      message: string;
+      wp_post_id?: number;
+      wp_link?: string | null;
+    };
   },
 
   async requestIndexing(projectId: string, articleId: string) {
@@ -655,21 +786,8 @@ export const api = {
     return apiFetch<AdminUserDetails>(`/api/admin/users/${userId}/details`);
   },
   async adminDeleteUser(userId: string) {
-    const headers = new Headers();
-    headers.set("content-type", "application/json");
-    const token = getAccessToken();
-    if (token) headers.set("authorization", `Bearer ${token}`);
-    emitGlobalLoading(+1);
-    try {
-      const res = await fetch(apiUrl(`/api/admin/users/${userId}`), { method: "DELETE", headers });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `${res.status} ${res.statusText}`);
-      }
-      return { ok: true as const };
-    } finally {
-      emitGlobalLoading(-1);
-    }
+    await apiFetch<unknown>(`/api/admin/users/${userId}`, { method: "DELETE" });
+    return { ok: true as const };
   },
   async adminListPlans() {
     return apiFetch<PlanPublic[]>("/api/admin/plans");

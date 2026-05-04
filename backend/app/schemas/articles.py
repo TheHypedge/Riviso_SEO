@@ -1,13 +1,22 @@
+"""
+Pydantic request/response models for article APIs.
+
+Field constraints mirror validation enforced in route handlers (max lengths, keyword counts).
+**Bulk upload:** See ``BulkUploadRequest.skip_project_duplicate_conflicts`` for the second-phase import flow.
+"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
 
 class ArticlePublic(BaseModel):
+    """Article fields exposed in list views and lightweight responses."""
+
     id: str
     project_id: str
     title: str
-    status: str = "pending"
+    status: str = Field(default="pending", description="Derived listing status (pending/draft/scheduled/published).")
     created_at: str | None = None
     updated_at: str | None = None
     posted_at: str | None = None
@@ -21,42 +30,71 @@ class ArticlePublic(BaseModel):
     gsc_inspection_last_attempt_at: str | None = None
     gsc_inspection_error: str | None = None
     gsc_inspection_url: str | None = None
-    hasBody: bool | None = None
+    hasBody: bool | None = Field(default=None, description="Optional hint that body HTML exists without loading full text.")
 
 
 class ArticleCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=500)
+    """Payload for ``POST .../articles`` (single create)."""
+
+    title: str = Field(min_length=1, max_length=500, description="Must be unique per project when normalized (NFKC + casefold).")
     keywords: list[str] = Field(default_factory=list, max_length=10)
     focus_keyphrase: str | None = Field(default=None, max_length=500)
 
 
 class BulkActionRequest(BaseModel):
+    """Bulk delete or bulk status change within one project."""
+
     action: str = Field(pattern="^(delete|change_status)$")
     article_ids: list[str] = Field(min_length=1, max_length=500)
     new_status: str | None = Field(default=None, max_length=32)
 
 
 class BulkUploadRow(BaseModel):
+    """One parsed spreadsheet row prior to insert."""
+
     title: str = Field(min_length=1, max_length=500)
     focus_keyphrase: str | None = Field(default=None, max_length=500)
     keywords: list[str] = Field(default_factory=list, max_length=10)
 
 
 class BulkUploadRequest(BaseModel):
+    """
+    Parsed Excel rows for ``POST .../articles/bulk-upload``.
+
+    After in-sheet deduplication, remaining titles are checked against the project. If any conflict
+    exists and ``skip_project_duplicate_conflicts`` is false, the API responds with **409** and no rows
+    are written. The client may retry with ``skip_project_duplicate_conflicts=true`` to insert only
+    non-conflicting rows.
+    """
+
     rows: list[BulkUploadRow] = Field(min_length=1, max_length=500)
+    skip_project_duplicate_conflicts: bool = Field(
+        default=False,
+        description="If true, skip rows whose normalized title already exists in the project; insert the rest.",
+    )
 
 
 class BulkUploadResponse(BaseModel):
+    """Summary counters returned after a bulk import attempt."""
+
     ok: bool = True
-    created: int
-    skipped: int = 0
+    created: int = Field(description="Number of new article documents inserted.")
+    skipped: int = Field(default=0, description="Rows not imported (blank titles, in-sheet duplicates, or project conflicts when skipping).")
     articles: list[ArticlePublic] = Field(default_factory=list)
-    # Titles that appeared more than once in the upload; only the first row (oldest in file order) was imported.
-    duplicate_titles: list[str] = Field(default_factory=list)
-    duplicate_rows_dropped: int = 0
+    duplicate_titles: list[str] = Field(
+        default_factory=list,
+        description="Display titles that appeared more than once in the upload; only the first row per title was kept.",
+    )
+    duplicate_rows_dropped: int = Field(default=0, description="Count of extra rows dropped due to in-sheet duplicate titles.")
+    project_skipped_as_duplicates: int = Field(
+        default=0,
+        description="Rows skipped because the title matched an existing article (only when skip flag was used).",
+    )
 
 
 class ArticleDetailResponse(ArticlePublic):
+    """Full editor payload including HTML body and meta."""
+
     article: str = ""
     meta_title: str | None = None
     meta_description: str | None = None
@@ -64,6 +102,8 @@ class ArticleDetailResponse(ArticlePublic):
 
 
 class ArticleUpdateRequest(BaseModel):
+    """Partial update; omitted fields are left unchanged."""
+
     title: str | None = Field(default=None, max_length=500)
     keywords: list[str] | None = Field(default=None, max_length=10)
     focus_keyphrase: str | None = Field(default=None, max_length=500)
@@ -73,6 +113,8 @@ class ArticleUpdateRequest(BaseModel):
 
 
 class GenerateRequest(BaseModel):
+    """Options for on-demand generation (writing + optional image)."""
+
     writing_prompt_id: str | None = Field(default=None, max_length=100)
     image_prompt_id: str | None = Field(default=None, max_length=100)
     focus_keyphrase: str | None = Field(default=None, max_length=500)
@@ -80,10 +122,11 @@ class GenerateRequest(BaseModel):
 
 
 class ScheduleRequest(BaseModel):
-    wp_scheduled_at: str = Field(min_length=1, max_length=64)  # accepts ISO or "YYYY-MM-DD HH:MM"
-    wp_status: str = Field(default="draft", max_length=16)  # draft|publish
+    """WordPress scheduling and generation options."""
+
+    wp_scheduled_at: str = Field(min_length=1, max_length=64, description="ISO or legacy 'YYYY-MM-DD HH:MM' string.")
+    wp_status: str = Field(default="draft", max_length=16, description="draft or publish")
     post_type: str = Field(default="posts", max_length=200)
     writing_prompt_id: str | None = Field(default=None, max_length=100)
     image_prompt_id: str | None = Field(default=None, max_length=100)
     generate_image: bool = True
-

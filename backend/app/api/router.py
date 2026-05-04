@@ -1,3 +1,9 @@
+"""
+Aggregates all HTTP routers under the ``/api`` prefix (see ``app.main.create_app``).
+
+Route modules are mounted without per-router prefixes here; each route file defines its own path segments.
+"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter

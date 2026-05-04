@@ -1,7 +1,21 @@
+"""
+FastAPI ASGI entrypoint: middleware stack, API router, lifespan hooks.
+
+**Production notes**
+
+- Set ``ENVIRONMENT=production`` to disable interactive OpenAPI/Swagger UIs.
+- Run startup checks via :func:`app.core.production.run_startup_checks`.
+- Prefer TLS termination at a reverse proxy; enable ``COOKIE_SECURE`` when HTTPS is used.
+- The in-process scheduler is optional; for multiple API workers, set ``ENABLE_SCHEDULER=0`` and run
+  a single dedicated worker process for scheduled jobs.
+"""
+
 from __future__ import annotations
 
-import os
 import asyncio
+import os
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import MutableHeaders
@@ -15,6 +29,7 @@ from app.core.ratelimit import limiter
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.core.production import run_startup_checks
 from app.services.scheduler import scheduler_loop
 from app.legacy.storage import get_legacy_storage_module
 
@@ -64,10 +79,50 @@ def _effective_cors_origins() -> list[str]:
     return merged
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Startup: storage init, production checks, optional background scheduler.
+    Shutdown: cancel scheduler task so workers exit cleanly.
+    """
+    run_startup_checks(settings)
+
+    st = get_legacy_storage_module()
+    if hasattr(st, "init_storage"):
+        try:
+            await asyncio.to_thread(st.init_storage)
+        except Exception:
+            # Legacy JSON fallback may still run if Mongo is unavailable.
+            pass
+
+    scheduler_task: asyncio.Task | None = None
+    enable = (os.environ.get("ENABLE_SCHEDULER", "1") or "1").strip()
+    if enable in {"1", "true", "yes", "on"}:
+        # One task per process; use ENABLE_SCHEDULER=0 when running multiple uvicorn workers.
+        scheduler_task = asyncio.create_task(scheduler_loop(poll_seconds=10.0))
+
+    yield
+
+    if scheduler_task:
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except asyncio.CancelledError:
+            pass
+
+
 def create_app() -> FastAPI:
     configure_logging(level="INFO")
 
-    app = FastAPI(title=settings.app_name)
+    expose_docs = not settings.is_production
+
+    app = FastAPI(
+        title=settings.app_name,
+        lifespan=lifespan,
+        docs_url="/docs" if expose_docs else None,
+        redoc_url="/redoc" if expose_docs else None,
+        openapi_url="/openapi.json" if expose_docs else None,
+    )
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, lambda request, exc: Response("Rate limit exceeded", status_code=429))
     app.add_middleware(SlowAPIMiddleware)
@@ -105,30 +160,16 @@ def create_app() -> FastAPI:
 
     app.add_middleware(SecurityHeadersASGIMiddleware)
 
-    @app.on_event("startup")
-    async def _start_scheduler() -> None:
-        # Initialize storage early so we can fall back to JSON mode if Mongo is down.
-        st = get_legacy_storage_module()
-        if hasattr(st, "init_storage"):
-            try:
-                await asyncio.to_thread(st.init_storage)
-            except Exception:
-                pass
-
-        enable = (os.environ.get("ENABLE_SCHEDULER", "1") or "1").strip()
-        if enable not in {"1", "true", "yes", "on"}:
-            return
-        # In-process scheduler for dev. For production, run a separate worker.
-        asyncio.create_task(scheduler_loop(poll_seconds=10.0))
-
     @app.get("/", include_in_schema=False)
     async def _root():
-        return {
+        payload: dict = {
             "service": settings.app_name,
             "status": "ok",
-            "docs": "/docs",
             "health": f"{settings.api_prefix}/health",
         }
+        if expose_docs:
+            payload["docs"] = "/docs"
+        return payload
 
     origins = _effective_cors_origins()
     app.add_middleware(
@@ -144,4 +185,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-

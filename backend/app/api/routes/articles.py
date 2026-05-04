@@ -1,3 +1,24 @@
+"""
+REST API for articles under ``/api/projects/{project_id}/articles``.
+
+**Architecture**
+
+- Persistence goes through :mod:`app.legacy.storage` (MongoDB for primary app data).
+- Heavy OR blocking storage calls use :func:`app.services.to_thread.run_sync` so the event loop stays responsive.
+- Listing/status helpers reconcile legacy ``status`` fields with WordPress REST outcomes.
+
+**Duplicate titles**
+
+Per-project uniqueness uses :func:`_normalize_article_title_key` (NFKC + casefold). Create, bulk-upload,
+and title updates return HTTP 409 with structured JSON ``detail`` when a collision occurs.
+
+For bulk upload, the API applies two phases:
+
+1. **In-sheet dedupe** — same title repeated in the payload keeps the first row only.
+2. **Project index** — remaining rows compared against existing articles; conflicts yield 409 unless
+   ``skip_project_duplicate_conflicts`` is true (client confirms importing only non-conflicting rows).
+"""
+
 from __future__ import annotations
 
 import uuid
@@ -40,6 +61,10 @@ from app.schemas.articles import (
 )
 
 router = APIRouter(prefix="/projects/{project_id}/articles", tags=["articles"])
+
+# ---------------------------------------------------------------------------
+# WordPress / listing helpers (normalize stored rows for API responses)
+# ---------------------------------------------------------------------------
 
 
 def _wp_post_present(a: dict) -> bool:
@@ -200,6 +225,11 @@ def _to_public(a: dict) -> ArticlePublic:
     )
 
 
+# ---------------------------------------------------------------------------
+# Access control & article lookup
+# ---------------------------------------------------------------------------
+
+
 def _require_project_access(*, st, user: dict, project_id: str) -> dict:
     pid = (project_id or "").strip()
     proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
@@ -226,8 +256,83 @@ def _get_article_or_404(*, st, project_id: str, article_id: str) -> dict:
     raise HTTPException(status_code=404, detail="Not found")
 
 
+# ---------------------------------------------------------------------------
+# Duplicate title detection (per project, case-insensitive)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_article_title_key(raw: str) -> str:
+    """Stable case-insensitive key for duplicate detection within a project (Unicode-safe)."""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    try:
+        s = unicodedata.normalize("NFKC", s)
+    except Exception:
+        pass
+    return s.casefold()
+
+
+def _sync_project_title_index(st, project_id: str) -> dict[str, tuple[str, str]]:
+    """
+    Map normalized title key -> (stored display title, article id) for one project.
+    First occurrence wins when legacy data somehow contains inconsistent casing for the same logical title.
+    """
+    pid = (project_id or "").strip()
+    if hasattr(st, "load_articles_listing_for_project"):
+        rows = st.load_articles_listing_for_project(pid, limit=20000) or []
+    else:
+        rows = [
+            a
+            for a in (st.load_articles() or [])
+            if isinstance(a, dict) and (a.get("project_id") or "").strip() == pid
+        ]
+    out: dict[str, tuple[str, str]] = {}
+    for a in rows:
+        if not isinstance(a, dict):
+            continue
+        t = (a.get("title") or "").strip()
+        if not t:
+            continue
+        k = _normalize_article_title_key(t)
+        if not k:
+            continue
+        aid = (a.get("id") or "").strip()
+        if not aid:
+            continue
+        if k not in out:
+            out[k] = (t[:500], aid)
+    return out
+
+
+def _duplicate_title_http_detail(
+    *,
+    submitted: str,
+    existing_title: str,
+    existing_id: str,
+) -> dict:
+    """Serializable payload for HTTP 409 responses (single-title conflict)."""
+    return {
+        "error": "duplicate_article_title",
+        "message": "An article with this title already exists in this project. Only unique titles are allowed (comparison is not case-sensitive).",
+        "duplicates": [
+            {
+                "submitted_title": submitted[:500],
+                "existing_title": (existing_title or "")[:500],
+                "existing_id": (existing_id or "").strip(),
+            }
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# CRUD & bulk operations
+# ---------------------------------------------------------------------------
+
+
 @router.get("", response_model=list[ArticlePublic])
 async def list_articles(project_id: str, user: dict = Depends(get_current_user)) -> list[ArticlePublic]:
+    """List articles for a project, newest first, with WordPress/schedule overlay when present."""
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     if hasattr(st, "load_articles_listing_for_project"):
@@ -251,6 +356,10 @@ async def create_article(
     payload: ArticleCreate,
     user: dict = Depends(get_current_user),
 ) -> ArticlePublic:
+    """
+    Create a single pending article. Rejects with 409 if the title matches an existing article
+    in the same project (case-insensitive; see module docstring).
+    """
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
 
@@ -259,6 +368,22 @@ async def create_article(
     keywords = [str(k).strip()[:80] for k in payload.keywords if str(k).strip()]
     keywords = keywords[:10]
 
+    title_clean = payload.title.strip()[:500]
+    tkey = _normalize_article_title_key(title_clean)
+    if tkey:
+        idx = await run_sync(_sync_project_title_index, st, project_id)
+        hit = idx.get(tkey)
+        if hit:
+            etitle, eid = hit
+            raise HTTPException(
+                status_code=409,
+                detail=_duplicate_title_http_detail(
+                    submitted=title_clean,
+                    existing_title=etitle,
+                    existing_id=eid,
+                ),
+            )
+
     aid = str(uuid.uuid4())
     try:
         await run_sync(
@@ -266,7 +391,7 @@ async def create_article(
             {
                 "id": aid,
                 "project_id": project_id,
-                "title": payload.title.strip()[:500],
+                "title": title_clean,
                 "keywords": keywords,
                 "status": "pending",
                 "article": "",
@@ -289,7 +414,7 @@ async def create_article(
     return ArticlePublic(
         id=aid,
         project_id=project_id,
-        title=payload.title.strip()[:500],
+        title=title_clean,
         status="pending",
         created_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         keywords=keywords,
@@ -303,6 +428,7 @@ async def bulk_action(
     payload: BulkActionRequest,
     user: dict = Depends(get_current_user),
 ) -> dict:
+    """Bulk delete or status change; ``article_ids`` are validated against this project only."""
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
 
@@ -348,6 +474,8 @@ async def bulk_action(
 
 def _dedupe_bulk_upload_rows(rows: list) -> tuple[list, list[str], int]:
     """
+    Collapse duplicate titles **within the uploaded payload** (same normalization as DB checks).
+
     For duplicate titles (case-insensitive), keep only the first row (top of file = oldest).
 
     Returns (deduped_rows, sorted_duplicate_display_titles, extra_rows_dropped).
@@ -357,7 +485,9 @@ def _dedupe_bulk_upload_rows(rows: list) -> tuple[list, list[str], int]:
         title = (getattr(row, "title", None) or "").strip()
         if not title:
             continue
-        key = title.casefold()
+        key = _normalize_article_title_key(title)
+        if not key:
+            continue
         norm_rows.append((key, title, row))
 
     counts = Counter(k for k, _, _ in norm_rows)
@@ -383,20 +513,63 @@ async def bulk_upload_articles(
     payload: BulkUploadRequest,
     user: dict = Depends(get_current_user),
 ) -> BulkUploadResponse:
+    """
+    Import many articles from a parsed Excel flow. In-sheet dedupe first, then project index.
+
+    If any row's title collides with an existing article and ``skip_project_duplicate_conflicts`` is
+    false, the handler returns **409** without writing rows so the client can confirm skipping conflicts.
+    """
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
 
     rows_in = list(payload.rows or [])
     rows_work, duplicate_titles, duplicate_dropped = _dedupe_bulk_upload_rows(rows_in)
 
+    title_index = await run_sync(_sync_project_title_index, st, project_id)
+    project_conflicts: list[dict[str, str]] = []
+    rows_to_insert: list = []
+    for row in rows_work:
+        title = (getattr(row, "title", None) or "").strip()
+        if not title:
+            continue
+        tkey = _normalize_article_title_key(title)
+        if not tkey:
+            continue
+        if tkey in title_index:
+            ex_title, ex_id = title_index[tkey]
+            project_conflicts.append(
+                {
+                    "submitted_title": title[:500],
+                    "existing_title": (ex_title or "")[:500],
+                    "existing_id": (ex_id or "").strip(),
+                }
+            )
+        else:
+            rows_to_insert.append(row)
+
+    if project_conflicts and not payload.skip_project_duplicate_conflicts:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "duplicate_article_titles",
+                "message": "One or more article titles already exist in this project. Only unique titles can be added (comparison is not case-sensitive).",
+                "project_duplicates": project_conflicts,
+                "in_file_duplicate_titles": duplicate_titles,
+                "would_create_count": len(rows_to_insert),
+                "project_conflict_count": len(project_conflicts),
+            },
+        )
+
     created_rows: list[ArticlePublic] = []
     skipped = duplicate_dropped
     for row in rows_in:
         if not (getattr(row, "title", None) or "").strip():
             skipped += 1
+    if project_conflicts and payload.skip_project_duplicate_conflicts:
+        skipped += len(project_conflicts)
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-    for row in rows_work:
+    for row in rows_to_insert:
         title = (row.title or "").strip()
         if not title:
             skipped += 1
@@ -454,6 +627,7 @@ async def bulk_upload_articles(
         articles=created_rows,
         duplicate_titles=duplicate_titles,
         duplicate_rows_dropped=duplicate_dropped,
+        project_skipped_as_duplicates=len(project_conflicts) if payload.skip_project_duplicate_conflicts else 0,
     )
 
 
@@ -463,6 +637,7 @@ async def get_article_detail(
     article_id: str,
     user: dict = Depends(get_current_user),
 ) -> ArticleDetailResponse:
+    """Full article body and meta for the editor UI."""
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
@@ -486,13 +661,31 @@ async def update_article(
     payload: ArticleUpdateRequest,
     user: dict = Depends(get_current_user),
 ) -> ArticleDetailResponse:
+    """Partial update; changing ``title`` runs the same duplicate check as create (409 on conflict)."""
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     _ = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    aid_now = (article_id or "").strip()
 
     updates: dict = {}
     if payload.title is not None:
-        updates["title"] = payload.title.strip()[:500]
+        new_title = payload.title.strip()[:500]
+        tkey = _normalize_article_title_key(new_title)
+        if tkey:
+            idx = await run_sync(_sync_project_title_index, st, project_id)
+            hit = idx.get(tkey)
+            if hit:
+                _etitle, eid = hit
+                if (eid or "").strip() != aid_now:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=_duplicate_title_http_detail(
+                            submitted=new_title,
+                            existing_title=_etitle,
+                            existing_id=eid,
+                        ),
+                    )
+        updates["title"] = new_title
     if payload.keywords is not None:
         kw = [str(x).strip()[:80] for x in (payload.keywords or []) if str(x).strip()]
         updates["keywords"] = kw[:10]
@@ -519,6 +712,11 @@ async def update_article(
     )
 
 
+# ---------------------------------------------------------------------------
+# Generation, scheduling, publishing, GSC (downstream of CRUD)
+# ---------------------------------------------------------------------------
+
+
 @router.post("/{article_id}/generate")
 async def generate_article_and_image(
     project_id: str,
@@ -527,11 +725,9 @@ async def generate_article_and_image(
     user: dict = Depends(get_current_user),
 ) -> dict:
     """
-    Stable API contract for the legacy "Generate article" panel.
+    Generate article HTML and optional featured image (OpenAI), then persist to storage.
 
-    Next step: wire this to the real generation engine (OpenAI + optional image generation)
-    and persist results to storage. For now, return a deterministic "not implemented"
-    response so the frontend can be built safely against the contract.
+    Requires ``OPENAI_API_KEY``; uses project prompts and article row fields as context.
     """
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
@@ -846,13 +1042,13 @@ async def publish_to_live_site(
             pass
 
     try:
-        created = await wp.post_json(f"/wp-json/wp/v2/{rest_base}", payload, timeout=45.0)
+        created = await wp.post_json(f"/wp-json/wp/v2/{rest_base}", payload, timeout=90.0)
     except Exception as e:
         # Some custom post types don't support tags; retry without them.
         if "tags" in payload:
             try:
                 payload.pop("tags", None)
-                created = await wp.post_json(f"/wp-json/wp/v2/{rest_base}", payload, timeout=45.0)
+                created = await wp.post_json(f"/wp-json/wp/v2/{rest_base}", payload, timeout=90.0)
             except Exception:
                 raise HTTPException(status_code=502, detail=f"WordPress publish failed: {e}") from e
         else:

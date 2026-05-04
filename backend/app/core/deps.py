@@ -1,3 +1,10 @@
+"""
+FastAPI dependencies for authentication.
+
+Resolves the current user from either ``Authorization: Bearer`` or the ``aa_access`` cookie,
+then loads the user record from legacy storage. Used by all authenticated API routes.
+"""
+
 from __future__ import annotations
 
 from fastapi import Cookie, Depends, HTTPException

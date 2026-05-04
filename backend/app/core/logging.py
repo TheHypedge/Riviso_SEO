@@ -1,3 +1,9 @@
+"""
+Structured JSON logging via ``structlog`` for stdout (container-friendly).
+
+Call :func:`configure_logging` once at process startup before handling requests.
+"""
+
 from __future__ import annotations
 
 import logging

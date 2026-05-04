@@ -82,7 +82,7 @@ async def generate_article_bundle(
         try:
             image_url = await asyncio.wait_for(
                 client.generate_image_url(model=settings.openai_image_model, prompt=image_prompt),
-                timeout=240.0,
+                timeout=300.0,
             )
         except Exception:
             log.exception("Image generation failed (returning without image_url)")

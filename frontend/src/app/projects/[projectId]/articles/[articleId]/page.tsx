@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import styles from "../../../../page.module.css";
 import {
   api,
+  ApiError,
   ArticleDetail,
   clearAuth,
   getAccessToken,
@@ -149,6 +150,10 @@ export default function ArticleEditPage() {
       setArticle(updated);
       setNotice("Saved.");
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        setError(e.message);
+        return;
+      }
       setError(e instanceof Error ? e.message : "Save failed");
     }
   }
@@ -219,6 +224,10 @@ export default function ArticleEditPage() {
       window.setTimeout(() => setLoadingLines(null), 900);
       timers.forEach((t) => window.clearTimeout(t));
     } catch (e) {
+      if (e instanceof ApiError && e.status === 408) {
+        setError(e.message);
+        return;
+      }
       setError(e instanceof Error ? e.message : "Generate request failed");
     }
   }
@@ -241,6 +250,10 @@ export default function ArticleEditPage() {
       });
       setNotice(`${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`);
     } catch (e) {
+      if (e instanceof ApiError && e.status === 408) {
+        setError(e.message);
+        return;
+      }
       setError(e instanceof Error ? e.message : "Publish to live site failed");
     }
   }
