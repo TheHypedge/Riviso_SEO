@@ -201,5 +201,27 @@
     "default_wp_rest_base": "",
     "default_wp_status": "",
     "created_at": "2026-04-16 00:34:15"
+  },
+  {
+    "id": "7173ace9-bb9c-407a-88e8-261b4f1c5ec7",
+    "owner_user_id": "bb45a526-2e8b-4017-a71c-fd1fa9f6b591",
+    "name": "hypedge",
+    "website_url": "https://hypedge.com/",
+    "wp_site_url": "https://hypedge.com/",
+    "wp_username": "jasdeep",
+    "wp_app_password": "yTf961hwhE9jQEw6WLinX5at",
+    "wp_category_ids": "",
+    "prompts": [],
+    "default_prompt_id": "",
+    "image_prompts": [],
+    "default_image_prompt_id": "",
+    "image_style": "semi_real",
+    "optimize_image_prompt": true,
+    "context_links": [],
+    "gsc_property_url": "",
+    "gsc_index_on_publish": true,
+    "default_wp_rest_base": "",
+    "default_wp_status": "",
+    "created_at": "2026-05-04 08:43:20"
   }
 ]

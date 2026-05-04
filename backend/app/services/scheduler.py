@@ -17,6 +17,12 @@ from app.services.to_thread import run_sync
 log = logging.getLogger(__name__)
 
 
+def _normalize_wp_rest_status_local(val: object) -> str:
+    if isinstance(val, str):
+        return val.strip().lower()
+    return str(val or "").strip().lower()
+
+
 def _parse_run_at_utc(s: str) -> datetime | None:
     """Parse stored job run_at as a UTC wall-clock instant (naive string in DB is always UTC)."""
     v = (s or "").strip()
@@ -304,6 +310,9 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
 
                     wp_post_id = created.get("id")
                     wp_link = created.get("link") or ""
+                    created_wp_status = _normalize_wp_rest_status_local(created.get("status")) or _normalize_wp_rest_status_local(
+                        j.get("wp_status")
+                    )
                     await run_sync(
                         st.update_scheduled_job_fields,
                         jid,
@@ -314,25 +323,30 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                             "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                         },
                     )
-                    await run_sync(
+                    ok_article = await run_sync(
                         st.update_article_fields,
                         aid,
                         {
                             "wp_post_id": wp_post_id,
                             "wp_link": wp_link,
                             "wp_rest_base": (j.get("post_type") or "posts"),
-                            "wp_last_wp_status": (j.get("wp_status") or "draft"),
+                            # Use WordPress REST response, not the job's requested status (they can differ).
+                            "wp_last_wp_status": created_wp_status or "draft",
                             # Once posted, clear schedule marker so UI shows draft/published instead of scheduled.
                             "wp_scheduled_at": "",
                             "wp_schedule_error": "",
                             "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                            if (j.get("wp_status") or "").lower() == "publish"
+                            if created_wp_status == "publish"
                             else (art.get("posted_at") or ""),
-                            "status": "published"
-                            if (j.get("wp_status") or "").lower() == "publish"
-                            else (art.get("status") or "draft"),
+                            "status": "published" if created_wp_status == "publish" else (art.get("status") or "draft"),
                         },
                     )
+                    if not ok_article:
+                        log.warning(
+                            "Scheduled post wrote job=%s as posted but article id=%s was not found in DB to update (check article_id / project_id).",
+                            jid,
+                            aid,
+                        )
 
                     # Best-effort: Search Console URL Inspection after live publish.
                     try:
@@ -340,7 +354,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                             st=st,
                             proj=proj,
                             live_url=str(wp_link or ""),
-                            wp_status=(j.get("wp_status") or ""),
+                            wp_status=created_wp_status or "",
                             article_id=aid,
                         )
                     except Exception:
@@ -348,7 +362,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
 
                     # Best-effort: ping sitemap after live publish for discovery.
                     try:
-                        if (j.get("wp_status") or "").lower() == "publish":
+                        if created_wp_status == "publish":
                             wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
                             asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
                     except Exception:

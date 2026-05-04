@@ -401,7 +401,14 @@ export const api = {
   },
 
   async bulkUploadArticles(projectId: string, rows: BulkUploadRow[]) {
-    return apiFetch<{ ok: true; created: number; skipped: number; articles: ArticlePublic[] }>(`/api/projects/${projectId}/articles/bulk-upload`, {
+    return apiFetch<{
+      ok: true;
+      created: number;
+      skipped: number;
+      articles: ArticlePublic[];
+      duplicate_titles?: string[];
+      duplicate_rows_dropped?: number;
+    }>(`/api/projects/${projectId}/articles/bulk-upload`, {
       method: "POST",
       body: JSON.stringify({ rows }),
     });

@@ -10,6 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.core.deps import get_current_user
+from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.wordpress import WordpressCategory, WordpressPostType
 from app.services.wordpress_client import WordpressClient
@@ -26,6 +27,29 @@ router = APIRouter(tags=["wordpress"])
 _WP_REST_TIMEOUT_S = 45.0
 
 
+def _wp_upstream_error_detail(exc: httpx.HTTPStatusError) -> str:
+    """Human-readable reason from WordPress REST error responses."""
+    code = exc.response.status_code
+    suffix = ""
+    try:
+        data = exc.response.json()
+        if isinstance(data, dict):
+            msg = (data.get("message") or "").strip()
+            if msg:
+                suffix = f" {msg}"
+            elif (data.get("code") or "").strip():
+                suffix = f" ({(data.get('code') or '').strip()})"
+    except Exception:
+        pass
+    if code in (401, 403):
+        return (
+            f"WordPress returned HTTP {code} (not authorized for the REST API).{suffix} "
+            "Check the site URL, username, and Application Password in Project Settings (WordPress: Users → Profile → Application Passwords). "
+            "Spaces in the app password are ignored; regenerate the password if unsure."
+        )
+    return (f"WordPress returned HTTP {code}.{suffix}").strip()
+
+
 async def _wp_get_json(wp: WordpressClient, path: str) -> Any:
     """Fetch WP REST JSON; never crash the ASGI worker on timeouts / network errors."""
     try:
@@ -36,10 +60,18 @@ async def _wp_get_json(wp: WordpressClient, path: str) -> Any:
             detail="WordPress REST API timed out (slow or overloaded site). Retry in a moment.",
         ) from None
     except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"WordPress returned HTTP {e.response.status_code}.",
-        ) from None
+        code = e.response.status_code
+        detail = _wp_upstream_error_detail(e)
+        # Do not map WP 401 to HTTP 401 here: our SPA treats any API 401 as JWT expiry and refreshes the session.
+        if code in (401, 403):
+            raise HTTPException(status_code=403, detail=detail) from None
+        if code == 404:
+            raise HTTPException(status_code=404, detail=detail) from None
+        if code == 429:
+            raise HTTPException(status_code=429, detail=detail) from None
+        if code >= 500:
+            raise HTTPException(status_code=502, detail=detail) from None
+        raise HTTPException(status_code=400, detail=detail) from None
     except httpx.RequestError as e:
         raise HTTPException(status_code=503, detail=f"Could not reach WordPress: {e}") from None
 
@@ -60,7 +92,7 @@ def _require_project_access(*, st, user: dict, project_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Project not found")
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    if role != "admin" and (proj.get("owner_user_id") or "").strip() != uid:
+    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
         raise HTTPException(status_code=404, detail="Project not found")
     return proj
 

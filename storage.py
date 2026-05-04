@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from datetime import date, datetime
 from typing import Any
@@ -138,6 +139,34 @@ def _coerce_user_id_str(val: Any) -> str:
     if isinstance(val, str):
         return val.strip()
     return str(val).strip()
+
+
+def _mongo_owner_user_id_filter(owner_user_id: str) -> dict[str, Any]:
+    """
+    Match projects.owner_user_id for the logged-in user.
+
+    Mongo may store owner_user_id as a string, legacy 24-hex ObjectId, or alternate casing
+    for UUID strings — exact equality on a single string misses rows.
+    """
+    oid = (owner_user_id or "").strip()
+    if not oid:
+        return {}
+    from bson import ObjectId
+
+    clauses: list[dict[str, Any]] = [{"owner_user_id": oid}]
+    lo, hi = oid.casefold(), oid.upper()
+    if lo != oid:
+        clauses.append({"owner_user_id": lo})
+    if hi != oid and hi != lo:
+        clauses.append({"owner_user_id": hi})
+    if len(oid) == 24 and ObjectId.is_valid(oid):
+        try:
+            clauses.append({"owner_user_id": ObjectId(oid)})
+        except Exception:
+            pass
+    if len(clauses) == 1:
+        return clauses[0]
+    return {"$or": clauses}
 
 
 def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
@@ -368,7 +397,14 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
         return None
     if _storage_mode != "mongo":
         return None
-    doc = get_db().users.find_one({"id": uid})
+    db = get_db()
+    doc = db.users.find_one({"id": uid})
+    if not doc and uid:
+        # Case-insensitive id match (UUID casing drift between token and DB).
+        try:
+            doc = db.users.find_one({"id": {"$regex": f"^{re.escape(uid)}$", "$options": "i"}})
+        except re.error:
+            doc = None
     if not doc:
         return None
     return {
@@ -742,9 +778,15 @@ def load_projects(owner_user_id: str | None = None) -> list[dict[str, Any]]:
         rows = [_normalize_project_dict(p) for p in _load_json_list("projects.json")]
         if not owner:
             return rows
-        return [p for p in rows if (p.get("owner_user_id") or "").strip() == owner]
+        ocf = owner.casefold()
+        return [
+            p
+            for p in rows
+            if (p.get("owner_user_id") or "").strip() == owner
+            or (p.get("owner_user_id") or "").strip().casefold() == ocf
+        ]
     db = get_db()
-    q = {"owner_user_id": owner} if owner else {}
+    q = _mongo_owner_user_id_filter(owner) if owner else {}
     cur = db.projects.find(q).sort("created_at", 1)
     return [_mongo_doc_to_project(doc) for doc in cur]
 
@@ -896,7 +938,8 @@ def load_articles_listing_for_project(
                 "project_id": 1,
                 "title": 1,
                 "keywords": 1,
-                "status": 1,
+                # Always emit a string so API/UI never miss status when the field was null or odd-typed.
+                "status": {"$ifNull": ["$status", "pending"]},
                 "focus_keyphrase": 1,
                 "meta_title": 1,
                 "meta_description": 1,
@@ -1083,8 +1126,14 @@ def project_ids_for_owner(user_id: str) -> list[str]:
         return []
     if _storage_mode != "mongo":
         projs = [_normalize_project_dict(p) for p in _load_json_list("projects.json")]
-        return [(p.get("id") or "").strip() for p in projs if (p.get("owner_user_id") or "").strip() == uid and (p.get("id") or "").strip()]
-    cur = get_db().projects.find({"owner_user_id": uid}, {"_id": 0, "id": 1})
+        ucf = uid.casefold()
+        return [
+            (p.get("id") or "").strip()
+            for p in projs
+            if ((p.get("owner_user_id") or "").strip() == uid or (p.get("owner_user_id") or "").strip().casefold() == ucf)
+            and (p.get("id") or "").strip()
+        ]
+    cur = get_db().projects.find(_mongo_owner_user_id_filter(uid), {"_id": 0, "id": 1})
     out: list[str] = []
     for d in cur:
         pid = (d.get("id") or "").strip()

@@ -6,6 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.core.deps import get_current_user
+from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.projects import ProjectCreate, ProjectPublic, ProjectUpdate
 
@@ -35,17 +36,21 @@ def _to_public(p: dict) -> ProjectPublic:
 async def list_projects(user: dict = Depends(get_current_user)) -> list[ProjectPublic]:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
-    # Show only projects linked to the logged-in user (even for admin).
-    # Admin can inspect other users' projects via the Manage users details panel.
-    projects = st.load_projects(uid) or []
-    out: list[ProjectPublic] = []
-    for p in projects:
-        if not isinstance(p, dict):
-            continue
-        owner = (p.get("owner_user_id") or "").strip()
-        if owner != uid:
-            continue
-        out.append(_to_public(p))
+    role = (user.get("role") or "").strip().lower()
+    # Admins see every project (workspace / project management). Regular users only their own.
+    if role == "admin":
+        projects = st.load_projects(None) or []
+        out = [_to_public(p) for p in projects if isinstance(p, dict)]
+    else:
+        projects = st.load_projects(uid) or []
+        out = []
+        for p in projects:
+            if not isinstance(p, dict):
+                continue
+            owner = (p.get("owner_user_id") or "").strip()
+            if not user_ids_equal(owner, uid):
+                continue
+            out.append(_to_public(p))
     out.sort(key=lambda x: (x.name.lower(), x.id))
     return out
 
@@ -95,7 +100,7 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user)) -
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    if role != "admin" and (proj.get("owner_user_id") or "").strip() != uid:
+    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
         raise HTTPException(status_code=404, detail="Not found")
     return _to_public(proj)
 
@@ -109,7 +114,7 @@ async def update_project(project_id: str, payload: ProjectUpdate, user: dict = D
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    if role != "admin" and (proj.get("owner_user_id") or "").strip() != uid:
+    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
         raise HTTPException(status_code=404, detail="Not found")
 
     updates: dict = {}
@@ -137,7 +142,7 @@ async def delete_project(project_id: str, user: dict = Depends(get_current_user)
         return Response(status_code=204)
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    if role != "admin" and (proj.get("owner_user_id") or "").strip() != uid:
+    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
         return Response(status_code=204)
     st.delete_project_and_articles(pid)
     return Response(status_code=204)

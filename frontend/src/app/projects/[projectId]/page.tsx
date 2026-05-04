@@ -36,6 +36,38 @@ function toDatetimeLocalValue(d: Date) {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 }
 
+/** Same title (case-insensitive): keep first row in file order (treated as oldest). */
+function dedupeBulkUploadRowsByTitle(rows: BulkUploadRow[]): {
+  rows: BulkUploadRow[];
+  duplicateTitles: string[];
+  droppedCount: number;
+} {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const k = (r.title || "").trim().toLowerCase();
+    if (!k) continue;
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  const seen = new Set<string>();
+  const out: BulkUploadRow[] = [];
+  const firstDisplay = new Map<string, string>();
+  for (const r of rows) {
+    const raw = (r.title || "").trim();
+    const k = raw.toLowerCase();
+    if (!k) continue;
+    if (!firstDisplay.has(k)) firstDisplay.set(k, raw);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(r);
+  }
+  const duplicateTitles = [...firstDisplay.entries()]
+    .filter(([key]) => (counts.get(key) || 0) > 1)
+    .map(([, display]) => display)
+    .sort((a, b) => a.localeCompare(b));
+  const droppedCount = [...counts.values()].reduce((s, c) => s + Math.max(0, c - 1), 0);
+  return { rows: out, duplicateTitles, droppedCount };
+}
+
 export default function ProjectPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -97,6 +129,8 @@ export default function ProjectPage() {
   const [bulkUploadErrors, setBulkUploadErrors] = useState<string[]>([]);
   const [bulkUploadRows, setBulkUploadRows] = useState<BulkUploadRow[]>([]);
   const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkParseDupTitles, setBulkParseDupTitles] = useState<string[]>([]);
+  const [postImportDupTitles, setPostImportDupTitles] = useState<string[] | null>(null);
   const [bulkMode, setBulkMode] = useState<"root" | "change_status" | "schedule">("root");
   const [scheduleMin, setScheduleMin] = useState("");
   const [editJobMin, setEditJobMin] = useState("");
@@ -634,6 +668,7 @@ export default function ProjectPage() {
   async function onBulkFilePicked(file: File | null) {
     setBulkUploadErrors([]);
     setBulkUploadRows([]);
+    setBulkParseDupTitles([]);
     if (!file) return;
     try {
       const XLSX = await import("xlsx");
@@ -711,7 +746,9 @@ export default function ProjectPage() {
         return;
       }
 
-      setBulkUploadRows(outRows);
+      const { rows: deduped, duplicateTitles } = dedupeBulkUploadRowsByTitle(outRows);
+      setBulkUploadRows(deduped);
+      setBulkParseDupTitles(duplicateTitles);
       if (rowErrors.length) setBulkUploadErrors(rowErrors.slice(0, 30));
     } catch (e) {
       setBulkUploadErrors([e instanceof Error ? e.message : "Failed to read the uploaded Excel file."]);
@@ -729,6 +766,9 @@ export default function ProjectPage() {
       setShowBulkUpload(false);
       setBulkUploadRows([]);
       setBulkUploadErrors([]);
+      setBulkParseDupTitles([]);
+      const dups = (res.duplicate_titles || []).filter(Boolean);
+      if (dups.length) setPostImportDupTitles(dups);
       if (!res.created) setError("No articles were created from the uploaded file.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Bulk upload failed");
@@ -1367,6 +1407,7 @@ export default function ProjectPage() {
                       setError(null);
                       setBulkUploadErrors([]);
                       setBulkUploadRows([]);
+                      setBulkParseDupTitles([]);
                       setShowBulkUpload(true);
                     }}
                   >
@@ -1503,6 +1544,15 @@ export default function ProjectPage() {
                             <span>Updated {a.updated_at || a.created_at || "—"}</span>
                             <span> · Posted {a.posted_at || "—"}</span>
                             <span> · Sched {formatInProfileTz(a.wp_scheduled_at)}</span>
+                            {a.wp_link ? (
+                              <span>
+                                {" "}
+                                ·{" "}
+                                <a href={a.wp_link} target="_blank" rel="noreferrer" style={{ color: "var(--link-color, #1677ff)" }}>
+                                  View live
+                                </a>
+                              </span>
+                            ) : null}
                             {a.wp_schedule_error ? <span style={{ color: "#ff4d4f" }}> · Schedule error</span> : null}
                           </div>
 
@@ -1825,12 +1875,24 @@ export default function ProjectPage() {
                   type="button"
                   className={styles.modalBackdrop}
                   aria-label="Close"
-                  onClick={() => (bulkUploading ? null : setShowBulkUpload(false))}
+                  onClick={() => {
+                    if (bulkUploading) return;
+                    setBulkParseDupTitles([]);
+                    setShowBulkUpload(false);
+                  }}
                 />
                 <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Bulk upload articles">
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Bulk Upload</h3>
-                    <button type="button" className={styles.btnSecondary} onClick={() => (bulkUploading ? null : setShowBulkUpload(false))}>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => {
+                        if (bulkUploading) return;
+                        setBulkParseDupTitles([]);
+                        setShowBulkUpload(false);
+                      }}
+                    >
                       Close
                     </button>
                   </div>
@@ -1869,6 +1931,28 @@ export default function ProjectPage() {
                       </div>
                     ) : null}
 
+                    {bulkParseDupTitles.length ? (
+                      <div
+                        style={{
+                          marginTop: 12,
+                          padding: "10px 12px",
+                          borderRadius: 8,
+                          background: "#fff7e6",
+                          border: "1px solid #ffd591",
+                          fontSize: 13,
+                          lineHeight: 1.5,
+                        }}
+                        role="status"
+                      >
+                        <strong>Duplicate article titles</strong> — only the <strong>first</strong> row in your file (oldest) is kept for each title. Extra rows were removed before import.
+                        <ul style={{ margin: "8px 0 0", paddingLeft: 20 }}>
+                          {bulkParseDupTitles.map((t) => (
+                            <li key={t}>{t}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+
                     {bulkUploadRows.length ? (
                       <div style={{ marginTop: 12, fontSize: 12, color: "#666", lineHeight: 1.5 }}>
                         Columns validated and sanitized. Imported articles will be created with <b>Pending</b> status.
@@ -1878,11 +1962,49 @@ export default function ProjectPage() {
                     {error ? <p className={styles.error}>{error}</p> : null}
                   </div>
                   <div className={styles.modalFooter}>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setShowBulkUpload(false)} disabled={bulkUploading}>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => {
+                        setBulkParseDupTitles([]);
+                        setShowBulkUpload(false);
+                      }}
+                      disabled={bulkUploading}
+                    >
                       Cancel
                     </button>
                     <button type="button" className={styles.button} onClick={importBulkRows} disabled={bulkUploading || !bulkUploadRows.length}>
                       {bulkUploading ? "Importing…" : "Import"}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            {postImportDupTitles && postImportDupTitles.length ? (
+              <>
+                <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setPostImportDupTitles(null)} />
+                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Duplicate titles after import">
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Duplicate article titles</h3>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setPostImportDupTitles(null)}>
+                      Close
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <p style={{ marginTop: 0, lineHeight: 1.55 }}>
+                      Your file had more than one row with the same title (case-insensitive). Only the <strong>first</strong> row in the sheet — treated as the older entry — was imported for each duplicate name.
+                    </p>
+                    <p style={{ marginBottom: 6, fontWeight: 600 }}>Titles that had duplicates:</p>
+                    <ul style={{ margin: 0, paddingLeft: 20, lineHeight: 1.6 }}>
+                      {postImportDupTitles.map((t) => (
+                        <li key={t}>{t}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button type="button" className={styles.button} onClick={() => setPostImportDupTitles(null)}>
+                      OK
                     </button>
                   </div>
                 </div>

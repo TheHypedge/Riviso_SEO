@@ -51,6 +51,9 @@ class BulkUploadResponse(BaseModel):
     created: int
     skipped: int = 0
     articles: list[ArticlePublic] = Field(default_factory=list)
+    # Titles that appeared more than once in the upload; only the first row (oldest in file order) was imported.
+    duplicate_titles: list[str] = Field(default_factory=list)
+    duplicate_rows_dropped: int = 0
 
 
 class ArticleDetailResponse(ArticlePublic):

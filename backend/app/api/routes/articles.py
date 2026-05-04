@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 import base64
+import unicodedata
+from collections import Counter
 import binascii
 import html
 from datetime import datetime, timedelta, timezone
@@ -11,8 +13,10 @@ import hashlib
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 import markdown as md
+from pymongo.errors import PyMongoError
 
 from app.core.deps import get_current_user
+from app.core.ids import user_ids_equal
 from app.core.config import settings
 from app.legacy.storage import get_legacy_storage_module
 from app.services.article_generation import generate_article_bundle
@@ -38,11 +42,146 @@ from app.schemas.articles import (
 router = APIRouter(prefix="/projects/{project_id}/articles", tags=["articles"])
 
 
+def _wp_post_present(a: dict) -> bool:
+    link = (a.get("wp_link") or "").strip()
+    if link:
+        return True
+    pid = a.get("wp_post_id")
+    if pid is None or pid == "":
+        return False
+    try:
+        return int(pid) > 0
+    except (TypeError, ValueError):
+        s = str(pid).strip().lower()
+        return s not in ("", "0", "none")
+
+
+def _normalize_wp_rest_status(val: object) -> str:
+    if isinstance(val, str):
+        return val.strip().lower()
+    return str(val or "").strip().lower()
+
+
+def _stored_article_status_normalized(a: dict) -> str:
+    """
+    Normalize Mongo `status` for comparisons. Handles non-str BSON / odd whitespace so UI matches DB.
+    """
+    v = a.get("status")
+    if v is None:
+        return "pending"
+    if isinstance(v, (bytes, bytearray)):
+        try:
+            s = v.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            return "pending"
+    elif isinstance(v, str):
+        s = v.strip()
+    else:
+        s = str(v).strip()
+    if not s:
+        return "pending"
+    try:
+        s = unicodedata.normalize("NFKC", s)
+    except Exception:
+        pass
+    return s.casefold()
+
+
+def _derive_listing_status(a: dict) -> str:
+    """
+    UI status from stored row. Prefer WordPress truth (post id / link / last REST status) over
+    legacy `status` which often stayed 'pending' after successful publishes or imports.
+    """
+    wp_sched = (a.get("wp_scheduled_at") or "").strip()
+    raw = _stored_article_status_normalized(a)
+    wp_last = _normalize_wp_rest_status(a.get("wp_last_wp_status"))
+    has_post = _wp_post_present(a)
+
+    # DB explicitly published → always show published (even if wp_link/wp_post_id missing; data can be inconsistent).
+    if raw == "published" or wp_last == "publish":
+        return "published"
+    if wp_last == "draft" and has_post:
+        return "draft"
+    if wp_sched:
+        # Stale schedule row but post already live as publish.
+        if has_post and wp_last == "publish":
+            return "published"
+        return "scheduled"
+    if has_post and raw == "pending":
+        # WP row exists but app `status` was never upgraded (older Flask paths, partial writes).
+        return "draft" if wp_last == "draft" else "published"
+    return raw
+
+
+def _fetch_posted_job_overlay_map(st, project_id: str) -> dict[str, dict]:
+    """
+    For articles whose Mongo row missed wp_link/wp_post_id after a scheduled post, the scheduled_jobs
+    row may still hold state=posted + link. Map article_id -> best job doc for list/detail overlay.
+    """
+    pid = (project_id or "").strip()
+    if not pid or not hasattr(st, "load_scheduled_jobs"):
+        return {}
+    try:
+        jobs = st.load_scheduled_jobs(project_id=pid) or []
+    except Exception:
+        return {}
+    best: dict[str, dict] = {}
+    for j in jobs:
+        if not isinstance(j, dict):
+            continue
+        if (j.get("state") or "").strip().lower() != "posted":
+            continue
+        aid = (j.get("article_id") or "").strip()
+        if not aid:
+            continue
+        cur = best.get(aid)
+        if cur is None:
+            best[aid] = j
+            continue
+        jw = (j.get("wp_link") or "").strip()
+        cw = (cur.get("wp_link") or "").strip()
+        if jw and not cw:
+            best[aid] = j
+    return best
+
+
+def _merge_posted_job_into_article_row(a: dict, job: dict | None) -> dict:
+    """Non-persistent merge: fill missing WP fields from a posted scheduled job."""
+    if not job or not isinstance(a, dict):
+        return a
+    m = dict(a)
+    if not (m.get("wp_link") or "").strip():
+        wl = (job.get("wp_link") or "").strip()
+        if wl:
+            m["wp_link"] = wl
+    if not _wp_post_present(m):
+        wpid = job.get("wp_post_id")
+        if wpid is not None and str(wpid).strip() not in ("", "None", "0"):
+            if isinstance(wpid, int):
+                if wpid > 0:
+                    m["wp_post_id"] = wpid
+            elif str(wpid).strip().isdigit():
+                m["wp_post_id"] = int(str(wpid).strip())
+    jws = (job.get("wp_status") or "").strip().lower()
+    if jws == "publish":
+        if not _normalize_wp_rest_status(m.get("wp_last_wp_status")):
+            m["wp_last_wp_status"] = "publish"
+        if not (m.get("posted_at") or "").strip():
+            ts = (job.get("updated_at") or job.get("last_attempt_at") or job.get("created_at") or "").strip()
+            if ts:
+                m["posted_at"] = ts
+        if _stored_article_status_normalized(m) != "published":
+            m["status"] = "published"
+    return m
+
+
 def _to_public(a: dict) -> ArticlePublic:
     wp_sched = (a.get("wp_scheduled_at") or "").strip()
-    status_raw = ((a.get("status") or "pending").strip().lower() or "pending")
-    # Back-compat with old UI: if schedule exists and not yet posted, display scheduled.
-    status = "scheduled" if wp_sched else status_raw
+    status = _derive_listing_status(a)
+    posted = (a.get("posted_at") or "").strip() or None
+    # If we treat the row as published but posted_at was never set, surface updated_at so the list is not blank.
+    if status == "published" and not posted:
+        posted = (a.get("updated_at") or "").strip() or (a.get("created_at") or "").strip() or None
     return ArticlePublic(
         id=(a.get("id") or "").strip(),
         project_id=(a.get("project_id") or "").strip(),
@@ -50,7 +189,7 @@ def _to_public(a: dict) -> ArticlePublic:
         status=status,
         created_at=(a.get("created_at") or "").strip() or None,
         updated_at=(a.get("updated_at") or "").strip() or None,
-        posted_at=(a.get("posted_at") or "").strip() or None,
+        posted_at=posted or None,
         keywords=[str(x).strip() for x in (a.get("keywords") or []) if str(x).strip()],
         focus_keyphrase=(a.get("focus_keyphrase") or "").strip() or None,
         wp_scheduled_at=wp_sched or None,
@@ -68,7 +207,7 @@ def _require_project_access(*, st, user: dict, project_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Project not found")
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    if role != "admin" and (proj.get("owner_user_id") or "").strip() != uid:
+    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
         raise HTTPException(status_code=404, detail="Project not found")
     return proj
 
@@ -96,7 +235,12 @@ async def list_articles(project_id: str, user: dict = Depends(get_current_user))
     else:
         all_rows = await run_sync(st.load_articles)
         rows = [a for a in (all_rows or []) if isinstance(a, dict) and (a.get("project_id") or "") == project_id]
-    out = [_to_public(a) for a in rows if isinstance(a, dict)]
+    posted_jobs = await run_sync(_fetch_posted_job_overlay_map, st, project_id)
+    out = [
+        _to_public(_merge_posted_job_into_article_row(a, posted_jobs.get((a.get("id") or "").strip())))
+        for a in rows
+        if isinstance(a, dict)
+    ]
     out.sort(key=lambda x: (x.created_at or ""), reverse=True)
     return out
 
@@ -116,24 +260,30 @@ async def create_article(
     keywords = keywords[:10]
 
     aid = str(uuid.uuid4())
-    await run_sync(
-        st.insert_article,
-        {
-            "id": aid,
-            "project_id": project_id,
-            "title": payload.title.strip()[:500],
-            "keywords": keywords,
-            "status": "pending",
-            "article": "",
-            "focus_keyphrase": (payload.focus_keyphrase or "").strip()[:500],
-            "meta_title": "",
-            "meta_description": "",
-            "generated_at": "",
-            "posted_at": "",
-            "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            "gsc_status": "pending",
-        },
-    )
+    try:
+        await run_sync(
+            st.insert_article,
+            {
+                "id": aid,
+                "project_id": project_id,
+                "title": payload.title.strip()[:500],
+                "keywords": keywords,
+                "status": "pending",
+                "article": "",
+                "focus_keyphrase": (payload.focus_keyphrase or "").strip()[:500],
+                "meta_title": "",
+                "meta_description": "",
+                "generated_at": "",
+                "posted_at": "",
+                "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "gsc_status": "pending",
+            },
+        )
+    except PyMongoError as e:
+        raise HTTPException(
+            status_code=503,
+            detail="Database temporarily unavailable. Please try again.",
+        ) from e
 
     # Return minimal created row.
     return ArticlePublic(
@@ -196,6 +346,37 @@ async def bulk_action(
     raise HTTPException(status_code=400, detail="Unknown action")
 
 
+def _dedupe_bulk_upload_rows(rows: list) -> tuple[list, list[str], int]:
+    """
+    For duplicate titles (case-insensitive), keep only the first row (top of file = oldest).
+
+    Returns (deduped_rows, sorted_duplicate_display_titles, extra_rows_dropped).
+    """
+    norm_rows: list[tuple[str, str, object]] = []
+    for row in rows or []:
+        title = (getattr(row, "title", None) or "").strip()
+        if not title:
+            continue
+        key = title.casefold()
+        norm_rows.append((key, title, row))
+
+    counts = Counter(k for k, _, _ in norm_rows)
+    seen: set[str] = set()
+    deduped: list = []
+    first_display: dict[str, str] = {}
+    for key, display, row in norm_rows:
+        if key not in first_display:
+            first_display[key] = display
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+
+    duplicate_titles = sorted(first_display[k] for k, c in counts.items() if c > 1)
+    dropped = sum(max(0, c - 1) for c in counts.values())
+    return deduped, duplicate_titles, dropped
+
+
 @router.post("/bulk-upload", response_model=BulkUploadResponse, status_code=200)
 async def bulk_upload_articles(
     project_id: str,
@@ -205,11 +386,17 @@ async def bulk_upload_articles(
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
 
+    rows_in = list(payload.rows or [])
+    rows_work, duplicate_titles, duplicate_dropped = _dedupe_bulk_upload_rows(rows_in)
+
     created_rows: list[ArticlePublic] = []
-    skipped = 0
+    skipped = duplicate_dropped
+    for row in rows_in:
+        if not (getattr(row, "title", None) or "").strip():
+            skipped += 1
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-    for row in payload.rows or []:
+    for row in rows_work:
         title = (row.title or "").strip()
         if not title:
             skipped += 1
@@ -261,7 +448,13 @@ async def bulk_upload_articles(
             )
         )
 
-    return BulkUploadResponse(created=len(created_rows), skipped=skipped, articles=created_rows)
+    return BulkUploadResponse(
+        created=len(created_rows),
+        skipped=skipped,
+        articles=created_rows,
+        duplicate_titles=duplicate_titles,
+        duplicate_rows_dropped=duplicate_dropped,
+    )
 
 
 @router.get("/{article_id}", response_model=ArticleDetailResponse)
@@ -273,7 +466,10 @@ async def get_article_detail(
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
-    base = _to_public(a).model_dump()
+    aid = (article_id or "").strip()
+    posted_jobs = await run_sync(_fetch_posted_job_overlay_map, st, project_id)
+    a_view = _merge_posted_job_into_article_row(a, posted_jobs.get(aid))
+    base = _to_public(a_view).model_dump()
     return ArticleDetailResponse(
         **base,
         article=(a.get("article") or ""),
@@ -664,14 +860,17 @@ async def publish_to_live_site(
 
     wp_post_id = created.get("id") if isinstance(created, dict) else None
     wp_link = created.get("link") if isinstance(created, dict) else None
+    created_wp_status = _normalize_wp_rest_status(created.get("status")) if isinstance(created, dict) else ""
+    if not created_wp_status:
+        created_wp_status = (payload["status"] or "").strip().lower()
 
     updates: dict = {
         "wp_post_id": wp_post_id,
         "wp_link": wp_link or "",
         "wp_rest_base": rest_base,
-        "wp_last_wp_status": payload["status"],
-        "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") if payload["status"] == "publish" else (a.get("posted_at") or ""),
-        "status": "published" if payload["status"] == "publish" else (a.get("status") or "draft"),
+        "wp_last_wp_status": created_wp_status or payload["status"],
+        "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") if created_wp_status == "publish" else (a.get("posted_at") or ""),
+        "status": "published" if created_wp_status == "publish" else (a.get("status") or "draft"),
         # Clear schedule marker so the UI shows published, not scheduled (same as scheduler after post).
         "wp_scheduled_at": "",
         "wp_schedule_error": "",
@@ -684,7 +883,7 @@ async def publish_to_live_site(
             st=st,
             proj=proj,
             live_url=str(wp_link or ""),
-            wp_status=payload["status"],
+            wp_status=created_wp_status or payload["status"],
             article_id=article_id,
         )
     except Exception:
@@ -693,7 +892,7 @@ async def publish_to_live_site(
     # Best-effort: ping sitemap so crawlers discover the new URL via sitemap updates.
     # (This is not a guarantee of indexing.)
     try:
-        if payload["status"] == "publish":
+        if created_wp_status == "publish":
             asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
     except Exception:
         pass
@@ -732,8 +931,8 @@ async def publish_to_live_site(
 
     return {
         "ok": True,
-        "status": "published" if payload["status"] == "publish" else "draft",
-        "message": "Published to WordPress successfully." if payload["status"] == "publish" else "Created draft on WordPress successfully.",
+        "status": "published" if created_wp_status == "publish" else "draft",
+        "message": "Published to WordPress successfully." if created_wp_status == "publish" else "Created draft on WordPress successfully.",
         "wp_post_id": wp_post_id,
         "wp_link": wp_link,
     }

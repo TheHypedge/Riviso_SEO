@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.deps import get_current_user
+from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobUpdate
 from app.services.scheduler import prepare_article_for_scheduled_job
@@ -23,7 +24,7 @@ def _require_project_access(*, st, user: dict, project_id: str) -> dict:
         raise HTTPException(status_code=404, detail="Project not found")
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    if role != "admin" and (proj.get("owner_user_id") or "").strip() != uid:
+    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
         raise HTTPException(status_code=404, detail="Project not found")
     return proj
 
