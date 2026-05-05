@@ -1,22 +1,27 @@
 :root {
-  /* Claude warm-canvas design tokens (global). */
-  --aa-primary: #cc785c;
-  --aa-primary-active: #a9583e;
-  --aa-primary-disabled: #e6dfd8;
-  --aa-ink: #141413;
-  --aa-body: #3d3d3a;
-  --aa-body-strong: #252523;
-  --aa-muted: #6c6a64;
-  --aa-muted-soft: #8e8b82;
-  --aa-hairline: #e6dfd8;
-  --aa-hairline-soft: #ebe6df;
-  --aa-canvas: #faf9f5;
-  --aa-surface-soft: #f5f0e8;
-  --aa-surface-card: #efe9de;
-  --aa-surface-cream-strong: #e8e0d2;
-  --aa-surface-dark: #181715;
-  --aa-surface-dark-elevated: #252320;
-  --aa-surface-dark-soft: #1f1e1b;
+  /* Claude-inspired neutrals: matte charcoal + off-white surfaces + orange accent. */
+  --aa-primary: #d97757; /* accent orange */
+  --aa-primary-active: #c86a4c;
+  --aa-primary-disabled: #edeae5;
+
+  --aa-ink: #141413; /* near-black text */
+  --aa-body: #2c2c2a;
+  --aa-body-strong: #1f1f1e;
+  --aa-muted: #64625d;
+  --aa-muted-soft: #7a7872;
+
+  --aa-hairline: #e6e2dc;
+  --aa-hairline-soft: #edeae5;
+
+  --aa-canvas: #fbfbf8; /* off-white */
+  --aa-surface-soft: #f5f4f0;
+  --aa-surface-card: #ffffff;
+  --aa-surface-cream-strong: #efede7;
+
+  /* Matte charcoals (use for sidebar/header accents). */
+  --aa-surface-dark: #1f1f1e;
+  --aa-surface-dark-elevated: #262625;
+  --aa-surface-dark-soft: #232322;
   --aa-on-primary: #ffffff;
   --aa-on-dark: #faf9f5;
   --aa-on-dark-soft: #a09d96;
@@ -49,7 +54,7 @@
 
   /* App base mapping */
   --background: var(--aa-canvas);
-  --foreground: #ffffff;
+  --foreground: var(--aa-surface-card);
 }
 
 html {
@@ -96,7 +101,9 @@ html {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(1200px 800px at 50% 30%, rgba(124, 58, 237, 0.18), rgba(0, 0, 0, 0.72));
+  background:
+    radial-gradient(900px 600px at 50% 10%, rgba(204, 120, 92, 0.18), transparent 60%),
+    rgba(20, 20, 19, 0.12);
   backdrop-filter: blur(10px);
 }
 
@@ -105,11 +112,11 @@ html {
   width: min(520px, calc(100vw - 48px));
   border-radius: 18px;
   padding: 26px 26px 22px;
-  background: linear-gradient(180deg, rgba(20, 20, 28, 0.9), rgba(10, 10, 16, 0.9));
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: color-mix(in oklab, var(--aa-canvas), var(--aa-surface-soft) 55%);
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
   box-shadow:
-    0 30px 90px rgba(0, 0, 0, 0.55),
-    0 0 0 1px rgba(124, 58, 237, 0.20) inset;
+    0 24px 70px rgba(20, 20, 19, 0.18),
+    0 0 0 1px rgba(250, 249, 245, 0.6) inset;
   overflow: hidden;
 }
 
@@ -117,9 +124,10 @@ html {
   position: absolute;
   inset: -60px -60px auto -60px;
   height: 180px;
-  background: radial-gradient(circle at 30% 40%, rgba(99, 102, 241, 0.65), transparent 55%),
-    radial-gradient(circle at 70% 30%, rgba(236, 72, 153, 0.45), transparent 60%),
-    radial-gradient(circle at 50% 80%, rgba(34, 211, 238, 0.35), transparent 60%);
+  background:
+    radial-gradient(circle at 30% 40%, rgba(204, 120, 92, 0.40), transparent 60%),
+    radial-gradient(circle at 70% 30%, rgba(212, 160, 23, 0.22), transparent 62%),
+    radial-gradient(circle at 50% 80%, rgba(93, 184, 114, 0.16), transparent 62%);
   filter: blur(18px);
   opacity: 0.9;
   animation: aaGlowFloat 2.2s ease-in-out infinite;
@@ -148,18 +156,18 @@ html {
   position: absolute;
   inset: 0;
   border-radius: 999px;
-  border: 3px solid rgba(255, 255, 255, 0.12);
-  border-top-color: rgba(124, 58, 237, 0.95);
-  border-right-color: rgba(34, 211, 238, 0.70);
+  border: 3px solid rgba(20, 20, 19, 0.10);
+  border-top-color: color-mix(in oklab, var(--aa-primary), #ffffff 12%);
+  border-right-color: rgba(204, 120, 92, 0.45);
   animation: aaSpin 0.95s linear infinite;
-  box-shadow: 0 0 28px rgba(124, 58, 237, 0.25);
+  box-shadow: 0 0 26px rgba(204, 120, 92, 0.18);
 }
 
 .aaLoadingRing2 {
   inset: 10px;
   border-width: 3px;
-  border-top-color: rgba(236, 72, 153, 0.88);
-  border-right-color: rgba(255, 255, 255, 0.18);
+  border-top-color: rgba(212, 160, 23, 0.65);
+  border-right-color: rgba(20, 20, 19, 0.12);
   animation-duration: 1.25s;
   animation-direction: reverse;
 }
@@ -175,14 +183,14 @@ html {
   font-size: 16px;
   font-weight: 700;
   letter-spacing: 0.2px;
-  color: rgba(255, 255, 255, 0.94);
+  color: var(--aa-body-strong);
 }
 
 .aaLoadingSub {
   margin-top: 6px;
   text-align: center;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.62);
+  color: var(--aa-muted);
 }
 
 .aaLoadingSteps {
@@ -194,15 +202,15 @@ html {
 .aaLoadingStep {
   padding: 8px 10px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.72);
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 30%);
+  background: rgba(250, 249, 245, 0.5);
+  color: var(--aa-body);
   text-align: left;
   line-height: 1.25;
 }
 
 .aaLoadingStepActive {
-  border-color: rgba(124, 58, 237, 0.35);
-  background: rgba(124, 58, 237, 0.16);
-  color: rgba(255, 255, 255, 0.92);
+  border-color: rgba(204, 120, 92, 0.35);
+  background: rgba(204, 120, 92, 0.14);
+  color: var(--aa-body-strong);
 }

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import styles from "../page.module.css";
+import dashStyles from "./dashboard.module.css";
 import { api, clearAuth, getAccessToken, ProjectPublic, AdminUserPublic, PlanPublic, ProfilePublic, ProjectSettings, WordpressVerifyResponse, AdminUserDetails, GscStatus } from "@/lib/api";
 
 type DashSection = "projects" | "users" | "limits" | "profile";
@@ -77,6 +78,19 @@ export default function DashboardPage() {
   const [newPlanMaxProjects, setNewPlanMaxProjects] = useState<number>(2);
 
   const token = useMemo(() => getAccessToken(), []);
+
+  const Icon = {
+    Menu: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path d="M4 6.5h16M4 12h16M4 17.5h16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    ),
+    X: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    ),
+  };
 
   useEffect(() => {
     if (!token) {
@@ -322,7 +336,7 @@ export default function DashboardPage() {
       <main className={`${styles.main} ${styles.mainWide}`}>
         <div className={styles.mobileTopBar}>
           <button type="button" className={styles.mobileMenuBtn} onClick={() => setMobileNavOpen(true)} aria-label="Open menu">
-            Menu
+            <Icon.Menu className={styles.icon20} />
           </button>
           <div className={styles.mobileTopTitle}>Dashboard</div>
         </div>
@@ -332,8 +346,8 @@ export default function DashboardPage() {
           <aside className={`${styles.sidebar} ${mobileNavOpen ? styles.sidebarOpen : ""}`}>
             <div className={styles.sidebarMobileHead}>
               <div className={styles.sidebarMobileTitle}>Menu</div>
-              <button type="button" className={styles.sidebarCloseBtn} onClick={() => setMobileNavOpen(false)} aria-label="Close menu">
-                ✕
+              <button type="button" className={styles.iconButton} onClick={() => setMobileNavOpen(false)} aria-label="Close menu">
+                <Icon.X className={styles.icon20} />
               </button>
             </div>
             <div className={styles.sidebarTitle}>ADMIN</div>
@@ -398,26 +412,14 @@ export default function DashboardPage() {
                 onClick={connectGoogleSearchConsole}
                 disabled={gscConnecting}
               >
-                <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, width: "100%" }}>
+                <span className={dashStyles.navItemRow}>
                   <span>{gscConnecting ? "Connecting Google…" : "Connect Google (Search Console)"}</span>
                   {gsc?.connected ? (
                     <span
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 6,
-                        fontSize: 11,
-                        fontWeight: 900,
-                        padding: "4px 8px",
-                        borderRadius: 999,
-                        background: "rgba(52, 211, 153, 0.16)",
-                        color: "rgba(52, 211, 153, 1)",
-                        border: "1px solid rgba(52, 211, 153, 0.35)",
-                        flexShrink: 0,
-                      }}
+                      className={dashStyles.connectedBadge}
                       title={gsc.email ? `Connected: ${gsc.email}` : "Connected"}
                     >
-                      <span aria-hidden="true" style={{ width: 7, height: 7, borderRadius: 999, background: "rgba(52, 211, 153, 1)" }} />
+                      <span aria-hidden="true" className={dashStyles.connectedDot} />
                       Connected
                     </span>
                   ) : null}
@@ -447,9 +449,9 @@ export default function DashboardPage() {
                 </div>
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
-                  <div className={styles.projectCardTop}>
-                    <h2 style={{ margin: 0 }}>Projects</h2>
-                    <div className={styles.row} style={{ justifyContent: "flex-end" }}>
+                  <div className={dashStyles.cardHeaderRow}>
+                    <div className={dashStyles.cardHeaderTitle}>Projects</div>
+                    <div className={dashStyles.cardHeaderRight}>
                       <button
                         className={styles.button}
                         type="button"
@@ -460,9 +462,7 @@ export default function DashboardPage() {
                       >
                         + Add project
                       </button>
-                      <div className={styles.muted} style={{ alignSelf: "center" }}>
-                        {loading ? "Loading…" : `${projects.length} total`}
-                      </div>
+                      <div className={dashStyles.mutedCount}>{loading ? "Loading…" : `${projects.length} total`}</div>
                     </div>
                   </div>
 
@@ -578,7 +578,7 @@ export default function DashboardPage() {
                     </button>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "180px 1fr 160px", gap: 10 }}>
+                  <div className={dashStyles.planCreateGrid}>
                     <label className={styles.label}>
                       Plan key
                       <input className={styles.input} value={newPlanKey} onChange={(e) => setNewPlanKey(e.target.value)} placeholder="e.g. pro" />
@@ -603,12 +603,12 @@ export default function DashboardPage() {
                 <div className={`${styles.card} ${styles.cardWide}`}>
                   {plansLoading ? <div className={styles.muted}>Loading plans…</div> : null}
                   {!plansLoading ? (
-                    <div style={{ display: "grid", gap: 12 }}>
+                    <div className={dashStyles.stackGrid}>
                       {plans.map((p) => (
                         <div key={p.key} className={styles.subtleCard}>
-                          <div className={styles.sectionHead} style={{ alignItems: "center" }}>
+                          <div className={`${styles.sectionHead} ${dashStyles.planRowHead}`}>
                             <div>
-                              <div style={{ fontWeight: 900 }}>{p.name || p.key}</div>
+                              <div className={dashStyles.planTitle}>{p.name || p.key}</div>
                               <div className={styles.muted}>Key: {p.key}</div>
                             </div>
                             <button className={`${styles.miniBtn} ${styles.miniPrimary}`} type="button" onClick={() => upsertPlan(p.key, p)}>
@@ -616,7 +616,7 @@ export default function DashboardPage() {
                             </button>
                           </div>
 
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, marginTop: 10 }}>
+                          <div className={dashStyles.planEditGrid}>
                             <label className={styles.label}>
                               Plan name
                               <input
@@ -674,7 +674,7 @@ export default function DashboardPage() {
                 <div className={`${styles.card} ${styles.cardWide}`}>
                   {profileLoading ? <div className={styles.muted}>Loading profile…</div> : null}
                   {profile ? (
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div className={dashStyles.profileGrid}>
                       <label className={styles.label}>
                         Full name
                         <input className={styles.input} value={profile.full_name || ""} onChange={(e) => setProfile((p) => (p ? { ...p, full_name: e.target.value } : p))} />
@@ -684,12 +684,11 @@ export default function DashboardPage() {
                         <input className={styles.input} value={profile.phone || ""} onChange={(e) => setProfile((p) => (p ? { ...p, phone: e.target.value } : p))} />
                       </label>
                       <div className={styles.label}>
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+                        <div className={dashStyles.flexBetween}>
                           <span>Timezone</span>
                           <button
                             type="button"
-                            className={styles.btnSecondary}
-                            style={{ padding: "8px 10px", fontSize: 12 }}
+                            className={`${styles.btnSecondary} ${dashStyles.autoDetectBtn}`}
                             onClick={() => setProfile((p) => (p ? { ...p, timezone: normalizeTimeZoneId(browserTimeZone || "UTC") } : p))}
                             title="Auto-detect your current timezone"
                           >
@@ -707,12 +706,12 @@ export default function DashboardPage() {
                             </option>
                           ))}
                         </select>
-                        <div className={styles.muted} style={{ fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>
+                        <div className={`${styles.muted} ${dashStyles.tzHelper}`}>
                           <div>
                             <strong>Current time</strong> in this timezone:{" "}
                             <span>{formatWallClockInTz(profile.timezone, profileClockTick)}</span>
                           </div>
-                          <div style={{ marginTop: 4 }}>
+                          <div className={dashStyles.tzHelperSpacer}>
                             <strong>UTC</strong> (server reference):{" "}
                             <span>{formatWallClockInTz("UTC", profileClockTick)}</span>
                           </div>
@@ -733,7 +732,7 @@ export default function DashboardPage() {
                     </div>
                   ) : null}
 
-                  <div className={styles.row} style={{ justifyContent: "flex-end" }}>
+                  <div className={`${styles.row} ${dashStyles.rowEnd}`}>
                     <button className={styles.button} type="button" onClick={saveProfile} disabled={!profile}>
                       Save profile
                     </button>

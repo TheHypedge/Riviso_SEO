@@ -26,6 +26,22 @@ function kwFromString(raw: string) {
     .slice(0, 10);
 }
 
+const META_TITLE_MAX = 60;
+const META_DESC_MAX = 120;
+
+function clampChars(s: string, max: number) {
+  const t = (s || "").trim();
+  if (!t) return "";
+  return t.length <= max ? t : t.slice(0, max).trim();
+}
+
+function seoMeter(len: number, max: number): { percent: number; state: "warning" | "excellent"; label: string } {
+  if (!len) return { percent: 0, state: "warning", label: "Missing" };
+  if (len > max) return { percent: 100, state: "warning", label: "Too long" };
+  if (len < Math.max(20, Math.floor(max * 0.5))) return { percent: Math.max(6, Math.round((len / max) * 100)), state: "warning", label: "Too short" };
+  return { percent: Math.round((len / max) * 100), state: "excellent", label: "Excellent" };
+}
+
 export default function ArticleEditPage() {
   const params = useParams<{ projectId: string; articleId: string }>();
   const router = useRouter();
@@ -42,6 +58,8 @@ export default function ArticleEditPage() {
   const [imagePrompts, setImagePrompts] = useState<PromptListResponse | null>(
     null,
   );
+  const [promptsLoading, setPromptsLoading] = useState(false);
+  const [wpMetaLoading, setWpMetaLoading] = useState(false);
 
   // Editable fields
   const [title, setTitle] = useState("");
@@ -88,14 +106,14 @@ export default function ArticleEditPage() {
       setNotice(null);
       setLoading(true);
       try {
-        const [a, wp, ip] = await Promise.all([
-          api.getArticle(params.projectId, params.articleId),
-          api.listWritingPrompts(params.projectId),
-          api.listImagePrompts(params.projectId),
-        ]);
+        const a = await api.getArticle(params.projectId, params.articleId);
+        // Prompts are not required to *view/edit* the article; lazy-load them on demand.
+        const wp = null;
+        const ip = null;
+
         setArticle(a);
-        setWritingPrompts(wp);
-        setImagePrompts(ip);
+        if (wp) setWritingPrompts(wp);
+        if (ip) setImagePrompts(ip);
 
         setTitle(a.title || "");
         setKeywords(kwToString(a.keywords));
@@ -105,33 +123,71 @@ export default function ArticleEditPage() {
         setMetaDesc(a.meta_description || "");
         setGeneratedImageUrl(a.image_url || "");
 
-        setWritingPromptId(wp.default_id || "");
-        setImagePromptId(ip.default_id || "");
+        setWritingPromptId("");
+        setImagePromptId("");
 
-        // WordPress options (best effort)
-        try {
-          const [types, cats, ps] = await Promise.all([
-            api.wordpressPostTypes(params.projectId),
-            api.wordpressCategories(params.projectId),
-            api.getProjectSettings(params.projectId),
-          ]);
-          setWpPostTypes(types);
-          setWpCategories(cats);
-          if (types.find((t) => t.rest_base === "posts")) setWpPostType("posts");
-          setWpPostType((ps.default_wp_rest_base || "posts") as string);
-          setWpStatus(((ps.default_wp_status || "draft") as "draft" | "publish"));
-          setWpCategoryIds((ps.default_wp_category_ids || []) as number[]);
-        } catch {
-          // ignore; user may not have WP connected yet
-        }
+        // WordPress metadata is only required when the user publishes. Load on demand.
       } catch (e) {
-        clearAuth();
-        router.replace("/login");
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+          clearAuth();
+          router.replace("/login");
+          return;
+        }
+        setError(e instanceof Error ? e.message : "Failed to load article");
       } finally {
         setLoading(false);
       }
     })();
   }, [params.articleId, params.projectId, router, token]);
+
+  async function ensurePromptsLoaded() {
+    if (promptsLoading) return;
+    if (writingPrompts && imagePrompts) return;
+    setPromptsLoading(true);
+    try {
+      const [wpRes, ipRes] = await Promise.allSettled([
+        api.listWritingPrompts(params.projectId),
+        api.listImagePrompts(params.projectId),
+      ]);
+      const wp = wpRes.status === "fulfilled" ? wpRes.value : null;
+      const ip = ipRes.status === "fulfilled" ? ipRes.value : null;
+      if (wp) {
+        setWritingPrompts(wp);
+        if (!writingPromptId) setWritingPromptId(wp.default_id || "");
+      }
+      if (ip) {
+        setImagePrompts(ip);
+        if (!imagePromptId) setImagePromptId(ip.default_id || "");
+      }
+    } catch {
+      // ignore
+    } finally {
+      setPromptsLoading(false);
+    }
+  }
+
+  async function ensureWpMetaLoaded() {
+    if (wpMetaLoading) return;
+    if (wpPostTypes.length || wpCategories.length) return;
+    setWpMetaLoading(true);
+    try {
+      const [types, cats, ps] = await Promise.all([
+        api.wordpressPostTypes(params.projectId, { timeoutMs: 8000 }),
+        api.wordpressCategories(params.projectId, { timeoutMs: 8000 }),
+        api.getProjectSettingsWithOpts(params.projectId, { timeoutMs: 8000 }),
+      ]);
+      setWpPostTypes(types);
+      setWpCategories(cats);
+      if (types.find((t) => t.rest_base === "posts")) setWpPostType("posts");
+      setWpPostType((ps.default_wp_rest_base || "posts") as string);
+      setWpStatus(((ps.default_wp_status || "draft") as "draft" | "publish"));
+      setWpCategoryIds((ps.default_wp_category_ids || []) as number[]);
+    } catch {
+      // ignore
+    } finally {
+      setWpMetaLoading(false);
+    }
+  }
 
   async function save() {
     setError(null);
@@ -157,6 +213,7 @@ export default function ArticleEditPage() {
   }
 
   async function generate() {
+    await ensurePromptsLoaded();
     const alreadyGenerated =
       !!(body || "").trim() || !!(metaTitle || "").trim() || !!(metaDesc || "").trim() || !!generatedImageUrl;
     if (alreadyGenerated) {
@@ -204,8 +261,8 @@ export default function ArticleEditPage() {
         generate_image: generateImage,
       });
       if (res.generated?.article) setBody(res.generated.article);
-      if (res.generated?.meta_title !== undefined) setMetaTitle(res.generated.meta_title || "");
-      if (res.generated?.meta_description !== undefined) setMetaDesc(res.generated.meta_description || "");
+      if (res.generated?.meta_title !== undefined) setMetaTitle(clampChars(res.generated.meta_title || "", META_TITLE_MAX));
+      if (res.generated?.meta_description !== undefined) setMetaDesc(clampChars(res.generated.meta_description || "", META_DESC_MAX));
       if (res.generated?.image_url) setGeneratedImageUrl(res.generated.image_url);
       const refreshed = await api.getArticle(params.projectId, params.articleId);
       setArticle(refreshed);
@@ -259,29 +316,30 @@ export default function ArticleEditPage() {
   return (
     <div className={`${styles.page} ${styles.pageTop}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
-        <div className={styles.intro}>
-          <h1>Article</h1>
-          <p>
-            <Link href={`/projects/${params.projectId}`}>← Back to project</Link>
-          </p>
-        </div>
-
-        <div className={styles.row}>
-          <span className={styles.pill}>Status: {article?.status || "…"}</span>
-          {article?.wp_scheduled_at ? (
-            <span className={styles.pill}>Scheduled: {article.wp_scheduled_at}</span>
-          ) : null}
-          {article?.posted_at ? (
-            <span className={styles.pill}>Posted: {article.posted_at}</span>
-          ) : null}
-        </div>
-
-        {error ? <div className={`${styles.card} ${styles.cardWide}`}><p className={styles.error}>{error}</p></div> : null}
-        {notice ? (
-          <div className={`${styles.card} ${styles.cardWide}`}>
-            <p style={{ color: "#666", lineHeight: 1.5 }}>{notice}</p>
+        <section className={styles.contentCol}>
+          <div className={styles.intro} style={{ paddingTop: 0 }}>
+            <h1>Article</h1>
+            <p>
+              <Link href={`/projects/${params.projectId}`}>← Back to project</Link>
+            </p>
           </div>
-        ) : null}
+
+          <div className={styles.row}>
+            <span className={styles.pill}>Status: {article?.status || "…"}</span>
+            {article?.wp_scheduled_at ? <span className={styles.pill}>Scheduled: {article.wp_scheduled_at}</span> : null}
+            {article?.posted_at ? <span className={styles.pill}>Posted: {article.posted_at}</span> : null}
+          </div>
+
+          {error ? (
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <p className={styles.error}>{error}</p>
+            </div>
+          ) : null}
+          {notice ? (
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <p style={{ color: "#666", lineHeight: 1.5 }}>{notice}</p>
+            </div>
+          ) : null}
 
         {showRegenConfirm ? (
           <div className={styles.modalBackdrop}>
@@ -316,196 +374,149 @@ export default function ArticleEditPage() {
           </div>
         ) : null}
 
-        <div className={styles.editorGrid}>
-          <div className={`${styles.card} ${styles.cardWide}`}>
-            <h2>Generate</h2>
-            {loading ? <p>Loading…</p> : null}
-            <label className={styles.label}>
-              Writing prompt
-              <select
-                className={styles.input}
-                value={writingPromptId}
-                onChange={(e) => setWritingPromptId(e.target.value)}
-                disabled={isPublished}
-              >
-                <option value="">Project default</option>
-                {(writingPrompts?.items || []).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {writingPrompts?.default_id ? (
-              <div className={styles.muted} style={{ fontSize: 12 }}>
-                Default writing prompt:{" "}
-                <strong>{writingPrompts.items.find((x) => x.id === writingPrompts.default_id)?.name || writingPrompts.default_id}</strong>
-                {writingPromptId && writingPromptId !== writingPrompts.default_id ? (
-                  <>
-                    {" · "}
-                    <button
-                      type="button"
-                      className={styles.btnSecondary}
-                      style={{ padding: "6px 10px", fontSize: 12 }}
-                      disabled={isPublished}
-                      onClick={async () => {
-                        try {
-                          setError(null);
-                          await api.setDefaultWritingPrompt(params.projectId, writingPromptId);
-                          const wp = await api.listWritingPrompts(params.projectId);
-                          setWritingPrompts(wp);
-                          setNotice("Default writing prompt updated.");
-                        } catch (e) {
-                          setError(e instanceof Error ? e.message : "Failed to set default writing prompt");
-                        }
-                      }}
-                    >
-                      Set selected as default
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-            <label className={styles.label}>
-              Image prompt
-              <select
-                className={styles.input}
-                value={imagePromptId}
-                onChange={(e) => setImagePromptId(e.target.value)}
-                disabled={isPublished}
-              >
-                <option value="">Project default</option>
-                {(imagePrompts?.items || []).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {imagePrompts?.default_id ? (
-              <div className={styles.muted} style={{ fontSize: 12 }}>
-                Default image prompt:{" "}
-                <strong>{imagePrompts.items.find((x) => x.id === imagePrompts.default_id)?.name || imagePrompts.default_id}</strong>
-                {imagePromptId && imagePromptId !== imagePrompts.default_id ? (
-                  <>
-                    {" · "}
-                    <button
-                      type="button"
-                      className={styles.btnSecondary}
-                      style={{ padding: "6px 10px", fontSize: 12 }}
-                      disabled={isPublished}
-                      onClick={async () => {
-                        try {
-                          setError(null);
-                          await api.setDefaultImagePrompt(params.projectId, imagePromptId);
-                          const ip = await api.listImagePrompts(params.projectId);
-                          setImagePrompts(ip);
-                          setNotice("Default image prompt updated.");
-                        } catch (e) {
-                          setError(e instanceof Error ? e.message : "Failed to set default image prompt");
-                        }
-                      }}
-                    >
-                      Set selected as default
-                    </button>
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-            <label className={styles.label}>
-              Focus keyphrase (Yoast)
-              <input
-                className={styles.input}
-                value={focus}
-                onChange={(e) => setFocus(e.target.value)}
-                placeholder="Optional"
-                disabled={isPublished}
-              />
-            </label>
-            <label className={styles.label}>
-              Generate image
-              <select
-                className={styles.input}
-                value={generateImage ? "yes" : "no"}
-                onChange={(e) => setGenerateImage(e.target.value === "yes")}
-                disabled={isPublished}
-              >
-                <option value="yes">Yes</option>
-                <option value="no">No</option>
-              </select>
-            </label>
+          <div className={styles.editorGrid}>
+          <div className={styles.editorCol}>
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <h2>Prompts</h2>
+              {!isPublished && !writingPrompts && !imagePrompts ? (
+                <div className={styles.row}>
+                  <button className={styles.btnSecondary} type="button" onClick={ensurePromptsLoaded} disabled={promptsLoading}>
+                    {promptsLoading ? "Loading prompts…" : "Load prompts"}
+                  </button>
+                  <div className={styles.muted} style={{ fontSize: 12 }}>
+                    Loaded on demand to keep this page fast.
+                  </div>
+                </div>
+              ) : null}
 
-            <div className={styles.row}>
-              <button className={styles.button} type="button" onClick={generate} disabled={isPublished}>
-                Generate
-              </button>
-              <button className={styles.button} type="button" onClick={save} disabled={isPublished}>
-                Save
-              </button>
+              <label className={styles.label}>
+                Writing prompt
+                <select className={styles.input} value={writingPromptId} onChange={(e) => setWritingPromptId(e.target.value)} disabled={isPublished}>
+                  <option value="">Project default</option>
+                  {(writingPrompts?.items || []).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className={styles.label}>
+                Image prompt
+                <select className={styles.input} value={imagePromptId} onChange={(e) => setImagePromptId(e.target.value)} disabled={isPublished}>
+                  <option value="">Project default</option>
+                  {(imagePrompts?.items || []).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className={styles.label}>
+                Focus keyphrase (Yoast)
+                <input className={styles.input} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Optional" disabled={isPublished} />
+              </label>
+
+              <label className={styles.label}>
+                Generate image
+                <select className={styles.input} value={generateImage ? "yes" : "no"} onChange={(e) => setGenerateImage(e.target.value === "yes")} disabled={isPublished}>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </label>
+
+              <div className={styles.row}>
+                <button className={styles.button} type="button" onClick={generate} disabled={isPublished}>
+                  Generate
+                </button>
+                <button className={styles.button} type="button" onClick={save} disabled={isPublished}>
+                  Save
+                </button>
+              </div>
             </div>
 
-            <h2 style={{ marginTop: 6 }}>Fields</h2>
-            <label className={styles.label}>
-              Title
-              <input
-                className={styles.input}
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                disabled={isPublished}
-              />
-            </label>
-            <label className={styles.label}>
-              Targeting keywords (comma-separated)
-              <input
-                className={styles.input}
-                value={keywords}
-                onChange={(e) => setKeywords(e.target.value)}
-                disabled={isPublished}
-              />
-            </label>
-            <label className={styles.label}>
-              Meta title
-              <input
-                className={styles.input}
-                value={metaTitle}
-                onChange={(e) => setMetaTitle(e.target.value)}
-                disabled={isPublished}
-              />
-            </label>
-            <label className={styles.label}>
-              Meta description
-              <input
-                className={styles.input}
-                value={metaDesc}
-                onChange={(e) => setMetaDesc(e.target.value)}
-                disabled={isPublished}
-              />
-            </label>
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <h2>SEO</h2>
+              <label className={styles.label}>
+                Title
+                <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} disabled={isPublished} />
+              </label>
+              <label className={styles.label}>
+                Meta title
+                <input
+                  className={styles.input}
+                  value={metaTitle}
+                  onChange={(e) => setMetaTitle(clampChars(e.target.value, META_TITLE_MAX))}
+                  disabled={isPublished}
+                />
+              </label>
+              <div className={styles.seoMeterRow} aria-label="Meta title character meter">
+                <div className={styles.seoMeterMeta}>
+                  <span className={styles.muted}>
+                    {metaTitle.length}/{META_TITLE_MAX}
+                  </span>
+                  <span className={seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? styles.seoOk : styles.seoWarn}>
+                    {seoMeter(metaTitle.length, META_TITLE_MAX).label}
+                  </span>
+                </div>
+                <div className={styles.seoMeterTrack}>
+                  <div
+                    className={seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? styles.seoMeterFillOk : styles.seoMeterFillWarn}
+                    style={{ width: `${seoMeter(metaTitle.length, META_TITLE_MAX).percent}%` }}
+                  />
+                </div>
+              </div>
+              <label className={styles.label}>
+                Meta description
+                <input
+                  className={styles.input}
+                  value={metaDesc}
+                  onChange={(e) => setMetaDesc(clampChars(e.target.value, META_DESC_MAX))}
+                  disabled={isPublished}
+                />
+              </label>
+              <div className={styles.seoMeterRow} aria-label="Meta description character meter">
+                <div className={styles.seoMeterMeta}>
+                  <span className={styles.muted}>
+                    {metaDesc.length}/{META_DESC_MAX}
+                  </span>
+                  <span className={seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? styles.seoOk : styles.seoWarn}>
+                    {seoMeter(metaDesc.length, META_DESC_MAX).label}
+                  </span>
+                </div>
+                <div className={styles.seoMeterTrack}>
+                  <div
+                    className={seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? styles.seoMeterFillOk : styles.seoMeterFillWarn}
+                    style={{ width: `${seoMeter(metaDesc.length, META_DESC_MAX).percent}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+
           </div>
 
-          <div className={`${styles.card} ${styles.cardWide}`}>
-            <h2>Result</h2>
-            <div style={{ display: "grid", gap: 10, marginBottom: 10 }}>
-              <div
-                style={{
-                  border: "1px solid var(--button-secondary-border)",
-                  borderRadius: 14,
-                  overflow: "hidden",
-                  background: "color-mix(in oklab, var(--foreground), var(--background) 10%)",
-                  minHeight: 180,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                }}
-              >
+          <div className={styles.editorCol}>
+            <div className={`${styles.card} ${styles.cardWide} ${styles.articleEditorCard}`}>
+              <h2>Article content</h2>
+              <textarea
+                className={`${styles.textarea} ${styles.articleTextareaFull}`}
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                placeholder="Article markdown/body…"
+                disabled={isPublished}
+              />
+            </div>
+          </div>
+
+          <div className={styles.editorCol}>
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <h2>Featured image</h2>
+              <div className={styles.articleImageFrame}>
                 {generateImage ? (
                   generatedImageUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={generatedImageUrl}
-                      alt="Generated preview"
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                    />
+                    <img src={generatedImageUrl} alt="Generated preview" className={styles.articleImage} />
                   ) : (
                     <div style={{ color: "#666", fontSize: 13, padding: 12, textAlign: "center" }}>
                       Image will be generated using the selected (or default) image prompt.
@@ -514,102 +525,114 @@ export default function ArticleEditPage() {
                   )
                 ) : uploadedImagePreview ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={uploadedImagePreview}
-                    alt="Uploaded preview"
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  />
+                  <img src={uploadedImagePreview} alt="Uploaded preview" className={styles.articleImage} />
                 ) : (
-                  <div style={{ color: "#666", fontSize: 13, padding: 12, textAlign: "center" }}>
-                    No image selected. Upload an image to include when publishing.
-                  </div>
+                  <div style={{ color: "#666", fontSize: 13, padding: 12, textAlign: "center" }}>No image selected.</div>
                 )}
               </div>
 
               {!generateImage ? (
-                <label className={styles.label}>
+                <label className={styles.label} style={{ marginTop: 10 }}>
                   Upload image (used on publish)
-                  <input
-                    className={styles.input}
-                    type="file"
-                    accept="image/*"
-                    disabled={isPublished}
-                    onChange={(e) => setUploadedImageFile(e.target.files?.[0] || null)}
-                  />
+                  <input className={styles.input} type="file" accept="image/*" disabled={isPublished} onChange={(e) => setUploadedImageFile(e.target.files?.[0] || null)} />
                 </label>
               ) : null}
             </div>
-            <textarea
-              className={styles.textarea}
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="Article markdown/body…"
-              disabled={isPublished}
-            />
-          </div>
-        </div>
 
-        <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-            <div>
-              <div style={{ fontWeight: 900 }}>Publish to live site</div>
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <h2>Tags</h2>
+              <label className={styles.label}>
+                Targeting keywords (comma-separated)
+                <input className={styles.input} value={keywords} onChange={(e) => setKeywords(e.target.value)} disabled={isPublished} />
+              </label>
               <div className={styles.muted} style={{ fontSize: 12 }}>
-                Enabled after content is ready. If you selected “Generate image: No”, upload an image first.
+                Tip: keep this focused (5–10 keywords max).
               </div>
             </div>
-            <button className={styles.button} type="button" onClick={publishToLiveSite} disabled={!canPublish}>
-              Publish To Live Site
-            </button>
-          </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
-            <label className={styles.label}>
-              WordPress post type
-              <select className={styles.input} value={wpPostType} onChange={(e) => setWpPostType(e.target.value)} disabled={isPublished}>
-                <option value="posts">Posts</option>
-                {wpPostTypes
-                  .filter((t) => t.rest_base && t.rest_base !== "posts")
-                  .map((t) => (
-                    <option key={t.rest_base} value={t.rest_base}>
-                      {t.name || t.rest_base}
-                    </option>
-                  ))}
-              </select>
-            </label>
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <h2 style={{ margin: 0 }}>WordPress</h2>
+                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 4 }}>
+                    Post to WordPress when content is ready.
+                  </div>
+                </div>
+                <button className={styles.button} type="button" onClick={publishToLiveSite} disabled={!canPublish}>
+                  Publish
+                </button>
+              </div>
 
-            <label className={styles.label}>
-              Publish as
-              <select className={styles.input} value={wpStatus} onChange={(e) => setWpStatus(e.target.value as "draft" | "publish")} disabled={isPublished}>
-                <option value="draft">Draft</option>
-                <option value="publish">Publish</option>
-              </select>
-            </label>
-          </div>
+              {!isPublished && !wpPostTypes.length && !wpCategories.length ? (
+                <div className={styles.row} style={{ paddingTop: 10 }}>
+                  <button className={styles.btnSecondary} type="button" onClick={ensureWpMetaLoaded} disabled={wpMetaLoading}>
+                    {wpMetaLoading ? "Loading…" : "Load WordPress settings"}
+                  </button>
+                  <div className={styles.muted} style={{ fontSize: 12 }}>
+                    Optional. Defaults will be used if not loaded.
+                  </div>
+                </div>
+              ) : null}
 
-          <label className={styles.label} style={{ marginTop: 10 }}>
-            WordPress categories
-            <select
-              className={styles.input}
-              multiple
-              value={wpCategoryIds.map(String)}
-              onChange={(e) => {
-                const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
-                setWpCategoryIds(ids);
-              }}
-              style={{ minHeight: 120 }}
-              disabled={isPublished}
-            >
-              {wpCategories.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-            <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-              Hold Cmd/Ctrl to select multiple categories.
+              {wpPostTypes.length || wpCategories.length ? (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
+                    <label className={styles.label}>
+                      Post type
+                      <select className={styles.input} value={wpPostType} onChange={(e) => setWpPostType(e.target.value)} disabled={isPublished}>
+                        <option value="posts">Posts</option>
+                        {wpPostTypes
+                          .filter((t) => t.rest_base && t.rest_base !== "posts")
+                          .map((t) => (
+                            <option key={t.rest_base} value={t.rest_base}>
+                              {t.name || t.rest_base}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+
+                    <label className={styles.label}>
+                      Status
+                      <select className={styles.input} value={wpStatus} onChange={(e) => setWpStatus(e.target.value as "draft" | "publish")} disabled={isPublished}>
+                        <option value="draft">Draft</option>
+                        <option value="publish">Publish</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <label className={styles.label} style={{ marginTop: 10 }}>
+                    Categories
+                    <select
+                      className={styles.input}
+                      multiple
+                      value={wpCategoryIds.map(String)}
+                      onChange={(e) => {
+                        const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
+                        setWpCategoryIds(ids);
+                      }}
+                      style={{ minHeight: 120 }}
+                      disabled={isPublished}
+                    >
+                      {wpCategories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                      Hold Cmd/Ctrl to select multiple categories.
+                    </div>
+                  </label>
+                </>
+              ) : (
+                <div className={styles.muted} style={{ fontSize: 12, marginTop: 12 }}>
+                  Publishing will use defaults unless you load WordPress settings.
+                </div>
+              )}
             </div>
-          </label>
-        </div>
+          </div>
+          </div>
+        </section>
       </main>
     </div>
   );

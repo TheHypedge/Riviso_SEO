@@ -270,6 +270,31 @@ export const DEFAULT_API_TIMEOUT_MS = 120_000;
 export const LONG_API_TIMEOUT_MS = 600_000;
 /** Token refresh must stay snappy so hanging refresh does not block the UI forever. */
 const AUTH_REFRESH_TIMEOUT_MS = 45_000;
+/** Non-critical metadata (prompts/WP types/categories) should not block UX for long. */
+const META_API_TIMEOUT_MS = 15_000;
+
+type CacheEntry<T> = { at: number; value: T } | { at: number; inflight: Promise<T> };
+function cacheGet<T>(m: Map<string, CacheEntry<T>>, key: string, ttlMs: number): T | Promise<T> | null {
+  const e = m.get(key);
+  if (!e) return null;
+  if (Date.now() - e.at > ttlMs) {
+    m.delete(key);
+    return null;
+  }
+  return "inflight" in e ? e.inflight : e.value;
+}
+function cacheSetInflight<T>(m: Map<string, CacheEntry<T>>, key: string, p: Promise<T>) {
+  m.set(key, { at: Date.now(), inflight: p });
+}
+function cacheSetValue<T>(m: Map<string, CacheEntry<T>>, key: string, v: T) {
+  m.set(key, { at: Date.now(), value: v });
+}
+
+const _cacheWritingPrompts = new Map<string, CacheEntry<PromptListResponse>>();
+const _cacheImagePrompts = new Map<string, CacheEntry<PromptListResponse>>();
+const _cacheWpTypes = new Map<string, CacheEntry<WordpressPostType[]>>();
+const _cacheWpCats = new Map<string, CacheEntry<WordpressCategory[]>>();
+const _cacheProjectSettings = new Map<string, CacheEntry<ProjectSettings>>();
 
 function createTimeoutSignal(ms: number): AbortSignal {
   const AT = AbortSignal as unknown as { timeout?: (n: number) => AbortSignal };
@@ -487,8 +512,27 @@ export const api = {
       body: JSON.stringify({ name, website_url: website_url || null }),
     });
   },
+  async deleteProject(projectId: string) {
+    await apiFetch<unknown>(`/api/projects/${projectId}`, { method: "DELETE" });
+    return { ok: true as const };
+  },
   async getProjectSettings(projectId: string) {
-    return apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`);
+    const key = projectId;
+    const cached = cacheGet(_cacheProjectSettings, key, 30_000);
+    if (cached) return await cached;
+    const p = apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, undefined, { timeoutMs: META_API_TIMEOUT_MS });
+    cacheSetInflight(_cacheProjectSettings, key, p);
+    try {
+      const v = await p;
+      cacheSetValue(_cacheProjectSettings, key, v);
+      return v;
+    } catch (e) {
+      _cacheProjectSettings.delete(key);
+      throw e;
+    }
+  },
+  async getProjectSettingsWithOpts(projectId: string, opts?: ApiFetchOptions) {
+    return apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, undefined, opts);
   },
   async updateProjectSettings(
     projectId: string,
@@ -514,11 +558,43 @@ export const api = {
       { timeoutMs: LONG_API_TIMEOUT_MS },
     );
   },
-  async wordpressPostTypes(projectId: string) {
-    return apiFetch<WordpressPostType[]>(`/api/projects/${projectId}/wordpress/post-types`);
+  async wordpressPostTypes(projectId: string, opts?: ApiFetchOptions) {
+    const key = projectId;
+    const cached = cacheGet(_cacheWpTypes, key, 60_000);
+    if (cached && !opts) return await cached;
+    const p = apiFetch<WordpressPostType[]>(
+      `/api/projects/${projectId}/wordpress/post-types`,
+      undefined,
+      opts ?? { timeoutMs: META_API_TIMEOUT_MS },
+    );
+    if (!opts) cacheSetInflight(_cacheWpTypes, key, p);
+    try {
+      const v = await p;
+      if (!opts) cacheSetValue(_cacheWpTypes, key, v);
+      return v;
+    } catch (e) {
+      if (!opts) _cacheWpTypes.delete(key);
+      throw e;
+    }
   },
-  async wordpressCategories(projectId: string) {
-    return apiFetch<WordpressCategory[]>(`/api/projects/${projectId}/wordpress/categories`);
+  async wordpressCategories(projectId: string, opts?: ApiFetchOptions) {
+    const key = projectId;
+    const cached = cacheGet(_cacheWpCats, key, 60_000);
+    if (cached && !opts) return await cached;
+    const p = apiFetch<WordpressCategory[]>(
+      `/api/projects/${projectId}/wordpress/categories`,
+      undefined,
+      opts ?? { timeoutMs: META_API_TIMEOUT_MS },
+    );
+    if (!opts) cacheSetInflight(_cacheWpCats, key, p);
+    try {
+      const v = await p;
+      if (!opts) cacheSetValue(_cacheWpCats, key, v);
+      return v;
+    } catch (e) {
+      if (!opts) _cacheWpCats.delete(key);
+      throw e;
+    }
   },
   async listScheduledJobs(projectId: string) {
     return apiFetch<ScheduledJobPublic[]>(`/api/projects/${projectId}/scheduled-jobs`);
@@ -606,8 +682,20 @@ export const api = {
     });
   },
 
-  async listWritingPrompts(projectId: string) {
-    return apiFetch<PromptListResponse>(`/api/projects/${projectId}/prompts`);
+  async listWritingPrompts(projectId: string, opts?: ApiFetchOptions) {
+    const key = projectId;
+    const cached = cacheGet(_cacheWritingPrompts, key, 30_000);
+    if (cached && !opts) return await cached;
+    const p = apiFetch<PromptListResponse>(`/api/projects/${projectId}/prompts`, undefined, opts ?? { timeoutMs: META_API_TIMEOUT_MS });
+    if (!opts) cacheSetInflight(_cacheWritingPrompts, key, p);
+    try {
+      const v = await p;
+      if (!opts) cacheSetValue(_cacheWritingPrompts, key, v);
+      return v;
+    } catch (e) {
+      if (!opts) _cacheWritingPrompts.delete(key);
+      throw e;
+    }
   },
 
   async setDefaultWritingPrompt(projectId: string, id: string) {
@@ -636,8 +724,20 @@ export const api = {
     return { ok: true as const };
   },
 
-  async listImagePrompts(projectId: string) {
-    return apiFetch<PromptListResponse>(`/api/projects/${projectId}/image-prompts`);
+  async listImagePrompts(projectId: string, opts?: ApiFetchOptions) {
+    const key = projectId;
+    const cached = cacheGet(_cacheImagePrompts, key, 30_000);
+    if (cached && !opts) return await cached;
+    const p = apiFetch<PromptListResponse>(`/api/projects/${projectId}/image-prompts`, undefined, opts ?? { timeoutMs: META_API_TIMEOUT_MS });
+    if (!opts) cacheSetInflight(_cacheImagePrompts, key, p);
+    try {
+      const v = await p;
+      if (!opts) cacheSetValue(_cacheImagePrompts, key, v);
+      return v;
+    } catch (e) {
+      if (!opts) _cacheImagePrompts.delete(key);
+      throw e;
+    }
   },
 
   async setDefaultImagePrompt(projectId: string, id: string) {

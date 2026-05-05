@@ -94,6 +94,8 @@ export default function ProjectPage() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsVerify, setSettingsVerify] = useState<import("@/lib/api").WordpressVerifyResponse | null>(null);
   const [settingsVerifying, setSettingsVerifying] = useState(false);
+  const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
+  const [deletingProject, setDeletingProject] = useState(false);
 
   const [sName, setSName] = useState("");
   const [sUrl, setSUrl] = useState("");
@@ -203,6 +205,7 @@ export default function ProjectPage() {
   const [dateOrder, setDateOrder] = useState<"desc" | "asc">("desc");
   const [page, setPage] = useState(1);
   const [profileTz, setProfileTz] = useState<string>("");
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
 
   // Bulk selection
   const [selected, setSelected] = useState<Record<string, boolean>>({});
@@ -253,26 +256,6 @@ export default function ProjectPage() {
           post_type: (ps.default_wp_rest_base || "posts") as string,
           wp_status: ((ps.default_wp_status || "draft") as "draft" | "publish"),
         });
-        try {
-          const [types, cats] = await Promise.all([api.wordpressPostTypes(projectId), api.wordpressCategories(projectId)]);
-          setWpTypesForSchedule(types);
-          setWpCatsForSchedule(cats);
-        } catch {
-          setWpTypesForSchedule([]);
-          setWpCatsForSchedule([]);
-        }
-
-        // Prompts for scheduling (defaults pre-selected)
-        try {
-          const [wp, ip] = await Promise.all([api.listWritingPrompts(projectId), api.listImagePrompts(projectId)]);
-          setScheduleWritingPrompts(wp);
-          setScheduleImagePrompts(ip);
-          setScheduleWritingPromptId(wp.default_id || "");
-          setScheduleImagePromptId(ip.default_id || "");
-        } catch {
-          setScheduleWritingPrompts(null);
-          setScheduleImagePrompts(null);
-        }
       } catch {
         clearAuth();
         router.replace("/login");
@@ -281,6 +264,26 @@ export default function ProjectPage() {
       }
     })();
   }, [projectId, router, token]);
+
+  async function ensureScheduleMetaLoaded() {
+    if (wpTypesForSchedule.length || wpCatsForSchedule.length || scheduleWritingPrompts || scheduleImagePrompts) return;
+    try {
+      const [types, cats, wp, ip] = await Promise.all([
+        api.wordpressPostTypes(projectId, { timeoutMs: 8000 }),
+        api.wordpressCategories(projectId, { timeoutMs: 8000 }),
+        api.listWritingPrompts(projectId),
+        api.listImagePrompts(projectId),
+      ]);
+      setWpTypesForSchedule(types);
+      setWpCatsForSchedule(cats);
+      setScheduleWritingPrompts(wp);
+      setScheduleImagePrompts(ip);
+      setScheduleWritingPromptId(wp.default_id || "");
+      setScheduleImagePromptId(ip.default_id || "");
+    } catch {
+      // ignore
+    }
+  }
 
   function formatInProfileTz(utcLike: string | null | undefined) {
     const v = (utcLike || "").trim();
@@ -518,6 +521,20 @@ export default function ProjectPage() {
       setSettingsVerify({ ok: false, status: "error", message: e instanceof Error ? e.message : "Verify failed" });
     } finally {
       setSettingsVerifying(false);
+    }
+  }
+
+  async function deleteProjectNow() {
+    setError(null);
+    setDeletingProject(true);
+    try {
+      await api.deleteProject(projectId);
+      router.push("/dashboard");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to delete project");
+    } finally {
+      setDeletingProject(false);
+      setConfirmDeleteProject(false);
     }
   }
 
@@ -947,6 +964,7 @@ export default function ProjectPage() {
   async function scheduleOne(articleId: string) {
     setError(null);
     try {
+      await ensureScheduleMetaLoaded();
       const when = scheduleWhen.trim();
       if (!when) throw new Error("Please choose a schedule time");
 
@@ -1033,6 +1051,7 @@ export default function ProjectPage() {
 
   function bulkSchedule() {
     if (!selectedIds.length) return;
+    void ensureScheduleMetaLoaded();
     const min = new Date(Date.now() + 5 * 60 * 1000);
     const minStr = toDatetimeLocalFromDateInProfileTz(min);
     setBulkScheduleMin(minStr);
@@ -1274,6 +1293,11 @@ export default function ProjectPage() {
         <path d="M4 6.5h16M4 12h16M4 17.5h16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
       </svg>
     ),
+    Back: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path d="M14.5 6.5L9 12l5.5 5.5M10 12h10" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
     X: (props: { className?: string }) => (
       <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
         <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -1284,14 +1308,13 @@ export default function ProjectPage() {
   return (
     <div className={`${styles.page} ${styles.pageTop}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
-        <div className={styles.intro}>
-          <h1>Project</h1>
-          <p>
-            <Link href="/dashboard">← Back to dashboard</Link>
-          </p>
-        </div>
-
         <div className={styles.mobileTabsBar} role="navigation" aria-label="Project sections">
+         
+          <Link className={styles.mobileBackButton} href="/dashboard" aria-label="Back to dashboard">
+            <Icon.Back className={styles.icon20} />
+            Back
+          </Link>
+
           <button
             type="button"
             className={styles.mobileMenuButton}
@@ -1301,63 +1324,8 @@ export default function ProjectPage() {
             onClick={() => setMobileNavOpen(true)}
           >
             <Icon.Menu className={styles.icon20} />
-            <span className={styles.mobileMenuLabel}>Menu</span>
           </button>
-          <div className={styles.mobileTabsTitle} aria-live="polite">
-            {tabLabel[tab]}
-          </div>
-        </div>
-
-        <div className={styles.tabs} role="tablist" aria-label="Project sections">
-          <button
-            type="button"
-            className={`${styles.tab} ${tab === "articles" ? styles.tabActive : ""}`}
-            onClick={() => goTab("articles")}
-          >
-            Articles
-          </button>
-          <button
-            type="button"
-            className={`${styles.tab} ${tab === "scheduled_articles" ? styles.tabActive : ""}`}
-            onClick={() => goTab("scheduled_articles")}
-          >
-            Scheduled Articles
-          </button>
-          <button
-            type="button"
-            className={`${styles.tab} ${tab === "configuration" ? styles.tabActive : ""}`}
-            onClick={() => goTab("configuration")}
-          >
-            Configuration
-          </button>
-          <button
-            type="button"
-            className={`${styles.tab} ${tab === "prompts" ? styles.tabActive : ""}`}
-            onClick={() => goTab("prompts")}
-          >
-            Prompts
-          </button>
-          <button
-            type="button"
-            className={`${styles.tab} ${tab === "context_links" ? styles.tabActive : ""}`}
-            onClick={() => goTab("context_links")}
-          >
-            Context links
-          </button>
-          <button
-            type="button"
-            className={`${styles.tab} ${tab === "tools" ? styles.tabActive : ""}`}
-            onClick={() => goTab("tools")}
-          >
-            Tools
-          </button>
-          <button
-            type="button"
-            className={`${styles.tab} ${tab === "project_settings" ? styles.tabActive : ""}`}
-            onClick={() => goTab("project_settings")}
-          >
-            Project Settings
-          </button>
+         
         </div>
 
         {mobileNavOpen ? (
@@ -1390,6 +1358,206 @@ export default function ProjectPage() {
             </div>
           </>
         ) : null}
+
+        <div className={styles.shell}>
+          <aside className={styles.sidebar} aria-label="Project navigation">
+            <div className={styles.sidebarTitle}>PROJECT</div>
+            <div className={styles.navGroup}>
+              <Link className={styles.navItem} href="/dashboard">
+                ← Back to dashboard
+              </Link>
+            </div>
+
+            <div className={styles.sidebarTitle}>SECTIONS</div>
+            <div className={styles.navGroup} role="navigation" aria-label="Project sections">
+              {(Object.keys(tabLabel) as TabKey[]).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`${styles.navItem} ${tab === k ? styles.navItemActive : ""}`}
+                  onClick={() => goTab(k)}
+                >
+                  {tabLabel[k]}
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className={styles.contentCol}>
+            <div className={styles.intro} style={{ paddingTop: 0 }}>
+              {tab === "articles" ? (
+                <>
+                  {/* Desktop header: Articles + live search + add */}
+                  <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
+                    <h1 style={{ margin: 0 }}>Articles</h1>
+                    <div className={styles.headSearchWrap} aria-label="Live search">
+                      <input
+                        className={`${styles.input} ${styles.headSearchInput}`}
+                        placeholder="Search by title, keyphrase, keyword…"
+                        value={q}
+                        onChange={(e) => setQ(e.target.value)}
+                      />
+                    </div>
+                    <button
+                      className={styles.button}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setAddArticleDupModal(null);
+                        setShowAddArticle(true);
+                      }}
+                    >
+                      + Add article
+                    </button>
+                  </div>
+
+                  {/* Mobile header: Articles + add */}
+                  <div className={`${styles.mobileHeadRow} ${styles.showOnMobile}`}>
+                    <h1 className={styles.mobileTitle} style={{ margin: 0 }}>
+                      Articles
+                    </h1>
+                    <button
+                      className={styles.button}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setAddArticleDupModal(null);
+                        setShowAddArticle(true);
+                      }}
+                    >
+                      + Add article
+                    </button>
+                  </div>
+
+                  {/* Mobile: live search full width under header */}
+                  <div className={styles.showOnMobile} style={{ width: "100%" }}>
+                    <input
+                      className={`${styles.input} ${styles.headSearchInputMobile}`}
+                      placeholder="Search by title, keyphrase, keyword…"
+                      value={q}
+                      onChange={(e) => setQ(e.target.value)}
+                    />
+                  </div>
+                
+
+                  <div className={styles.mobileActionChips}>
+                    <button
+                      className={styles.chipButton}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setBulkUploadErrors([]);
+                        setBulkUploadRows([]);
+                        setBulkParseDupTitles([]);
+                        setShowBulkUpload(true);
+                      }}
+                    >
+                      Bulk Upload
+                    </button>
+                    <button
+                      className={styles.chipButton}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setExportFrom(dateFrom || "");
+                        setExportTo(dateTo || "");
+                        setExportStatus(status || "");
+                        setShowExportArticles(true);
+                      }}
+                    >
+                      Export
+                    </button>
+                    <button className={`${styles.chipButton} ${styles.chipButtonPrimary}`} type="button" onClick={() => setShowMobileFilters(true)}>
+                      Filter
+                    </button>
+                    {selectedIds.length ? (
+                      <button
+                        className={`${styles.chipButton} ${styles.buttonHighlight}`}
+                        type="button"
+                        onClick={() => {
+                          setBulkMode("root");
+                          setShowBulkPopup(true);
+                        }}
+                      >
+                        Actions…
+                      </button>
+                    ) : null}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h1>{tabLabel[tab]}</h1>
+                 
+                </>
+              )}
+            </div>
+
+            {showMobileFilters ? (
+              <>
+                <button type="button" className={styles.modalBackdrop} aria-label="Close filters" onClick={() => setShowMobileFilters(false)} />
+                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Filters">
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Filter</h3>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setShowMobileFilters(false)}>
+                      Close
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <label className={styles.label}>
+                      Status
+                      <select className={styles.input} value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
+                        <option value="">All</option>
+                        <option value="pending">Pending</option>
+                        <option value="draft">Draft</option>
+                        <option value="scheduled">Scheduled</option>
+                        <option value="published">Published</option>
+                      </select>
+                    </label>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                      <label className={styles.label}>
+                        From
+                        <input className={styles.input} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                      </label>
+                      <label className={styles.label}>
+                        To
+                        <input className={styles.input} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                      </label>
+                    </div>
+                    <label className={styles.label} style={{ marginTop: 10 }}>
+                      Date order
+                      <select
+                        className={styles.input}
+                        value={dateOrder}
+                        onChange={(e) => {
+                          setDateOrder(e.target.value as "asc" | "desc");
+                          setPage(1);
+                        }}
+                      >
+                        <option value="desc">Latest → Oldest</option>
+                        <option value="asc">Oldest → Latest</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => {
+                        setStatus("");
+                        setDateFrom("");
+                        setDateTo("");
+                        setDateOrder("desc");
+                      }}
+                    >
+                      Clear
+                    </button>
+                    <button type="button" className={styles.button} onClick={() => setShowMobileFilters(false)}>
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
 
         {tab === "articles" ? (
           <>
@@ -1551,10 +1719,67 @@ export default function ProjectPage() {
               </>
             ) : null}
 
+              <div className={`${styles.card} ${styles.cardWide} ${styles.hideOnMobile}`}>
+                <div className={styles.filtersGrid}>
+                  <label className={styles.label}>
+                    Status
+                    <select className={styles.input} value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
+                      <option value="">All</option>
+                      <option value="pending">Pending</option>
+                      <option value="draft">Draft</option>
+                      <option value="scheduled">Scheduled</option>
+                      <option value="published">Published</option>
+                    </select>
+                  </label>
+                  <label className={styles.label}>
+                    From
+                    <input className={styles.input} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                  </label>
+                  <label className={styles.label}>
+                    To
+                    <input className={styles.input} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                  </label>
+                  <label className={styles.label}>
+                    Date order
+                    <select
+                      className={styles.input}
+                      value={dateOrder}
+                      onChange={(e) => {
+                        setDateOrder(e.target.value as "asc" | "desc");
+                        setPage(1);
+                      }}
+                    >
+                      <option value="desc">Latest → Oldest</option>
+                      <option value="asc">Oldest → Latest</option>
+                    </select>
+                  </label>
+                  <button className={styles.button} type="button" onClick={() => { setQ(""); setStatus(""); setDateFrom(""); setDateTo(""); }}>
+                    Clear filters
+                  </button>
+                </div>
+
+                <div className={styles.filtersActionsRow}>
+                  <div className={styles.filtersActionsRight}>
+                    <span className={styles.smallMuted}>{selectedIds.length} selected</span>
+                    <button
+                      className={`${styles.button} ${selectedIds.length ? styles.buttonHighlight : ""}`}
+                      type="button"
+                      onClick={() => {
+                        if (!selectedIds.length) return;
+                        setBulkMode("root");
+                        setShowBulkPopup(true);
+                      }}
+                      disabled={selectedIds.length === 0}
+                    >
+                      Actions…
+                    </button>
+                  </div>
+                </div>
+              </div>
+
               <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={styles.sectionHeadRow}>
-                <h2 style={{ margin: 0 }}>Articles</h2>
-                <div className={styles.sectionHeadActions}>
+              <div className={`${styles.sectionHeadRow} ${styles.hideOnMobile}`}>
+                <div className={`${styles.sectionHeadActions} ${styles.pushRight}`}>
                   <button
                     className={styles.btnSecondary}
                     type="button"
@@ -1591,71 +1816,6 @@ export default function ProjectPage() {
                     }}
                   >
                     + Add article
-                  </button>
-                </div>
-              </div>
-
-              <div className={styles.filtersGrid}>
-                <label className={styles.label}>
-                  Search
-                  <input
-                    className={styles.input}
-                    placeholder="Search by title, keyphrase, keyword…"
-                    value={q}
-                    onChange={(e) => setQ(e.target.value)}
-                  />
-                </label>
-                <label className={styles.label}>
-                  Status
-                  <select className={styles.input} value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-                    <option value="">All</option>
-                    <option value="pending">Pending</option>
-                    <option value="draft">Draft</option>
-                    <option value="scheduled">Scheduled</option>
-                    <option value="published">Published</option>
-                  </select>
-                </label>
-                <label className={styles.label}>
-                  From
-                  <input className={styles.input} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-                </label>
-                <label className={styles.label}>
-                  To
-                  <input className={styles.input} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-                </label>
-                <label className={styles.label}>
-                  Date order
-                  <select
-                    className={styles.input}
-                    value={dateOrder}
-                    onChange={(e) => {
-                      setDateOrder(e.target.value as "asc" | "desc");
-                      setPage(1);
-                    }}
-                  >
-                    <option value="desc">Latest → Oldest</option>
-                    <option value="asc">Oldest → Latest</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className={styles.filtersActionsRow}>
-                <button className={styles.button} type="button" onClick={() => { setQ(""); setStatus(""); setDateFrom(""); setDateTo(""); }}>
-                  Clear filters
-                </button>
-                <div className={styles.filtersActionsRight}>
-                  <span className={styles.smallMuted}>{selectedIds.length} selected</span>
-                  <button
-                    className={`${styles.button} ${selectedIds.length ? styles.buttonHighlight : ""}`}
-                    type="button"
-                    onClick={() => {
-                      if (!selectedIds.length) return;
-                      setBulkMode("root");
-                      setShowBulkPopup(true);
-                    }}
-                    disabled={selectedIds.length === 0}
-                  >
-                    Actions…
                   </button>
                 </div>
               </div>
@@ -3195,10 +3355,61 @@ export default function ProjectPage() {
                     {settingsVerify.message}
                   </div>
                 ) : null}
+
+                <div style={{ marginTop: 16, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Danger zone</div>
+                  <div className={styles.muted} style={{ fontSize: 13, lineHeight: 1.5 }}>
+                    Deleting a project removes it permanently, including all settings, website connections, prompts, scheduled jobs, and articles.
+                  </div>
+                  <div className={styles.row} style={{ justifyContent: "flex-end", marginTop: 10 }}>
+                    <button type="button" className={`${styles.miniBtn} ${styles.miniDanger}`} onClick={() => setConfirmDeleteProject(true)} disabled={deletingProject}>
+                      Delete project
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : null}
           </>
         ) : null}
+
+        {confirmDeleteProject ? (
+          <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Confirm delete project">
+            <div className={styles.modalPanel}>
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>Delete project?</h3>
+                <button type="button" className={styles.btnSecondary} onClick={() => (deletingProject ? null : setConfirmDeleteProject(false))}>
+                  Close
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                <div style={{ lineHeight: 1.55 }}>
+                  This will permanently delete the project and all its data:
+                  <ul style={{ margin: "10px 0 0", paddingLeft: 18 }}>
+                    <li>Project settings and website connections</li>
+                    <li>Writing prompts and image prompts</li>
+                    <li>Context links</li>
+                    <li>Scheduled jobs</li>
+                    <li>All articles in this project</li>
+                  </ul>
+                  <div style={{ marginTop: 10 }}>
+                    <strong>This action cannot be undone.</strong>
+                  </div>
+                </div>
+                {error ? <p className={styles.error} style={{ marginTop: 10 }}>{error}</p> : null}
+              </div>
+              <div className={styles.modalFooter}>
+                <button type="button" className={styles.btnSecondary} onClick={() => setConfirmDeleteProject(false)} disabled={deletingProject}>
+                  Cancel
+                </button>
+                <button type="button" className={`${styles.miniBtn} ${styles.miniDanger}`} onClick={() => void deleteProjectNow()} disabled={deletingProject}>
+                  {deletingProject ? "Deleting…" : "Yes, delete project"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+          </section>
+        </div>
       </main>
     </div>
   );

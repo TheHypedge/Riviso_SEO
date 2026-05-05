@@ -1,0 +1,132 @@
+.connectedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(93, 184, 114, 0.14);
+  color: color-mix(in oklab, var(--aa-success), var(--aa-ink) 10%);
+  border: 1px solid rgba(93, 184, 114, 0.35);
+  flex-shrink: 0;
+}
+
+.connectedDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--aa-success);
+}
+
+.cardHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.cardHeaderTitle {
+  font-weight: 900;
+  color: var(--aa-ink);
+}
+
+.cardHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mutedCount {
+  font-size: 12px;
+  color: var(--aa-muted);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.navItemRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+
+.planCreateGrid {
+  display: grid;
+  grid-template-columns: 180px 1fr 160px;
+  gap: 10px;
+}
+
+.stackGrid {
+  display: grid;
+  gap: 12px;
+}
+
+.planRowHead {
+  align-items: center;
+}
+
+.planTitle {
+  font-weight: 900;
+  color: var(--aa-ink);
+}
+
+.planEditGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.profileGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.flexBetween {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.autoDetectBtn {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.tzHelper {
+  font-size: 12px;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+.tzHelperSpacer {
+  margin-top: 4px;
+}
+
+.rowEnd {
+  justify-content: flex-end;
+}
+
+@media (max-width: 900px) {
+  .planEditGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .planCreateGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .profileGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
