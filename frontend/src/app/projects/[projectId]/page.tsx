@@ -1268,6 +1268,19 @@ export default function ProjectPage() {
     setMobileNavOpen(false);
   }
 
+  const Icon = {
+    Menu: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path d="M4 6.5h16M4 12h16M4 17.5h16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    ),
+    X: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    ),
+  };
+
   return (
     <div className={`${styles.page} ${styles.pageTop}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
@@ -1287,7 +1300,8 @@ export default function ProjectPage() {
             aria-expanded={mobileNavOpen ? "true" : "false"}
             onClick={() => setMobileNavOpen(true)}
           >
-            Menu
+            <Icon.Menu className={styles.icon20} />
+            <span className={styles.mobileMenuLabel}>Menu</span>
           </button>
           <div className={styles.mobileTabsTitle} aria-live="polite">
             {tabLabel[tab]}
@@ -1357,8 +1371,8 @@ export default function ProjectPage() {
             <div className={styles.offcanvasPanel} role="dialog" aria-modal="true" aria-label="Project menu">
               <div className={styles.offcanvasHead}>
                 <div className={styles.offcanvasTitle}>Menu</div>
-                <button type="button" className={styles.btnSecondary} onClick={() => setMobileNavOpen(false)}>
-                  Close
+                <button type="button" className={styles.iconButton} aria-label="Close menu" onClick={() => setMobileNavOpen(false)}>
+                  <Icon.X className={styles.icon20} />
                 </button>
               </div>
               <div className={styles.offcanvasBody}>
@@ -1388,8 +1402,8 @@ export default function ProjectPage() {
                       <strong>Bulk actions</strong>
                       <span>{selectedIds.length} selected</span>
                     </div>
-                    <button className={styles.bulkPopupClose} type="button" onClick={() => setShowBulkPopup(false)}>
-                      Close
+                    <button className={styles.iconButton} type="button" aria-label="Close bulk actions" onClick={() => setShowBulkPopup(false)}>
+                      <Icon.X className={styles.icon20} />
                     </button>
                   </div>
                   {bulkMode === "root" ? (
@@ -1537,10 +1551,10 @@ export default function ProjectPage() {
               </>
             ) : null}
 
-            <div className={`${styles.card} ${styles.cardWide}`}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <div className={`${styles.card} ${styles.cardWide}`}>
+              <div className={styles.sectionHeadRow}>
                 <h2 style={{ margin: 0 }}>Articles</h2>
-                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <div className={styles.sectionHeadActions}>
                   <button
                     className={styles.btnSecondary}
                     type="button"
@@ -1581,7 +1595,7 @@ export default function ProjectPage() {
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 180px 140px 140px 180px", gap: 10 }}>
+              <div className={styles.filtersGrid}>
                 <label className={styles.label}>
                   Search
                   <input
@@ -1625,12 +1639,12 @@ export default function ProjectPage() {
                 </label>
               </div>
 
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+              <div className={styles.filtersActionsRow}>
                 <button className={styles.button} type="button" onClick={() => { setQ(""); setStatus(""); setDateFrom(""); setDateTo(""); }}>
                   Clear filters
                 </button>
-                <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "center" }}>
-                  <span style={{ color: "#666", fontSize: 13 }}>{selectedIds.length} selected</span>
+                <div className={styles.filtersActionsRight}>
+                  <span className={styles.smallMuted}>{selectedIds.length} selected</span>
                   <button
                     className={`${styles.button} ${selectedIds.length ? styles.buttonHighlight : ""}`}
                     type="button"
@@ -1647,10 +1661,10 @@ export default function ProjectPage() {
               </div>
 
               <div className={`${styles.card} ${styles.cardWide}`} style={{ padding: 0 }}>
-                <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--button-secondary-border)" }}>
+                <div className={styles.articlesListHead}>
                   <input type="checkbox" checked={allOnPageSelected} onChange={toggleAllOnPage} />
-                  <div style={{ fontSize: 12, color: "#666" }}>Title</div>
-                  <div style={{ marginLeft: "auto", fontSize: 12, color: "#666" }}>Status</div>
+                  <div className={styles.smallMuted}>Title</div>
+                  <div className={`${styles.smallMuted} ${styles.pushRight}`}>Status</div>
                 </div>
 
                 {loading ? <div style={{ padding: 14 }}>Loading…</div> : null}
