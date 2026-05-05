@@ -186,6 +186,16 @@ export function getApiBaseUrl(): string {
   if (typeof window === "undefined") return "http://127.0.0.1:8000";
 
   const host = (window.location.hostname || "").trim() || "127.0.0.1";
+  const isLocal = host === "localhost" || host === "127.0.0.1";
+
+  // Production browsers must not default to :8000 — that host/port is rarely reachable on the public
+  // internet (firewall) and causes net::ERR_CONNECTION_TIMED_OUT. Assume API is reverse-proxied at the
+  // same origin (e.g. https://riviso.com/api/... on port 443). Override with NEXT_PUBLIC_API_BASE_URL
+  // when the API lives on another host (e.g. https://api.example.com).
+  if (!isLocal) {
+    return `${window.location.protocol}//${window.location.host}`;
+  }
+
   const targetHost = host === "localhost" ? "127.0.0.1" : host;
   const proto = window.location.protocol === "https:" ? "https:" : "http:";
   return `${proto}//${targetHost}:8000`;

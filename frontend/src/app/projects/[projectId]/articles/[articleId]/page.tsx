@@ -56,7 +56,10 @@ export default function ArticleEditPage() {
   const [imagePromptId, setImagePromptId] = useState<string>("");
   const [generateImage, setGenerateImage] = useState(true);
   const [uploadedImageFile, setUploadedImageFile] = useState<File | null>(null);
-  const [uploadedImagePreview, setUploadedImagePreview] = useState<string>("");
+  const uploadedImagePreview = useMemo(() => {
+    if (!uploadedImageFile) return "";
+    return URL.createObjectURL(uploadedImageFile);
+  }, [uploadedImageFile]);
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string>("");
   const isPublished = (article?.status || "").toLowerCase() === "published";
 
@@ -71,14 +74,9 @@ export default function ArticleEditPage() {
   const [showRegenConfirm, setShowRegenConfirm] = useState(false);
 
   useEffect(() => {
-    if (!uploadedImageFile) {
-      setUploadedImagePreview("");
-      return;
-    }
-    const url = URL.createObjectURL(uploadedImageFile);
-    setUploadedImagePreview(url);
-    return () => URL.revokeObjectURL(url);
-  }, [uploadedImageFile]);
+    if (!uploadedImagePreview) return;
+    return () => URL.revokeObjectURL(uploadedImagePreview);
+  }, [uploadedImagePreview]);
 
   useEffect(() => {
     if (!token) {

@@ -88,6 +88,7 @@ export default function ProjectPage() {
 
   const token = useMemo(() => getAccessToken(), []);
   const [tab, setTab] = useState<TabKey>("articles");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settings, setSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -378,8 +379,10 @@ export default function ProjectPage() {
 
   function dedupeScheduledJobs(rows: import("@/lib/api").ScheduledJobPublic[]) {
     const bestByArticle = new Map<string, import("@/lib/api").ScheduledJobPublic>();
+    type JobWithTimestamps = import("@/lib/api").ScheduledJobPublic & { updated_at?: string; created_at?: string };
     const score = (j: import("@/lib/api").ScheduledJobPublic) => {
-      const s = (j as any).updated_at || (j as any).created_at || j.run_at || "";
+      const jj = j as JobWithTimestamps;
+      const s = jj.updated_at || jj.created_at || j.run_at || "";
       return typeof s === "string" ? s : "";
     };
     for (const j of rows || []) {
@@ -1248,6 +1251,23 @@ export default function ProjectPage() {
     return v || "unknown";
   }
 
+  const tabLabel: Record<TabKey, string> = {
+    articles: "Articles",
+    scheduled_articles: "Scheduled Articles",
+    configuration: "Configuration",
+    prompts: "Prompts",
+    context_links: "Context links",
+    tools: "Tools",
+    project_settings: "Project Settings",
+  };
+
+  function goTab(next: TabKey) {
+    if (next === tab) return;
+    if ((next === "tools" || next === "project_settings") && !confirmLoseChanges()) return;
+    setTab(next);
+    setMobileNavOpen(false);
+  }
+
   return (
     <div className={`${styles.page} ${styles.pageTop}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
@@ -1258,63 +1278,104 @@ export default function ProjectPage() {
           </p>
         </div>
 
+        <div className={styles.mobileTabsBar} role="navigation" aria-label="Project sections">
+          <button
+            type="button"
+            className={styles.mobileMenuButton}
+            aria-label="Open menu"
+            aria-haspopup="dialog"
+            aria-expanded={mobileNavOpen ? "true" : "false"}
+            onClick={() => setMobileNavOpen(true)}
+          >
+            Menu
+          </button>
+          <div className={styles.mobileTabsTitle} aria-live="polite">
+            {tabLabel[tab]}
+          </div>
+        </div>
+
         <div className={styles.tabs} role="tablist" aria-label="Project sections">
           <button
             type="button"
             className={`${styles.tab} ${tab === "articles" ? styles.tabActive : ""}`}
-            onClick={() => setTab("articles")}
+            onClick={() => goTab("articles")}
           >
             Articles
           </button>
           <button
             type="button"
             className={`${styles.tab} ${tab === "scheduled_articles" ? styles.tabActive : ""}`}
-            onClick={() => setTab("scheduled_articles")}
+            onClick={() => goTab("scheduled_articles")}
           >
             Scheduled Articles
           </button>
           <button
             type="button"
             className={`${styles.tab} ${tab === "configuration" ? styles.tabActive : ""}`}
-            onClick={() => setTab("configuration")}
+            onClick={() => goTab("configuration")}
           >
             Configuration
           </button>
           <button
             type="button"
             className={`${styles.tab} ${tab === "prompts" ? styles.tabActive : ""}`}
-            onClick={() => setTab("prompts")}
+            onClick={() => goTab("prompts")}
           >
             Prompts
           </button>
           <button
             type="button"
             className={`${styles.tab} ${tab === "context_links" ? styles.tabActive : ""}`}
-            onClick={() => setTab("context_links")}
+            onClick={() => goTab("context_links")}
           >
             Context links
           </button>
           <button
             type="button"
             className={`${styles.tab} ${tab === "tools" ? styles.tabActive : ""}`}
-            onClick={() => {
-              if (!confirmLoseChanges()) return;
-              setTab("tools");
-            }}
+            onClick={() => goTab("tools")}
           >
             Tools
           </button>
           <button
             type="button"
             className={`${styles.tab} ${tab === "project_settings" ? styles.tabActive : ""}`}
-            onClick={() => {
-              if (!confirmLoseChanges()) return;
-              setTab("project_settings");
-            }}
+            onClick={() => goTab("project_settings")}
           >
             Project Settings
           </button>
         </div>
+
+        {mobileNavOpen ? (
+          <>
+            <button
+              type="button"
+              className={styles.offcanvasBackdrop}
+              aria-label="Close menu"
+              onClick={() => setMobileNavOpen(false)}
+            />
+            <div className={styles.offcanvasPanel} role="dialog" aria-modal="true" aria-label="Project menu">
+              <div className={styles.offcanvasHead}>
+                <div className={styles.offcanvasTitle}>Menu</div>
+                <button type="button" className={styles.btnSecondary} onClick={() => setMobileNavOpen(false)}>
+                  Close
+                </button>
+              </div>
+              <div className={styles.offcanvasBody}>
+                {(Object.keys(tabLabel) as TabKey[]).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    className={`${styles.offcanvasItem} ${tab === k ? styles.offcanvasItemActive : ""}`}
+                    onClick={() => goTab(k)}
+                  >
+                    {tabLabel[k]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        ) : null}
 
         {tab === "articles" ? (
           <>

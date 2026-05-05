@@ -115,7 +115,9 @@ export default function DashboardPage() {
       const flag = (hashParams.get("gsc") || "").trim();
       const msg = (hashParams.get("msg") || "").trim();
       if (flag === "connected") {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setShowGscCongrats(true);
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setGscMsg(null);
         // refresh status
         api.gscStatus().then(setGsc).catch(() => {});

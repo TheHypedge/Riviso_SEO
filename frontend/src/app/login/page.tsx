@@ -39,7 +39,9 @@ function useTypewriter(lines: string[]) {
 
     // deleting
     if (text.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setPhase("typing");
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLineIdx((i) => (i + 1) % Math.max(1, lines.length));
       return;
     }

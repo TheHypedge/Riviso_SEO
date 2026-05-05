@@ -1,20 +1,21 @@
 .page {
-  --background: #fafafa;
-  --foreground: #fff;
+  /* Map legacy variables to the Claude token system. */
+  --background: var(--aa-canvas);
+  --foreground: var(--aa-canvas);
 
-  --text-primary: #000;
-  --text-secondary: #666;
+  --text-primary: var(--aa-ink);
+  --text-secondary: var(--aa-muted);
 
-  --button-primary-hover: #383838;
-  --button-secondary-hover: #f2f2f2;
-  --button-secondary-border: #ebebeb;
+  --button-primary-hover: var(--aa-primary-active);
+  --button-secondary-hover: var(--aa-surface-soft);
+  --button-secondary-border: var(--aa-hairline);
 
   display: flex;
   flex: 1;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  font-family: var(--font-geist-sans);
+  font-family: var(--aa-font-ui);
   background-color: var(--background);
 }
 
@@ -314,7 +315,7 @@
   flex-direction: column;
   align-items: flex-start;
   justify-content: space-between;
-  background-color: var(--foreground);
+  background-color: transparent;
   padding: 120px 60px;
 }
 
@@ -326,9 +327,10 @@
 }
 
 .card {
-  border: 1px solid var(--button-secondary-border);
-  border-radius: 16px;
-  padding: 16px;
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card);
+  border-radius: var(--aa-r-xl);
+  padding: var(--aa-s-md);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -344,13 +346,13 @@
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  border-bottom: 1px solid var(--button-secondary-border);
+  border-bottom: 1px solid var(--aa-hairline);
   padding-bottom: 12px;
   width: 100%;
 }
 
 .tab {
-  border: 1px solid var(--button-secondary-border);
+  border: 1px solid var(--aa-hairline);
   background: transparent;
   color: var(--text-primary);
   border-radius: 999px;
@@ -360,9 +362,108 @@
 }
 
 .tabActive {
+  background: var(--aa-surface-card);
+  color: var(--aa-ink);
+  border-color: transparent;
+}
+
+.mobileTabsBar {
+  display: none;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid var(--button-secondary-border);
+  padding-bottom: 12px;
+  margin-bottom: 2px;
+}
+
+.mobileMenuButton {
+  border: 1px solid var(--button-secondary-border);
+  background: var(--foreground);
+  color: var(--text-primary);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.mobileTabsTitle {
+  min-width: 0;
+  flex: 1;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.offcanvasBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 70;
+}
+
+.offcanvasPanel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: min(340px, calc(100% - 42px));
+  background: var(--foreground);
+  border-left: 1px solid var(--button-secondary-border);
+  z-index: 71;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -20px 0 70px rgba(0, 0, 0, 0.22);
+}
+
+.offcanvasHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--button-secondary-border);
+}
+
+.offcanvasTitle {
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.offcanvasBody {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+
+.offcanvasItem {
+  text-align: left;
+  border: 1px solid var(--button-secondary-border);
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 14px;
+  padding: 12px 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.offcanvasItemActive {
   background: var(--text-primary);
   color: var(--background);
   border-color: transparent;
+}
+
+@media (max-width: 860px) {
+  .tabs {
+    display: none;
+  }
+  .mobileTabsBar {
+    display: flex;
+  }
 }
 
 .bulkBackdrop {
@@ -835,11 +936,12 @@
 }
 
 .btnSecondary {
-  border: 1px solid var(--button-secondary-border);
-  background: transparent;
-  color: var(--text-primary);
-  border-radius: 12px;
-  padding: 10px 12px;
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-canvas);
+  color: var(--aa-ink);
+  border-radius: var(--aa-r-md);
+  padding: 12px 20px;
+  height: 40px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -847,9 +949,10 @@
 .table {
   width: 100%;
   border-collapse: collapse;
-  border-radius: 14px;
+  border-radius: var(--aa-r-lg);
   overflow: hidden;
-  border: 1px solid var(--button-secondary-border);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-canvas);
 }
 
 .th {
@@ -858,13 +961,13 @@
   color: var(--text-secondary);
   font-weight: 800;
   padding: 10px 12px;
-  border-bottom: 1px solid var(--button-secondary-border);
-  background: color-mix(in oklab, var(--foreground), var(--background) 12%);
+  border-bottom: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
 }
 
 .td {
   padding: 10px 12px;
-  border-bottom: 1px solid var(--button-secondary-border);
+  border-bottom: 1px solid var(--aa-hairline);
   font-size: 13px;
   color: var(--text-primary);
   vertical-align: middle;
@@ -891,11 +994,11 @@
     overflow: visible;
   }
   .table tr {
-    border: 1px solid var(--button-secondary-border);
-    border-radius: 14px;
+    border: 1px solid var(--aa-hairline);
+    border-radius: var(--aa-r-lg);
     overflow: hidden;
     margin: 10px 0;
-    background: var(--foreground);
+    background: var(--aa-surface-card);
   }
   .td {
     border-bottom: 0;
@@ -921,9 +1024,9 @@
 }
 
 .miniBtn {
-  border: 1px solid var(--button-secondary-border);
-  background: transparent;
-  color: var(--text-primary);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-canvas);
+  color: var(--aa-ink);
   border-radius: 10px;
   padding: 6px 10px;
   font-weight: 800;
@@ -1085,39 +1188,48 @@
   flex-direction: column;
   gap: 6px;
   font-size: 14px;
-  color: var(--text-primary);
+  color: var(--aa-ink);
 }
 
 .input {
-  border: 1px solid var(--button-secondary-border);
-  border-radius: 12px;
-  background: transparent;
-  color: var(--text-primary);
-  padding: 10px 12px;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md);
+  background: var(--aa-canvas);
+  color: var(--aa-ink);
+  padding: 10px 14px;
+  height: 40px;
   outline: none;
 }
 
 .input:focus {
-  border-color: var(--text-secondary);
+  border-color: var(--aa-primary);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--aa-primary), transparent 85%);
 }
 
 .button {
   border: 0;
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-weight: 600;
-  background: var(--text-primary);
-  color: var(--background);
+  border-radius: var(--aa-r-md);
+  padding: 12px 20px;
+  height: 40px;
+  font-weight: 700;
+  background: var(--aa-primary);
+  color: var(--aa-on-primary);
   cursor: pointer;
 }
 
+.button:hover {
+  background: var(--aa-primary-active);
+}
+
 .button:disabled {
-  opacity: 0.65;
+  background: var(--aa-primary-disabled);
+  color: var(--aa-muted);
+  opacity: 1;
   cursor: not-allowed;
 }
 
 .error {
-  color: #ff4d4f;
+  color: var(--aa-error);
   font-size: 13px;
   line-height: 1.35;
   white-space: pre-wrap;
@@ -1133,10 +1245,11 @@
 
 .intro h1 {
   max-width: 320px;
+  font-family: var(--aa-font-display);
   font-size: 40px;
-  font-weight: 600;
-  line-height: 48px;
-  letter-spacing: -2.4px;
+  font-weight: 400;
+  line-height: 1.1;
+  letter-spacing: -1px;
   text-wrap: balance;
   color: var(--text-primary);
 }

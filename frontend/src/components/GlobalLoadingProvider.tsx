@@ -50,11 +50,13 @@ export function GlobalLoadingProvider({ children }: { children: React.ReactNode 
 
   useEffect(() => {
     if (pendingCount > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setVisible(true);
       return;
     }
     // Keep overlay visible briefly so the user can read "completed".
     const t = window.setTimeout(() => {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setVisible(false);
       setStatusLines([]);
     }, 650);
