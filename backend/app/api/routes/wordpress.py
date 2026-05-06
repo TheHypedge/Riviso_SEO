@@ -116,14 +116,29 @@ async def download_plugin() -> Response:
     """
     Download the WordPress connector plugin as a zip.
     """
-    # Repo root: backend/app/api/routes/wordpress.py -> backend/app/api/routes -> backend/app/api -> backend/app -> backend -> repo
     here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.abspath(os.path.join(here, "..", "..", "..", ".."))
-    # Production (Docker) includes `backend/` but may not include repo-root `wordpress_plugin/`.
-    plugin_dir_candidates = [
-        os.path.join(repo_root, "backend", "wordpress_plugin", "riviso-content-operations"),
-        os.path.join(repo_root, "wordpress_plugin", "riviso-content-operations"),
+    # Resolve plugin directory robustly across:
+    # - local repo layout: <repo>/wordpress_plugin/...
+    # - docker layout: /app/app/... (backend code) and /app/backend/wordpress_plugin/...
+    #
+    # `here` is typically:
+    # - local: <repo>/backend/app/api/routes
+    # - docker: /app/app/api/routes
+    roots = [
+        os.path.abspath(os.path.join(here, "..", "..", "..")),       # local: <repo>/backend/app ; docker: /app/app
+        os.path.abspath(os.path.join(here, "..", "..", "..", "..")), # local: <repo>/backend ; docker: /app
+        os.path.abspath(os.path.join(here, "..", "..", "..", "..", "..")),  # local: <repo> ; docker: /
+        "/app",
     ]
+    plugin_dir_candidates: list[str] = []
+    for r in roots:
+        plugin_dir_candidates.extend(
+            [
+                os.path.join(r, "backend", "wordpress_plugin", "riviso-content-operations"),
+                os.path.join(r, "wordpress_plugin", "riviso-content-operations"),
+                os.path.join(r, "backend", "wordpress_plugin", "riviso-content-operations"),
+            ]
+        )
     plugin_dir = next((p for p in plugin_dir_candidates if os.path.isdir(p)), "")
     if not plugin_dir:
         raise HTTPException(status_code=404, detail="Plugin directory not found on server")
