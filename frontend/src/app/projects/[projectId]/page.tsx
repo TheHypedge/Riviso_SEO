@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import styles from "../../page.module.css";
+import projectsDark from "../projectsDark.module.css";
 import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse } from "@/lib/api";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
@@ -1306,7 +1307,7 @@ export default function ProjectPage() {
   };
 
   return (
-    <div className={`${styles.page} ${styles.pageTop}`}>
+    <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
         <div className={styles.mobileTabsBar} role="navigation" aria-label="Project sections">
          

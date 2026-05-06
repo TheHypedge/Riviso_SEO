@@ -1248,7 +1248,7 @@
 
 .navItem {
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
-  background: rgba(250, 249, 245, 0.55);
+  background: rgba(8, 8, 8, 0.55);
   color: var(--aa-body-strong);
   border-radius: var(--aa-r-lg);
   padding: 10px 12px;
@@ -1714,7 +1714,7 @@
   border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-md);
   background: var(--aa-ink);
-  color: var(--aa-ink);
+  color: #fff;
   padding: 10px 14px;
   height: 40px;
   outline: none;

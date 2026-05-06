@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import styles from "../../../../page.module.css";
+import projectsDark from "../../projectsDark.module.css";
 import {
   api,
   ApiError,
@@ -314,7 +315,7 @@ export default function ArticleEditPage() {
   }
 
   return (
-    <div className={`${styles.page} ${styles.pageTop}`}>
+    <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
         <section className={styles.contentCol}>
           <div className={styles.intro} style={{ paddingTop: 0 }}>

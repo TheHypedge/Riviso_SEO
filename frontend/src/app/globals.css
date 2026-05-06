@@ -11,11 +11,11 @@
   --aa-muted-soft: #7a7872;
 
   --aa-hairline: #3e3e3e;
-  --aa-hairline-soft: #edeae5;
+  --aa-hairline-soft: rgb(43, 43, 43);
 
   --aa-canvas: #fbfbf8; /* off-white */
-  --aa-surface-soft: #f5f4f0;
-  --aa-surface-card: #ffffff;
+  --aa-surface-soft: #070707;
+  --aa-surface-card: #141414;
   --aa-surface-cream-strong: #efede7;
 
   /* Matte charcoals (use for sidebar/header accents). */
@@ -33,7 +33,7 @@
   --aa-r-xs: 4px;
   --aa-r-sm: 6px;
   --aa-r-md: 8px;
-  --aa-r-lg: 12px;
+  --aa-r-lg: 4px;
   --aa-r-xl: 16px;
   --aa-r-pill: 9999px;
 

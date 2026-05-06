@@ -332,7 +332,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className={`${styles.page} ${styles.pageTop}`}>
+    <div className={`${styles.page} ${styles.pageTop} ${dashStyles.dashboardDark}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
         <div className={styles.mobileTopBar}>
           <button type="button" className={styles.mobileMenuBtn} onClick={() => setMobileNavOpen(true)} aria-label="Open menu">
