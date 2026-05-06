@@ -2,7 +2,7 @@
   /* Claude-inspired neutrals: matte charcoal + off-white surfaces + orange accent. */
   --aa-primary: #d97757; /* accent orange */
   --aa-primary-active: #c86a4c;
-  --aa-primary-disabled: #edeae5;
+  --aa-primary-disabled: #757575;
 
   --aa-ink: #141413; /* near-black text */
   --aa-body: #2c2c2a;

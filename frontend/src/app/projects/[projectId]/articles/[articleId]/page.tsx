@@ -15,6 +15,7 @@ import {
   getAccessToken,
   PromptListResponse,
 } from "@/lib/api";
+import { ArticleReadonlyBody } from "@/components/ArticleReadonlyBody";
 
 const ArticleRichEditor = dynamic(
   () => import("@/components/ArticleRichEditor").then((m) => m.ArticleRichEditor),
@@ -472,7 +473,7 @@ export default function ArticleEditPage() {
             </div>
 
             <div className={`${styles.card} ${styles.cardWide}`}>
-              <h2>SEO</h2>
+              <h2 style={{ color:"white" }}>SEO</h2>
               <label className={styles.label}>
                 Title
                 <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} disabled={isPublished} />
@@ -533,8 +534,8 @@ export default function ArticleEditPage() {
 
           <div className={styles.editorCol}>
             <div className={`${styles.card} ${styles.cardWide} ${styles.articleEditorCard}`}>
-              <h2>Article content</h2>
-              <ArticleRichEditor value={body} onChange={setBody} disabled={isPublished} />
+              <h2 style={{ color:"white" }}>Article content</h2>
+              {isPublished ? <ArticleReadonlyBody markdown={body} /> : <ArticleRichEditor value={body} onChange={setBody} />}
             </div>
           </div>
 
@@ -582,7 +583,7 @@ export default function ArticleEditPage() {
             <div className={`${styles.card} ${styles.cardWide}`}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                 <div>
-                  <h2 style={{ margin: 0 }}>WordPress</h2>
+                  <h2 style={{ color:"white" }}>WordPress</h2>
                   <div className={styles.muted} style={{ fontSize: 12, marginTop: 4 }}>
                     Post to WordPress when content is ready.
                   </div>
