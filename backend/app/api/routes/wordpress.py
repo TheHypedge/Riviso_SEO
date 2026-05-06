@@ -119,8 +119,13 @@ async def download_plugin() -> Response:
     # Repo root: backend/app/api/routes/wordpress.py -> backend/app/api/routes -> backend/app/api -> backend/app -> backend -> repo
     here = os.path.dirname(os.path.abspath(__file__))
     repo_root = os.path.abspath(os.path.join(here, "..", "..", "..", ".."))
-    plugin_dir = os.path.join(repo_root, "wordpress_plugin", "riviso-content-operations")
-    if not os.path.isdir(plugin_dir):
+    # Production (Docker) includes `backend/` but may not include repo-root `wordpress_plugin/`.
+    plugin_dir_candidates = [
+        os.path.join(repo_root, "backend", "wordpress_plugin", "riviso-content-operations"),
+        os.path.join(repo_root, "wordpress_plugin", "riviso-content-operations"),
+    ]
+    plugin_dir = next((p for p in plugin_dir_candidates if os.path.isdir(p)), "")
+    if not plugin_dir:
         raise HTTPException(status_code=404, detail="Plugin directory not found on server")
 
     buf = io.BytesIO()
@@ -128,7 +133,7 @@ async def download_plugin() -> Response:
         for root, _dirs, files in os.walk(plugin_dir):
             for fn in files:
                 abs_path = os.path.join(root, fn)
-                rel = os.path.relpath(abs_path, os.path.join(repo_root, "wordpress_plugin"))
+                rel = os.path.relpath(abs_path, os.path.dirname(plugin_dir))
                 z.write(abs_path, rel)
     data = buf.getvalue()
     filename = "Riviso - Content Operations.zip"
