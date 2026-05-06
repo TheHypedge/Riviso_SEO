@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import styles from "../../../../page.module.css";
-import projectsDark from "../../projectsDark.module.css";
+import projectsDark from "../../../projectsDark.module.css";
 import {
   api,
   ApiError,
