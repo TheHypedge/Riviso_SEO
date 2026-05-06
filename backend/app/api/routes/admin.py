@@ -122,6 +122,8 @@ def _plan_to_public(key: str, d: dict) -> PlanPublic:
     known = {
         "key": base_key,
         "name": base.get("name"),
+        "is_default": base.get("is_default"),
+        "cost_monthly": base.get("cost_monthly"),
         "max_projects": base.get("max_projects"),
         "max_articles": base.get("max_articles"),
         "max_articles_per_day": base.get("max_articles_per_day"),
@@ -131,7 +133,9 @@ def _plan_to_public(key: str, d: dict) -> PlanPublic:
         "max_image_prompts": base.get("max_image_prompts"),
         "image_prompt_char_limit": base.get("image_prompt_char_limit"),
         "allow_scheduling": base.get("allow_scheduling"),
+        "max_scheduled_per_month": base.get("max_scheduled_per_month"),
         "allow_export": base.get("allow_export"),
+        "max_export_per_month": base.get("max_export_per_month"),
         "allow_bulk_upload": base.get("allow_bulk_upload"),
     }
     extra = {k: v for k, v in base.items() if k not in known}

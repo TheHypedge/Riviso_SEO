@@ -44,6 +44,8 @@ class AdminUserDetails(BaseModel):
 class PlanPublic(BaseModel):
     key: str = Field(..., description="Plan key (e.g. beta, pro)")
     name: str | None = None
+    is_default: bool | None = None
+    cost_monthly: float | None = None
     max_projects: int | None = None
     max_articles: int | None = None
     max_articles_per_day: int | None = None
@@ -53,13 +55,17 @@ class PlanPublic(BaseModel):
     max_image_prompts: int | None = None
     image_prompt_char_limit: int | None = None
     allow_scheduling: bool | None = None
+    max_scheduled_per_month: int | None = None
     allow_export: bool | None = None
+    max_export_per_month: int | None = None
     allow_bulk_upload: bool | None = None
     extra: dict[str, Any] | None = None
 
 
 class PlanUpsert(BaseModel):
     name: str | None = None
+    is_default: bool | None = None
+    cost_monthly: float | None = None
     max_projects: int | None = None
     max_articles: int | None = None
     max_articles_per_day: int | None = None
@@ -69,7 +75,9 @@ class PlanUpsert(BaseModel):
     max_image_prompts: int | None = None
     image_prompt_char_limit: int | None = None
     allow_scheduling: bool | None = None
+    max_scheduled_per_month: int | None = None
     allow_export: bool | None = None
+    max_export_per_month: int | None = None
     allow_bulk_upload: bool | None = None
     extra: dict[str, Any] | None = None
 

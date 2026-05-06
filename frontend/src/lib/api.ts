@@ -39,6 +39,8 @@ export type AdminUserDetails = {
 export type PlanPublic = {
   key: string;
   name?: string | null;
+  is_default?: boolean | null;
+  cost_monthly?: number | null;
   max_projects?: number | null;
   max_articles?: number | null;
   max_articles_per_day?: number | null;
@@ -48,7 +50,9 @@ export type PlanPublic = {
   max_image_prompts?: number | null;
   image_prompt_char_limit?: number | null;
   allow_scheduling?: boolean | null;
+  max_scheduled_per_month?: number | null;
   allow_export?: boolean | null;
+  max_export_per_month?: number | null;
   allow_bulk_upload?: boolean | null;
 };
 
@@ -614,6 +618,9 @@ export const api = {
   },
   async listArticles(projectId: string) {
     return apiFetch<ArticlePublic[]>(`/api/projects/${projectId}/articles`);
+  },
+  async consumeExportQuota(projectId: string) {
+    return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/articles/export/consume`, { method: "POST" });
   },
   async createArticle(projectId: string, title: string) {
     return apiFetch<ArticlePublic>(`/api/projects/${projectId}/articles`, {

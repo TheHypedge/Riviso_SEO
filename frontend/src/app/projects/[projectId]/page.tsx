@@ -639,6 +639,7 @@ export default function ProjectPage() {
     setError(null);
     setExporting(true);
     try {
+      await api.consumeExportQuota(projectId);
       const all = await api.listArticles(projectId);
       const df = parseDateOnly(exportFrom);
       const dt = parseDateOnly(exportTo);
@@ -3192,12 +3193,6 @@ export default function ProjectPage() {
           <>
             <div className={`${styles.card} ${styles.cardWide}`}>
               <div className={styles.projectCardTop}>
-                <div>
-                  <h2 style={{ margin: 0 }}>Project settings</h2>
-                  <p style={{ color: "#666", lineHeight: 1.5, margin: "6px 0 0" }}>
-                    Update display name, WordPress credentials, download the plugin, and verify your connection.
-                  </p>
-                </div>
                 {settingsDirty ? (
                   <button className={styles.button} type="button" onClick={saveSettings} disabled={settingsSaving || settingsLoading}>
                     {settingsSaving ? "Saving…" : "Save"}

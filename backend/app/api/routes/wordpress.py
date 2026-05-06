@@ -119,7 +119,7 @@ async def download_plugin() -> Response:
     # Repo root: backend/app/api/routes/wordpress.py -> backend/app/api/routes -> backend/app/api -> backend/app -> backend -> repo
     here = os.path.dirname(os.path.abspath(__file__))
     repo_root = os.path.abspath(os.path.join(here, "..", "..", "..", ".."))
-    plugin_dir = os.path.join(repo_root, "wordpress_plugin", "auto-articles-connector")
+    plugin_dir = os.path.join(repo_root, "wordpress_plugin", "riviso-content-operations")
     if not os.path.isdir(plugin_dir):
         raise HTTPException(status_code=404, detail="Plugin directory not found on server")
 
@@ -131,7 +131,10 @@ async def download_plugin() -> Response:
                 rel = os.path.relpath(abs_path, os.path.join(repo_root, "wordpress_plugin"))
                 z.write(abs_path, rel)
     data = buf.getvalue()
-    headers = {"content-disposition": 'attachment; filename="riviso.zip"'}
+    filename = "Riviso - Content Operations.zip"
+    headers = {
+        "content-disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'Riviso%20-%20Content%20Operations.zip'
+    }
     return Response(content=data, media_type="application/zip", headers=headers)
 
 

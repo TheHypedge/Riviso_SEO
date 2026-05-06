@@ -219,6 +219,10 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "usage_daily_articles_count": int(d.get("usage_daily_articles_count") or 0),
         "usage_monthly_articles_month": (d.get("usage_monthly_articles_month") or "").strip()[:16],
         "usage_monthly_articles_count": int(d.get("usage_monthly_articles_count") or 0),
+        "usage_monthly_export_month": (d.get("usage_monthly_export_month") or "").strip()[:16],
+        "usage_monthly_export_count": int(d.get("usage_monthly_export_count") or 0),
+        "usage_monthly_scheduled_month": (d.get("usage_monthly_scheduled_month") or "").strip()[:16],
+        "usage_monthly_scheduled_count": int(d.get("usage_monthly_scheduled_count") or 0),
         "created_at": (d.get("created_at") or "")[:64],
         "pending_product_tour": bool(d.get("pending_product_tour", False)),
         # Google Search Console OAuth (stored per-user)
@@ -293,6 +297,203 @@ def update_user_fields(user_id: str, updates: dict[str, Any]) -> bool:
         return bool(res.acknowledged and res.matched_count == 1)
 
 
+def _utc_day_key_now() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d")
+
+
+def _utc_month_key_now() -> str:
+    return datetime.utcnow().strftime("%Y-%m")
+
+
+def _limit_allows(current: int, limit: int | None, amount: int) -> bool:
+    # None or 0 means unlimited.
+    if limit is None:
+        return True
+    try:
+        lim = int(limit)
+    except Exception:
+        return True
+    if lim <= 0:
+        return True
+    return (current + amount) <= lim
+
+
+def consume_article_usage(user_id: str, *, day_limit: int | None, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
+    """
+    Consume "article operations" quota (used for generate/publish).
+    Uses per-user counters (UTC day + UTC month).
+    """
+    uid = (user_id or "").strip()
+    if not uid:
+        return False, "Missing user id"
+    day_key = _utc_day_key_now()
+    month_key = _utc_month_key_now()
+
+    def _apply(d: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+        cur_day = (d.get("usage_daily_articles_date") or "").strip()
+        day_count = int(d.get("usage_daily_articles_count") or 0)
+        if cur_day != day_key:
+            cur_day = day_key
+            day_count = 0
+        cur_month = (d.get("usage_monthly_articles_month") or "").strip()
+        month_count = int(d.get("usage_monthly_articles_count") or 0)
+        if cur_month != month_key:
+            cur_month = month_key
+            month_count = 0
+        if not _limit_allows(day_count, day_limit, amount):
+            return False, "Daily article limit reached for your plan.", d
+        if not _limit_allows(month_count, month_limit, amount):
+            return False, "Monthly article limit reached for your plan.", d
+        d2 = dict(d)
+        d2["usage_daily_articles_date"] = cur_day
+        d2["usage_daily_articles_count"] = day_count + amount
+        d2["usage_monthly_articles_month"] = cur_month
+        d2["usage_monthly_articles_count"] = month_count + amount
+        return True, "", d2
+
+    if _storage_mode == "json":
+        with _db_write_lock:
+            users = _load_json_users()
+            for i, u in enumerate(users):
+                if (u.get("id") or "").strip() != uid:
+                    continue
+                ok, msg, upd = _apply(dict(u))
+                if not ok:
+                    return False, msg
+                users[i] = _normalize_user_dict(upd)
+                _save_json_users(users)
+                return True, ""
+        return False, "User not found"
+
+    if _storage_mode != "mongo":
+        return True, ""
+
+    with _db_write_lock:
+        db = get_db()
+        doc = db.users.find_one({"id": uid})
+        if not doc:
+            return False, "User not found"
+        d = dict(doc)
+        d.pop("_id", None)
+        ok, msg, upd = _apply(d)
+        if not ok:
+            return False, msg
+        norm = _normalize_user_dict(upd)
+        new_doc = {**norm, "_id": norm["id"]}
+        res = db.users.replace_one({"id": uid}, new_doc)
+        if not (res.acknowledged and res.matched_count == 1):
+            return False, "Failed to update usage"
+        return True, ""
+
+
+def consume_export_usage(user_id: str, *, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
+    uid = (user_id or "").strip()
+    if not uid:
+        return False, "Missing user id"
+    month_key = _utc_month_key_now()
+
+    def _apply(d: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+        cur_month = (d.get("usage_monthly_export_month") or "").strip()
+        count = int(d.get("usage_monthly_export_count") or 0)
+        if cur_month != month_key:
+            cur_month = month_key
+            count = 0
+        if not _limit_allows(count, month_limit, amount):
+            return False, "Monthly export limit reached for your plan.", d
+        d2 = dict(d)
+        d2["usage_monthly_export_month"] = cur_month
+        d2["usage_monthly_export_count"] = count + amount
+        return True, "", d2
+
+    if _storage_mode == "json":
+        with _db_write_lock:
+            users = _load_json_users()
+            for i, u in enumerate(users):
+                if (u.get("id") or "").strip() != uid:
+                    continue
+                ok, msg, upd = _apply(dict(u))
+                if not ok:
+                    return False, msg
+                users[i] = _normalize_user_dict(upd)
+                _save_json_users(users)
+                return True, ""
+        return False, "User not found"
+
+    if _storage_mode != "mongo":
+        return True, ""
+
+    with _db_write_lock:
+        db = get_db()
+        doc = db.users.find_one({"id": uid})
+        if not doc:
+            return False, "User not found"
+        d = dict(doc)
+        d.pop("_id", None)
+        ok, msg, upd = _apply(d)
+        if not ok:
+            return False, msg
+        norm = _normalize_user_dict(upd)
+        new_doc = {**norm, "_id": norm["id"]}
+        res = db.users.replace_one({"id": uid}, new_doc)
+        if not (res.acknowledged and res.matched_count == 1):
+            return False, "Failed to update usage"
+        return True, ""
+
+
+def consume_scheduled_usage(user_id: str, *, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
+    uid = (user_id or "").strip()
+    if not uid:
+        return False, "Missing user id"
+    month_key = _utc_month_key_now()
+
+    def _apply(d: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+        cur_month = (d.get("usage_monthly_scheduled_month") or "").strip()
+        count = int(d.get("usage_monthly_scheduled_count") or 0)
+        if cur_month != month_key:
+            cur_month = month_key
+            count = 0
+        if not _limit_allows(count, month_limit, amount):
+            return False, "Monthly schedule limit reached for your plan.", d
+        d2 = dict(d)
+        d2["usage_monthly_scheduled_month"] = cur_month
+        d2["usage_monthly_scheduled_count"] = count + amount
+        return True, "", d2
+
+    if _storage_mode == "json":
+        with _db_write_lock:
+            users = _load_json_users()
+            for i, u in enumerate(users):
+                if (u.get("id") or "").strip() != uid:
+                    continue
+                ok, msg, upd = _apply(dict(u))
+                if not ok:
+                    return False, msg
+                users[i] = _normalize_user_dict(upd)
+                _save_json_users(users)
+                return True, ""
+        return False, "User not found"
+
+    if _storage_mode != "mongo":
+        return True, ""
+
+    with _db_write_lock:
+        db = get_db()
+        doc = db.users.find_one({"id": uid})
+        if not doc:
+            return False, "User not found"
+        d = dict(doc)
+        d.pop("_id", None)
+        ok, msg, upd = _apply(d)
+        if not ok:
+            return False, msg
+        norm = _normalize_user_dict(upd)
+        new_doc = {**norm, "_id": norm["id"]}
+        res = db.users.replace_one({"id": uid}, new_doc)
+        if not (res.acknowledged and res.matched_count == 1):
+            return False, "Failed to update usage"
+        return True, ""
+
+
 def _plans_json_path() -> str:
     return _data_path("plans.json")
 
@@ -301,6 +502,8 @@ def _default_plans() -> dict[str, Any]:
     return {
         "beta": {
             "name": "Beta Plan",
+            "is_default": True,
+            "cost_monthly": 0.0,
             "max_projects": 2,
             "max_articles": 5,
             "max_articles_per_day": 0,
@@ -310,7 +513,9 @@ def _default_plans() -> dict[str, Any]:
             "max_image_prompts": 1,
             "image_prompt_char_limit": 2000,
             "allow_scheduling": True,
+            "max_scheduled_per_month": 0,
             "allow_export": True,
+            "max_export_per_month": 0,
             "allow_bulk_upload": True,
         }
     }
@@ -373,6 +578,15 @@ def upsert_plan(plan_key: str, plan: dict[str, Any]) -> None:
                 plans = raw
         except Exception:
             plans = {}
+        # If this plan is being set as default, unset others.
+        if payload.get("is_default") is True:
+            for k, v in list(plans.items()):
+                if not isinstance(v, dict):
+                    continue
+                if str(k).strip().lower() != key and v.get("is_default") is True:
+                    v2 = dict(v)
+                    v2["is_default"] = False
+                    plans[k] = v2
         plans[key] = payload
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -382,8 +596,35 @@ def upsert_plan(plan_key: str, plan: dict[str, Any]) -> None:
     if _storage_mode != "mongo":
         return
     with _db_write_lock:
+        # If this plan is being set as default, unset others.
+        if payload.get("is_default") is True:
+            try:
+                get_db().plans.update_many({"_id": {"$ne": key}}, {"$set": {"is_default": False}})
+            except Exception:
+                pass
         doc = {**payload, "_id": key}
         get_db().plans.replace_one({"_id": key}, doc, upsert=True)
+
+
+def get_default_plan_key() -> str:
+    """
+    Return the default plan key for new registrations.
+    Falls back to 'beta' if none is marked default.
+    """
+    plans = load_plans() or {}
+    # Prefer explicit default flag.
+    for k, v in plans.items():
+        if isinstance(v, dict) and v.get("is_default") is True:
+            kk = (v.get("key") or k or "").strip().lower()
+            if kk:
+                return kk
+    # Fallback: beta if present, else first key.
+    if "beta" in plans:
+        return "beta"
+    for k in sorted([str(x).strip().lower() for x in plans.keys() if str(x).strip()]):
+        if k:
+            return k
+    return "beta"
 
 
 def get_user_by_id(user_id: str) -> dict[str, Any] | None:

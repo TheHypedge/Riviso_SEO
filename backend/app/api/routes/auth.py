@@ -84,6 +84,12 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     if not re.search(r"[a-zA-Z]", pw) or not re.search(r"\d", pw) or not re.search(r"[^a-zA-Z0-9]", pw):
         raise HTTPException(status_code=400, detail="Password must include letters, numbers, and a special character")
     uid = str(uuid.uuid4())
+    default_plan = "beta"
+    try:
+        if hasattr(st, "get_default_plan_key"):
+            default_plan = str(st.get_default_plan_key() or "beta").strip().lower() or "beta"
+    except Exception:
+        default_plan = "beta"
     try:
         await run_sync(
             st.insert_user,
@@ -92,7 +98,7 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
                 "email": email,
                 "password_hash": generate_password_hash(payload.password),
                 "role": "user",
-                "subscription_type": "beta",
+                "subscription_type": default_plan,
                 "full_name": "",
                 "phone": "",
                 "last_activity_at": "",

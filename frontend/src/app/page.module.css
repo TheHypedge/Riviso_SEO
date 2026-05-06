@@ -540,6 +540,9 @@
 @media (max-width: 640px) {
   .card {
     padding: 0px;
+    border:none;
+    background:transparent;
+    
   }
 }
 
@@ -1149,7 +1152,7 @@
   border-right: 1px solid var(--aa-hairline);
   border-radius: 0;
   padding: 16px 14px;
-  background: var(--aa-surface-soft);
+  background: #0a0a0e;
   width: 100%;
   min-height: 100vh;
 }
@@ -1160,7 +1163,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 0 10px;
+  padding: 10px;
 }
 
 .mobileMenuBtn {
@@ -1248,7 +1251,7 @@
 
 .navItem {
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
-  background: rgba(8, 8, 8, 0.55);
+  background: var(--aa-surface-card);
   color: var(--aa-body-strong);
   border-radius: var(--aa-r-lg);
   padding: 10px 12px;
@@ -1300,7 +1303,7 @@
   border: 1px solid var(--button-secondary-border);
   border-radius: 16px;
   padding: 14px;
-  background: transparent;
+  background: var(--aa-surface-card);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1713,7 +1716,7 @@
 .input {
   border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-md);
-  background: var(--aa-ink);
+  background: var(--aa-surface-card);
   color: #fff;
   padding: 10px 14px;
   height: 40px;

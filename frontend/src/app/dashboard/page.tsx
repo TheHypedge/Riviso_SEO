@@ -76,6 +76,14 @@ export default function DashboardPage() {
   const [newPlanKey, setNewPlanKey] = useState("");
   const [newPlanName, setNewPlanName] = useState("");
   const [newPlanMaxProjects, setNewPlanMaxProjects] = useState<number>(2);
+  const [newPlanMaxArticlesPerDay, setNewPlanMaxArticlesPerDay] = useState<number>(0);
+  const [newPlanMaxArticlesPerMonth, setNewPlanMaxArticlesPerMonth] = useState<number>(0);
+  const [newPlanAllowExport, setNewPlanAllowExport] = useState<boolean>(true);
+  const [newPlanMaxExportPerMonth, setNewPlanMaxExportPerMonth] = useState<number>(0);
+  const [newPlanAllowScheduling, setNewPlanAllowScheduling] = useState<boolean>(true);
+  const [newPlanMaxScheduledPerMonth, setNewPlanMaxScheduledPerMonth] = useState<number>(0);
+  const [newPlanCostMonthly, setNewPlanCostMonthly] = useState<number>(0);
+  const [newPlanIsDefault, setNewPlanIsDefault] = useState<boolean>(false);
 
   const token = useMemo(() => getAccessToken(), []);
 
@@ -310,10 +318,30 @@ export default function DashboardPage() {
   async function createPlan() {
     const key = newPlanKey.trim().toLowerCase();
     if (!key) return;
-    await upsertPlan(key, { key, name: newPlanName.trim() || key, max_projects: newPlanMaxProjects });
+    await upsertPlan(key, {
+      key,
+      name: newPlanName.trim() || key,
+      is_default: newPlanIsDefault,
+      cost_monthly: newPlanCostMonthly,
+      max_projects: newPlanMaxProjects,
+      max_articles_per_day: newPlanMaxArticlesPerDay,
+      max_articles_per_month: newPlanMaxArticlesPerMonth,
+      allow_export: newPlanAllowExport,
+      max_export_per_month: newPlanAllowExport ? newPlanMaxExportPerMonth : 0,
+      allow_scheduling: newPlanAllowScheduling,
+      max_scheduled_per_month: newPlanAllowScheduling ? newPlanMaxScheduledPerMonth : 0,
+    });
     setNewPlanKey("");
     setNewPlanName("");
     setNewPlanMaxProjects(2);
+    setNewPlanMaxArticlesPerDay(0);
+    setNewPlanMaxArticlesPerMonth(0);
+    setNewPlanAllowExport(true);
+    setNewPlanMaxExportPerMonth(0);
+    setNewPlanAllowScheduling(true);
+    setNewPlanMaxScheduledPerMonth(0);
+    setNewPlanCostMonthly(0);
+    setNewPlanIsDefault(false);
   }
 
   async function saveProfile() {
@@ -564,13 +592,13 @@ export default function DashboardPage() {
               <>
                 <div className={styles.intro}>
                   <h1>System limitations</h1>
-                  <p>Define subscription plans and feature limits.</p>
+                  
                 </div>
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
                   <div className={styles.sectionHead}>
                     <div>
-                      <h2 style={{ margin: 0 }}>Create new plan</h2>
+                      <h2 style={{ margin: 0, color: "#fff" }}>Create new plan</h2>
                       <div className={styles.muted}>Key must be unique (letters/numbers/underscore).</div>
                     </div>
                     <button className={styles.button} type="button" onClick={createPlan} disabled={!newPlanKey.trim()}>
@@ -596,6 +624,63 @@ export default function DashboardPage() {
                         value={newPlanMaxProjects}
                         onChange={(e) => setNewPlanMaxProjects(Number(e.target.value || 0))}
                       />
+                    </label>
+                    <label className={styles.label}>
+                      Max articles / day
+                      <input className={styles.input} type="number" min={0} value={newPlanMaxArticlesPerDay} onChange={(e) => setNewPlanMaxArticlesPerDay(Number(e.target.value || 0))} />
+                    </label>
+                    <label className={styles.label}>
+                      Max articles / month
+                      <input className={styles.input} type="number" min={0} value={newPlanMaxArticlesPerMonth} onChange={(e) => setNewPlanMaxArticlesPerMonth(Number(e.target.value || 0))} />
+                    </label>
+                    <label className={styles.label}>
+                      Plan cost (monthly)
+                      <input className={styles.input} type="number" min={0} step="0.01" value={newPlanCostMonthly} onChange={(e) => setNewPlanCostMonthly(Number(e.target.value || 0))} />
+                    </label>
+                    <label className={styles.label}>
+                      Default plan for new users
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <input type="checkbox" checked={newPlanIsDefault} onChange={(e) => setNewPlanIsDefault(e.target.checked)} />
+                        <span className={styles.muted} style={{ fontSize: 12 }}>
+                          New registrations will get this plan.
+                        </span>
+                      </div>
+                    </label>
+                    <label className={styles.label}>
+                      Enable Export Articles
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        <input type="checkbox" checked={newPlanAllowExport} onChange={(e) => setNewPlanAllowExport(e.target.checked)} />
+                        <span className={styles.muted} style={{ fontSize: 12 }}>
+                          Monthly export limit:
+                        </span>
+                        <input
+                          className={styles.input}
+                          style={{ width: 140 }}
+                          type="number"
+                          min={0}
+                          value={newPlanMaxExportPerMonth}
+                          onChange={(e) => setNewPlanMaxExportPerMonth(Number(e.target.value || 0))}
+                          disabled={!newPlanAllowExport}
+                        />
+                      </div>
+                    </label>
+                    <label className={styles.label}>
+                      Enable Schedule feature
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        <input type="checkbox" checked={newPlanAllowScheduling} onChange={(e) => setNewPlanAllowScheduling(e.target.checked)} />
+                        <span className={styles.muted} style={{ fontSize: 12 }}>
+                          Monthly schedule limit:
+                        </span>
+                        <input
+                          className={styles.input}
+                          style={{ width: 140 }}
+                          type="number"
+                          min={0}
+                          value={newPlanMaxScheduledPerMonth}
+                          onChange={(e) => setNewPlanMaxScheduledPerMonth(Number(e.target.value || 0))}
+                          disabled={!newPlanAllowScheduling}
+                        />
+                      </div>
                     </label>
                   </div>
                 </div>
@@ -623,6 +708,30 @@ export default function DashboardPage() {
                                 className={styles.input}
                                 value={p.name || ""}
                                 onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, name: e.target.value } : x)))}
+                              />
+                            </label>
+                            <label className={styles.label}>
+                              Default for new users
+                              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(p.is_default)}
+                                  onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, is_default: e.target.checked } : x)))}
+                                />
+                                <span className={styles.muted} style={{ fontSize: 12 }}>
+                                  One default at a time.
+                                </span>
+                              </div>
+                            </label>
+                            <label className={styles.label}>
+                              Cost (monthly)
+                              <input
+                                className={styles.input}
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                value={Number(p.cost_monthly ?? 0)}
+                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, cost_monthly: Number(e.target.value || 0) } : x)))}
                               />
                             </label>
                             <label className={styles.label}>
@@ -654,6 +763,50 @@ export default function DashboardPage() {
                                 value={p.max_articles_per_month ?? 0}
                                 onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_articles_per_month: Number(e.target.value || 0) } : x)))}
                               />
+                            </label>
+                            <label className={styles.label}>
+                              Export Articles
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(p.allow_export)}
+                                  onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, allow_export: e.target.checked } : x)))}
+                                />
+                                <span className={styles.muted} style={{ fontSize: 12 }}>
+                                  Limit / month:
+                                </span>
+                                <input
+                                  className={styles.input}
+                                  style={{ width: 140 }}
+                                  type="number"
+                                  min={0}
+                                  value={p.max_export_per_month ?? 0}
+                                  onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_export_per_month: Number(e.target.value || 0) } : x)))}
+                                  disabled={!p.allow_export}
+                                />
+                              </div>
+                            </label>
+                            <label className={styles.label}>
+                              Schedule feature
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(p.allow_scheduling)}
+                                  onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, allow_scheduling: e.target.checked } : x)))}
+                                />
+                                <span className={styles.muted} style={{ fontSize: 12 }}>
+                                  Limit / month:
+                                </span>
+                                <input
+                                  className={styles.input}
+                                  style={{ width: 140 }}
+                                  type="number"
+                                  min={0}
+                                  value={p.max_scheduled_per_month ?? 0}
+                                  onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_scheduled_per_month: Number(e.target.value || 0) } : x)))}
+                                  disabled={!p.allow_scheduling}
+                                />
+                              </div>
                             </label>
                           </div>
                         </div>

@@ -59,6 +59,34 @@ async def list_projects(user: dict = Depends(get_current_user)) -> list[ProjectP
 async def create_project(payload: ProjectCreate, user: dict = Depends(get_current_user)) -> ProjectPublic:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+
+    # Enforce plan limits for regular users (admins are not limited).
+    if role != "admin":
+        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+        plan = {}
+        try:
+            plans = st.load_plans() or {}
+            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+            if not isinstance(plan, dict):
+                plan = {}
+        except Exception:
+            plan = {}
+        max_projects = plan.get("max_projects")
+        try:
+            max_projects_i = int(max_projects) if max_projects is not None else None
+        except Exception:
+            max_projects_i = None
+        if max_projects_i is not None and max_projects_i > 0 and hasattr(st, "project_ids_for_owner"):
+            try:
+                existing = st.project_ids_for_owner(uid) or []
+            except Exception:
+                existing = []
+            if len(existing) >= max_projects_i:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Project limit reached for your plan (max {max_projects_i}). Upgrade your subscription to create more projects.",
+                )
     pid = str(uuid.uuid4())
     url = _normalize_url(payload.website_url)
     st.insert_project(

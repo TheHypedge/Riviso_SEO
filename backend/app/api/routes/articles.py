@@ -386,6 +386,41 @@ async def list_articles(project_id: str, user: dict = Depends(get_current_user))
     return out
 
 
+@router.post("/export/consume", status_code=200)
+async def consume_export_quota(project_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """
+    Consume an export allowance for the user's current plan.
+
+    The frontend calls this before running the client-side export. This provides plan enforcement
+    even though the XLSX is generated in the browser.
+    """
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    if role == "admin" or not uid:
+        return {"ok": True}
+
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    plan = {}
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+        if not isinstance(plan, dict):
+            plan = {}
+    except Exception:
+        plan = {}
+
+    if plan.get("allow_export") is False:
+        raise HTTPException(status_code=403, detail="Export Articles is not enabled for your plan.")
+
+    if hasattr(st, "consume_export_usage"):
+        ok, msg = st.consume_export_usage(uid, month_limit=plan.get("max_export_per_month"), amount=1)
+        if not ok:
+            raise HTTPException(status_code=403, detail=msg or "Export limit reached for your plan")
+    return {"ok": True}
+
+
 @router.post("", response_model=ArticlePublic, status_code=201)
 async def create_article(
     project_id: str,
@@ -769,6 +804,25 @@ async def generate_article_and_image(
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
+    # Plan enforcement: generation consumes the per-day / per-month article quota.
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    if role != "admin" and uid and hasattr(st, "consume_article_usage"):
+        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+        plan = {}
+        try:
+            plans = st.load_plans() or {}
+            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+            if not isinstance(plan, dict):
+                plan = {}
+        except Exception:
+            plan = {}
+        day_lim = plan.get("max_articles_per_day")
+        month_lim = plan.get("max_articles_per_month")
+        ok, msg = st.consume_article_usage(uid, day_limit=day_lim, month_limit=month_lim, amount=1)
+        if not ok:
+            raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
+
     # Resolve prompt ids: explicit override > project default > None
     writing_prompt_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
     image_prompt_id = (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
@@ -845,6 +899,26 @@ async def schedule_article(
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+
+    # Plan enforcement: scheduling must be enabled and consumes monthly schedule quota.
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    if role != "admin" and uid:
+        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+        plan = {}
+        try:
+            plans = st.load_plans() or {}
+            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+            if not isinstance(plan, dict):
+                plan = {}
+        except Exception:
+            plan = {}
+        if plan.get("allow_scheduling") is False:
+            raise HTTPException(status_code=403, detail="Scheduling is not enabled for your plan.")
+        if hasattr(st, "consume_scheduled_usage"):
+            ok, msg = st.consume_scheduled_usage(uid, month_limit=plan.get("max_scheduled_per_month"), amount=1)
+            if not ok:
+                raise HTTPException(status_code=403, detail=msg or "Schedule limit reached for your plan")
 
     raw = (payload.wp_scheduled_at or "").strip()
     if not raw:
@@ -983,6 +1057,25 @@ async def publish_to_live_site(
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+
+    # Plan enforcement: publishing consumes per-day / per-month article quota.
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    if role != "admin" and uid and hasattr(st, "consume_article_usage"):
+        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+        plan = {}
+        try:
+            plans = st.load_plans() or {}
+            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+            if not isinstance(plan, dict):
+                plan = {}
+        except Exception:
+            plan = {}
+        day_lim = plan.get("max_articles_per_day")
+        month_lim = plan.get("max_articles_per_month")
+        ok, msg = st.consume_article_usage(uid, day_limit=day_lim, month_limit=month_lim, amount=1)
+        if not ok:
+            raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
 
     links = []
     for x in (proj.get("context_links") or []):
