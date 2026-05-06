@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY backend/app /app/app
 COPY backend/.env.example /app/.env.example
+COPY backend/wordpress_plugin /app/backend/wordpress_plugin
 
 # Transitional: reuse existing modules while migrating to new architecture.
 COPY storage.py /app/storage.py
