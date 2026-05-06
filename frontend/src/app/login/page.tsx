@@ -120,6 +120,32 @@ export default function LoginPage() {
         </section>
 
         <section className={styles.authRight}>
+          <div className={styles.authMobileTop}>
+            <div className={styles.authMobileBrand} aria-label="Riviso">
+              <span className={styles.authMobileLogo} aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" focusable="false" aria-hidden="true">
+                  <path
+                    d="M12 2.6c4.85 0 8.8 3.95 8.8 8.8 0 4.85-3.95 8.8-8.8 8.8-4.85 0-8.8-3.95-8.8-8.8 0-4.85 3.95-8.8 8.8-8.8Zm0 3.2a5.6 5.6 0 1 0 0 11.2 5.6 5.6 0 0 0 0-11.2Z"
+                    fill="currentColor"
+                    opacity="0.95"
+                  />
+                  <path d="M12 7.2a4.8 4.8 0 1 1 0 9.6 4.8 4.8 0 0 1 0-9.6Z" fill="currentColor" opacity="0.22" />
+                </svg>
+              </span>
+              <span className={styles.authMobileBrandText}>Riviso</span>
+            </div>
+            <button type="button" className={styles.authMobileMenu} aria-label="Menu">
+              <span aria-hidden="true">≡</span>
+            </button>
+          </div>
+
+          <div className={styles.authMobileHero}>
+            <div className={styles.authMobileHeadline}>The AI for content teams.</div>
+            <div className={styles.authMobileSubhead}>
+              Generate SEO-ready articles, metadata, and images—then publish to WordPress in one workflow.
+            </div>
+          </div>
+
           <div className={styles.authCard}>
             <div className={styles.authTabs} role="tablist" aria-label="Auth tabs">
               <button
@@ -249,11 +275,11 @@ export default function LoginPage() {
         </section>
       </div>
 
-      <div style={{ marginTop: 18, display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center" }}>
-        <Link href="/privacy-policy" style={{ color: "rgba(255,255,255,0.72)", fontSize: 12, textDecoration: "none" }}>
+      <div className={styles.authFooter}>
+        <Link href="/privacy-policy">
           Privacy Policy
         </Link>
-        <Link href="/terms" style={{ color: "rgba(255,255,255,0.72)", fontSize: 12, textDecoration: "none" }}>
+        <Link href="/terms">
           Terms & Conditions
         </Link>
       </div>

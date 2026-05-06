@@ -21,17 +21,27 @@
 
 .authPage {
   min-height: 100vh;
+  min-height: 100dvh;
   width: 100%;
+  box-sizing: border-box;
   background:
-    radial-gradient(1100px 800px at 12% 18%, rgba(204, 120, 92, 0.20), transparent 60%),
-    radial-gradient(900px 700px at 75% 30%, rgba(212, 160, 23, 0.14), transparent 62%),
+    radial-gradient(1100px 800px at 12% 18%, rgba(217, 119, 87, 0.18), transparent 60%),
+    radial-gradient(900px 700px at 75% 30%, rgba(212, 160, 23, 0.12), transparent 62%),
     radial-gradient(700px 600px at 70% 92%, rgba(93, 184, 114, 0.10), transparent 62%),
-    var(--aa-canvas);
-  color: var(--aa-body);
+    radial-gradient(1100px 760px at 55% 52%, rgba(255, 255, 255, 0.04), transparent 62%),
+    #0b0b0d;
+  color: rgba(255, 255, 255, 0.9);
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 28px 16px;
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+  padding-bottom: max(28px, env(safe-area-inset-bottom));
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .authShell {
@@ -40,6 +50,7 @@
   grid-template-columns: 1.15fr 0.85fr;
   gap: 24px;
   align-items: center;
+  min-width: 0;
 }
 
 @media (max-width: 960px) {
@@ -50,6 +61,7 @@
 
 .authLeft {
   padding: 18px 10px;
+  min-width: 0;
 }
 
 .authBrand {
@@ -60,13 +72,14 @@
   letter-spacing: -0.02em;
   margin-bottom: 34px;
   opacity: 0.95;
+  color: rgba(255, 255, 255, 0.96);
 }
 
 .authKicker {
   font-size: 11px;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(255, 255, 255, 0.62);
   margin-bottom: 10px;
   font-weight: 800;
 }
@@ -87,14 +100,17 @@
   font-size: clamp(16px, 1.7vw, 20px);
   color: rgba(255, 255, 255, 0.86);
   margin-bottom: 18px;
+  min-height: 1.35em;
+  flex-wrap: wrap;
 }
 
 .authTypeCursor {
   width: 10px;
   height: 20px;
-  background: rgba(255, 255, 255, 0.65);
+  background: color-mix(in oklab, var(--aa-primary), var(--aa-ink) 35%);
   border-radius: 2px;
   animation: aaBlink 1s step-end infinite;
+  flex-shrink: 0;
 }
 
 @keyframes aaBlink {
@@ -108,7 +124,7 @@
 }
 
 .authSub {
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(255, 255, 255, 0.66);
   line-height: 1.6;
   max-width: 52ch;
 }
@@ -116,10 +132,103 @@
 .authRight {
   display: flex;
   justify-content: flex-end;
+  min-width: 0;
+}
+
+.authMobileTop {
+  display: none;
+}
+
+.authMobileHero {
+  display: none;
+}
+
+.authMobileBrand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+.authMobileLogo {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: color-mix(in oklab, var(--aa-primary), #fff 25%);
+  flex: 0 0 auto;
+}
+
+.authMobileBrandText {
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.authMobileMenu {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+  line-height: 1;
+  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.authMobileMenu:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.authMobileHeadline {
+  font-family: var(--aa-font-display);
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  font-size: clamp(34px, 10vw, 54px);
+  line-height: 1.04;
+  color: rgba(255, 255, 255, 0.96);
+  text-align: center;
+  text-wrap: balance;
+}
+
+.authMobileSubhead {
+  margin-top: 10px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.72);
+  text-align: center;
+  max-width: 44ch;
+}
+
+@media (max-width: 640px) {
+  .authMobileTop {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-inline: 2px;
+  }
+
+  .authMobileHero {
+    display: block;
+    width: 100%;
+    padding-top: 2px;
+    padding-bottom: 4px;
+  }
 }
 
 .authCard {
   width: min(440px, 100%);
+  max-width: 100%;
   border-radius: 18px;
   background: rgba(10, 10, 14, 0.62);
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -127,6 +236,66 @@
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   padding: 14px;
+  box-sizing: border-box;
+}
+
+/* Mobile: auth form only — hide marketing + footer links; center card in viewport. */
+@media (max-width: 640px) {
+  .authPage {
+    padding-top: max(18px, env(safe-area-inset-top));
+    padding-right: max(14px, env(safe-area-inset-right));
+    padding-bottom: max(22px, env(safe-area-inset-bottom));
+    padding-left: max(14px, env(safe-area-inset-left));
+    justify-content: flex-start;
+    align-items: center;
+    color: rgba(255, 255, 255, 0.9);
+    background:
+      radial-gradient(920px 620px at 18% 12%, rgba(217, 119, 87, 0.16), transparent 58%),
+      radial-gradient(820px 560px at 86% 20%, rgba(93, 184, 114, 0.10), transparent 62%),
+      radial-gradient(760px 560px at 70% 92%, rgba(212, 160, 23, 0.10), transparent 64%),
+      radial-gradient(900px 700px at 50% 50%, rgba(255, 255, 255, 0.04), transparent 60%),
+      #0b0b0d;
+  }
+
+  .authShell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    max-width: min(460px, 100%);
+    gap: 14px;
+    flex: 0 1 auto;
+    min-height: 0;
+  }
+
+  .authLeft {
+    display: none !important;
+  }
+
+  .authRight {
+    justify-content: flex-start;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .authCard {
+    width: 100%;
+    max-width: 100%;
+    margin-inline: auto;
+    padding: 14px;
+    border-radius: 18px;
+    background: rgba(20, 20, 22, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 40px 140px rgba(0, 0, 0, 0.7);
+  }
+
+  .authFooter {
+    display: none !important;
+  }
 }
 
 .authTabs {
@@ -180,6 +349,7 @@
   height: 44px;
   border-radius: 12px;
   padding: 10px 12px;
+  font-size: 16px;
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
   width: 100%;
   display: block;
@@ -188,7 +358,7 @@
 
 .authInput:focus {
   border-color: rgba(255, 255, 255, 0.36);
-  box-shadow: 0 0 0 4px rgba(138, 46, 255, 0.22);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--aa-primary) 28%, transparent);
   background: rgba(255, 255, 255, 0.08);
 }
 
@@ -302,6 +472,27 @@
   border-color: rgba(82, 196, 26, 0.45);
   background: rgba(82, 196, 26, 0.16);
   color: #9effa0;
+}
+
+.authFooter {
+  margin-top: 18px;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  width: min(1200px, 100%);
+  box-sizing: border-box;
+}
+
+.authFooter a {
+  color: var(--aa-muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.authFooter a:hover {
+  color: var(--aa-ink);
+  text-decoration: underline;
 }
 
 .pageTop {
@@ -1516,13 +1707,13 @@
   flex-direction: column;
   gap: 6px;
   font-size: 14px;
-  color: var(--aa-ink);
+  color: #fff;
 }
 
 .input {
   border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-md);
-  background: var(--aa-canvas);
+  background: var(--aa-ink);
   color: var(--aa-ink);
   padding: 10px 14px;
   height: 40px;

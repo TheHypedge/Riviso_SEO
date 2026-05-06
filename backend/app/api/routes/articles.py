@@ -170,6 +170,38 @@ def _fetch_posted_job_overlay_map(st, project_id: str) -> dict[str, dict]:
     return best
 
 
+def _fetch_posted_job_overlay_for_article(st, project_id: str, article_id: str) -> dict | None:
+    """
+    Return the best posted scheduled-job row for a single article.
+
+    This avoids loading/scanning all scheduled jobs in large projects on the editor page.
+    """
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid or not hasattr(st, "load_scheduled_jobs"):
+        return None
+    try:
+        jobs = st.load_scheduled_jobs(project_id=pid, article_id=aid, state="posted", limit=25) or []
+    except Exception:
+        return None
+    best: dict | None = None
+    for j in jobs:
+        if not isinstance(j, dict):
+            continue
+        jw = (j.get("wp_link") or "").strip()
+        if best is None:
+            best = j
+            # Prefer a row that already has a link.
+            if jw:
+                break
+            continue
+        bw = (best.get("wp_link") or "").strip()
+        if jw and not bw:
+            best = j
+            break
+    return best
+
+
 def _merge_posted_job_into_article_row(a: dict, job: dict | None) -> dict:
     """Non-persistent merge: fill missing WP fields from a posted scheduled job."""
     if not job or not isinstance(a, dict):
@@ -247,6 +279,10 @@ def _get_article_or_404(*, st, project_id: str, article_id: str) -> dict:
     aid = (article_id or "").strip()
     if not pid or not aid:
         raise HTTPException(status_code=404, detail="Not found")
+    if hasattr(st, "get_article"):
+        a = st.get_article(project_id=pid, article_id=aid)
+        if isinstance(a, dict):
+            return a
     rows = st.load_articles() or []
     for a in rows:
         if not isinstance(a, dict):
@@ -642,8 +678,8 @@ async def get_article_detail(
     _require_project_access(st=st, user=user, project_id=project_id)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     aid = (article_id or "").strip()
-    posted_jobs = await run_sync(_fetch_posted_job_overlay_map, st, project_id)
-    a_view = _merge_posted_job_into_article_row(a, posted_jobs.get(aid))
+    job = await run_sync(_fetch_posted_job_overlay_for_article, st, project_id, aid)
+    a_view = _merge_posted_job_into_article_row(a, job)
     base = _to_public(a_view).model_dump()
     return ArticleDetailResponse(
         **base,

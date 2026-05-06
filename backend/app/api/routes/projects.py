@@ -144,6 +144,10 @@ async def delete_project(project_id: str, user: dict = Depends(get_current_user)
     role = (user.get("role") or "").strip().lower()
     if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
         return Response(status_code=204)
-    st.delete_project_and_articles(pid)
+    # Delete the project and all resources that reference it (articles, scheduled jobs, settings, prompts, etc.).
+    if hasattr(st, "delete_project_and_resources"):
+        st.delete_project_and_resources(pid)
+    else:
+        st.delete_project_and_articles(pid)
     return Response(status_code=204)
 

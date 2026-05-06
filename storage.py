@@ -798,6 +798,30 @@ def load_articles() -> list[dict[str, Any]]:
     return [_mongo_doc_to_article(doc) for doc in db.articles.find({})]
 
 
+def get_article(*, project_id: str, article_id: str) -> dict[str, Any] | None:
+    """
+    Fetch one article by id within a project.
+
+    Used by the editor API to avoid scanning `load_articles()` for large collections.
+    """
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        return None
+    if _storage_mode != "mongo":
+        for a in _load_json_list("articles.json"):
+            if not isinstance(a, dict):
+                continue
+            if (a.get("id") or "").strip() == aid and (a.get("project_id") or "").strip() == pid:
+                return _normalize_article_dict(a)
+        return None
+
+    doc = get_db().articles.find_one({"_id": aid, "project_id": pid})
+    if not isinstance(doc, dict):
+        return None
+    return _mongo_doc_to_article(doc)
+
+
 def load_articles_for_project_minimal(
     project_id: str,
     *,
@@ -979,17 +1003,47 @@ def load_articles_listing_for_project(
 # ----------------------------
 
 
-def load_scheduled_jobs(*, project_id: str | None = None) -> list[dict[str, Any]]:
+def load_scheduled_jobs(
+    *,
+    project_id: str | None = None,
+    article_id: str | None = None,
+    state: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Load scheduled jobs, optionally filtered.
+
+    Historically this function only filtered by project_id and returned the full list; the editor
+    view for a single article now uses `article_id` to avoid scanning all jobs for large projects.
+    """
     pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    st = (state or "").strip().lower()
+    lim = int(limit) if isinstance(limit, int) and limit > 0 else None
     if _storage_mode != "mongo":
         rows = [_normalize_scheduled_job_dict(x) for x in _load_json_list("scheduled_jobs.json")]
-        if not pid:
-            return rows
-        return [r for r in rows if (r.get("project_id") or "").strip() == pid]
+        out = rows
+        if pid:
+            out = [r for r in out if (r.get("project_id") or "").strip() == pid]
+        if aid:
+            out = [r for r in out if (r.get("article_id") or "").strip() == aid]
+        if st:
+            out = [r for r in out if (r.get("state") or "").strip().lower() == st]
+        if lim is not None:
+            out = out[:lim]
+        return out
+
     q: dict[str, Any] = {}
     if pid:
         q["project_id"] = pid
+    if aid:
+        q["article_id"] = aid
+    if st:
+        q["state"] = st
+
     cur = get_db().scheduled_jobs.find(q).sort("run_at", 1)
+    if lim is not None:
+        cur = cur.limit(lim)
     out: list[dict[str, Any]] = []
     for doc in cur:
         if isinstance(doc, dict):
@@ -1201,25 +1255,45 @@ def update_project_fields(project_id: str, updates: dict[str, Any]) -> bool:
         return bool(res.acknowledged and res.matched_count == 1)
 
 
-def delete_project_and_articles(project_id: str) -> bool:
+def delete_project_and_resources(project_id: str) -> bool:
+    """
+    Hard-delete a project and all resources that reference it.
+
+    This is intentionally destructive and is used for "Delete project" actions.
+    """
     if _storage_mode != "mongo":
         with _db_write_lock:
             projects = [_normalize_project_dict(dict(p)) for p in _load_json_list("projects.json")]
             if not any((p.get("id") or "") == project_id for p in projects):
                 return False
-            projects = [p for p in projects if (p.get("id") or "") != project_id]
-            _save_json_projects(projects)
+            _save_json_projects([p for p in projects if (p.get("id") or "") != project_id])
+
             articles = [_normalize_article_dict(dict(a)) for a in _load_json_list("articles.json")]
-            articles = [a for a in articles if (a.get("project_id") or "") != project_id]
-            _save_json_articles(articles)
+            _save_json_articles([a for a in articles if (a.get("project_id") or "") != project_id])
+
+            # Scheduled jobs are stored separately from the project row.
+            jobs = [_normalize_scheduled_job_dict(dict(j)) for j in _load_json_list("scheduled_jobs.json")]
+            _save_json_scheduled_jobs([j for j in jobs if (j.get("project_id") or "") != project_id])
         return True
+
     with _db_write_lock:
         db = get_db()
         if db.projects.count_documents({"id": project_id}, limit=1) == 0:
             return False
         db.articles.delete_many({"project_id": project_id})
+        db.scheduled_jobs.delete_many({"project_id": project_id})
         db.projects.delete_one({"id": project_id})
         return True
+
+
+def delete_project_and_articles(project_id: str) -> bool:
+    """
+    Backward-compatible wrapper.
+
+    Historically this function deleted only projects + articles. It now deletes all related
+    project resources as well (scheduled jobs), which is the desired behavior for the API.
+    """
+    return delete_project_and_resources(project_id)
 
 
 def save_articles_replace_all(articles: list[dict[str, Any]]) -> None:
