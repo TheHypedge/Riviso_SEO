@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -14,6 +15,18 @@ import {
   getAccessToken,
   PromptListResponse,
 } from "@/lib/api";
+
+const ArticleRichEditor = dynamic(
+  () => import("@/components/ArticleRichEditor").then((m) => m.ArticleRichEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className={styles.muted} style={{ padding: 16 }}>
+        Loading editor…
+      </div>
+    ),
+  },
+);
 
 function kwToString(keywords?: string[] | null) {
   return (keywords || []).filter(Boolean).join(", ");
@@ -521,13 +534,7 @@ export default function ArticleEditPage() {
           <div className={styles.editorCol}>
             <div className={`${styles.card} ${styles.cardWide} ${styles.articleEditorCard}`}>
               <h2>Article content</h2>
-              <textarea
-                className={`${styles.textarea} ${styles.articleTextareaFull}`}
-                value={body}
-                onChange={(e) => setBody(e.target.value)}
-                placeholder="Article markdown/body…"
-                disabled={isPublished}
-              />
+              <ArticleRichEditor value={body} onChange={setBody} disabled={isPublished} />
             </div>
           </div>
 

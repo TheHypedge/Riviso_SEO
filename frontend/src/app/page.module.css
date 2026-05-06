@@ -999,18 +999,38 @@
   align-items: start;
 }
 
-@media (max-width: 980px) {
-  .editorGrid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 1280px) {
+/* Tablet: two columns + third full-width. Must NOT apply below 981px or it overrides the mobile
+   single-column rule and squishes the center "Article content" column (e.g. ~425px viewports). */
+@media (max-width: 1280px) and (min-width: 981px) {
   .editorGrid {
     grid-template-columns: 340px minmax(0, 1fr);
   }
   .editorGrid > :nth-child(3) {
     grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 980px) {
+  .editorGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .articleEditorCard {
+    height: auto;
+    min-height: 260px;
+  }
+
+  /* Single column + content column first on small screens */
+  .editorGrid > :nth-child(1) {
+    order: 2;
+  }
+  .editorGrid > :nth-child(2) {
+    order: 1;
+  }
+  .editorGrid > :nth-child(3) {
+    order: 3;
+    grid-column: auto;
   }
 }
 
@@ -1033,6 +1053,167 @@
   min-height: 0;
   max-height: none;
   resize: none;
+}
+
+/* Rich article editor (TipTap / ProseMirror) — aligns with formatted HTML sent to WordPress */
+.articleRichEditorWrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--button-secondary-border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: color-mix(in oklab, var(--aa-surface-dark-soft), transparent 55%);
+}
+
+.articleRichEditorReadonly {
+  opacity: 0.97;
+}
+
+.articleRichToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--aa-hairline-soft);
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 45%);
+}
+
+.articleRichToolBtn {
+  border: 1px solid var(--aa-hairline);
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 25%);
+  color: var(--aa-ink);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  line-height: 1.2;
+}
+
+.articleRichToolBtn:hover {
+  border-color: color-mix(in oklab, var(--aa-primary), var(--aa-hairline) 40%);
+}
+
+.articleRichToolBtn[aria-pressed="true"] {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 25%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 80%);
+}
+
+.articleRichEditorInner {
+  flex: 1;
+  min-height: 200px;
+  min-width: 0;
+}
+
+.articleProseMirror {
+  min-height: 220px;
+  max-height: min(62vh, 760px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 14px;
+  outline: none;
+  font-family: var(--font-ui-sans), var(--font-geist-sans), system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.68;
+  color: var(--aa-body);
+  word-break: break-word;
+}
+
+.articleProseMirror:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--aa-primary), transparent 70%);
+}
+
+.articleProseMirror p {
+  margin: 0 0 0.75em;
+}
+
+.articleProseMirror p:last-child {
+  margin-bottom: 0;
+}
+
+.articleProseMirror h2 {
+  font-family: var(--font-display-serif), var(--font-geist-sans), serif;
+  font-size: 1.45rem;
+  font-weight: 600;
+  line-height: 1.25;
+  margin: 1.1em 0 0.45em;
+  color: color-mix(in oklab, var(--aa-primary), var(--aa-ink) 12%);
+}
+
+.articleProseMirror h3 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin: 1em 0 0.4em;
+  color: var(--aa-body-strong);
+}
+
+.articleProseMirror h4 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0.85em 0 0.35em;
+}
+
+.articleProseMirror ul,
+.articleProseMirror ol {
+  padding-left: 1.35em;
+  margin: 0 0 0.85em;
+}
+
+.articleProseMirror li {
+  margin: 0.25em 0;
+}
+
+.articleProseMirror blockquote {
+  margin: 0.75em 0;
+  padding: 8px 12px;
+  border-left: 3px solid color-mix(in oklab, var(--aa-primary), transparent 55%);
+  color: var(--aa-muted);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 70%);
+  border-radius: 0 8px 8px 0;
+}
+
+.articleProseMirror pre {
+  margin: 0.75em 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in oklab, #000000, var(--aa-surface-card) 18%);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 12px;
+  overflow-x: auto;
+}
+
+.articleProseMirror code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.9em;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: color-mix(in oklab, #000000, var(--aa-surface-card) 22%);
+}
+
+.articleProseMirror a.article-editor-link {
+  color: color-mix(in oklab, var(--aa-primary), #fff 14%);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.articleProseMirror hr {
+  border: 0;
+  border-top: 1px solid var(--aa-hairline-soft);
+  margin: 1em 0;
+}
+
+.articleProseMirror strong {
+  color: var(--aa-body-strong);
+}
+
+@media (max-width: 980px) {
+  .articleProseMirror {
+    max-height: none;
+    min-height: 280px;
+  }
 }
 
 .seoMeterRow {
