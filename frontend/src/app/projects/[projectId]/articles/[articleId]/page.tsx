@@ -141,6 +141,27 @@ export default function ArticleEditPage() {
     })();
   }, [params.articleId, params.projectId, router, token]);
 
+  // Background prefetch (non-blocking) for better perceived performance.
+  useEffect(() => {
+    if (!token) return;
+    const pid = params.projectId;
+    const prefetch = () => {
+      // Fire-and-forget: keep editor responsive.
+      void ensurePromptsLoaded();
+      // WP meta is heavier and often unused; prefetch slightly later.
+      setTimeout(() => void ensureWpMetaLoaded(), 900);
+    };
+    // Prefer idle time; fallback to short delay.
+    const w = window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number; cancelIdleCallback?: (id: number) => void };
+    const idleId = typeof w.requestIdleCallback === "function" ? w.requestIdleCallback(prefetch, { timeout: 2000 }) : null;
+    const t = idleId ? null : window.setTimeout(prefetch, 900);
+    return () => {
+      if (idleId && typeof w.cancelIdleCallback === "function") w.cancelIdleCallback(idleId);
+      if (t) window.clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.projectId, token]);
+
   async function ensurePromptsLoaded() {
     if (promptsLoading) return;
     if (writingPrompts && imagePrompts) return;

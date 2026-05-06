@@ -173,3 +173,57 @@
   }
 }
 
+.workspaceCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.modalHeadActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.linkishButton {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: color-mix(in oklab, var(--aa-primary), #fff 12%);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.linkishButton:hover {
+  color: color-mix(in oklab, var(--aa-primary), #fff 24%);
+}
+
+.workspaceModal {
+  width: min(980px, calc(100vw - 32px));
+  max-width: none;
+}
+
+.workspaceModalBody {
+  max-height: min(70vh, 720px);
+  overflow: auto;
+}
+
+.workspaceSection {
+  margin-bottom: 22px;
+}
+
+.workspaceSection:last-child {
+  margin-bottom: 0;
+}
+
+.tableScroll {
+  overflow-x: auto;
+  border-radius: var(--aa-radius-panel, 14px);
+  border: 1px solid var(--aa-hairline-soft);
+}
+

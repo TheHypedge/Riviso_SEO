@@ -22,6 +22,8 @@ export type AdminUserPublic = {
   address?: string | null;
   created_at?: string | null;
   last_activity_at?: string | null;
+  /** Number of projects owned by this user (admin list/reporting). */
+  total_projects?: number;
 };
 
 export type AdminUserDetails = {
@@ -34,6 +36,39 @@ export type AdminUserDetails = {
     total_draft_articles: number;
     total_published_articles: number;
   };
+};
+
+export type AdminWorkspaceResponse = {
+  user_id: string;
+  email: string;
+  projects: { id: string; name: string; website_url?: string | null; article_count: number }[];
+  articles: {
+    id: string;
+    project_id: string;
+    project_name: string;
+    title: string;
+    status: string;
+    created_at?: string | null;
+    wp_link?: string | null;
+  }[];
+  articles_truncated: boolean;
+};
+
+export type ResearchIdeaRow = {
+  id: string;
+  title: string;
+  focus_keyphrase: string;
+  keywords: string[];
+  score?: number | null;
+  rationale?: string | null;
+};
+
+export type ResearchIdeasResponse = {
+  ok: boolean;
+  ideas: ResearchIdeaRow[];
+  keyword_analysis?: Record<string, unknown> | null;
+  scraped_queries?: string[];
+  used_history_count?: number;
 };
 
 export type PlanPublic = {
@@ -901,6 +936,27 @@ export const api = {
   },
   async adminGetUserDetails(userId: string) {
     return apiFetch<AdminUserDetails>(`/api/admin/users/${userId}/details`);
+  },
+  async adminGetUserWorkspace(userId: string) {
+    return apiFetch<AdminWorkspaceResponse>(`/api/admin/users/${encodeURIComponent(userId)}/workspace`);
+  },
+
+  async researchIdeas(
+    projectId: string,
+    payload: {
+      brand_niche?: string;
+      intent?: "informational" | "commercial" | "transactional" | "navigational";
+      tone?: "professional" | "friendly" | "authoritative" | "conversational" | "technical";
+      seed_keywords: string[];
+      country?: string;
+      language?: string;
+      max_ideas?: number;
+    },
+  ) {
+    return apiFetch<ResearchIdeasResponse>(`/api/projects/${projectId}/research/ideas`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
   },
   async adminDeleteUser(userId: string) {
     await apiFetch<unknown>(`/api/admin/users/${userId}`, { method: "DELETE" });

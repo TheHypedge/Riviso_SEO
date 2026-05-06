@@ -11,6 +11,36 @@ from app.schemas.prompts import PromptCreate, PromptItem, PromptListResponse, Pr
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["prompts"])
 
+_DEFAULT_WRITING_PROMPT_NAME = "Default writing prompt"
+_DEFAULT_WRITING_PROMPT_TEXT = (
+    "You are Riviso, an expert content writer.\n"
+    "Write a clear, SEO-friendly article for the given title and keywords.\n"
+    "- Use a compelling introduction\n"
+    "- Use helpful headings (H2/H3)\n"
+    "- Include practical details and examples where relevant\n"
+    "- Keep tone professional, readable, and concise\n"
+    "- Avoid fluff, repetition, and keyword stuffing\n"
+    "- End with a short conclusion\n"
+)
+
+
+def _ensure_default_prompt(*, st, project_id: str, proj: dict) -> dict:
+    prompts = [p for p in (proj.get("prompts") or []) if isinstance(p, dict)]
+    default_id = (proj.get("default_prompt_id") or "").strip()
+    if prompts and default_id:
+        return proj
+    if prompts and not default_id:
+        st.update_project_fields(project_id, {"default_prompt_id": (prompts[0].get("id") or "").strip()})
+        proj["default_prompt_id"] = (prompts[0].get("id") or "").strip()
+        return proj
+    # Seed a default writing prompt for new/empty projects.
+    pid = str(uuid.uuid4())
+    row = {"id": pid, "name": _DEFAULT_WRITING_PROMPT_NAME, "text": _DEFAULT_WRITING_PROMPT_TEXT}
+    st.update_project_fields(project_id, {"prompts": [row], "default_prompt_id": pid})
+    proj["prompts"] = [row]
+    proj["default_prompt_id"] = pid
+    return proj
+
 
 def _require_project_access(*, st, user: dict, project_id: str) -> dict:
     pid = (project_id or "").strip()
@@ -39,6 +69,10 @@ def _coerce_prompt_item(x: dict) -> PromptItem | None:
 async def list_prompts(project_id: str, user: dict = Depends(get_current_user)) -> PromptListResponse:
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
+    try:
+        proj = _ensure_default_prompt(st=st, project_id=project_id, proj=proj)
+    except Exception:
+        pass
     items = []
     for p in proj.get("prompts") or []:
         it = _coerce_prompt_item(p) if isinstance(p, dict) else None

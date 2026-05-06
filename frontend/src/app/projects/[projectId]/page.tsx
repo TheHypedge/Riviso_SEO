@@ -6,10 +6,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
-import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse } from "@/lib/api";
+import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse, ResearchIdeaRow as ApiResearchIdeaRow } from "@/lib/api";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
-type TabKey = "articles" | "scheduled_articles" | "configuration" | "prompts" | "context_links" | "tools" | "project_settings";
+type TabKey = "articles" | "research" | "scheduled_articles" | "configuration" | "prompts" | "context_links" | "tools" | "project_settings";
 
 function parseDateOnly(s: string): Date | null {
   const v = (s || "").trim();
@@ -81,6 +81,17 @@ function dedupeBulkUploadRowsByTitle(rows: BulkUploadRow[]): {
 }
 
 type ProjectDupRow = { submitted_title: string; existing_title: string; existing_id: string };
+
+type ResearchIntent = "informational" | "commercial" | "transactional" | "navigational";
+type ResearchTone = "professional" | "friendly" | "authoritative" | "conversational" | "technical";
+type ResearchIdeaRow = {
+  id: string;
+  title: string;
+  focus_keyphrase: string;
+  keywords: string[];
+  score?: number | null;
+  rationale?: string | null;
+};
 
 export default function ProjectPage() {
   const router = useRouter();
@@ -167,6 +178,25 @@ export default function ProjectPage() {
   const [bulkScheduleWpStatus, setBulkScheduleWpStatus] = useState<"draft" | "publish">("draft");
   const [bulkSchedulePostType, setBulkSchedulePostType] = useState("posts");
   const [bulkScheduling, setBulkScheduling] = useState(false);
+
+  // Research module state
+  const [researchBrandNiche, setResearchBrandNiche] = useState("");
+  const [researchIntent, setResearchIntent] = useState<ResearchIntent>("informational");
+  const [researchTone, setResearchTone] = useState<ResearchTone>("professional");
+  const [researchSeed, setResearchSeed] = useState("");
+  const [researchCountry, setResearchCountry] = useState("US");
+  const [researchLanguage, setResearchLanguage] = useState("en");
+  const [researchBusy, setResearchBusy] = useState(false);
+  const [researchMsg, setResearchMsg] = useState<string | null>(null);
+  const [researchResults, setResearchResults] = useState<ResearchIdeaRow[]>([]);
+  const [researchSelected, setResearchSelected] = useState<Set<string>>(new Set());
+  const [researchImporting, setResearchImporting] = useState(false);
+  const [researchImportMsg, setResearchImportMsg] = useState<string | null>(null);
+  const [researchImportDupModal, setResearchImportDupModal] = useState<{
+    projectDuplicates: ProjectDupRow[];
+    inFileDuplicateTitles: string[];
+    wouldCreateCount: number;
+  } | null>(null);
 
   // Prompts module state (staged edits; saved on demand)
   const [writingPrompts, setWritingPrompts] = useState<PromptListResponse | null>(null);
@@ -1274,6 +1304,7 @@ export default function ProjectPage() {
 
   const tabLabel: Record<TabKey, string> = {
     articles: "Articles",
+    research: "Research",
     scheduled_articles: "Scheduled Articles",
     configuration: "Configuration",
     prompts: "Prompts",
@@ -1488,8 +1519,12 @@ export default function ProjectPage() {
                 </>
               ) : (
                 <>
-                  <h1>{tabLabel[tab]}</h1>
-                 
+                  <h1 style={{ margin: 0 }}>{tabLabel[tab]}</h1>
+                  {tab === "research" ? (
+                    <div className={styles.muted} style={{ marginTop: 6, lineHeight: 1.55 }}>
+                      Generate optimized titles, focus keyphrases, and keywords — then import them into Articles.
+                    </div>
+                  ) : null}
                 </>
               )}
             </div>
@@ -2503,6 +2538,360 @@ export default function ProjectPage() {
                       }}
                     >
                       OK
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </>
+        ) : null}
+
+        {tab === "research" ? (
+          <>
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <div className={styles.sectionHead}>
+                <div>
+                  <h2 style={{ margin: 0 }}>Curation</h2>
+                  <div className={styles.muted}>Fine-tune results for your brand and intent.</div>
+                </div>
+                <button
+                  className={styles.button}
+                  type="button"
+                  disabled={researchBusy || !researchSeed.trim()}
+                  onClick={async () => {
+                    setError(null);
+                    setResearchMsg(null);
+                    setResearchBusy(true);
+                    try {
+                      const seeds = researchSeed
+                        .split("\n")
+                        .map((s) => s.trim())
+                        .filter(Boolean)
+                        .slice(0, 25);
+                      if (!seeds.length) {
+                        setResearchMsg("Add at least one seed keyword/topic.");
+                        return;
+                      }
+
+                      const res = await api.researchIdeas(projectId, {
+                        brand_niche: researchBrandNiche,
+                        intent: researchIntent,
+                        tone: researchTone,
+                        seed_keywords: seeds,
+                        country: researchCountry,
+                        language: researchLanguage,
+                      });
+                      const rows = (res?.ideas || []) as ApiResearchIdeaRow[];
+                      const ka = (res as unknown as { keyword_analysis?: unknown })?.keyword_analysis;
+
+                      const normalized: ResearchIdeaRow[] = Array.isArray(rows)
+                        ? rows
+                            .filter((r) => r && typeof r === "object")
+                            .map((r) => ({
+                              id: String((r as ApiResearchIdeaRow).id || `${(r as ApiResearchIdeaRow).title}:${(r as ApiResearchIdeaRow).focus_keyphrase}`),
+                              title: String((r as ApiResearchIdeaRow).title || "").trim(),
+                              focus_keyphrase: String((r as ApiResearchIdeaRow).focus_keyphrase || "").trim(),
+                              keywords: Array.isArray((r as ApiResearchIdeaRow).keywords)
+                                ? (r as ApiResearchIdeaRow).keywords.map((k) => String(k || "").trim()).filter(Boolean)
+                                : [],
+                              score: (r as ApiResearchIdeaRow).score ?? null,
+                              rationale: (r as ApiResearchIdeaRow).rationale ?? null,
+                            }))
+                            .filter((r) => r.title && r.focus_keyphrase)
+                        : [];
+
+                      setResearchResults(normalized);
+                      setResearchSelected(new Set());
+                      if (!normalized.length) setResearchMsg("No results returned. Try different seeds.");
+                      if (ka && typeof ka === "object") {
+                        try {
+                          setResearchMsg((prev) => {
+                            const s = JSON.stringify(ka, null, 2);
+                            const note = `Keyword analysis:\\n${s}`;
+                            return prev ? `${prev}\\n\\n${note}` : note;
+                          });
+                        } catch {
+                          // ignore
+                        }
+                      }
+                    } catch (e) {
+                      setResearchMsg(e instanceof Error ? e.message : "Research failed");
+                    } finally {
+                      setResearchBusy(false);
+                    }
+                  }}
+                >
+                  {researchBusy ? "Researching…" : "Run research"}
+                </button>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 12,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 12,
+                }}
+              >
+                <label className={styles.label}>
+                  Brand niche
+                  <input className={styles.input} value={researchBrandNiche} onChange={(e) => setResearchBrandNiche(e.target.value)} placeholder="e.g. MSME legal services in India" />
+                </label>
+
+                <label className={styles.label}>
+                  Article intent
+                  <select className={styles.select} value={researchIntent} onChange={(e) => setResearchIntent(e.target.value as ResearchIntent)}>
+                    <option value="informational">Informational</option>
+                    <option value="commercial">Commercial</option>
+                    <option value="transactional">Transactional</option>
+                    <option value="navigational">Navigational</option>
+                  </select>
+                </label>
+
+                <label className={styles.label}>
+                  Article tone
+                  <select className={styles.select} value={researchTone} onChange={(e) => setResearchTone(e.target.value as ResearchTone)}>
+                    <option value="professional">Professional</option>
+                    <option value="friendly">Friendly</option>
+                    <option value="authoritative">Authoritative</option>
+                    <option value="conversational">Conversational</option>
+                    <option value="technical">Technical</option>
+                  </select>
+                </label>
+
+                <label className={styles.label}>
+                  Country
+                  <input className={styles.input} value={researchCountry} onChange={(e) => setResearchCountry(e.target.value)} placeholder="US" />
+                </label>
+
+                <label className={styles.label}>
+                  Language
+                  <input className={styles.input} value={researchLanguage} onChange={(e) => setResearchLanguage(e.target.value)} placeholder="en" />
+                </label>
+
+                <label className={styles.label} style={{ gridColumn: "1 / -1" }}>
+                  Seed keywords/topics (one per line)
+                  <textarea
+                    className={styles.textarea}
+                    value={researchSeed}
+                    onChange={(e) => setResearchSeed(e.target.value)}
+                    placeholder={"e.g.\nMSME lawyer\nMSME dispute resolution\ncommercial litigation"}
+                    style={{ minHeight: 140 }}
+                  />
+                </label>
+              </div>
+
+              {researchMsg ? (
+                <div className={styles.muted} style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
+                  {researchMsg}
+                </div>
+              ) : null}
+            </div>
+
+            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+              <div className={styles.sectionHead}>
+                <div>
+                  <h2 style={{ margin: 0 }}>Results</h2>
+                  <div className={styles.muted}>Select ideas and import them into your Articles list.</div>
+                </div>
+                <button
+                  className={styles.button}
+                  type="button"
+                  disabled={!researchSelected.size || researchImporting}
+                  onClick={async () => {
+                    setError(null);
+                    setResearchMsg(null);
+                    setResearchImportMsg(null);
+                    try {
+                      const selected = researchResults.filter((r) => researchSelected.has(r.id));
+                      const rows: BulkUploadRow[] = selected.map((r) => ({
+                        title: r.title,
+                        focus_keyphrase: r.focus_keyphrase,
+                        keywords: (r.keywords || []).slice(0, 10),
+                      }));
+                      if (!rows.length) return;
+                      setResearchImporting(true);
+                      const res = await api.bulkUploadArticles(projectId, rows, { skipProjectDuplicateConflicts: false });
+                      setArticles(await api.listArticles(projectId));
+                      setResearchImportDupModal(null);
+                      setResearchSelected(new Set());
+                      const skipped = res.project_skipped_as_duplicates || 0;
+                      setResearchImportMsg(`Imported ${res.created} article${res.created === 1 ? "" : "s"}${skipped ? ` (${skipped} skipped as duplicates)` : ""}.`);
+                    } catch (e) {
+                      if (e instanceof ApiError && e.status === 409 && e.detail && typeof e.detail === "object" && e.detail !== null) {
+                        const d = e.detail as Record<string, unknown>;
+                        if (d.error === "duplicate_article_titles") {
+                          const raw = d.project_duplicates;
+                          const projectDuplicates: ProjectDupRow[] = Array.isArray(raw)
+                            ? raw
+                                .filter((x): x is Record<string, unknown> => x !== null && typeof x === "object")
+                                .map((x) => ({
+                                  submitted_title: String(x.submitted_title ?? ""),
+                                  existing_title: String(x.existing_title ?? ""),
+                                  existing_id: String(x.existing_id ?? ""),
+                                }))
+                            : [];
+                          const inRaw = d.in_file_duplicate_titles;
+                          const inFileDuplicateTitles = Array.isArray(inRaw)
+                            ? inRaw.filter((x): x is string => typeof x === "string")
+                            : [];
+                          const wc = d.would_create_count;
+                          setResearchImportDupModal({
+                            projectDuplicates,
+                            inFileDuplicateTitles,
+                            wouldCreateCount: typeof wc === "number" ? wc : 0,
+                          });
+                          return;
+                        }
+                      }
+                      setResearchImportMsg(e instanceof Error ? e.message : "Import failed");
+                    } finally {
+                      setResearchImporting(false);
+                    }
+                  }}
+                >
+                  {researchImporting ? "Importing…" : "Import selected"}
+                </button>
+              </div>
+
+              {researchImportMsg ? (
+                <div className={styles.muted} style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
+                  {researchImportMsg}{" "}
+                  <button type="button" className={styles.miniBtn} onClick={() => goTab("articles")}>
+                    Open Articles
+                  </button>
+                </div>
+              ) : null}
+
+              {!researchResults.length ? <div className={styles.muted}>Run research to see results.</div> : null}
+
+              {researchResults.length ? (
+                <table className={styles.table} style={{ marginTop: 10 }}>
+                  <thead>
+                    <tr>
+                      <th className={styles.th} style={{ width: 44 }}>
+                        <input
+                          type="checkbox"
+                          checked={researchSelected.size > 0 && researchSelected.size === researchResults.length}
+                          onChange={(e) => {
+                            const next = new Set<string>();
+                            if (e.target.checked) researchResults.forEach((r) => next.add(r.id));
+                            setResearchSelected(next);
+                          }}
+                        />
+                      </th>
+                      <th className={styles.th}>Title</th>
+                      <th className={styles.th}>Focus keyphrase</th>
+                      <th className={styles.th}>Keywords</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {researchResults.map((r) => (
+                      <tr key={r.id}>
+                        <td className={styles.td}>
+                          <input
+                            type="checkbox"
+                            checked={researchSelected.has(r.id)}
+                            onChange={(e) => {
+                              setResearchSelected((prev) => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(r.id);
+                                else next.delete(r.id);
+                                return next;
+                              });
+                            }}
+                          />
+                        </td>
+                        <td className={styles.td} style={{ maxWidth: 420 }}>
+                          <div style={{ fontWeight: 900 }}>{r.title}</div>
+                          {r.rationale ? <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>{r.rationale}</div> : null}
+                        </td>
+                        <td className={styles.td}>{r.focus_keyphrase}</td>
+                        <td className={styles.td}>
+                          <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
+                            {(r.keywords || []).slice(0, 10).join(", ") || "—"}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : null}
+            </div>
+
+            {researchImportDupModal ? (
+              <>
+                <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setResearchImportDupModal(null)} />
+                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Duplicate articles detected" style={{ maxWidth: 520 }}>
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Duplicate articles detected</h3>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setResearchImportDupModal(null)}>
+                      Close
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <p style={{ marginTop: 0, lineHeight: 1.55 }}>
+                      Some selected titles already exist in this project (comparison is not case-sensitive). You can skip duplicates and import only unique rows.
+                    </p>
+                    <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.55 }}>
+                      Conflicts: <b>{researchImportDupModal.projectDuplicates.length}</b> · Would create: <b>{researchImportDupModal.wouldCreateCount}</b>
+                    </div>
+                    {researchImportDupModal.projectDuplicates.length ? (
+                      <div style={{ marginTop: 10 }}>
+                        <div className={styles.muted} style={{ fontSize: 12, marginBottom: 6 }}>
+                          Conflicting titles
+                        </div>
+                        <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.55 }}>
+                          {researchImportDupModal.projectDuplicates.slice(0, 25).map((row) => (
+                            <li key={`${row.submitted_title}:${row.existing_id}`}>
+                              <span style={{ fontWeight: 800 }}>{row.submitted_title}</span>{" "}
+                              <span className={styles.muted} style={{ fontSize: 12 }}>
+                                (existing: {row.existing_title})
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        {researchImportDupModal.projectDuplicates.length > 25 ? (
+                          <div className={styles.muted} style={{ marginTop: 8, fontSize: 12 }}>
+                            Showing first 25 conflicts.
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setResearchImportDupModal(null)} disabled={researchImporting}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      disabled={researchImporting}
+                      onClick={async () => {
+                        setError(null);
+                        setResearchImportMsg(null);
+                        setResearchImporting(true);
+                        try {
+                          const selected = researchResults.filter((r) => researchSelected.has(r.id));
+                          const rows: BulkUploadRow[] = selected.map((r) => ({
+                            title: r.title,
+                            focus_keyphrase: r.focus_keyphrase,
+                            keywords: (r.keywords || []).slice(0, 10),
+                          }));
+                          const res = await api.bulkUploadArticles(projectId, rows, { skipProjectDuplicateConflicts: true });
+                          setArticles(await api.listArticles(projectId));
+                          setResearchImportDupModal(null);
+                          setResearchSelected(new Set());
+                          const skipped = res.project_skipped_as_duplicates || 0;
+                          setResearchImportMsg(`Imported ${res.created} article${res.created === 1 ? "" : "s"}${skipped ? ` (${skipped} skipped as duplicates)` : ""}.`);
+                        } catch (e) {
+                          setResearchImportMsg(e instanceof Error ? e.message : "Import failed");
+                        } finally {
+                          setResearchImporting(false);
+                        }
+                      }}
+                    >
+                      Import unique only
                     </button>
                   </div>
                 </div>

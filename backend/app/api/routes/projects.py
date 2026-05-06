@@ -12,6 +12,24 @@ from app.schemas.projects import ProjectCreate, ProjectPublic, ProjectUpdate
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
+_DEFAULT_WRITING_PROMPT_NAME = "Default writing prompt"
+_DEFAULT_WRITING_PROMPT_TEXT = (
+    "You are Riviso, an expert content writer.\n"
+    "Write a clear, SEO-friendly article for the given title and keywords.\n"
+    "- Use a compelling introduction\n"
+    "- Use helpful headings (H2/H3)\n"
+    "- Include practical details and examples where relevant\n"
+    "- Keep tone professional, readable, and concise\n"
+    "- Avoid fluff, repetition, and keyword stuffing\n"
+    "- End with a short conclusion\n"
+)
+
+_DEFAULT_IMAGE_PROMPT_NAME = "Default image prompt"
+_DEFAULT_IMAGE_PROMPT_TEXT = (
+    "Create a realistic, professional featured image that matches the article topic.\n"
+    "No text, no watermarks, clean composition, editorial lighting, sharp focus.\n"
+)
+
 
 def _normalize_url(raw: str | None) -> str:
     s = (raw or "").strip()
@@ -36,21 +54,17 @@ def _to_public(p: dict) -> ProjectPublic:
 async def list_projects(user: dict = Depends(get_current_user)) -> list[ProjectPublic]:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    # Admins see every project (workspace / project management). Regular users only their own.
-    if role == "admin":
-        projects = st.load_projects(None) or []
-        out = [_to_public(p) for p in projects if isinstance(p, dict)]
-    else:
-        projects = st.load_projects(uid) or []
-        out = []
-        for p in projects:
-            if not isinstance(p, dict):
-                continue
-            owner = (p.get("owner_user_id") or "").strip()
-            if not user_ids_equal(owner, uid):
-                continue
-            out.append(_to_public(p))
+    # Workspace project list is always scoped to the signed-in account (including admins).
+    # Admins browse other accounts' projects via Manage users → workspace view.
+    projects = st.load_projects(uid) or []
+    out: list[ProjectPublic] = []
+    for p in projects:
+        if not isinstance(p, dict):
+            continue
+        owner = (p.get("owner_user_id") or "").strip()
+        if not user_ids_equal(owner, uid):
+            continue
+        out.append(_to_public(p))
     out.sort(key=lambda x: (x.name.lower(), x.id))
     return out
 
@@ -88,6 +102,8 @@ async def create_project(payload: ProjectCreate, user: dict = Depends(get_curren
                     detail=f"Project limit reached for your plan (max {max_projects_i}). Upgrade your subscription to create more projects.",
                 )
     pid = str(uuid.uuid4())
+    default_writing_id = str(uuid.uuid4())
+    default_image_id = str(uuid.uuid4())
     url = _normalize_url(payload.website_url)
     st.insert_project(
         {
@@ -99,10 +115,10 @@ async def create_project(payload: ProjectCreate, user: dict = Depends(get_curren
             "wp_username": "",
             "wp_app_password": "",
             "wp_category_ids": "",
-            "prompts": [],
-            "default_prompt_id": "",
-            "image_prompts": [],
-            "default_image_prompt_id": "",
+            "prompts": [{"id": default_writing_id, "name": _DEFAULT_WRITING_PROMPT_NAME, "text": _DEFAULT_WRITING_PROMPT_TEXT}],
+            "default_prompt_id": default_writing_id,
+            "image_prompts": [{"id": default_image_id, "name": _DEFAULT_IMAGE_PROMPT_NAME, "text": _DEFAULT_IMAGE_PROMPT_TEXT}],
+            "default_image_prompt_id": default_image_id,
             "image_style": "semi_real",
             "optimize_image_prompt": True,
             "context_links": [],

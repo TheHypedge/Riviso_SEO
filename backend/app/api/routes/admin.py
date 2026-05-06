@@ -4,7 +4,17 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.core.deps import require_admin
 from app.legacy.storage import get_legacy_storage_module
-from app.schemas.admin import AdminUserDetails, AdminUserPublic, AdminUserStats, AdminUserUpdate, PlanPublic, PlanUpsert
+from app.schemas.admin import (
+    AdminUserDetails,
+    AdminUserPublic,
+    AdminUserStats,
+    AdminUserUpdate,
+    AdminWorkspaceArticleRow,
+    AdminWorkspaceProjectRow,
+    AdminWorkspaceResponse,
+    PlanPublic,
+    PlanUpsert,
+)
 from app.services.user_timezone import normalize_user_timezone
 from app.services.to_thread import run_sync
 
@@ -34,7 +44,7 @@ async def storage_status(_: dict = Depends(require_admin)) -> dict:
     return {"storage_mode": mode, "storage_init_error": err}
 
 
-def _user_to_public(u: dict) -> AdminUserPublic:
+def _user_to_public(u: dict, *, total_projects: int = 0) -> AdminUserPublic:
     tz_raw = (u.get("timezone") or "").strip()
     tz_norm = normalize_user_timezone(tz_raw) if tz_raw else None
     return AdminUserPublic(
@@ -48,6 +58,7 @@ def _user_to_public(u: dict) -> AdminUserPublic:
         address=((u.get("address") or "").strip() or None),
         created_at=((u.get("created_at") or "").strip() or None),
         last_activity_at=((u.get("last_activity_at") or "").strip() or None),
+        total_projects=int(total_projects or 0),
     )
 
 
@@ -58,7 +69,14 @@ async def list_users(_: dict = Depends(require_admin)) -> list[AdminUserPublic]:
     out: list[AdminUserPublic] = []
     for u in items:
         if isinstance(u, dict):
-            out.append(_user_to_public(u))
+            uid = (u.get("id") or "").strip()
+            nproj = 0
+            if uid and hasattr(st, "project_ids_for_owner"):
+                try:
+                    nproj = len(st.project_ids_for_owner(uid) or [])
+                except Exception:
+                    nproj = 0
+            out.append(_user_to_public(u, total_projects=nproj))
     out.sort(key=lambda x: (x.email.lower(), x.id))
     return out
 
@@ -79,7 +97,13 @@ async def update_user(user_id: str, payload: AdminUserUpdate, _: dict = Depends(
     u = st.get_user_by_id(uid)
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
-    return _user_to_public(u)
+    nproj = 0
+    if hasattr(st, "project_ids_for_owner"):
+        try:
+            nproj = len(st.project_ids_for_owner(uid) or [])
+        except Exception:
+            nproj = 0
+    return _user_to_public(u, total_projects=nproj)
 
 
 @router.delete("/users/{user_id}", status_code=204)
@@ -113,7 +137,96 @@ async def user_details(user_id: str, _: dict = Depends(require_admin)) -> AdminU
         total_draft_articles=int(counts.get("draft") or 0),
         total_published_articles=int(counts.get("published") or 0),
     )
-    return AdminUserDetails(user=_user_to_public(u), stats=stats)
+    return AdminUserDetails(user=_user_to_public(u, total_projects=len(pids)), stats=stats)
+
+
+@router.get("/users/{user_id}/workspace", response_model=AdminWorkspaceResponse)
+async def user_workspace(user_id: str, _: dict = Depends(require_admin)) -> AdminWorkspaceResponse:
+    """
+    Admin-only snapshot of another user's projects plus a recent article listing.
+    Opening project/article routes in the main app still respects admin access checks.
+    """
+    st = get_legacy_storage_module()
+    uid = (user_id or "").strip()
+    if not uid:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    u = st.get_user_by_id(uid)
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    projs = [p for p in (st.load_projects(uid) or []) if isinstance(p, dict)]
+    by_id: dict[str, dict] = {}
+    for p in projs:
+        pid = (p.get("id") or "").strip()
+        if pid:
+            by_id[pid] = p
+    pids = sorted(by_id.keys())
+
+    counts: dict[str, int] = {}
+    if hasattr(st, "article_totals_per_project"):
+        try:
+            counts = dict(st.article_totals_per_project(pids))
+        except Exception:
+            counts = {pid: 0 for pid in pids}
+
+    listing_limit = 1500
+    raw_articles: list[dict] = []
+    if hasattr(st, "load_recent_article_listings_for_projects"):
+        try:
+            raw_articles = list(st.load_recent_article_listings_for_projects(pids, limit=listing_limit) or [])
+        except Exception:
+            raw_articles = []
+    else:
+        for pid in pids:
+            if hasattr(st, "load_articles_listing_for_project"):
+                try:
+                    raw_articles.extend(st.load_articles_listing_for_project(pid, limit=300) or [])
+                except Exception:
+                    pass
+
+    total_articles = sum(int(counts.get(pid, 0) or 0) for pid in pids)
+    articles_truncated = total_articles > len(raw_articles)
+
+    project_rows = [
+        AdminWorkspaceProjectRow(
+            id=pid,
+            name=str((by_id[pid].get("name") or "")).strip(),
+            website_url=(str(by_id[pid].get("website_url") or "").strip() or None),
+            article_count=int(counts.get(pid, 0) or 0),
+        )
+        for pid in sorted(pids, key=lambda x: (str(by_id[x].get("name") or "").lower(), x))
+    ]
+
+    article_rows: list[AdminWorkspaceArticleRow] = []
+    for a in raw_articles:
+        if not isinstance(a, dict):
+            continue
+        aid = (a.get("id") or "").strip()
+        pid = (a.get("project_id") or "").strip()
+        if not aid or not pid:
+            continue
+        pname = str((by_id.get(pid) or {}).get("name") or "").strip() or pid
+        ca = (str(a.get("created_at") or "").strip() or None)
+        wpl = (str(a.get("wp_link") or "").strip() or None)
+        article_rows.append(
+            AdminWorkspaceArticleRow(
+                id=aid,
+                project_id=pid,
+                project_name=pname,
+                title=(str(a.get("title") or "").strip() or "(untitled)"),
+                status=str(a.get("status") or "pending").strip().lower(),
+                created_at=ca,
+                wp_link=wpl,
+            )
+        )
+
+    return AdminWorkspaceResponse(
+        user_id=uid,
+        email=(u.get("email") or "").strip(),
+        projects=project_rows,
+        articles=article_rows,
+        articles_truncated=articles_truncated,
+    )
 
 
 def _plan_to_public(key: str, d: dict) -> PlanPublic:

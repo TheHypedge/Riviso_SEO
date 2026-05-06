@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import threading
+import time
 from datetime import date, datetime
 from typing import Any
 
@@ -1237,6 +1238,249 @@ def load_articles_listing_for_project(
         d["wp_scheduled_at"] = _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at"))
         out.append(d)
     return out
+
+
+def article_totals_per_project(project_ids: list[str]) -> dict[str, int]:
+    """Return total article counts keyed by project_id (admin reporting)."""
+    pids = sorted({str(x).strip() for x in (project_ids or []) if str(x).strip()})
+    if not pids:
+        return {}
+    if _storage_mode != "mongo":
+        rows = [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
+        out: dict[str, int] = {p: 0 for p in pids}
+        ps = set(pids)
+        for a in rows:
+            pid = (a.get("project_id") or "").strip()
+            if pid in ps:
+                out[pid] = out.get(pid, 0) + 1
+        return out
+    db = get_db()
+    tallies: dict[str, int] = {p: 0 for p in pids}
+    try:
+        pipeline = [
+            {"$match": {"project_id": {"$in": pids}}},
+            {"$group": {"_id": "$project_id", "n": {"$sum": 1}}},
+        ]
+        for row in db.articles.aggregate(pipeline, allowDiskUse=False):
+            k = str(row.get("_id") or "").strip()
+            if k in tallies:
+                tallies[k] = int(row.get("n") or 0)
+    except Exception:
+        for pid in pids:
+            tallies[pid] = int(db.articles.count_documents({"project_id": pid}))
+    return tallies
+
+
+def load_recent_article_listings_for_projects(
+    project_ids: list[str],
+    *,
+    limit: int = 1500,
+) -> list[dict[str, Any]]:
+    """
+    Recent articles across multiple projects for admin dashboards (titles + listing fields only).
+    """
+    pids = sorted({str(x).strip() for x in (project_ids or []) if str(x).strip()})
+    if not pids:
+        return []
+    lim = max(1, min(int(limit or 1500), 5000))
+
+    if _storage_mode != "mongo":
+        rows = [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
+        ps = set(pids)
+        out = [r for r in rows if (r.get("project_id") or "").strip() in ps]
+        out.sort(key=lambda r: (r.get("created_at") or ""), reverse=True)
+        trimmed = out[:lim]
+        for r in trimmed:
+            r["hasBody"] = bool((r.get("article") or "").strip())
+            r["status"] = (r.get("status") or "pending") if isinstance(r.get("status"), str) else str(r.get("status") or "pending")
+            r["title"] = (r.get("title") or "").strip()
+        return trimmed
+
+    db = get_db()
+    pipeline = [
+        {"$match": {"project_id": {"$in": pids}}},
+        {
+            "$project": {
+                "_id": 0,
+                "id": 1,
+                "project_id": 1,
+                "title": 1,
+                "keywords": 1,
+                "status": {"$ifNull": ["$status", "pending"]},
+                "focus_keyphrase": 1,
+                "meta_title": 1,
+                "meta_description": 1,
+                "generated_at": 1,
+                "posted_at": 1,
+                "created_at": 1,
+                "updated_at": 1,
+                "wp_post_id": 1,
+                "wp_link": 1,
+                "wp_rest_base": 1,
+                "wp_last_wp_status": 1,
+                "wp_scheduled_at": 1,
+                "wp_schedule_wp_status": 1,
+                "wp_schedule_error": 1,
+                "wp_schedule_batch_id": 1,
+                "wp_schedule_batch_index": 1,
+                "wp_schedule_batch_total": 1,
+                "gsc_status": 1,
+                "gsc_inspection_requested_at": 1,
+                "gsc_inspection_error": 1,
+                "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
+            }
+        },
+        {"$sort": {"created_at": -1}},
+        {"$limit": lim},
+    ]
+    out_list: list[dict[str, Any]] = []
+    for d in db.articles.aggregate(pipeline, allowDiskUse=False):
+        d["wp_scheduled_at"] = _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at"))
+        out_list.append(d)
+    return out_list
+
+
+def save_research_serp_snapshot(snapshot: dict[str, Any]) -> None:
+    """
+    Persist a SERP snapshot for future improvements/learning.
+
+    Storage:
+    - Mongo: `research_serp` collection, keyed by a stable `_id` (project_id + query + gl + hl + html_sha256).
+    - JSON fallback: append to `research_serp.json` (bounded list).
+    """
+    s = dict(snapshot or {})
+    pid = (s.get("project_id") or "").strip()
+    query = (s.get("query") or "").strip()
+    gl = (s.get("gl") or "").strip()
+    hl = (s.get("hl") or "").strip()
+    sha = (s.get("html_sha256") or "").strip()
+    if not pid or not query:
+        return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("research_serp.json") if isinstance(x, dict)]
+            rows.append(s)
+            # Keep most recent 2000 snapshots to avoid unbounded growth in fallback mode.
+            rows = rows[-2000:]
+            _save_json("research_serp.json", rows)
+        return
+    doc = dict(s)
+    doc["_id"] = f"{pid}:{gl}:{hl}:{query.casefold()}:{sha}" if sha else f"{pid}:{gl}:{hl}:{query.casefold()}"
+    with _db_write_lock:
+        get_db().research_serp.update_one({"_id": doc["_id"]}, {"$set": doc}, upsert=True)
+
+
+def load_research_serp_history(
+    *,
+    project_id: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Load recent SERP snapshots for a project (for analysis context)."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    lim = max(1, min(int(limit or 50), 200))
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("research_serp.json") if isinstance(x, dict)]
+        out = [r for r in rows if (r.get("project_id") or "").strip() == pid]
+        out.sort(key=lambda r: float(r.get("fetched_at") or 0.0), reverse=True)
+        return out[:lim]
+    cur = get_db().research_serp.find({"project_id": pid}, {"_id": 0}).sort("fetched_at", -1).limit(lim)
+    return [dict(d) for d in cur]
+
+
+def save_research_ideas_run(run: dict[str, Any]) -> None:
+    """
+    Persist a research generation run: inputs + structured outputs.
+
+    Used to improve quality over time by feeding previous runs back into the prompt as context.
+    """
+    r = dict(run or {})
+    pid = (r.get("project_id") or "").strip()
+    rid = (r.get("id") or "").strip()
+    if not pid:
+        return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("research_ideas_runs.json") if isinstance(x, dict)]
+            rows.append(r)
+            rows = rows[-2000:]
+            _save_json("research_ideas_runs.json", rows)
+        return
+    doc = dict(r)
+    if rid:
+        doc["_id"] = rid
+    else:
+        # Deterministic enough; callers can still pass explicit ids.
+        doc["_id"] = f"{pid}:{doc.get('created_at') or ''}:{len(str(doc.get('ideas') or ''))}"
+    with _db_write_lock:
+        get_db().research_ideas_runs.update_one({"_id": doc["_id"]}, {"$set": doc}, upsert=True)
+
+
+def load_research_ideas_runs(*, project_id: str, limit: int = 30) -> list[dict[str, Any]]:
+    """Load recent research runs (inputs + outputs) for a project."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    lim = max(1, min(int(limit or 30), 120))
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("research_ideas_runs.json") if isinstance(x, dict)]
+        out = [r for r in rows if (r.get("project_id") or "").strip() == pid]
+        out.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        return out[:lim]
+    cur = get_db().research_ideas_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).limit(lim)
+    return [dict(d) for d in cur]
+
+
+def get_research_cache(*, cache_key: str, max_age_s: int = 6 * 60 * 60) -> dict[str, Any] | None:
+    """Fetch a cached research response by key if still fresh."""
+    key = (cache_key or "").strip()
+    if not key:
+        return None
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("research_cache.json") if isinstance(x, dict)]
+        now = time.time()
+        for r in reversed(rows):
+            if (r.get("key") or "").strip() != key:
+                continue
+            try:
+                ts = float(r.get("saved_at") or 0.0)
+            except Exception:
+                ts = 0.0
+            if now is not None and max_age_s and ts and (now - ts) > float(max_age_s):
+                return None
+            return r.get("value") if isinstance(r.get("value"), dict) else None
+        return None
+    doc = get_db().research_cache.find_one({"_id": key})
+    if not isinstance(doc, dict):
+        return None
+    try:
+        saved_at = float(doc.get("saved_at") or 0.0)
+    except Exception:
+        saved_at = 0.0
+    if max_age_s and saved_at and (time.time() - saved_at) > float(max_age_s):
+        return None
+    v = doc.get("value")
+    return v if isinstance(v, dict) else None
+
+
+def set_research_cache(*, cache_key: str, value: dict[str, Any]) -> None:
+    """Set cached research response by key."""
+    key = (cache_key or "").strip()
+    if not key:
+        return
+    v = dict(value or {})
+    now = time.time()
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("research_cache.json") if isinstance(x, dict)]
+            rows.append({"key": key, "saved_at": float(now or 0.0), "value": v})
+            rows = rows[-5000:]
+            _save_json("research_cache.json", rows)
+        return
+    doc = {"_id": key, "saved_at": float(time.time()), "value": v}
+    with _db_write_lock:
+        get_db().research_cache.update_one({"_id": key}, {"$set": doc}, upsert=True)
 
 
 # ----------------------------

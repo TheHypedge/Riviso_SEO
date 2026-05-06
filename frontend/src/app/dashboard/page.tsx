@@ -6,7 +6,20 @@ import { useRouter } from "next/navigation";
 
 import styles from "../page.module.css";
 import dashStyles from "./dashboard.module.css";
-import { api, clearAuth, getAccessToken, ProjectPublic, AdminUserPublic, PlanPublic, ProfilePublic, ProjectSettings, WordpressVerifyResponse, AdminUserDetails, GscStatus } from "@/lib/api";
+import {
+  AdminUserDetails,
+  AdminUserPublic,
+  AdminWorkspaceResponse,
+  api,
+  clearAuth,
+  getAccessToken,
+  GscStatus,
+  PlanPublic,
+  ProfilePublic,
+  ProjectPublic,
+  ProjectSettings,
+  WordpressVerifyResponse,
+} from "@/lib/api";
 
 type DashSection = "projects" | "users" | "limits" | "profile";
 
@@ -35,6 +48,8 @@ export default function DashboardPage() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [userDetails, setUserDetails] = useState<AdminUserDetails | null>(null);
   const [userDetailsLoading, setUserDetailsLoading] = useState(false);
+  const [userWorkspace, setUserWorkspace] = useState<AdminWorkspaceResponse | null>(null);
+  const [userWorkspaceLoading, setUserWorkspaceLoading] = useState(false);
   const [plans, setPlans] = useState<PlanPublic[]>([]);
   const [plansLoading, setPlansLoading] = useState(false);
   const [profile, setProfile] = useState<ProfilePublic | null>(null);
@@ -291,6 +306,27 @@ export default function DashboardPage() {
     }
   }
 
+  async function openUserWorkspace(userId: string) {
+    setError(null);
+    setUserWorkspace(null);
+    setUserWorkspaceLoading(true);
+    setUserDetails(null);
+    setUserDetailsLoading(false);
+    try {
+      const w = await api.adminGetUserWorkspace(userId);
+      setUserWorkspace(w);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load workspace");
+    } finally {
+      setUserWorkspaceLoading(false);
+    }
+  }
+
+  function closeUserWorkspace() {
+    setUserWorkspace(null);
+    setUserWorkspaceLoading(false);
+  }
+
   async function deleteUser(userId: string) {
     if (!confirm("Delete this user? This only deletes the user row (projects/articles are not removed).")) return;
     setError(null);
@@ -530,6 +566,7 @@ export default function DashboardPage() {
                           <th className={styles.th}>Email</th>
                           <th className={styles.th}>Role</th>
                           <th className={styles.th}>Subscription</th>
+                          <th className={styles.th}>Projects</th>
                           <th className={styles.th}>Details</th>
                           <th className={styles.th}>Actions</th>
                         </tr>
@@ -563,6 +600,14 @@ export default function DashboardPage() {
                                 onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, subscription_type: e.target.value } : x)))}
                                 placeholder="beta"
                               />
+                            </td>
+                            <td className={styles.td}>
+                              <div className={dashStyles.workspaceCell}>
+                                <span className={styles.muted}>{u.total_projects ?? 0}</span>
+                                <button className={styles.miniBtn} type="button" onClick={() => openUserWorkspace(u.id)}>
+                                  Open
+                                </button>
+                              </div>
                             </td>
                             <td className={styles.td}>
                               <button className={styles.miniBtn} type="button" onClick={() => viewUserDetails(u.id)}>
@@ -1095,16 +1140,23 @@ export default function DashboardPage() {
           <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="User details">
             <div className={styles.modalHead}>
               <h3 className={styles.modalTitle}>User details</h3>
-              <button
-                type="button"
-                className={styles.btnSecondary}
-                onClick={() => {
-                  setUserDetails(null);
-                  setUserDetailsLoading(false);
-                }}
-              >
-                Close
-              </button>
+              <div className={dashStyles.modalHeadActions}>
+                {userDetails ? (
+                  <button type="button" className={styles.button} onClick={() => openUserWorkspace(userDetails.user.id)}>
+                    Browse workspace
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => {
+                    setUserDetails(null);
+                    setUserDetailsLoading(false);
+                  }}
+                >
+                  Close
+                </button>
+              </div>
             </div>
 
             <div className={styles.modalBody}>
@@ -1152,13 +1204,138 @@ export default function DashboardPage() {
                       </thead>
                       <tbody>
                         <tr>
-                          <td className={styles.td}>{userDetails.stats.total_projects}</td>
+                          <td className={styles.td}>
+                            <button
+                              type="button"
+                              className={dashStyles.linkishButton}
+                              onClick={() => openUserWorkspace(userDetails.user.id)}
+                              title="Open projects and articles"
+                            >
+                              {userDetails.stats.total_projects}
+                            </button>
+                          </td>
                           <td className={styles.td}>{userDetails.stats.total_articles}</td>
                           <td className={styles.td}>{userDetails.stats.total_pending_articles}</td>
                           <td className={styles.td}>{userDetails.stats.total_active_articles}</td>
                         </tr>
                       </tbody>
                     </table>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {userWorkspaceLoading || userWorkspace ? (
+        <>
+          <button type="button" className={styles.modalBackdrop} aria-label="Close workspace" onClick={closeUserWorkspace} />
+          <div className={`${styles.modalPanel} ${dashStyles.workspaceModal}`} role="dialog" aria-modal="true" aria-label="User workspace">
+            <div className={styles.modalHead}>
+              <h3 className={styles.modalTitle}>
+                {userWorkspace ? `Workspace — ${userWorkspace.email}` : userWorkspaceLoading ? "Loading workspace…" : "Workspace"}
+              </h3>
+              <button type="button" className={styles.btnSecondary} onClick={closeUserWorkspace}>
+                Close
+              </button>
+            </div>
+            <div className={`${styles.modalBody} ${dashStyles.workspaceModalBody}`}>
+              {userWorkspaceLoading ? <div className={styles.muted}>Loading projects and articles…</div> : null}
+              {userWorkspace ? (
+                <>
+                  <div className={dashStyles.workspaceSection}>
+                    <div className={styles.muted} style={{ fontSize: 12, marginBottom: 8 }}>
+                      Projects ({userWorkspace.projects.length})
+                    </div>
+                    {userWorkspace.projects.length === 0 ? (
+                      <div className={styles.muted}>No projects for this user.</div>
+                    ) : (
+                      <div className={dashStyles.tableScroll}>
+                        <table className={styles.table}>
+                          <thead>
+                            <tr>
+                              <th className={styles.th}>Name</th>
+                              <th className={styles.th}>Website</th>
+                              <th className={styles.th}>Articles</th>
+                              <th className={styles.th}>Open</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {userWorkspace.projects.map((p) => (
+                              <tr key={p.id}>
+                                <td className={styles.td}>{p.name || "—"}</td>
+                                <td className={`${styles.td} ${styles.tdMuted}`}>
+                                  {p.website_url ? (
+                                    <a href={p.website_url} target="_blank" rel="noreferrer">
+                                      {p.website_url}
+                                    </a>
+                                  ) : (
+                                    "—"
+                                  )}
+                                </td>
+                                <td className={styles.td}>{p.article_count}</td>
+                                <td className={styles.td}>
+                                  <Link className={`${styles.miniBtn} ${styles.miniPrimary}`} href={`/projects/${p.id}`}>
+                                    Open
+                                  </Link>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={dashStyles.workspaceSection}>
+                    <div className={styles.muted} style={{ fontSize: 12, marginBottom: 8 }}>
+                      Recent articles (newest first, up to 1500)
+                    </div>
+                    {userWorkspace.articles.length === 0 ? (
+                      <div className={styles.muted}>No articles loaded.</div>
+                    ) : (
+                      <div className={dashStyles.tableScroll}>
+                        <table className={styles.table}>
+                          <thead>
+                            <tr>
+                              <th className={styles.th}>Project</th>
+                              <th className={styles.th}>Title</th>
+                              <th className={styles.th}>Status</th>
+                              <th className={styles.th}>Created</th>
+                              <th className={styles.th}>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {userWorkspace.articles.map((a) => (
+                              <tr key={`${a.project_id}:${a.id}`}>
+                                <td className={`${styles.td} ${styles.tdMuted}`}>{a.project_name}</td>
+                                <td className={styles.td}>{a.title}</td>
+                                <td className={styles.td}>{a.status}</td>
+                                <td className={`${styles.td} ${styles.tdMuted}`}>{a.created_at || "—"}</td>
+                                <td className={styles.td}>
+                                  <div className={dashStyles.workspaceCell}>
+                                    <Link className={styles.miniBtn} href={`/projects/${a.project_id}/articles/${a.id}`}>
+                                      Edit
+                                    </Link>
+                                    {a.wp_link ? (
+                                      <a className={styles.miniBtn} href={a.wp_link} target="_blank" rel="noreferrer">
+                                        WP
+                                      </a>
+                                    ) : null}
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                    {userWorkspace.articles_truncated ? (
+                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 10 }}>
+                        Listing is truncated. Totals appear in Manage users stats; download or reporting exports are not included here.
+                      </div>
+                    ) : null}
                   </div>
                 </>
               ) : null}

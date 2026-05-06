@@ -16,6 +16,7 @@ class AdminUserPublic(BaseModel):
     address: str | None = None
     created_at: str | None = None
     last_activity_at: str | None = None
+    total_projects: int = 0
 
 
 class AdminUserUpdate(BaseModel):
@@ -39,6 +40,35 @@ class AdminUserStats(BaseModel):
 class AdminUserDetails(BaseModel):
     user: AdminUserPublic
     stats: AdminUserStats
+
+
+class AdminWorkspaceProjectRow(BaseModel):
+    """One project owned by the target user (admin browse)."""
+
+    id: str
+    name: str
+    website_url: str | None = None
+    article_count: int = 0
+
+
+class AdminWorkspaceArticleRow(BaseModel):
+    """Minimal article row for admin tables (truncated listing)."""
+
+    id: str
+    project_id: str
+    project_name: str
+    title: str
+    status: str
+    created_at: str | None = None
+    wp_link: str | None = None
+
+
+class AdminWorkspaceResponse(BaseModel):
+    user_id: str
+    email: str
+    projects: list[AdminWorkspaceProjectRow]
+    articles: list[AdminWorkspaceArticleRow]
+    articles_truncated: bool = False
 
 
 class PlanPublic(BaseModel):
