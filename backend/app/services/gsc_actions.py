@@ -3,14 +3,23 @@ Helpers that bridge Google Search Console / Indexing API access from per-project
 (preferred) or per-user (legacy fallback) credentials, and store the article's
 indexing state for the UI.
 
-Two public helpers:
+Important reality of Google's APIs (drives all the language used here):
+
+- The **GSC URL Inspection API** is read-only. Calling it does NOT submit a URL
+  for indexing — it only returns the current coverage state. We use it only for
+  the "Check" action (:func:`inspect_url_status`).
+- The **Google Indexing API** (``urlNotifications.publish``) is officially limited
+  to ``JobPosting`` / ``BroadcastEvent`` content. Even when it accepts a call for
+  general URLs, the request is **not** echoed into Search Console's URL Inspection
+  "Indexing requested" history.
+- The **GSC web UI "Request Indexing" button** is the only thing that produces
+  the visible "Indexing requested" entry in URL Inspection. It has no public API.
+
+Public helpers:
 
 - :func:`maybe_request_url_inspection` — fired automatically after a live publish.
 - :func:`request_url_inspection_now` — fired manually from the article actions UI.
-
-Both prefer :func:`google_indexing.publish_url_update` (Indexing API via service
-account) when configured; otherwise they fall back to the user's OAuth-issued
-URL Inspection API token.
+- :func:`inspect_url_status` — read-only "Check" used by the UI.
 """
 
 from __future__ import annotations
@@ -22,6 +31,7 @@ from typing import Any
 
 from app.services import gsc
 from app.services import google_indexing
+from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 
 
 log = logging.getLogger(__name__)
@@ -127,131 +137,132 @@ async def _mark_article(*, st, article_id: str | None, patch: dict[str, Any]) ->
             log.exception("Failed to write GSC indexing state on article=%s", article_id)
 
 
-async def _attempt_inspection_via_oauth(*, st, proj: dict, live_url: str) -> dict[str, Any]:
-    prop = (proj.get("gsc_property_url") or "").strip()
-    if not prop:
-        raise RuntimeError("Search Console property is not selected for this project")
-    at, _src = await _get_valid_access_token_for_project(st=st, proj=proj)
-    return await gsc.request_url_inspection(access_token=at, site_url=prop, inspection_url=live_url)
-
-
-async def request_url_inspection_now(*, st, proj: dict, live_url: str, article_id: str | None) -> bool:
+async def request_url_inspection_now(
+    *, st, proj: dict, live_url: str, article_id: str | None
+) -> dict[str, Any]:
     """
-    Manual trigger for "Index this URL" / "Inspect URL".
+    Manual "Index now" trigger.
 
-    Tries the Google Indexing API first (service account), then falls back to the
-    Search Console URL Inspection API using the project's own OAuth tokens (or the
-    legacy user-level tokens when the project is not yet connected).
+    Behavior — honest about what's actually possible with Google's APIs:
 
-    Stores the resulting ``gsc_status`` / ``gsc_inspection_*`` fields on the article.
+    1. **Google Indexing API** (service account, when configured): we send
+       ``urlNotifications.publish``. Officially this only indexes ``JobPosting``
+       / ``BroadcastEvent`` content; for general articles Google may accept the
+       call but it is **not** echoed into URL Inspection's "Indexing requested"
+       history. We track this in ``indexing_api`` regardless.
+    2. **Sitemap ping** (Google + Bing): best-effort discovery hint based on the
+       project's WordPress site URL. Not a guarantee of indexing.
+    3. **Manual handoff**: we always return a deep link to the GSC URL Inspection
+       panel pre-filled with ``live_url``. Pressing "REQUEST INDEXING" there is
+       the **only** action that produces the visible entry in the user's URL
+       Inspection history (Google does not expose this as a public API).
+
+    Never calls the read-only URL Inspection API (that's the "Check" action only).
+
+    Returns a structured result the UI can surface verbatim::
+
+        {
+          "ok": True,
+          "gsc_status": "index_api_pinged" | "sitemap_pinged" | "manual_required",
+          "indexing_api": {"attempted": bool, "ok": bool, "error": str},
+          "sitemap_ping": {"attempted": bool, "ok": bool, "sitemap_url": str},
+          "inspect_panel_url": "https://search.google.com/search-console/inspect?...",
+          "note": "<human-readable summary>",
+        }
     """
     url = (live_url or "").strip()
     if not url:
-        return False
+        return {
+            "ok": False,
+            "gsc_status": "failed",
+            "indexing_api": {"attempted": False, "ok": False, "error": ""},
+            "sitemap_ping": {"attempted": False, "ok": False, "sitemap_url": ""},
+            "inspect_panel_url": "",
+            "note": "Article does not have a live URL yet (publish first).",
+        }
 
     now_str = _now_str()
-    indexing_attempted = False
+    prop = (proj.get("gsc_property_url") or "").strip()
+
+    indexing_api_attempted = False
+    indexing_api_ok = False
+    indexing_api_error = ""
 
     if google_indexing.configured():
-        indexing_attempted = True
-        await _mark_article(
-            st=st,
-            article_id=article_id,
-            patch={
-                "gsc_status": "pending",
-                "gsc_inspection_last_attempt_at": now_str,
-                "gsc_inspection_error": "",
-                "gsc_inspection_url": url,
-            },
-        )
+        indexing_api_attempted = True
         try:
             await google_indexing.publish_url_update(url=url)
-            await _mark_article(
-                st=st,
-                article_id=article_id,
-                patch={
-                    "gsc_status": "inspected",
-                    "gsc_inspection_requested_at": now_str,
-                    "gsc_inspection_last_attempt_at": now_str,
-                    "gsc_inspection_error": "",
-                    "gsc_inspection_url": url,
-                },
-            )
-            return True
+            indexing_api_ok = True
         except Exception as e:
-            await _mark_article(
-                st=st,
-                article_id=article_id,
-                patch={
-                    "gsc_status": "pending",
-                    "gsc_inspection_last_attempt_at": now_str,
-                    "gsc_inspection_error": f"Indexing API failed: {str(e)[:460]}",
-                    "gsc_inspection_url": url,
-                },
-            )
+            indexing_api_error = f"{e}"[:460]
+            log.info("Indexing API publish failed for %s: %s", url, indexing_api_error)
 
-    if not gsc.oauth_configured():
-        if not indexing_attempted:
-            await _mark_article(
-                st=st,
-                article_id=article_id,
-                patch={
-                    "gsc_status": "pending",
-                    "gsc_inspection_last_attempt_at": now_str,
-                    "gsc_inspection_error": "Google OAuth client is not configured on the backend.",
-                    "gsc_inspection_url": url,
-                },
-            )
-        return False
+    # Best-effort sitemap ping — never throws, and works whether or not Indexing API is set up.
+    sitemap_attempted = False
+    sitemap_ok = False
+    sitemap_url = default_sitemap_url(wp_site_url=(proj.get("wp_site_url") or ""))
+    if sitemap_url:
+        sitemap_attempted = True
+        try:
+            await ping_sitemap(sitemap_url=sitemap_url)
+            sitemap_ok = True
+        except Exception as e:
+            log.info("Sitemap ping failed for %s: %s", sitemap_url, e)
 
-    try:
-        await _mark_article(
-            st=st,
-            article_id=article_id,
-            patch={
-                "gsc_status": "pending",
-                "gsc_inspection_last_attempt_at": now_str,
-                "gsc_inspection_error": "",
-                "gsc_inspection_url": url,
-            },
+    inspect_panel_url = gsc.build_inspection_panel_url(site_url=prop, inspection_url=url) if prop else ""
+
+    if indexing_api_ok:
+        new_status = "index_api_pinged"
+        note = (
+            "Indexing API ping sent. Note: Google's Indexing API is officially supported only for "
+            "JobPosting / BroadcastEvent content; for general articles the ping is treated as a "
+            "discovery hint and will NOT appear in Search Console's URL Inspection history. "
+            "To get the request reflected in URL Inspection, click 'Open in Search Console' and "
+            "press REQUEST INDEXING there."
         )
-        resp = await _attempt_inspection_via_oauth(st=st, proj=proj, live_url=url)
-        if not gsc.inspection_response_accepted(resp):
-            await _mark_article(
-                st=st,
-                article_id=article_id,
-                patch={
-                    "gsc_status": "pending",
-                    "gsc_inspection_last_attempt_at": now_str,
-                    "gsc_inspection_error": "Inspection API returned no inspectionResult.",
-                    "gsc_inspection_url": url,
-                },
-            )
-            return False
-        await _mark_article(
-            st=st,
-            article_id=article_id,
-            patch={
-                "gsc_status": "inspected",
-                "gsc_inspection_requested_at": now_str,
-                "gsc_inspection_last_attempt_at": now_str,
-                "gsc_inspection_error": "",
-                "gsc_inspection_url": url,
-            },
+    elif sitemap_ok:
+        new_status = "sitemap_pinged"
+        note = (
+            "Sitemap ping sent to Google and Bing as a discovery hint. Google does not expose a "
+            "public API equivalent of the 'Request Indexing' button in URL Inspection — open the "
+            "URL in Search Console and press REQUEST INDEXING to actually queue a crawl request "
+            "you can see in URL Inspection."
         )
-        return True
-    except Exception as e:
-        await _mark_article(
-            st=st,
-            article_id=article_id,
-            patch={
-                "gsc_status": "pending",
-                "gsc_inspection_last_attempt_at": now_str,
-                "gsc_inspection_error": str(e)[:500],
-                "gsc_inspection_url": url,
-            },
+    else:
+        new_status = "manual_required"
+        note = (
+            "No automated channel was available. Open the URL in Search Console and press "
+            "REQUEST INDEXING to manually queue a crawl request."
         )
-        return False
+
+    await _mark_article(
+        st=st,
+        article_id=article_id,
+        patch={
+            "gsc_status": new_status,
+            "gsc_inspection_requested_at": now_str,
+            "gsc_inspection_last_attempt_at": now_str,
+            "gsc_inspection_error": indexing_api_error,
+            "gsc_inspection_url": url,
+        },
+    )
+
+    return {
+        "ok": True,
+        "gsc_status": new_status,
+        "indexing_api": {
+            "attempted": indexing_api_attempted,
+            "ok": indexing_api_ok,
+            "error": indexing_api_error,
+        },
+        "sitemap_ping": {
+            "attempted": sitemap_attempted,
+            "ok": sitemap_ok,
+            "sitemap_url": sitemap_url,
+        },
+        "inspect_panel_url": inspect_panel_url,
+        "note": note,
+    }
 
 
 async def maybe_request_url_inspection(
@@ -260,10 +271,9 @@ async def maybe_request_url_inspection(
     """
     Fired automatically after a successful live publish (REST status == ``publish``).
 
-    Honors the per-project ``gsc_index_on_publish`` toggle (default True). Requires
-    a non-empty ``live_url`` and a Search Console property linked to the project.
-    Delegates the actual call chain to :func:`request_url_inspection_now` so the
-    Indexing API + URL Inspection fallback path stays in one place.
+    Honors the per-project ``gsc_index_on_publish`` toggle (default True). Delegates to
+    :func:`request_url_inspection_now` so the discovery channels stay in one place.
+    Returns True only when at least one channel (Indexing API or sitemap) succeeded.
     """
     if (wp_status or "").strip().lower() != "publish":
         return False
@@ -275,7 +285,69 @@ async def maybe_request_url_inspection(
     prop = (proj.get("gsc_property_url") or "").strip()
     if not prop:
         return False
-    return await request_url_inspection_now(st=st, proj=proj, live_url=url, article_id=article_id)
+    result = await request_url_inspection_now(st=st, proj=proj, live_url=url, article_id=article_id)
+    return bool(
+        (result.get("indexing_api") or {}).get("ok")
+        or (result.get("sitemap_ping") or {}).get("ok")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sitemap registration helpers (project-aware)
+# ---------------------------------------------------------------------------
+
+
+async def list_sitemaps_for_project(*, st, proj: dict) -> list[dict[str, Any]]:
+    """List sitemaps registered against the project's linked GSC property."""
+    prop = (proj.get("gsc_property_url") or "").strip()
+    if not prop:
+        raise RuntimeError("Search Console property is not selected for this project")
+    if not gsc.oauth_configured():
+        raise RuntimeError("Google OAuth client is not configured on the backend")
+    at, _src = await _get_valid_access_token_for_project(st=st, proj=proj)
+    return await gsc.list_sitemaps(access_token=at, site_url=prop)
+
+
+async def submit_sitemap_for_project(*, st, proj: dict, sitemap_url: str) -> dict[str, Any]:
+    """
+    Register/re-submit ``sitemap_url`` against the project's linked property.
+
+    Returns ``{"ok": True, "sitemap_url": "...", "submitted_at": "..."}`` on success.
+    Raises ``RuntimeError`` on configuration / API errors so the route can map them
+    to a 400 with a descriptive ``detail``.
+    """
+    prop = (proj.get("gsc_property_url") or "").strip()
+    if not prop:
+        raise RuntimeError("Search Console property is not selected for this project")
+    if not gsc.oauth_configured():
+        raise RuntimeError("Google OAuth client is not configured on the backend")
+    su = (sitemap_url or "").strip()
+    if not su:
+        # Default to ``<wp_site_url>/sitemap.xml`` so users can submit with one click.
+        su = (proj.get("wp_site_url") or "").strip().rstrip("/")
+        if su:
+            su = f"{su}/sitemap.xml"
+    if not su:
+        raise RuntimeError("Sitemap URL is required (no WordPress site URL on this project to default from)")
+
+    at, _src = await _get_valid_access_token_for_project(st=st, proj=proj)
+    await gsc.submit_sitemap(access_token=at, site_url=prop, feedpath=su)
+    return {"ok": True, "sitemap_url": su, "submitted_at": _now_str()}
+
+
+async def delete_sitemap_for_project(*, st, proj: dict, sitemap_url: str) -> dict[str, Any]:
+    """Unregister ``sitemap_url`` from the project's linked property."""
+    prop = (proj.get("gsc_property_url") or "").strip()
+    if not prop:
+        raise RuntimeError("Search Console property is not selected for this project")
+    if not gsc.oauth_configured():
+        raise RuntimeError("Google OAuth client is not configured on the backend")
+    su = (sitemap_url or "").strip()
+    if not su:
+        raise RuntimeError("sitemap_url is required")
+    at, _src = await _get_valid_access_token_for_project(st=st, proj=proj)
+    await gsc.delete_sitemap(access_token=at, site_url=prop, feedpath=su)
+    return {"ok": True, "sitemap_url": su}
 
 
 async def inspect_url_status(*, st, proj: dict, live_url: str) -> dict[str, Any]:

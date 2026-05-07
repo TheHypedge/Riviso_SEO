@@ -5,11 +5,14 @@ Each project can connect to its own Google account. The OAuth state token carrie
 ``pid`` so the global ``/api/gsc/oauth/callback`` writes the resulting tokens to
 the project record (see :mod:`app.api.routes.gsc`). The endpoints below expose:
 
-- ``GET /api/projects/{project_id}/gsc/status``       — connection status for this project
-- ``GET /api/projects/{project_id}/gsc/connect-url``  — kick off OAuth (pid baked into state)
-- ``GET /api/projects/{project_id}/gsc/sites``        — list available Search Console properties
-- ``POST /api/projects/{project_id}/gsc/property``    — link a property + indexing toggle
-- ``POST /api/projects/{project_id}/gsc/disconnect``  — clear the project's GSC tokens
+- ``GET    /api/projects/{project_id}/gsc/status``      — connection status for this project
+- ``GET    /api/projects/{project_id}/gsc/connect-url`` — kick off OAuth (pid baked into state)
+- ``GET    /api/projects/{project_id}/gsc/sites``       — list available Search Console properties
+- ``POST   /api/projects/{project_id}/gsc/property``    — link a property + indexing toggle
+- ``POST   /api/projects/{project_id}/gsc/disconnect``  — clear the project's GSC tokens
+- ``GET    /api/projects/{project_id}/gsc/sitemaps``    — list sitemaps registered with the property
+- ``POST   /api/projects/{project_id}/gsc/sitemaps``    — submit / re-submit a sitemap URL
+- ``DELETE /api/projects/{project_id}/gsc/sitemaps``    — unregister a sitemap URL
 """
 
 from __future__ import annotations
@@ -157,3 +160,78 @@ async def set_property(project_id: str, payload: GscPropertyUpdate, user: dict =
         "property_url": (updates.get("gsc_property_url") or proj.get("gsc_property_url") or "") or None,
         "index_on_publish": bool(updates.get("gsc_index_on_publish", proj.get("gsc_index_on_publish", True))),
     }
+
+
+# ---------------------------------------------------------------------------
+# Sitemap registration (Google Sitemaps API via per-project OAuth)
+# ---------------------------------------------------------------------------
+
+
+class SitemapSubmitPayload(BaseModel):
+    """Optional explicit sitemap URL. Falls back to ``<wp_site_url>/sitemap.xml`` when omitted."""
+
+    sitemap_url: str | None = Field(default=None, max_length=2048)
+
+
+@router.get("/sitemaps")
+async def list_sitemaps(project_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """List sitemaps registered against the project's linked Search Console property."""
+    from app.services.gsc_actions import list_sitemaps_for_project  # local import to avoid cycles
+
+    st = get_legacy_storage_module()
+    proj = _require_project(st=st, user=user, project_id=project_id)
+    try:
+        sitemaps = await list_sitemaps_for_project(st=st, proj=proj)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e) or "Failed to list sitemaps") from e
+    # Surface a sensible default for the UI's "submit" form even before the user types.
+    base_site = (proj.get("wp_site_url") or "").strip().rstrip("/")
+    suggested = f"{base_site}/sitemap.xml" if base_site else ""
+    return {
+        "property_url": (proj.get("gsc_property_url") or "").strip() or None,
+        "suggested_sitemap_url": suggested or None,
+        "sitemaps": sitemaps,
+    }
+
+
+@router.post("/sitemaps")
+async def submit_sitemap(
+    project_id: str,
+    payload: SitemapSubmitPayload,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Register/resubmit a sitemap URL on the project's linked Search Console property.
+
+    With a sitemap registered Google will recrawl it on its own schedule, which means new
+    articles get discovered without the user having to click "Index now" per post.
+    """
+    from app.services.gsc_actions import submit_sitemap_for_project  # local import to avoid cycles
+
+    st = get_legacy_storage_module()
+    proj = _require_project(st=st, user=user, project_id=project_id)
+    try:
+        return await submit_sitemap_for_project(
+            st=st,
+            proj=proj,
+            sitemap_url=(payload.sitemap_url or "").strip(),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e) or "Sitemap submission failed") from e
+
+
+@router.delete("/sitemaps")
+async def delete_sitemap(
+    project_id: str,
+    sitemap_url: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Unregister a previously submitted sitemap URL."""
+    from app.services.gsc_actions import delete_sitemap_for_project  # local import to avoid cycles
+
+    st = get_legacy_storage_module()
+    proj = _require_project(st=st, user=user, project_id=project_id)
+    try:
+        return await delete_sitemap_for_project(st=st, proj=proj, sitemap_url=sitemap_url)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e) or "Sitemap delete failed") from e

@@ -1314,11 +1314,18 @@ async def publish_to_live_site(
 @router.post("/{article_id}/gsc/request-indexing", status_code=200)
 async def request_indexing(project_id: str, article_id: str, user: dict = Depends(get_current_user)) -> dict:
     """
-    Manual trigger: ask Google to (re)index this article's live URL.
+    Manual "Index now" — runs the available automated discovery channels and
+    returns a deep link to GSC URL Inspection so the user can finish the manual
+    "REQUEST INDEXING" step (which has no public API equivalent).
 
-    Uses the Google Indexing API when configured (service account); otherwise calls the
-    Search Console URL Inspection API using the per-project GSC connection (or the
-    legacy user-level connection as a fallback).
+    Channels exercised, in order, by :func:`request_url_inspection_now`:
+
+    1. Google Indexing API (when ``GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON`` is set).
+       Officially limited to JobPosting / BroadcastEvent — the response is **not**
+       reflected in URL Inspection's history. We surface this caveat in ``note``.
+    2. Sitemap ping to Google and Bing (best-effort discovery hint).
+    3. Deep link to the GSC URL Inspection panel pre-filled with the live URL —
+       the only way to actually create the visible "Indexing requested" entry.
     """
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
@@ -1328,18 +1335,18 @@ async def request_indexing(project_id: str, article_id: str, user: dict = Depend
         raise HTTPException(status_code=400, detail="Article does not have a live URL yet (publish first).")
     if not (proj.get("gsc_property_url") or "").strip():
         raise HTTPException(status_code=400, detail="Search Console property is not linked for this project. Open Tools → Search Console.")
-    ok = await request_url_inspection_now(st=st, proj=proj, live_url=live_url, article_id=article_id)
-    if not ok:
-        a2 = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
-        msg = (a2.get("gsc_inspection_error") or "").strip() or "Search Console request failed."
-        raise HTTPException(status_code=400, detail=msg)
+
+    result = await request_url_inspection_now(st=st, proj=proj, live_url=live_url, article_id=article_id)
     a2 = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     return {
-        "ok": True,
-        "status": "requested",
+        "ok": bool(result.get("ok")),
         "gsc_status": (a2.get("gsc_status") or "").strip() or None,
         "gsc_inspection_requested_at": (a2.get("gsc_inspection_requested_at") or "").strip() or None,
         "gsc_inspection_url": (a2.get("gsc_inspection_url") or "").strip() or None,
+        "indexing_api": result.get("indexing_api") or {"attempted": False, "ok": False, "error": ""},
+        "sitemap_ping": result.get("sitemap_ping") or {"attempted": False, "ok": False, "sitemap_url": ""},
+        "inspect_panel_url": (result.get("inspect_panel_url") or "").strip() or None,
+        "note": (result.get("note") or "").strip() or None,
     }
 
 

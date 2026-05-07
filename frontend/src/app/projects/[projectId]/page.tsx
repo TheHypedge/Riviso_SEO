@@ -230,6 +230,20 @@ export default function ProjectPage() {
   const [articleIndexBusy, setArticleIndexBusy] = useState<Record<string, "request" | "check" | undefined>>({});
   const [articleIndexMsg, setArticleIndexMsg] = useState<Record<string, string | null>>({});
   const [articleIndexStatus, setArticleIndexStatus] = useState<Record<string, import("@/lib/api").GscIndexingStatus | null>>({});
+  // Per-article result of the most recent "Index now" call. Holds the deep link to GSC's URL
+  // Inspection panel (where the user must press REQUEST INDEXING — Google has no public API
+  // equivalent) plus a structured trace of which channels we actually pinged.
+  const [articleIndexResult, setArticleIndexResult] = useState<
+    Record<string, import("@/lib/api").RequestIndexingResponse | null>
+  >({});
+  // Sitemap submission state for the Tools tab. ``sitemaps`` mirrors the registered
+  // sitemaps Google reports back so the user can see lastSubmitted / status.
+  const [gscSitemaps, setGscSitemaps] = useState<import("@/lib/api").GscSitemap[]>([]);
+  const [gscSitemapSuggested, setGscSitemapSuggested] = useState<string>("");
+  const [sitemapInput, setSitemapInput] = useState<string>("");
+  const [sitemapBusy, setSitemapBusy] = useState<"submit" | "delete" | "load" | null>(null);
+  const [sitemapMsg, setSitemapMsg] = useState<string | null>(null);
+  const [sitemapDeletingPath, setSitemapDeletingPath] = useState<string | null>(null);
   const settingsDirty = useMemo(() => {
     if (!settings) return false;
     return (
@@ -371,6 +385,9 @@ export default function ProjectPage() {
   const [requestIndexingId, setRequestIndexingId] = useState<string | null>(null);
   const [requestIndexingBusy, setRequestIndexingBusy] = useState(false);
   const [requestIndexingMsg, setRequestIndexingMsg] = useState<string>("");
+  const [requestIndexingResult, setRequestIndexingResult] = useState<
+    import("@/lib/api").RequestIndexingResponse | null
+  >(null);
   const [scheduleWhen, setScheduleWhen] = useState("");
   const [scheduleWpStatus, setScheduleWpStatus] = useState<"draft" | "publish">("draft");
   const [schedulePostType, setSchedulePostType] = useState("posts");
@@ -538,18 +555,25 @@ export default function ProjectPage() {
 
   async function requestIndexingOne(articleId: string) {
     setRequestIndexingBusy(true);
-    setRequestIndexingMsg("Submitting URL to Google for indexing…");
+    setRequestIndexingMsg("Pinging Google’s discovery endpoints…");
+    setRequestIndexingResult(null);
     try {
       const res = await api.requestIndexing(projectId, articleId);
-      setRequestIndexingMsg("Submitted. Google will process the indexing request.");
-      const newStatus = (res?.gsc_status || "inspected").toString();
+      setRequestIndexingResult(res);
+      const parts: string[] = [];
+      if (res?.indexing_api?.attempted) {
+        parts.push(res.indexing_api.ok ? "Indexing API ping sent." : "Indexing API ping failed.");
+      }
+      if (res?.sitemap_ping?.attempted) {
+        parts.push(res.sitemap_ping.ok ? "Sitemap pinged." : "Sitemap ping failed.");
+      }
+      if (!parts.length) parts.push("No automated channel was available.");
+      parts.push("Press 'Open in Search Console' to finish via the manual REQUEST INDEXING button.");
+      setRequestIndexingMsg(parts.join(" "));
+      const newStatus = (res?.gsc_status || "manual_required").toString();
       setArticles((prev) =>
         prev.map((a) => (a.id === articleId ? { ...a, gsc_status: newStatus } : a)),
       );
-      setTimeout(() => {
-        setRequestIndexingId(null);
-        setRequestIndexingMsg("");
-      }, 650);
     } catch (e) {
       setRequestIndexingMsg((e as Error)?.message || "Request failed.");
     } finally {
@@ -870,6 +894,57 @@ export default function ProjectPage() {
     }
   }
 
+  async function reloadProjectSitemaps(opts: { silent?: boolean } = {}) {
+    if (!projectId) return;
+    if (!opts.silent) setSitemapBusy("load");
+    setSitemapMsg(null);
+    try {
+      const res = await api.gscProjectListSitemaps(projectId);
+      setGscSitemaps(res?.sitemaps || []);
+      setGscSitemapSuggested(res?.suggested_sitemap_url || "");
+      setSitemapInput((prev) => prev || res?.suggested_sitemap_url || "");
+    } catch (e) {
+      setGscSitemaps([]);
+      setSitemapMsg(e instanceof Error ? e.message : "Failed to load sitemaps");
+    } finally {
+      if (!opts.silent) setSitemapBusy(null);
+    }
+  }
+
+  async function submitProjectSitemap() {
+    if (!projectId) return;
+    setSitemapBusy("submit");
+    setSitemapMsg(null);
+    try {
+      const res = await api.gscProjectSubmitSitemap(projectId, sitemapInput.trim() || null);
+      setSitemapMsg(
+        `Submitted ${res?.sitemap_url || "sitemap"}. Google will recrawl on its own schedule — typically within 24 hours.`,
+      );
+      await reloadProjectSitemaps({ silent: true });
+    } catch (e) {
+      setSitemapMsg(e instanceof Error ? e.message : "Sitemap submission failed");
+    } finally {
+      setSitemapBusy(null);
+    }
+  }
+
+  async function deleteProjectSitemap(sitemapUrl: string) {
+    if (!projectId || !sitemapUrl) return;
+    setSitemapBusy("delete");
+    setSitemapDeletingPath(sitemapUrl);
+    setSitemapMsg(null);
+    try {
+      await api.gscProjectDeleteSitemap(projectId, sitemapUrl);
+      setSitemapMsg(`Removed ${sitemapUrl} from Search Console.`);
+      await reloadProjectSitemaps({ silent: true });
+    } catch (e) {
+      setSitemapMsg(e instanceof Error ? e.message : "Failed to remove sitemap");
+    } finally {
+      setSitemapBusy(null);
+      setSitemapDeletingPath(null);
+    }
+  }
+
   async function saveGscPropertyForProject(propertyUrl: string, indexOnPublish: boolean) {
     setGscSaveMsg(null);
     try {
@@ -898,12 +973,20 @@ export default function ProjectPage() {
     if (!articleId) return;
     setArticleIndexBusy((m) => ({ ...m, [articleId]: "request" }));
     setArticleIndexMsg((m) => ({ ...m, [articleId]: null }));
+    setArticleIndexResult((m) => ({ ...m, [articleId]: null }));
     try {
       const res = await api.requestIndexing(projectId, articleId);
-      setArticleIndexMsg((m) => ({
-        ...m,
-        [articleId]: "Submitted to Google for indexing.",
-      }));
+      setArticleIndexResult((m) => ({ ...m, [articleId]: res }));
+      // Build a short, accurate one-liner that does not claim more than what really happened.
+      const parts: string[] = [];
+      if (res?.indexing_api?.attempted) {
+        parts.push(res.indexing_api.ok ? "Indexing API ping sent." : "Indexing API ping failed.");
+      }
+      if (res?.sitemap_ping?.attempted) {
+        parts.push(res.sitemap_ping.ok ? "Sitemap pinged." : "Sitemap ping failed.");
+      }
+      parts.push("Click 'Open in Search Console' to finish via the manual Request Indexing button.");
+      setArticleIndexMsg((m) => ({ ...m, [articleId]: parts.join(" ") }));
       setArticles((prev) =>
         prev.map((a) => (a.id === articleId ? { ...a, gsc_status: res?.gsc_status || a.gsc_status } : a)),
       );
@@ -1010,6 +1093,20 @@ export default function ProjectPage() {
     void reloadGscForProject({ showLoading: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, token]);
+
+  // Auto-load registered sitemaps once a property is linked. Re-runs whenever the
+  // user links / unlinks a property so the table reflects the current property.
+  useEffect(() => {
+    if (!token) return;
+    if (tab !== "tools") return;
+    if (!gscStatus?.connected || !gscStatus?.property_url) {
+      setGscSitemaps([]);
+      setGscSitemapSuggested("");
+      return;
+    }
+    void reloadProjectSitemaps({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, tab, token, gscStatus?.connected, gscStatus?.property_url]);
 
   // Handle the OAuth redirect (URL contains ?tab=tools#gsc=connected|error&msg=...)
   useEffect(() => {
@@ -2823,6 +2920,7 @@ export default function ProjectPage() {
                         if (requestIndexingBusy) return;
                         setRequestIndexingId(null);
                         setRequestIndexingMsg("");
+                        setRequestIndexingResult(null);
                       }}
                     >
                       <Icon.X className={styles.icon20} />
@@ -2830,13 +2928,44 @@ export default function ProjectPage() {
                   </div>
                   <div className={styles.modalBody}>
                     <div style={{ fontSize: 13, color: "#666", lineHeight: 1.5 }}>
-                      This submits the article’s live URL to Google Search Console URL Inspection API. Google may take some time to process it.
+                      This pings the Google Indexing API (when configured) and your sitemap as
+                      discovery hints. Google does <strong>not</strong> expose a public API equivalent
+                      of the &ldquo;Request Indexing&rdquo; button in URL Inspection — to actually
+                      queue a crawl that appears in Search Console, click{" "}
+                      <strong>Open in Search Console</strong> below and press{" "}
+                      <strong>REQUEST INDEXING</strong> there.
                     </div>
-                    {requestIndexingMsg ? <div style={{ marginTop: 10, fontSize: 13 }}>{requestIndexingMsg}</div> : null}
+                    {requestIndexingMsg ? (
+                      <div style={{ marginTop: 10, fontSize: 13, lineHeight: 1.5 }}>
+                        {requestIndexingMsg}
+                      </div>
+                    ) : null}
+                    {requestIndexingResult?.inspect_panel_url ? (
+                      <div style={{ marginTop: 12 }}>
+                        <a
+                          href={requestIndexingResult.inspect_panel_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={styles.button}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                        >
+                          Open in Search Console ↗
+                        </a>
+                      </div>
+                    ) : null}
                   </div>
                   <div className={styles.modalFoot}>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setRequestIndexingId(null)} disabled={requestIndexingBusy}>
-                      Cancel
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => {
+                        setRequestIndexingId(null);
+                        setRequestIndexingMsg("");
+                        setRequestIndexingResult(null);
+                      }}
+                      disabled={requestIndexingBusy}
+                    >
+                      Close
                     </button>
                     <button
                       type="button"
@@ -2844,7 +2973,11 @@ export default function ProjectPage() {
                       onClick={() => requestIndexingOne(requestIndexingId)}
                       disabled={requestIndexingBusy}
                     >
-                      {requestIndexingBusy ? "Requesting…" : "Request Indexing"}
+                      {requestIndexingBusy
+                        ? "Pinging…"
+                        : requestIndexingResult
+                        ? "Retry pings"
+                        : "Run discovery pings"}
                     </button>
                   </div>
                 </div>
@@ -4499,9 +4632,153 @@ export default function ProjectPage() {
             </div>
 
             <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+              <h3 style={{ marginTop: 0 }}>Sitemap submission</h3>
+              <div className={styles.muted} style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
+                Register your sitemap once and Google will recrawl it on its own schedule — every
+                future article gets discovered without per-post action. Sitemap submission is the
+                officially supported public API for telling Search Console about new URLs.
+              </div>
+
+              {!gscStatus?.connected || !gscStatus?.property_url ? (
+                <div className={styles.muted} style={{ fontSize: 13 }}>
+                  Connect Google and link a property above to submit sitemaps.
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "stretch" }}>
+                    <input
+                      type="url"
+                      className={styles.input}
+                      placeholder={gscSitemapSuggested || "https://example.com/sitemap.xml"}
+                      value={sitemapInput}
+                      onChange={(e) => setSitemapInput(e.target.value)}
+                      disabled={sitemapBusy === "submit" || sitemapBusy === "delete"}
+                    />
+                    <button
+                      type="button"
+                      className={styles.button}
+                      onClick={submitProjectSitemap}
+                      disabled={sitemapBusy === "submit" || sitemapBusy === "delete"}
+                    >
+                      {sitemapBusy === "submit" ? "Submitting…" : "Submit sitemap"}
+                    </button>
+                  </div>
+                  <div className={styles.muted} style={{ fontSize: 11, marginTop: 6, lineHeight: 1.45 }}>
+                    Default suggestion is <code>{gscSitemapSuggested || "—"}</code> (the WordPress core
+                    sitemap). If you use Yoast or RankMath the index sitemap usually lives at{" "}
+                    <code>/sitemap_index.xml</code> — paste that URL and submit it instead.
+                  </div>
+
+                  {sitemapMsg ? (
+                    <div className={styles.muted} style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
+                      {sitemapMsg}
+                    </div>
+                  ) : null}
+
+                  <div style={{ marginTop: 16 }}>
+                    <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <div style={{ fontWeight: 700 }}>Registered sitemaps</div>
+                      <button
+                        type="button"
+                        className={styles.miniBtn}
+                        onClick={() => reloadProjectSitemaps()}
+                        disabled={sitemapBusy === "load"}
+                      >
+                        {sitemapBusy === "load" ? "Refreshing…" : "Refresh"}
+                      </button>
+                    </div>
+                    {gscSitemaps.length === 0 ? (
+                      <div className={styles.muted} style={{ fontSize: 13 }}>
+                        No sitemaps registered yet. Submit one above to enable automatic discovery.
+                      </div>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table className={styles.table}>
+                          <thead>
+                            <tr>
+                              <th>Sitemap URL</th>
+                              <th>Last submitted</th>
+                              <th>Submitted / Indexed</th>
+                              <th>Errors</th>
+                              <th style={{ textAlign: "right" }}>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {gscSitemaps.map((s) => {
+                              const isDeleting = sitemapBusy === "delete" && sitemapDeletingPath === s.path;
+                              return (
+                                <tr key={s.path}>
+                                  <td style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    <a href={s.path} target="_blank" rel="noopener noreferrer">
+                                      {s.path}
+                                    </a>
+                                  </td>
+                                  <td>
+                                    <span className={styles.muted} style={{ fontSize: 12 }}>
+                                      {s.last_submitted ? new Date(s.last_submitted).toLocaleString() : "—"}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <span className={styles.muted} style={{ fontSize: 12 }}>
+                                      {(s.submitted_urls || "—") + " / " + (s.indexed_urls || "—")}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <span
+                                      className={styles.muted}
+                                      style={{
+                                        fontSize: 12,
+                                        color: (s.errors || 0) > 0 ? "var(--error-text, #b00020)" : undefined,
+                                      }}
+                                    >
+                                      {(s.errors || 0) + (s.warnings ? ` (${s.warnings} warning${s.warnings === 1 ? "" : "s"})` : "")}
+                                    </span>
+                                  </td>
+                                  <td style={{ textAlign: "right" }}>
+                                    <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                                      <button
+                                        type="button"
+                                        className={styles.miniBtn}
+                                        onClick={() => {
+                                          setSitemapInput(s.path);
+                                          void submitProjectSitemap();
+                                        }}
+                                        disabled={Boolean(sitemapBusy)}
+                                      >
+                                        Resubmit
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className={styles.miniBtn}
+                                        onClick={() => deleteProjectSitemap(s.path)}
+                                        disabled={Boolean(sitemapBusy)}
+                                      >
+                                        {isDeleting ? "Removing…" : "Remove"}
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
               <h3 style={{ marginTop: 0 }}>Existing articles — indexing status</h3>
               <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
-                Submit a published URL for indexing or check its current Search Console coverage. Requires a live URL and a linked property.
+                <strong>Check</strong> reads the URL’s current coverage from Search Console (read-only).{" "}
+                <strong>Index now</strong> pings Google’s Indexing API (officially supported only for
+                JobPosting / BroadcastEvent — for general articles it’s a discovery hint and is{" "}
+                <em>not</em> reflected in URL Inspection’s history) and pings your sitemap, then opens
+                Search Console’s URL Inspection panel pre-filled with the URL. Pressing{" "}
+                <strong>REQUEST INDEXING</strong> there is the only action that produces the visible
+                "Indexing requested" entry in Search Console.
               </div>
 
               {!gscStatus?.connected || !gscStatus?.property_url ? (
@@ -4535,6 +4812,8 @@ export default function ProjectPage() {
                           const busy = articleIndexBusy[a.id];
                           const msg = articleIndexMsg[a.id];
                           const status = articleIndexStatus[a.id];
+                          const result = articleIndexResult[a.id];
+                          const inspectUrl = result?.inspect_panel_url || "";
                           return (
                             <tr key={a.id}>
                               <td style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={a.title}>
@@ -4550,13 +4829,13 @@ export default function ProjectPage() {
                                   {status?.coverage_state || a.gsc_status || "—"}
                                 </span>
                                 {msg ? (
-                                  <div className={styles.muted} style={{ fontSize: 11, marginTop: 2 }}>
+                                  <div className={styles.muted} style={{ fontSize: 11, marginTop: 2, lineHeight: 1.45 }}>
                                     {msg}
                                   </div>
                                 ) : null}
                               </td>
                               <td style={{ textAlign: "right" }}>
-                                <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end" }}>
+                                <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
                                   <button
                                     type="button"
                                     className={styles.miniBtn}
@@ -4573,6 +4852,17 @@ export default function ProjectPage() {
                                   >
                                     {busy === "request" ? "Submitting…" : "Index now"}
                                   </button>
+                                  {inspectUrl ? (
+                                    <a
+                                      href={inspectUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={styles.miniBtn}
+                                      title="Opens Google Search Console URL Inspection pre-filled with this URL — press REQUEST INDEXING there to actually queue a crawl that shows up in URL Inspection history."
+                                    >
+                                      Open in Search Console ↗
+                                    </a>
+                                  ) : null}
                                 </div>
                               </td>
                             </tr>

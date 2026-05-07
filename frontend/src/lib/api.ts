@@ -145,6 +145,47 @@ export type GscSite = {
   permissionLevel?: string;
 };
 
+/**
+ * One sitemap registered on a Search Console property. Mirrors the Sitemaps API
+ * ``WmxSitemap`` resource, flattened to the fields the UI actually renders.
+ */
+export type GscSitemap = {
+  path: string;
+  last_submitted?: string;
+  last_downloaded?: string;
+  is_pending?: boolean;
+  is_sitemaps_index?: boolean;
+  type?: string;
+  warnings?: number;
+  errors?: number;
+  submitted_urls?: string;
+  indexed_urls?: string;
+};
+
+export type GscSitemapList = {
+  property_url?: string | null;
+  suggested_sitemap_url?: string | null;
+  sitemaps: GscSitemap[];
+};
+
+/**
+ * Response from POST /api/projects/:id/articles/:articleId/gsc/request-indexing.
+ *
+ * The backend tries the Google Indexing API + sitemap ping, then always returns the
+ * GSC URL Inspection deep link so the UI can hand off to the manual "Request Indexing"
+ * button (which is the only way to make the request show up in URL Inspection history).
+ */
+export type RequestIndexingResponse = {
+  ok: boolean;
+  gsc_status?: string | null;
+  gsc_inspection_requested_at?: string | null;
+  gsc_inspection_url?: string | null;
+  indexing_api?: { attempted: boolean; ok: boolean; error?: string };
+  sitemap_ping?: { attempted: boolean; ok: boolean; sitemap_url?: string };
+  inspect_panel_url?: string | null;
+  note?: string | null;
+};
+
 export type GscIndexingStatus = {
   url: string;
   site_url: string;
@@ -958,15 +999,10 @@ export const api = {
   },
 
   async requestIndexing(projectId: string, articleId: string) {
-    return apiFetch<{
-      ok: boolean;
-      status?: string;
-      gsc_status?: string | null;
-      gsc_inspection_requested_at?: string | null;
-      gsc_inspection_url?: string | null;
-    }>(`/api/projects/${projectId}/articles/${articleId}/gsc/request-indexing`, {
-      method: "POST",
-    });
+    return apiFetch<RequestIndexingResponse>(
+      `/api/projects/${projectId}/articles/${articleId}/gsc/request-indexing`,
+      { method: "POST" },
+    );
   },
   async checkArticleIndexingStatus(projectId: string, articleId: string) {
     return apiFetch<GscIndexingStatus>(
@@ -995,6 +1031,26 @@ export const api = {
     return apiFetch<{ ok: boolean; property_url?: string | null; index_on_publish: boolean }>(
       `/api/projects/${projectId}/gsc/property`,
       { method: "POST", body: JSON.stringify(payload) },
+    );
+  },
+
+  async gscProjectListSitemaps(projectId: string) {
+    return apiFetch<GscSitemapList>(`/api/projects/${projectId}/gsc/sitemaps`);
+  },
+  async gscProjectSubmitSitemap(projectId: string, sitemapUrl?: string | null) {
+    return apiFetch<{ ok: boolean; sitemap_url: string; submitted_at?: string }>(
+      `/api/projects/${projectId}/gsc/sitemaps`,
+      {
+        method: "POST",
+        body: JSON.stringify({ sitemap_url: (sitemapUrl || "").trim() || null }),
+      },
+    );
+  },
+  async gscProjectDeleteSitemap(projectId: string, sitemapUrl: string) {
+    const qs = new URLSearchParams({ sitemap_url: sitemapUrl });
+    return apiFetch<{ ok: boolean; sitemap_url: string }>(
+      `/api/projects/${projectId}/gsc/sitemaps?${qs.toString()}`,
+      { method: "DELETE" },
     );
   },
 
