@@ -48,7 +48,7 @@ from app.services.content_sanitizer import (
 )
 from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient
-from app.services.gsc_actions import maybe_request_url_inspection, request_url_inspection_now
+from app.services.gsc_actions import inspect_url_status, maybe_request_url_inspection, request_url_inspection_now
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.scheduler import prepare_article_for_scheduled_job
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
@@ -1313,7 +1313,11 @@ async def publish_to_live_site(
 @router.post("/{article_id}/gsc/request-indexing", status_code=200)
 async def request_indexing(project_id: str, article_id: str, user: dict = Depends(get_current_user)) -> dict:
     """
-    Manual trigger: request a Google Search Console URL Inspection for this article's live URL.
+    Manual trigger: ask Google to (re)index this article's live URL.
+
+    Uses the Google Indexing API when configured (service account); otherwise calls the
+    Search Console URL Inspection API using the per-project GSC connection (or the
+    legacy user-level connection as a fallback).
     """
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
@@ -1322,12 +1326,40 @@ async def request_indexing(project_id: str, article_id: str, user: dict = Depend
     if not live_url:
         raise HTTPException(status_code=400, detail="Article does not have a live URL yet (publish first).")
     if not (proj.get("gsc_property_url") or "").strip():
-        raise HTTPException(status_code=400, detail="Search Console property is not linked for this project (Project Settings).")
+        raise HTTPException(status_code=400, detail="Search Console property is not linked for this project. Open Tools → Search Console.")
     ok = await request_url_inspection_now(st=st, proj=proj, live_url=live_url, article_id=article_id)
     if not ok:
-        # Read back best-effort error message stored on the article.
         a2 = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
         msg = (a2.get("gsc_inspection_error") or "").strip() or "Search Console request failed."
         raise HTTPException(status_code=400, detail=msg)
-    return {"ok": True, "status": "requested"}
+    a2 = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    return {
+        "ok": True,
+        "status": "requested",
+        "gsc_status": (a2.get("gsc_status") or "").strip() or None,
+        "gsc_inspection_requested_at": (a2.get("gsc_inspection_requested_at") or "").strip() or None,
+        "gsc_inspection_url": (a2.get("gsc_inspection_url") or "").strip() or None,
+    }
+
+
+@router.get("/{article_id}/gsc/indexing-status", status_code=200)
+async def indexing_status(project_id: str, article_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """
+    Read-only "Check indexing" — calls Google Search Console URL Inspection and returns
+    flat coverageState / verdict / lastCrawlTime fields suitable for the UI. Does not
+    consume any indexing quota beyond Google's standard URL Inspection API limits.
+    """
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    live_url = (a.get("wp_link") or "").strip()
+    if not live_url:
+        raise HTTPException(status_code=400, detail="Article does not have a live URL yet (publish first).")
+    if not (proj.get("gsc_property_url") or "").strip():
+        raise HTTPException(status_code=400, detail="Search Console property is not linked for this project. Open Tools → Search Console.")
+    try:
+        result = await inspect_url_status(st=st, proj=proj, live_url=live_url)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e) or "Search Console URL Inspection failed.") from e
+    return result
 

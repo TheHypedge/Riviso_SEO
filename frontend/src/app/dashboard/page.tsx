@@ -13,7 +13,6 @@ import {
   api,
   clearAuth,
   getAccessToken,
-  GscStatus,
   PlanPublic,
   ProfilePublic,
   ProjectPublic,
@@ -55,10 +54,6 @@ export default function DashboardPage() {
   const [profile, setProfile] = useState<ProfilePublic | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileClockTick, setProfileClockTick] = useState(0);
-  const [gsc, setGsc] = useState<GscStatus | null>(null);
-  const [gscConnecting, setGscConnecting] = useState(false);
-  const [showGscCongrats, setShowGscCongrats] = useState(false);
-  const [gscMsg, setGscMsg] = useState<string | null>(null);
 
   function normalizeTimeZoneId(tz: string) {
     const raw = (tz || "").trim();
@@ -128,12 +123,6 @@ export default function DashboardPage() {
         setMeEmail(me.email);
         const items = await api.listProjects();
         setProjects(items);
-        try {
-          const gs = await api.gscStatus();
-          setGsc(gs);
-        } catch {
-          setGsc(null);
-        }
       } catch (e) {
         clearAuth();
         router.replace("/login");
@@ -143,25 +132,17 @@ export default function DashboardPage() {
     })();
   }, [router, token]);
 
+  // Per-project GSC flow now redirects directly to /projects/{id}?tab=tools, so the
+  // dashboard no longer needs to handle Search Console OAuth callbacks. If a stale
+  // hash is present on this page (older clients/links), strip it silently.
   useEffect(() => {
-    // Handle OAuth callback redirect flags (best-effort).
+    if (typeof window === "undefined") return;
     try {
       const url = new URL(window.location.href);
       const rawHash = (url.hash || "").replace(/^#/, "");
       const hashParams = new URLSearchParams(rawHash);
       const flag = (hashParams.get("gsc") || "").trim();
-      const msg = (hashParams.get("msg") || "").trim();
-      if (flag === "connected") {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setShowGscCongrats(true);
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setGscMsg(null);
-        // refresh status
-        api.gscStatus().then(setGsc).catch(() => {});
-        url.hash = "";
-        window.history.replaceState({}, "", url.toString());
-      } else if (flag === "error") {
-        setGscMsg(msg || "Google connect failed. Please try again.");
+      if (flag === "connected" || flag === "error") {
         url.hash = "";
         window.history.replaceState({}, "", url.toString());
       }
@@ -259,21 +240,6 @@ export default function DashboardPage() {
   function logout() {
     clearAuth();
     router.replace("/login");
-  }
-
-  async function connectGoogleSearchConsole() {
-    setError(null);
-    setGscMsg(null);
-    setGscConnecting(true);
-    try {
-      const res = await api.gscConnectUrl();
-      if (res?.url) window.location.href = res.url;
-      else throw new Error("No OAuth URL returned");
-    } catch (e) {
-      setGscMsg(e instanceof Error ? e.message : "Could not start Google connect");
-    } finally {
-      setGscConnecting(false);
-    }
   }
 
   async function saveUser(u: AdminUserPublic) {
@@ -473,25 +439,6 @@ export default function DashboardPage() {
               <button
                 type="button"
                 className={styles.navItem}
-                onClick={connectGoogleSearchConsole}
-                disabled={gscConnecting}
-              >
-                <span className={dashStyles.navItemRow}>
-                  <span>{gscConnecting ? "Connecting Google…" : "Connect Google (Search Console)"}</span>
-                  {gsc?.connected ? (
-                    <span
-                      className={dashStyles.connectedBadge}
-                      title={gsc.email ? `Connected: ${gsc.email}` : "Connected"}
-                    >
-                      <span aria-hidden="true" className={dashStyles.connectedDot} />
-                      Connected
-                    </span>
-                  ) : null}
-                </span>
-              </button>
-              <button
-                type="button"
-                className={styles.navItem}
                 onClick={() => alert("Tutorial will be wired next.")}
               >
                 Watch tutorial
@@ -503,7 +450,6 @@ export default function DashboardPage() {
 
           <section className={styles.contentCol}>
             {error ? <div className={styles.error}>{error}</div> : null}
-            {gscMsg ? <div className={styles.error}>{gscMsg}</div> : null}
 
             {section === "projects" ? (
               <>
@@ -941,67 +887,6 @@ export default function DashboardPage() {
           </section>
         </div>
       </main>
-
-      {showGscCongrats ? (
-        <>
-          <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setShowGscCongrats(false)} />
-          <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Google Search Console connected">
-            <div className={styles.modalHead}>
-              <h3 className={styles.modalTitle}>Congratulations!</h3>
-              <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowGscCongrats(false)}>
-                <Icon.X className={styles.icon20} />
-              </button>
-            </div>
-            <div className={styles.modalBody}>
-              <div style={{ position: "relative", overflow: "hidden", borderRadius: 12, padding: 12, border: "1px solid var(--button-secondary-border)" }}>
-                <div aria-hidden="true" style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-                  {Array.from({ length: 28 }).map((_, i) => (
-                    <span
-                      key={i}
-                      style={{
-                        position: "absolute",
-                        left: `${(i * 37) % 100}%`,
-                        top: `-12px`,
-                        width: 8,
-                        height: 14,
-                        borderRadius: 2,
-                        opacity: 0.9,
-                        background: ["#7dd3fc", "#a78bfa", "#34d399", "#fbbf24", "#fb7185"][i % 5],
-                        transform: `rotate(${(i * 23) % 180}deg)`,
-                        animation: `aaConfettiFall ${1200 + (i % 7) * 130}ms linear ${i * 35}ms 1 both`,
-                      }}
-                    />
-                  ))}
-                </div>
-
-                <div style={{ fontWeight: 800, marginBottom: 6 }}>
-                  Google Search Console is connected{gsc?.email ? ` (${gsc.email})` : ""}.
-                </div>
-                <div className={styles.muted} style={{ fontSize: 13, lineHeight: 1.5 }}>
-                  Go to <strong>Project settings</strong> and connect the Google Search Console property.
-                </div>
-              </div>
-            </div>
-            <div className={styles.modalFooter}>
-              <button type="button" className={styles.button} onClick={() => setShowGscCongrats(false)}>
-                OK
-              </button>
-            </div>
-          </div>
-          <style jsx global>{`
-            @keyframes aaConfettiFall {
-              0% {
-                transform: translateY(0) rotate(0deg);
-                opacity: 1;
-              }
-              100% {
-                transform: translateY(220px) rotate(180deg);
-                opacity: 0;
-              }
-            }
-          `}</style>
-        </>
-      ) : null}
 
       {showAddProject ? (
         <>

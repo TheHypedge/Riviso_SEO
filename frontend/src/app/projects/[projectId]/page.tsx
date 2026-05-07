@@ -214,10 +214,18 @@ export default function ProjectPage() {
   const [nicheIdentifier, setNicheIdentifier] = useState("");
   const [settingsPostTypes, setSettingsPostTypes] = useState<import("@/lib/api").WordpressPostType[]>([]);
   const [settingsCategories, setSettingsCategories] = useState<import("@/lib/api").WordpressCategory[]>([]);
-  const [gscStatus, setGscStatus] = useState<import("@/lib/api").GscStatus | null>(null);
+  const [gscStatus, setGscStatus] = useState<import("@/lib/api").ProjectGscStatus | null>(null);
   const [gscSites, setGscSites] = useState<import("@/lib/api").GscSite[]>([]);
   const [gscLoading, setGscLoading] = useState(false);
   const [gscSaveMsg, setGscSaveMsg] = useState<string | null>(null);
+  const [gscConnecting, setGscConnecting] = useState(false);
+  const [gscDisconnecting, setGscDisconnecting] = useState(false);
+  const [gscConfirmDisconnect, setGscConfirmDisconnect] = useState(false);
+  const [gscMsg, setGscMsg] = useState<string | null>(null);
+  const [gscOpenedFromOAuth, setGscOpenedFromOAuth] = useState(false);
+  const [articleIndexBusy, setArticleIndexBusy] = useState<Record<string, "request" | "check" | undefined>>({});
+  const [articleIndexMsg, setArticleIndexMsg] = useState<Record<string, string | null>>({});
+  const [articleIndexStatus, setArticleIndexStatus] = useState<Record<string, import("@/lib/api").GscIndexingStatus | null>>({});
   const settingsDirty = useMemo(() => {
     if (!settings) return false;
     return (
@@ -226,13 +234,11 @@ export default function ProjectPage() {
       (sWpUser || "") !== (settings.wp_username || "") ||
       (sWpDefaultPostType || "") !== ((settings.default_wp_rest_base || "posts") as string) ||
       (sWpDefaultStatus || "") !== ((settings.default_wp_status || "draft") as string) ||
-      JSON.stringify((sWpDefaultCategoryIds || []).slice().sort((a,b)=>a-b)) !==
-        JSON.stringify(((settings.default_wp_category_ids || []) as number[]).slice().sort((a,b)=>a-b)) ||
-      (sGscPropertyUrl || "") !== (settings.gsc_property_url || "") ||
-      Boolean(sGscIndexOnPublish) !== Boolean(settings.gsc_index_on_publish ?? true) ||
+      JSON.stringify((sWpDefaultCategoryIds || []).slice().sort((a, b) => a - b)) !==
+        JSON.stringify(((settings.default_wp_category_ids || []) as number[]).slice().sort((a, b) => a - b)) ||
       !!sWpPass.trim()
     );
-  }, [sName, sUrl, sWpUser, sWpPass, settings, sWpDefaultPostType, sWpDefaultStatus, sWpDefaultCategoryIds, sGscPropertyUrl, sGscIndexOnPublish]);
+  }, [sName, sUrl, sWpUser, sWpPass, settings, sWpDefaultPostType, sWpDefaultStatus, sWpDefaultCategoryIds]);
 
   const identityDirty = useMemo(() => {
     if (!projectMeta) return false;
@@ -528,11 +534,14 @@ export default function ProjectPage() {
 
   async function requestIndexingOne(articleId: string) {
     setRequestIndexingBusy(true);
-    setRequestIndexingMsg("Submitting URL to Google Search Console…");
+    setRequestIndexingMsg("Submitting URL to Google for indexing…");
     try {
-      await api.requestIndexing(projectId, articleId);
-      setRequestIndexingMsg("Submitted. Google will process the inspection request.");
-      setArticles((prev) => prev.map((a) => (a.id === articleId ? { ...a, gsc_status: "inspected" } : a)));
+      const res = await api.requestIndexing(projectId, articleId);
+      setRequestIndexingMsg("Submitted. Google will process the indexing request.");
+      const newStatus = (res?.gsc_status || "inspected").toString();
+      setArticles((prev) =>
+        prev.map((a) => (a.id === articleId ? { ...a, gsc_status: newStatus } : a)),
+      );
       setTimeout(() => {
         setRequestIndexingId(null);
         setRequestIndexingMsg("");
@@ -649,47 +658,50 @@ export default function ProjectPage() {
       setSettingsLoading(true);
       setGscLoading(true);
       try {
-        const [s, gs, pm] = await Promise.all([api.getProjectSettings(projectId), api.gscStatus(), api.getProject(projectId)]);
-        setSettings(s);
-        setProjectMeta(pm);
-        setSName(s.name || "");
-        setSUrl(s.wp_site_url || s.website_url || "");
-        setSWpUser(s.wp_username || "");
-        setSWpPass("");
-        setBrandIdentity((pm?.brand_identity || "") as string);
-        setNicheIdentifier((pm?.niche_identifier || "") as string);
-        setSWpDefaultPostType((s.default_wp_rest_base || "posts") as string);
-        setSWpDefaultStatus(((s.default_wp_status || "draft") as "draft" | "publish"));
-        setSWpDefaultCategoryIds((s.default_wp_category_ids || []) as number[]);
-        setSGscPropertyUrl((s.gsc_property_url || "") as string);
-        setSGscIndexOnPublish(Boolean(s.gsc_index_on_publish ?? true));
-        setGscStatus(gs);
-        setSettingsVerify(null);
+      const [s, gs, pm] = await Promise.all([
+        api.getProjectSettings(projectId),
+        api.gscProjectStatus(projectId),
+        api.getProject(projectId),
+      ]);
+      setSettings(s);
+      setProjectMeta(pm);
+      setSName(s.name || "");
+      setSUrl(s.wp_site_url || s.website_url || "");
+      setSWpUser(s.wp_username || "");
+      setSWpPass("");
+      setBrandIdentity((pm?.brand_identity || "") as string);
+      setNicheIdentifier((pm?.niche_identifier || "") as string);
+      setSWpDefaultPostType((s.default_wp_rest_base || "posts") as string);
+      setSWpDefaultStatus(((s.default_wp_status || "draft") as "draft" | "publish"));
+      setSWpDefaultCategoryIds((s.default_wp_category_ids || []) as number[]);
+      setSGscPropertyUrl((s.gsc_property_url || "") as string);
+      setSGscIndexOnPublish(Boolean(s.gsc_index_on_publish ?? true));
+      setGscStatus(gs);
+      setSettingsVerify(null);
 
-        // Load WP options for defaults if connected
-        try {
-          const [types, cats] = await Promise.all([
-            api.wordpressPostTypes(projectId),
-            api.wordpressCategories(projectId),
-          ]);
-          setSettingsPostTypes(types);
-          setSettingsCategories(cats);
-        } catch {
-          setSettingsPostTypes([]);
-          setSettingsCategories([]);
-        }
+      // Load WP options for defaults if connected
+      try {
+        const [types, cats] = await Promise.all([
+          api.wordpressPostTypes(projectId),
+          api.wordpressCategories(projectId),
+        ]);
+        setSettingsPostTypes(types);
+        setSettingsCategories(cats);
+      } catch {
+        setSettingsPostTypes([]);
+        setSettingsCategories([]);
+      }
 
-        // Load Search Console properties if connected
-        try {
-          if (gs?.connected) {
-            const sites = await api.gscListSites();
-            setGscSites(sites || []);
-          } else {
-            setGscSites([]);
-          }
-        } catch {
+      try {
+        if (gs?.connected) {
+          const sites = await api.gscProjectListSites(projectId);
+          setGscSites(sites || []);
+        } else {
           setGscSites([]);
         }
+      } catch {
+        setGscSites([]);
+      }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load project settings");
       } finally {
@@ -712,8 +724,6 @@ export default function ProjectPage() {
         default_wp_rest_base: sWpDefaultPostType,
         default_wp_status: sWpDefaultStatus,
         default_wp_category_ids: sWpDefaultCategoryIds,
-        gsc_property_url: sGscPropertyUrl,
-        gsc_index_on_publish: sGscIndexOnPublish,
         ...(sWpPass.trim() ? { wp_app_password: sWpPass } : {}),
       });
       setSettings(saved);
@@ -725,11 +735,6 @@ export default function ProjectPage() {
         });
         setProjectMeta(pm2);
       }
-      setGscSaveMsg(
-        saved.gsc_property_url
-          ? "Google Search Console property linked to this project."
-          : "Google Search Console settings saved.",
-      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save settings");
     } finally {
@@ -751,6 +756,139 @@ export default function ProjectPage() {
       setSettingsVerify({ ok: false, status: "error", message: e instanceof Error ? e.message : "Verify failed" });
     } finally {
       setSettingsVerifying(false);
+    }
+  }
+
+  async function reloadGscForProject(opts: { showLoading?: boolean } = {}) {
+    if (!projectId) return;
+    if (opts.showLoading) setGscLoading(true);
+    try {
+      const gs = await api.gscProjectStatus(projectId);
+      setGscStatus(gs);
+      if ((gs?.property_url || "") !== undefined && gs?.property_url) {
+        setSGscPropertyUrl(gs.property_url);
+      }
+      setSGscIndexOnPublish(Boolean(gs?.index_on_publish ?? true));
+      if (gs?.connected) {
+        try {
+          const sites = await api.gscProjectListSites(projectId);
+          setGscSites(sites || []);
+        } catch {
+          setGscSites([]);
+        }
+      } else {
+        setGscSites([]);
+      }
+    } catch (e) {
+      setGscMsg(e instanceof Error ? e.message : "Failed to refresh Search Console status");
+    } finally {
+      if (opts.showLoading) setGscLoading(false);
+    }
+  }
+
+  async function connectGscForProject() {
+    setGscMsg(null);
+    setGscConnecting(true);
+    try {
+      const res = await api.gscProjectConnectUrl(projectId);
+      if (res?.url) {
+        window.location.href = res.url;
+      } else {
+        throw new Error("No OAuth URL returned");
+      }
+    } catch (e) {
+      setGscMsg(e instanceof Error ? e.message : "Could not start Google connect");
+      setGscConnecting(false);
+    }
+  }
+
+  async function disconnectGscForProject() {
+    setGscMsg(null);
+    setGscDisconnecting(true);
+    try {
+      await api.gscProjectDisconnect(projectId);
+      setSGscPropertyUrl("");
+      setGscSites([]);
+      setGscStatus({
+        configured: gscStatus?.configured ?? false,
+        connected: false,
+        email: null,
+        connected_at: null,
+        property_url: null,
+        index_on_publish: gscStatus?.index_on_publish ?? true,
+      });
+      setGscMsg("Disconnected Google Search Console for this project.");
+    } catch (e) {
+      setGscMsg(e instanceof Error ? e.message : "Failed to disconnect");
+    } finally {
+      setGscDisconnecting(false);
+      setGscConfirmDisconnect(false);
+    }
+  }
+
+  async function saveGscPropertyForProject(propertyUrl: string, indexOnPublish: boolean) {
+    setGscSaveMsg(null);
+    try {
+      const res = await api.gscProjectSetProperty(projectId, {
+        property_url: propertyUrl || "",
+        index_on_publish: indexOnPublish,
+      });
+      setSGscPropertyUrl(res?.property_url || "");
+      setSGscIndexOnPublish(Boolean(res?.index_on_publish));
+      setGscStatus((s) =>
+        s
+          ? { ...s, property_url: res?.property_url || null, index_on_publish: Boolean(res?.index_on_publish) }
+          : s,
+      );
+      setGscSaveMsg(
+        propertyUrl
+          ? "Property linked. Google Search Console will be used for this project."
+          : "Property cleared.",
+      );
+    } catch (e) {
+      setGscMsg(e instanceof Error ? e.message : "Failed to save Search Console property");
+    }
+  }
+
+  async function requestArticleIndexing(articleId: string) {
+    if (!articleId) return;
+    setArticleIndexBusy((m) => ({ ...m, [articleId]: "request" }));
+    setArticleIndexMsg((m) => ({ ...m, [articleId]: null }));
+    try {
+      const res = await api.requestIndexing(projectId, articleId);
+      setArticleIndexMsg((m) => ({
+        ...m,
+        [articleId]: "Submitted to Google for indexing.",
+      }));
+      setArticles((prev) =>
+        prev.map((a) => (a.id === articleId ? { ...a, gsc_status: res?.gsc_status || a.gsc_status } : a)),
+      );
+    } catch (e) {
+      setArticleIndexMsg((m) => ({
+        ...m,
+        [articleId]: e instanceof Error ? e.message : "Indexing request failed",
+      }));
+    } finally {
+      setArticleIndexBusy((m) => ({ ...m, [articleId]: undefined }));
+    }
+  }
+
+  async function checkArticleIndexing(articleId: string) {
+    if (!articleId) return;
+    setArticleIndexBusy((m) => ({ ...m, [articleId]: "check" }));
+    setArticleIndexMsg((m) => ({ ...m, [articleId]: null }));
+    try {
+      const res = await api.checkArticleIndexingStatus(projectId, articleId);
+      setArticleIndexStatus((m) => ({ ...m, [articleId]: res }));
+      const verdict = (res.verdict || res.coverage_state || "").trim() || "Unknown";
+      setArticleIndexMsg((m) => ({ ...m, [articleId]: `Status: ${verdict}` }));
+    } catch (e) {
+      setArticleIndexMsg((m) => ({
+        ...m,
+        [articleId]: e instanceof Error ? e.message : "Status check failed",
+      }));
+    } finally {
+      setArticleIndexBusy((m) => ({ ...m, [articleId]: undefined }));
     }
   }
 
@@ -819,6 +957,44 @@ export default function ProjectPage() {
       }
     })();
   }, [projectId, tab, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    if (tab !== "tools") return;
+    setGscSaveMsg(null);
+    setGscMsg(null);
+    void reloadGscForProject({ showLoading: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, tab, token]);
+
+  // Handle the OAuth redirect (URL contains ?tab=tools#gsc=connected|error&msg=...)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!projectId) return;
+    try {
+      const url = new URL(window.location.href);
+      const rawHash = (url.hash || "").replace(/^#/, "");
+      const hashParams = new URLSearchParams(rawHash);
+      const flag = (hashParams.get("gsc") || "").trim();
+      const msg = (hashParams.get("msg") || "").trim();
+      if (flag === "connected" || flag === "error") {
+        setTab("tools");
+        if (flag === "connected") {
+          setGscOpenedFromOAuth(true);
+          setGscMsg(null);
+          void reloadGscForProject({ showLoading: true });
+        } else {
+          setGscMsg(msg || "Google connect failed. Please try again.");
+        }
+        url.hash = "";
+        url.searchParams.delete("tab");
+        window.history.replaceState({}, "", url.toString());
+      }
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
 
   useEffect(() => {
     queueMicrotask(() => {
@@ -4145,12 +4321,249 @@ export default function ProjectPage() {
         ) : null}
 
         {tab === "tools" ? (
-          <div className={`${styles.card} ${styles.cardWide}`}>
-            <h2>Tools</h2>
-            <p style={{ color: "#666", lineHeight: 1.5 }}>
-              This will contain Bulk upload, Search Console connect, and other integrations (mirrors “Tools / Integrations” from the legacy app).
-            </p>
-          </div>
+          <>
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <h2 style={{ marginTop: 0 }}>Search Console</h2>
+              <div className={styles.muted} style={{ fontSize: 13, lineHeight: 1.5 }}>
+                Connect this project to its own Google account and Search Console property. After a live publish,
+                we automatically request indexing for the post URL. Each project can use a different Google account.
+              </div>
+
+              {gscMsg ? <div className={styles.error} style={{ marginTop: 10 }}>{gscMsg}</div> : null}
+              {gscOpenedFromOAuth && gscStatus?.connected ? (
+                <div className={styles.muted} style={{ marginTop: 10, fontWeight: 700, color: "var(--success-text, #2f7d32)" }}>
+                  Connected{gscStatus?.email ? ` (${gscStatus.email})` : ""}.
+                </div>
+              ) : null}
+
+              <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center" }}>
+                <div>
+                  <div style={{ fontWeight: 800 }}>
+                    {gscLoading
+                      ? "Loading…"
+                      : gscStatus?.connected
+                      ? `Connected${gscStatus.email ? ` (${gscStatus.email})` : ""}`
+                      : "Not connected"}
+                  </div>
+                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 4 }}>
+                    {gscStatus?.configured
+                      ? gscStatus?.connected
+                        ? `Linked${gscStatus.connected_at ? ` on ${gscStatus.connected_at} UTC` : ""}.`
+                        : "Click Connect Google to authorize Search Console for this project."
+                      : "Google OAuth client is not configured on the server (set GOOGLE_OAUTH_CLIENT_ID / SECRET)."}
+                  </div>
+                </div>
+                <div className={styles.row} style={{ gap: 8 }}>
+                  {gscStatus?.connected ? (
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => setGscConfirmDisconnect(true)}
+                      disabled={gscDisconnecting}
+                    >
+                      {gscDisconnecting ? "Disconnecting…" : "Disconnect"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={styles.button}
+                    onClick={connectGscForProject}
+                    disabled={gscConnecting || !(gscStatus?.configured ?? true)}
+                  >
+                    {gscConnecting
+                      ? "Opening Google…"
+                      : gscStatus?.connected
+                      ? "Reconnect"
+                      : "Connect Google"}
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 18 }}>
+                <label className={styles.label}>
+                  Property for this project
+                  <select
+                    className={styles.input}
+                    value={sGscPropertyUrl}
+                    onChange={(e) => setSGscPropertyUrl(e.target.value)}
+                    disabled={!gscStatus?.connected}
+                  >
+                    <option value="">— None —</option>
+                    {gscSites.map((s) => (
+                      <option key={s.siteUrl} value={s.siteUrl}>
+                        {s.siteUrl}
+                        {s.permissionLevel ? ` (${s.permissionLevel})` : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {!gscStatus?.connected ? (
+                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                      Connect Google for this project first.
+                    </div>
+                  ) : gscSites.length === 0 ? (
+                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                      No properties available. Add/verify a Search Console property under this Google account, then click Reconnect.
+                    </div>
+                  ) : null}
+                </label>
+
+                <label className={styles.label} style={{ marginTop: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="checkbox"
+                      checked={sGscIndexOnPublish}
+                      onChange={(e) => setSGscIndexOnPublish(e.target.checked)}
+                      disabled={!gscStatus?.connected}
+                    />
+                    <span>Submit URL to Google for indexing automatically after a live publish</span>
+                  </div>
+                </label>
+
+                <div className={styles.row} style={{ gap: 8, marginTop: 12, justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    className={styles.button}
+                    onClick={() => saveGscPropertyForProject(sGscPropertyUrl, sGscIndexOnPublish)}
+                    disabled={!gscStatus?.connected}
+                  >
+                    Save
+                  </button>
+                </div>
+
+                {gscSaveMsg ? (
+                  <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }}>
+                    {gscSaveMsg}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+              <h3 style={{ marginTop: 0 }}>Existing articles — indexing status</h3>
+              <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
+                Submit a published URL for indexing or check its current Search Console coverage. Requires a live URL and a linked property.
+              </div>
+
+              {!gscStatus?.connected || !gscStatus?.property_url ? (
+                <div className={styles.muted} style={{ fontSize: 13 }}>
+                  Connect Google and link a property above to use these actions.
+                </div>
+              ) : (() => {
+                const published = (articles || [])
+                  .filter((a) => (a.wp_link || "").trim())
+                  .slice(0, 50);
+                if (!published.length) {
+                  return (
+                    <div className={styles.muted} style={{ fontSize: 13 }}>
+                      No published articles yet. Once an article goes live, it will appear here.
+                    </div>
+                  );
+                }
+                return (
+                  <div style={{ overflowX: "auto" }}>
+                    <table className={styles.table}>
+                      <thead>
+                        <tr>
+                          <th>Title</th>
+                          <th>Live URL</th>
+                          <th>Status</th>
+                          <th style={{ textAlign: "right" }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {published.map((a) => {
+                          const busy = articleIndexBusy[a.id];
+                          const msg = articleIndexMsg[a.id];
+                          const status = articleIndexStatus[a.id];
+                          return (
+                            <tr key={a.id}>
+                              <td style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={a.title}>
+                                {a.title || "(untitled)"}
+                              </td>
+                              <td style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                <a href={a.wp_link || "#"} target="_blank" rel="noopener noreferrer">
+                                  {a.wp_link}
+                                </a>
+                              </td>
+                              <td>
+                                <span className={styles.muted} style={{ fontSize: 12 }}>
+                                  {status?.coverage_state || a.gsc_status || "—"}
+                                </span>
+                                {msg ? (
+                                  <div className={styles.muted} style={{ fontSize: 11, marginTop: 2 }}>
+                                    {msg}
+                                  </div>
+                                ) : null}
+                              </td>
+                              <td style={{ textAlign: "right" }}>
+                                <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end" }}>
+                                  <button
+                                    type="button"
+                                    className={styles.miniBtn}
+                                    onClick={() => checkArticleIndexing(a.id)}
+                                    disabled={Boolean(busy)}
+                                  >
+                                    {busy === "check" ? "Checking…" : "Check"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className={styles.miniBtn}
+                                    onClick={() => requestArticleIndexing(a.id)}
+                                    disabled={Boolean(busy)}
+                                  >
+                                    {busy === "request" ? "Submitting…" : "Index now"}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {gscConfirmDisconnect ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.modalBackdrop}
+                  aria-label="Close"
+                  onClick={() => setGscConfirmDisconnect(false)}
+                />
+                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Disconnect Search Console">
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Disconnect Search Console?</h3>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <p>
+                      The connection for this project will be removed. The Google account itself stays connected (revoke it from your Google account if needed).
+                    </p>
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => setGscConfirmDisconnect(false)}
+                      disabled={gscDisconnecting}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.button} ${styles.miniDanger || ""}`}
+                      onClick={disconnectGscForProject}
+                      disabled={gscDisconnecting}
+                    >
+                      {gscDisconnecting ? "Disconnecting…" : "Disconnect"}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </>
         ) : null}
 
         {tab === "project_settings" ? (
@@ -4283,59 +4696,17 @@ export default function ProjectPage() {
                 <div style={{ marginTop: 14, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
                   <div style={{ fontWeight: 900, marginBottom: 8 }}>Google Search Console</div>
                   <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
-                    Connect Google on the dashboard first, then choose the Search Console property for this project.
-                    After a <strong>live</strong> publish, we automatically request a <strong>URL Inspection</strong> for the post URL.
-                  </div>
-
-                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>
-                    Status:{" "}
-                    <strong>
-                      {gscLoading ? "Loading…" : gscStatus?.connected ? `Connected${gscStatus.email ? ` (${gscStatus.email})` : ""}` : "Not connected"}
-                    </strong>
-                  </div>
-
-                  <label className={styles.label}>
-                    Property for this project
-                    <select
-                      className={styles.input}
-                      value={sGscPropertyUrl}
-                      onChange={(e) => setSGscPropertyUrl(e.target.value)}
-                      disabled={!gscStatus?.connected}
+                    Search Console connection moved to{" "}
+                    <button
+                      type="button"
+                      className={styles.linkButton}
+                      onClick={() => setTab("tools")}
+                      style={{ background: "none", border: "none", padding: 0, color: "inherit", textDecoration: "underline", cursor: "pointer" }}
                     >
-                      <option value="">— None —</option>
-                      {gscSites.map((s) => (
-                        <option key={s.siteUrl} value={s.siteUrl}>
-                          {s.siteUrl}{s.permissionLevel ? ` (${s.permissionLevel})` : ""}
-                        </option>
-                      ))}
-                    </select>
-                    {!gscStatus?.connected ? (
-                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                        Go to <Link href="/dashboard">Dashboard</Link> → <strong>Connect Google (Search Console)</strong>.
-                      </div>
-                    ) : gscSites.length === 0 ? (
-                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                        No properties returned. Add/verify a site in Search Console for this Google account, then reload this page.
-                      </div>
-                    ) : null}
-                  </label>
-
-                  <label className={styles.label} style={{ marginTop: 10 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <input
-                        type="checkbox"
-                        checked={sGscIndexOnPublish}
-                        onChange={(e) => setSGscIndexOnPublish(e.target.checked)}
-                      />
-                      <span>Inspect URL after live publish</span>
-                    </div>
-                  </label>
-
-                  {gscSaveMsg ? (
-                    <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }}>
-                      {gscSaveMsg}
-                    </div>
-                  ) : null}
+                      Tools → Search Console
+                    </button>
+                    . Each project now connects to its own Google account and chooses its property there.
+                  </div>
                 </div>
 
                 <div className={styles.row} style={{ justifyContent: "space-between", marginTop: 10 }}>

@@ -131,9 +131,34 @@ export type GscStatus = {
   email?: string | null;
 };
 
+export type ProjectGscStatus = {
+  configured: boolean;
+  connected: boolean;
+  email?: string | null;
+  connected_at?: string | null;
+  property_url?: string | null;
+  index_on_publish: boolean;
+};
+
 export type GscSite = {
   siteUrl: string;
   permissionLevel?: string;
+};
+
+export type GscIndexingStatus = {
+  url: string;
+  site_url: string;
+  verdict?: string;
+  coverage_state?: string;
+  robots_txt_state?: string;
+  indexing_state?: string;
+  last_crawl_time?: string;
+  page_fetch_state?: string;
+  google_canonical?: string;
+  user_canonical?: string;
+  referring_urls?: string[];
+  fetched_at?: string;
+  raw?: Record<string, unknown> | null;
 };
 
 export type WordpressVerifyResponse = {
@@ -933,9 +958,44 @@ export const api = {
   },
 
   async requestIndexing(projectId: string, articleId: string) {
-    return apiFetch<{ ok: boolean; status?: string }>(`/api/projects/${projectId}/articles/${articleId}/gsc/request-indexing`, {
+    return apiFetch<{
+      ok: boolean;
+      status?: string;
+      gsc_status?: string | null;
+      gsc_inspection_requested_at?: string | null;
+      gsc_inspection_url?: string | null;
+    }>(`/api/projects/${projectId}/articles/${articleId}/gsc/request-indexing`, {
       method: "POST",
     });
+  },
+  async checkArticleIndexingStatus(projectId: string, articleId: string) {
+    return apiFetch<GscIndexingStatus>(
+      `/api/projects/${projectId}/articles/${articleId}/gsc/indexing-status`,
+    );
+  },
+  async gscProjectStatus(projectId: string) {
+    return apiFetch<ProjectGscStatus>(`/api/projects/${projectId}/gsc/status`);
+  },
+  async gscProjectConnectUrl(projectId: string) {
+    return apiFetch<{ url: string }>(`/api/projects/${projectId}/gsc/connect-url`);
+  },
+  async gscProjectListSites(projectId: string) {
+    return apiFetch<GscSite[]>(`/api/projects/${projectId}/gsc/sites`);
+  },
+  async gscProjectDisconnect(projectId: string) {
+    return apiFetch<{ ok: boolean; disconnected_at?: string }>(
+      `/api/projects/${projectId}/gsc/disconnect`,
+      { method: "POST" },
+    );
+  },
+  async gscProjectSetProperty(
+    projectId: string,
+    payload: { property_url?: string | null; index_on_publish?: boolean },
+  ) {
+    return apiFetch<{ ok: boolean; property_url?: string | null; index_on_publish: boolean }>(
+      `/api/projects/${projectId}/gsc/property`,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
   },
 
   // Admin

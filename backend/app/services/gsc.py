@@ -30,16 +30,33 @@ def oauth_configured() -> bool:
     return bool((settings.google_oauth_client_id or "").strip() and (settings.google_oauth_client_secret or "").strip())
 
 
-def make_state_token(*, user_id: str) -> str:
+def make_state_token(*, user_id: str, project_id: str | None = None) -> str:
+    """
+    Mint a short-lived signed state token. ``project_id`` (when provided) is encoded
+    so the OAuth callback can route the resulting tokens to the per-project record
+    instead of the legacy user-level GSC fields.
+    """
     uid = (user_id or "").strip()
     if not uid:
         raise ValueError("Missing user_id")
     now = int(time.time())
-    payload = {"uid": uid, "nonce": secrets.token_hex(16), "iat": now, "exp": now + 15 * 60}
+    payload: dict[str, Any] = {
+        "uid": uid,
+        "nonce": secrets.token_hex(16),
+        "iat": now,
+        "exp": now + 15 * 60,
+    }
+    pid = (project_id or "").strip()
+    if pid:
+        payload["pid"] = pid
     return jwt.encode(payload, settings.secret_key, algorithm="HS256")
 
 
-def parse_state_token(state: str) -> str:
+def parse_state_token(state: str) -> dict[str, str]:
+    """
+    Decode a state token. Returns ``{"uid": str, "pid": str | None}``. Older callers
+    that only need ``uid`` should read it from the returned dict.
+    """
     raw = (state or "").strip()
     if not raw:
         raise ValueError("Missing state")
@@ -47,7 +64,8 @@ def parse_state_token(state: str) -> str:
     uid = (payload.get("uid") or "").strip()
     if not uid:
         raise ValueError("Invalid state")
-    return uid
+    pid = (payload.get("pid") or "").strip() or None
+    return {"uid": uid, "pid": pid}
 
 
 def build_auth_url(*, redirect_uri: str, state: str) -> str:

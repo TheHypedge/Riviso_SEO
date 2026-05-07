@@ -20,6 +20,7 @@ from app.api.routes import projects
 from app.api.routes import wordpress
 from app.api.routes import scheduled_jobs
 from app.api.routes import gsc
+from app.api.routes import project_gsc
 from app.api.routes import research
 
 api_router = APIRouter()
@@ -36,5 +37,6 @@ api_router.include_router(admin.router)
 api_router.include_router(wordpress.router)
 api_router.include_router(scheduled_jobs.router)
 api_router.include_router(gsc.router)
+api_router.include_router(project_gsc.router)
 api_router.include_router(research.router)
 
