@@ -12,3 +12,17 @@ class HealthResponse(BaseModel):
     service: str = Field(description="Application name from settings.")
     environment: str = Field(description="ENVIRONMENT value, e.g. development or production.")
     openai_configured: bool = Field(default=False, description="True when OPENAI_API_KEY is non-empty.")
+    gsc_oauth_configured: bool = Field(
+        default=False,
+        description=(
+            "True when both GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are loaded "
+            "by the running process. Use this from the VPS to verify env loading without "
+            "exposing secrets."
+        ),
+    )
+    gsc_oauth_client_id_fingerprint: str = Field(
+        default="",
+        description=(
+            "Non-secret hint of the loaded client id (first 12 chars + length). Empty when not configured."
+        ),
+    )

@@ -223,6 +223,10 @@ export default function ProjectPage() {
   const [gscConfirmDisconnect, setGscConfirmDisconnect] = useState(false);
   const [gscMsg, setGscMsg] = useState<string | null>(null);
   const [gscOpenedFromOAuth, setGscOpenedFromOAuth] = useState(false);
+  // True when the per-project GSC routes return 404 — almost always means the VPS
+  // backend wasn't restarted with the latest code. Surfaced with an actionable hint
+  // so the user does not chase the (misleading) "OAuth not configured" message.
+  const [gscApiUnavailable, setGscApiUnavailable] = useState(false);
   const [articleIndexBusy, setArticleIndexBusy] = useState<Record<string, "request" | "check" | undefined>>({});
   const [articleIndexMsg, setArticleIndexMsg] = useState<Record<string, string | null>>({});
   const [articleIndexStatus, setArticleIndexStatus] = useState<Record<string, import("@/lib/api").GscIndexingStatus | null>>({});
@@ -658,11 +662,17 @@ export default function ProjectPage() {
       setSettingsLoading(true);
       setGscLoading(true);
       try {
-      const [s, gs, pm] = await Promise.all([
+      // Use ``allSettled`` so a stale backend (404 on the per-project GSC route) does not
+      // wipe the rest of the settings tab — we surface the deployment-lag hint instead.
+      const [sRes, gsRes, pmRes] = await Promise.allSettled([
         api.getProjectSettings(projectId),
         api.gscProjectStatus(projectId),
         api.getProject(projectId),
       ]);
+      if (sRes.status !== "fulfilled") throw sRes.reason;
+      if (pmRes.status !== "fulfilled") throw pmRes.reason;
+      const s = sRes.value;
+      const pm = pmRes.value;
       setSettings(s);
       setProjectMeta(pm);
       setSName(s.name || "");
@@ -676,7 +686,15 @@ export default function ProjectPage() {
       setSWpDefaultCategoryIds((s.default_wp_category_ids || []) as number[]);
       setSGscPropertyUrl((s.gsc_property_url || "") as string);
       setSGscIndexOnPublish(Boolean(s.gsc_index_on_publish ?? true));
-      setGscStatus(gs);
+      if (gsRes.status === "fulfilled") {
+        setGscStatus(gsRes.value);
+        setGscApiUnavailable(false);
+      } else if (gsRes.reason instanceof ApiError && gsRes.reason.status === 404) {
+        setGscApiUnavailable(true);
+        setGscMsg(
+          "Backend is missing the per-project Search Console routes. Pull the latest code on the VPS and restart the FastAPI service (or recreate the Docker container)."
+        );
+      }
       setSettingsVerify(null);
 
       // Load WP options for defaults if connected
@@ -693,7 +711,7 @@ export default function ProjectPage() {
       }
 
       try {
-        if (gs?.connected) {
+        if (gsRes.status === "fulfilled" && gsRes.value?.connected) {
           const sites = await api.gscProjectListSites(projectId);
           setGscSites(sites || []);
         } else {
@@ -765,6 +783,7 @@ export default function ProjectPage() {
     try {
       const gs = await api.gscProjectStatus(projectId);
       setGscStatus(gs);
+      setGscApiUnavailable(false);
       if ((gs?.property_url || "") !== undefined && gs?.property_url) {
         setSGscPropertyUrl(gs.property_url);
       }
@@ -780,7 +799,18 @@ export default function ProjectPage() {
         setGscSites([]);
       }
     } catch (e) {
-      setGscMsg(e instanceof Error ? e.message : "Failed to refresh Search Console status");
+      // 404 on the per-project route means the backend hasn't been redeployed with
+      // the latest code (the legacy build doesn't expose /api/projects/:id/gsc/*).
+      // Treat that as a separate, actionable state rather than the generic "not configured".
+      if (e instanceof ApiError && e.status === 404) {
+        setGscApiUnavailable(true);
+        setGscMsg(
+          "Backend is missing the per-project Search Console routes. Pull the latest code on the VPS and restart the FastAPI service (or recreate the Docker container)."
+        );
+      } else {
+        setGscApiUnavailable(false);
+        setGscMsg(e instanceof Error ? e.message : "Failed to refresh Search Console status");
+      }
     } finally {
       if (opts.showLoading) setGscLoading(false);
     }
@@ -797,7 +827,21 @@ export default function ProjectPage() {
         throw new Error("No OAuth URL returned");
       }
     } catch (e) {
-      setGscMsg(e instanceof Error ? e.message : "Could not start Google connect");
+      if (e instanceof ApiError && e.status === 404) {
+        setGscApiUnavailable(true);
+        setGscMsg(
+          "Backend is missing the per-project Search Console routes. Pull the latest code on the VPS and restart the FastAPI service (or recreate the Docker container)."
+        );
+      } else if (e instanceof ApiError && e.status === 400) {
+        // Backend explicitly told us OAuth is not configured.
+        setGscMsg(
+          (e.message && e.message.toLowerCase().includes("oauth"))
+            ? "Google OAuth is not configured on the server. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in the backend env, then restart the backend service. (Tip: curl /api/health to verify the running process picked them up.)"
+            : (e.message || "Could not start Google connect")
+        );
+      } else {
+        setGscMsg(e instanceof Error ? e.message : "Could not start Google connect");
+      }
       setGscConnecting(false);
     }
   }
@@ -4341,16 +4385,20 @@ export default function ProjectPage() {
                   <div style={{ fontWeight: 800 }}>
                     {gscLoading
                       ? "Loading…"
+                      : gscApiUnavailable
+                      ? "Backend update required"
                       : gscStatus?.connected
                       ? `Connected${gscStatus.email ? ` (${gscStatus.email})` : ""}`
                       : "Not connected"}
                   </div>
                   <div className={styles.muted} style={{ fontSize: 12, marginTop: 4 }}>
-                    {gscStatus?.configured
+                    {gscApiUnavailable
+                      ? "The deployed backend doesn’t expose /api/projects/:id/gsc/* yet. Pull the latest code on the VPS and restart the backend (Docker: docker compose up -d --build backend; systemd: sudo systemctl restart auto-articles-backend)."
+                      : gscStatus?.configured
                       ? gscStatus?.connected
                         ? `Linked${gscStatus.connected_at ? ` on ${gscStatus.connected_at} UTC` : ""}.`
                         : "Click Connect Google to authorize Search Console for this project."
-                      : "Google OAuth client is not configured on the server (set GOOGLE_OAUTH_CLIENT_ID / SECRET)."}
+                      : "Google OAuth client is not configured on the server. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in the backend env, then restart the FastAPI service. Verify by curl-ing /api/health — gsc_oauth_configured should be true."}
                   </div>
                 </div>
                 <div className={styles.row} style={{ gap: 8 }}>
@@ -4368,7 +4416,19 @@ export default function ProjectPage() {
                     type="button"
                     className={styles.button}
                     onClick={connectGscForProject}
-                    disabled={gscConnecting || !(gscStatus?.configured ?? true)}
+                    disabled={
+                      gscConnecting ||
+                      gscApiUnavailable ||
+                      // Hide-disable when backend explicitly reports configured=false.
+                      gscStatus?.configured === false
+                    }
+                    title={
+                      gscApiUnavailable
+                        ? "Redeploy the backend to enable per-project Search Console connections."
+                        : gscStatus?.configured === false
+                        ? "Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in the backend env, then restart the FastAPI service."
+                        : undefined
+                    }
                   >
                     {gscConnecting
                       ? "Opening Google…"

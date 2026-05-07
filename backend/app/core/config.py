@@ -8,8 +8,26 @@ live deployments; see ``backend/.env.example`` for a production checklist.
 
 from __future__ import annotations
 
-from pydantic import AnyUrl, Field
+from typing import Any
+
+from pydantic import AnyUrl, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _clean_env_str(v: Any) -> Any:
+    """
+    Strip whitespace and a single layer of surrounding ASCII quotes from string envs.
+
+    Common VPS / docker-compose ``.env`` mistake: ``GOOGLE_OAUTH_CLIENT_SECRET="abc"`` —
+    pydantic-settings keeps the literal quotes, so the OAuth call later fails. We strip
+    them once here so every read site sees a clean value.
+    """
+    if not isinstance(v, str):
+        return v
+    s = v.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
+        s = s[1:-1].strip()
+    return s
 
 
 class Settings(BaseSettings):
@@ -58,22 +76,59 @@ class Settings(BaseSettings):
     public_base_url: AnyUrl | None = None
     frontend_base_url: AnyUrl | None = None
 
-    # Google OAuth (Search Console)
-    google_oauth_client_id: str = ""
-    google_oauth_client_secret: str = ""
+    # Google OAuth (Search Console). Use explicit ``validation_alias`` so case-sensitive
+    # pydantic-settings forks or proxied envs still resolve the canonical UPPER_SNAKE name.
+    google_oauth_client_id: str = Field(default="", validation_alias="GOOGLE_OAUTH_CLIENT_ID")
+    google_oauth_client_secret: str = Field(default="", validation_alias="GOOGLE_OAUTH_CLIENT_SECRET")
 
     # Google Indexing API (service account JSON; raw JSON or base64 JSON)
     google_indexing_service_account_json: str = Field(default="", validation_alias="GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON")
 
     # OpenAI (generation)
-    openai_api_key: str = ""
+    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_text_model: str = "gpt-4.1-mini"
     openai_image_model: str = "gpt-image-1"
+
+    @field_validator(
+        "secret_key",
+        "google_oauth_client_id",
+        "google_oauth_client_secret",
+        "openai_api_key",
+        mode="before",
+    )
+    @classmethod
+    def _strip_secret_envs(cls, v: Any) -> Any:
+        """
+        Remove a single surrounding pair of ASCII quotes and whitespace from secret-like envs.
+
+        Operators frequently quote secrets in ``.env`` (e.g. ``GOOGLE_OAUTH_CLIENT_SECRET="GOCSPX-..."``).
+        Without this normalisation, every downstream comparison would have to be quote-aware.
+        """
+        return _clean_env_str(v)
 
     @property
     def is_production(self) -> bool:
         """True when ``ENVIRONMENT`` is set to production (case-insensitive)."""
         return (self.environment or "").strip().lower() == "production"
+
+    @property
+    def google_oauth_configured(self) -> bool:
+        """True when both Google OAuth client envs are present (post-strip)."""
+        return bool((self.google_oauth_client_id or "").strip() and (self.google_oauth_client_secret or "").strip())
+
+    @property
+    def google_oauth_client_id_fingerprint(self) -> str:
+        """
+        Safe, non-secret hint of the loaded client id (first 12 chars + length).
+
+        Surfaced via ``/api/health`` so operators can verify the running process actually
+        loaded the expected env value without exposing the secret half of the credential.
+        """
+        cid = (self.google_oauth_client_id or "").strip()
+        if not cid:
+            return ""
+        head = cid[:12]
+        return f"{head}…(len={len(cid)})"
 
 
 settings = Settings()

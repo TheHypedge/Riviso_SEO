@@ -12,11 +12,20 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse, tags=["system"])
 async def health() -> HealthResponse:
-    """Cheap liveness probe; extend with DB pings only if your orchestrator needs readiness separation."""
+    """
+    Cheap liveness probe; extend with DB pings only if your orchestrator needs readiness separation.
+
+    ``gsc_oauth_configured`` and ``gsc_oauth_client_id_fingerprint`` are surfaced to make
+    VPS misconfiguration diagnosable with a single curl: if the fingerprint is empty after
+    you set ``GOOGLE_OAUTH_CLIENT_ID``/``SECRET``, the FastAPI process never picked the
+    values up — almost always a missed restart of the backend service.
+    """
     return HealthResponse(
         status="ok",
         service=settings.app_name,
         environment=settings.environment,
         openai_configured=bool((settings.openai_api_key or "").strip()),
+        gsc_oauth_configured=settings.google_oauth_configured,
+        gsc_oauth_client_id_fingerprint=settings.google_oauth_client_id_fingerprint,
     )
 

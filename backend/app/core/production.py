@@ -40,6 +40,19 @@ def run_startup_checks(settings: Settings) -> None:
         env,
     )
 
+    # Always emit GSC OAuth state so operators can confirm env loading from logs alone.
+    if settings.google_oauth_configured:
+        log.info(
+            "GSC OAuth configured: client_id=%s",
+            settings.google_oauth_client_id_fingerprint or "(set)",
+        )
+    else:
+        log.warning(
+            "GSC OAuth not configured: GOOGLE_OAUTH_CLIENT_ID/SECRET missing from this process. "
+            "Search Console connect will return 400 until both env vars are set and the backend "
+            "service is restarted."
+        )
+
     if env != "production":
         return
 
