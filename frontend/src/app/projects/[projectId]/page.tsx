@@ -202,6 +202,11 @@ export default function ProjectPage() {
   const [researchSelected, setResearchSelected] = useState<Set<string>>(new Set());
   const [researchImporting, setResearchImporting] = useState(false);
   const [researchImportMsg, setResearchImportMsg] = useState<string | null>(null);
+  const [researchKeywordAnalysis, setResearchKeywordAnalysis] = useState<{
+    primary_keywords: string[];
+    supporting_keywords: string[];
+    notes: string;
+  } | null>(null);
   const [researchImportDupModal, setResearchImportDupModal] = useState<{
     projectDuplicates: ProjectDupRow[];
     inFileDuplicateTitles: string[];
@@ -2581,6 +2586,7 @@ export default function ProjectPage() {
                   onClick={async () => {
                     setError(null);
                     setResearchMsg(null);
+                    setResearchKeywordAnalysis(null);
                     setResearchBusy(true);
                     try {
                       const seeds = researchSeed
@@ -2623,15 +2629,28 @@ export default function ProjectPage() {
                       setResearchResults(normalized);
                       setResearchSelected(new Set());
                       if (!normalized.length) setResearchMsg("No results returned. Try different seeds.");
-                      if (ka && typeof ka === "object") {
-                        try {
-                          setResearchMsg((prev) => {
-                            const s = JSON.stringify(ka, null, 2);
-                            const note = `Keyword analysis:\\n${s}`;
-                            return prev ? `${prev}\\n\\n${note}` : note;
+                      if (ka && typeof ka === "object" && ka !== null) {
+                        const obj = ka as Record<string, unknown>;
+                        const asStringArray = (v: unknown) =>
+                          Array.isArray(v) ? v.map((x) => String(x || "").trim()).filter(Boolean) : [];
+                        const primary =
+                          asStringArray(obj.primary_keywords) ||
+                          asStringArray(obj.primary_topics) ||
+                          asStringArray(obj.primaryTopics) ||
+                          asStringArray(obj.primary) ||
+                          [];
+                        const supporting =
+                          asStringArray(obj.supporting_keywords) ||
+                          asStringArray(obj.supportingKeywords) ||
+                          asStringArray(obj.supporting) ||
+                          [];
+                        const notes = String(obj.notes || obj.note || "").trim();
+                        if (primary.length || supporting.length || notes) {
+                          setResearchKeywordAnalysis({
+                            primary_keywords: primary,
+                            supporting_keywords: supporting,
+                            notes,
                           });
-                        } catch {
-                          // ignore
                         }
                       }
                     } catch (e) {
@@ -2704,6 +2723,58 @@ export default function ProjectPage() {
               {researchMsg ? (
                 <div className={styles.muted} style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
                   {researchMsg}
+                </div>
+              ) : null}
+
+              {researchKeywordAnalysis ? (
+                <div style={{ marginTop: 14, borderTop: "1px solid var(--aa-hairline)", paddingTop: 14 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Keyword analysis</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+                    <div>
+                      <div className={styles.muted} style={{ fontSize: 12, marginBottom: 8 }}>
+                        Primary keywords
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {(researchKeywordAnalysis.primary_keywords || []).length ? (
+                          researchKeywordAnalysis.primary_keywords.slice(0, 24).map((k) => (
+                            <span key={k} className={styles.pill}>
+                              {k}
+                            </span>
+                          ))
+                        ) : (
+                          <span className={styles.muted} style={{ fontSize: 12 }}>
+                            —
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <div className={styles.muted} style={{ fontSize: 12, marginBottom: 8 }}>
+                        Supporting keywords
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        {(researchKeywordAnalysis.supporting_keywords || []).length ? (
+                          researchKeywordAnalysis.supporting_keywords.slice(0, 36).map((k) => (
+                            <span key={k} className={styles.pill}>
+                              {k}
+                            </span>
+                          ))
+                        ) : (
+                          <span className={styles.muted} style={{ fontSize: 12 }}>
+                            —
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ gridColumn: "1 / -1" }}>
+                      <div className={styles.muted} style={{ fontSize: 12, marginBottom: 8 }}>
+                        Notes
+                      </div>
+                      <div style={{ lineHeight: 1.55, fontSize: 13, color: "var(--aa-ink)" }}>
+                        {researchKeywordAnalysis.notes || <span className={styles.muted}>—</span>}
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ) : null}
             </div>
