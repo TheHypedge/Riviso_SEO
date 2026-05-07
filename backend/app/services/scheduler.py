@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from app.legacy.storage import get_legacy_storage_module
 from app.services.wordpress_client import WordpressClient
 from app.services.context_links import apply_context_links_html
-from app.services.article_generation import generate_article_bundle
+from app.services.article_generation import estimate_tokens_for_generation_bundle, generate_article_bundle
+from app.services.prompt_validation import assert_writing_prompt_allowed
 from app.services.gsc_actions import maybe_request_url_inspection
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.to_thread import run_sync
@@ -70,7 +71,7 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
 
     st.update_scheduled_job_fields(jid, {"state": "content_generating" if needs_content else "image_generating", "last_error": ""})
 
-    # Resolve prompt texts: job override > project default > first prompt
+    # Resolve writing prompt: job override > project default > first prompt
     writing_text = _resolve_prompt_text(
         prompts=(proj.get("prompts") or []),
         pid=(job.get("writing_prompt_id") or "") or (proj.get("default_prompt_id") or ""),
@@ -78,21 +79,58 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
     if not writing_text:
         raise RuntimeError("No writing prompt available for scheduled generation")
 
-    image_text = _resolve_prompt_text(
-        prompts=(proj.get("image_prompts") or []),
-        pid=(job.get("image_prompt_id") or "") or (proj.get("default_image_prompt_id") or ""),
-    ) or _fallback_first_prompt_text(proj.get("image_prompts") or [])
+    owner_uid = (proj.get("owner_user_id") or "").strip()
+    try:
+        assert_writing_prompt_allowed(writing_text, user_id=owner_uid or None)
+    except ValueError as e:
+        err = str(e)
+        st.update_scheduled_job_fields(jid, {"state": "failed", "last_error": err})
+        raise RuntimeError(err) from e
 
-    gen = await generate_article_bundle(
-        title=(art.get("title") or "").strip(),
-        keywords=[str(x).strip() for x in (art.get("keywords") or []) if str(x).strip()],
-        focus_keyphrase=(art.get("focus_keyphrase") or "").strip(),
+    generate_image = bool(job.get("generate_image", True))
+    title = (art.get("title") or "").strip()
+    keywords = [str(x).strip() for x in (art.get("keywords") or []) if str(x).strip()]
+    focus = (art.get("focus_keyphrase") or "").strip()
+
+    token_estimate = estimate_tokens_for_generation_bundle(
+        title=title,
+        keywords=keywords,
+        focus_keyphrase=focus,
         writing_prompt_text=writing_text,
         brand_identity=(proj.get("brand_identity") or ""),
         niche_identifier=(proj.get("niche_identifier") or ""),
         generate_image=generate_image,
-        image_prompt_text=image_text,
     )
+
+    owner_row = st.get_user_by_id(owner_uid) if owner_uid and hasattr(st, "get_user_by_id") else None
+    owner_role = ((owner_row or {}).get("role") or "").strip().lower()
+    if owner_uid and owner_role != "admin":
+        plan_key = ((owner_row or {}).get("subscription_type") or "beta").strip().lower() or "beta"
+        plan: dict = {}
+        try:
+            plans = st.load_plans() or {}
+            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+            if not isinstance(plan, dict):
+                plan = {}
+        except Exception:
+            plan = {}
+        ok_t, msg_t = st.check_llm_token_budget(owner_uid, token_estimate, plan.get("max_llm_tokens_per_month"))
+        if not ok_t:
+            st.update_scheduled_job_fields(jid, {"state": "failed", "last_error": msg_t or "Token budget exceeded"})
+            raise RuntimeError(msg_t or "Token budget exceeded")
+
+    gen = await generate_article_bundle(
+        title=title,
+        keywords=keywords,
+        focus_keyphrase=focus,
+        writing_prompt_text=writing_text,
+        brand_identity=(proj.get("brand_identity") or ""),
+        niche_identifier=(proj.get("niche_identifier") or ""),
+        generate_image=generate_image,
+    )
+
+    if owner_uid and owner_role != "admin":
+        st.consume_llm_generation_tokens(owner_uid, token_estimate)
 
     st.update_article_fields(
         aid,

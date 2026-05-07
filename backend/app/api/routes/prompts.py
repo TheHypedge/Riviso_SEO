@@ -8,6 +8,7 @@ from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.prompts import PromptCreate, PromptItem, PromptListResponse, PromptUpdate, SetDefaultRequest
+from app.services.prompt_validation import validate_writing_prompt
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["prompts"])
 
@@ -86,9 +87,11 @@ async def list_prompts(project_id: str, user: dict = Depends(get_current_user)) 
 async def create_prompt(project_id: str, payload: PromptCreate, user: dict = Depends(get_current_user)) -> PromptItem:
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
+    text = payload.text.strip()[:100_000]
+    validate_writing_prompt(text, user_id=(user.get("id") or "").strip() or None)
     prompts = [p for p in (proj.get("prompts") or []) if isinstance(p, dict)]
     pid = str(uuid.uuid4())
-    row = {"id": pid, "name": payload.name.strip()[:200], "text": payload.text.strip()[:100_000]}
+    row = {"id": pid, "name": payload.name.strip()[:200], "text": text}
     prompts.append(row)
     st.update_project_fields(project_id, {"prompts": prompts})
     return PromptItem(**row)
@@ -105,6 +108,8 @@ async def update_prompt(
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     pid = (prompt_id or "").strip()
     prompts = [p for p in (proj.get("prompts") or []) if isinstance(p, dict)]
+    if payload.text is not None:
+        validate_writing_prompt(payload.text.strip()[:100_000], user_id=(user.get("id") or "").strip() or None)
     found = None
     for p in prompts:
         if (p.get("id") or "").strip() == pid:

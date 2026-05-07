@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
 import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse, ResearchIdeaRow as ApiResearchIdeaRow } from "@/lib/api";
+import { COUNTRIES, DEFAULT_COUNTRY_CODE } from "@/lib/countries";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 type TabKey = "articles" | "research" | "scheduled_articles" | "configuration" | "prompts" | "context_links" | "tools" | "project_settings";
@@ -83,7 +84,47 @@ function dedupeBulkUploadRowsByTitle(rows: BulkUploadRow[]): {
 type ProjectDupRow = { submitted_title: string; existing_title: string; existing_id: string };
 
 type ResearchIntent = "informational" | "commercial" | "transactional" | "navigational";
-type ResearchTone = "professional" | "friendly" | "authoritative" | "conversational" | "technical";
+type ResearchTone =
+  | "professional"
+  | "friendly"
+  | "authoritative"
+  | "conversational"
+  | "technical"
+  | "casual"
+  | "formal"
+  | "witty"
+  | "humorous"
+  | "empathetic"
+  | "persuasive"
+  | "inspirational"
+  | "confident"
+  | "educational"
+  | "storytelling"
+  | "neutral"
+  | "enthusiastic"
+  | "analytical";
+
+const RESEARCH_TONE_OPTIONS: { value: ResearchTone; label: string }[] = [
+  { value: "professional", label: "Professional" },
+  { value: "friendly", label: "Friendly" },
+  { value: "authoritative", label: "Authoritative" },
+  { value: "conversational", label: "Conversational" },
+  { value: "technical", label: "Technical" },
+  { value: "casual", label: "Casual" },
+  { value: "formal", label: "Formal" },
+  { value: "witty", label: "Witty" },
+  { value: "humorous", label: "Humorous" },
+  { value: "empathetic", label: "Empathetic" },
+  { value: "persuasive", label: "Persuasive" },
+  { value: "inspirational", label: "Inspirational" },
+  { value: "confident", label: "Confident" },
+  { value: "educational", label: "Educational" },
+  { value: "storytelling", label: "Storytelling" },
+  { value: "neutral", label: "Neutral" },
+  { value: "enthusiastic", label: "Enthusiastic" },
+  { value: "analytical", label: "Analytical" },
+];
+
 type ResearchIdeaRow = {
   id: string;
   title: string;
@@ -91,7 +132,57 @@ type ResearchIdeaRow = {
   keywords: string[];
   score?: number | null;
   rationale?: string | null;
+  imported?: boolean;
+  imported_at?: string | null;
+  imported_article_id?: string | null;
+  generated_at?: string | null;
+  run_id?: string | null;
 };
+
+type ResearchFilter = "all" | "latest" | "not_imported" | "imported";
+
+type PersistedResearchState = {
+  v: 1;
+  seeds: string[];
+  results: ResearchIdeaRow[];
+  latestRunId: string | null;
+  brandNiche: string;
+  intent: ResearchIntent;
+  tone: ResearchTone;
+  country: string;
+  language: string;
+  filter: ResearchFilter;
+};
+
+function researchStorageKey(projectId: string): string {
+  return `riviso.research.${projectId}.v1`;
+}
+
+function loadPersistedResearch(projectId: string): PersistedResearchState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(researchStorageKey(projectId));
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== "object" || obj.v !== 1) return null;
+    return obj as PersistedResearchState;
+  } catch {
+    return null;
+  }
+}
+
+function persistResearch(projectId: string, state: PersistedResearchState): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(researchStorageKey(projectId), JSON.stringify(state));
+  } catch {
+    /* ignore quota / serialization errors */
+  }
+}
+
+function makeResearchKey(title: string, focus: string): string {
+  return `${(title || "").trim().toLowerCase()}::${(focus || "").trim().toLowerCase()}`;
+}
 
 export default function ProjectPage() {
   const router = useRouter();
@@ -152,6 +243,8 @@ export default function ProjectPage() {
   const [articles, setArticles] = useState<ArticlePublic[]>([]);
   const [scheduledJobs, setScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [scheduledLoading, setScheduledLoading] = useState(false);
+  const [scheduledSearch, setScheduledSearch] = useState("");
+  const [scheduledOrder, setScheduledOrder] = useState<"desc" | "asc">("desc");
   const [title, setTitle] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -193,15 +286,20 @@ export default function ProjectPage() {
   const [researchBrandNiche, setResearchBrandNiche] = useState("");
   const [researchIntent, setResearchIntent] = useState<ResearchIntent>("informational");
   const [researchTone, setResearchTone] = useState<ResearchTone>("professional");
-  const [researchSeed, setResearchSeed] = useState("");
-  const [researchCountry, setResearchCountry] = useState("US");
+  const [researchSeeds, setResearchSeeds] = useState<string[]>([]);
+  const [researchSeedInput, setResearchSeedInput] = useState("");
+  const [researchCountry, setResearchCountry] = useState(DEFAULT_COUNTRY_CODE);
   const [researchLanguage, setResearchLanguage] = useState("en");
   const [researchBusy, setResearchBusy] = useState(false);
+  const [researchGeneratingMore, setResearchGeneratingMore] = useState(false);
   const [researchMsg, setResearchMsg] = useState<string | null>(null);
   const [researchResults, setResearchResults] = useState<ResearchIdeaRow[]>([]);
+  const [researchLatestRunId, setResearchLatestRunId] = useState<string | null>(null);
+  const [researchFilter, setResearchFilter] = useState<ResearchFilter>("latest");
   const [researchSelected, setResearchSelected] = useState<Set<string>>(new Set());
   const [researchImporting, setResearchImporting] = useState(false);
   const [researchImportMsg, setResearchImportMsg] = useState<string | null>(null);
+  const [researchHydrated, setResearchHydrated] = useState(false);
   const [researchKeywordAnalysis, setResearchKeywordAnalysis] = useState<{
     primary_keywords: string[];
     supporting_keywords: string[];
@@ -282,9 +380,85 @@ export default function ProjectPage() {
   const [confirmCancelJob, setConfirmCancelJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
   const [confirmPostNowJob, setConfirmPostNowJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
   const [postNowBusy, setPostNowBusy] = useState(false);
-  const [confirmClearScheduled, setConfirmClearScheduled] = useState(false);
 
   const pageSize = 10;
+
+  // Hydrate persisted research state once per project.
+  useEffect(() => {
+    if (!projectId) return;
+    const persisted = loadPersistedResearch(projectId);
+    if (persisted) {
+      setResearchSeeds(Array.isArray(persisted.seeds) ? persisted.seeds.slice(0, 200) : []);
+      setResearchResults(Array.isArray(persisted.results) ? persisted.results : []);
+      setResearchLatestRunId(persisted.latestRunId || null);
+      if (typeof persisted.brandNiche === "string") setResearchBrandNiche(persisted.brandNiche);
+      if (persisted.intent) setResearchIntent(persisted.intent);
+      if (persisted.tone) setResearchTone(persisted.tone);
+      if (persisted.country) setResearchCountry(persisted.country);
+      if (persisted.language) setResearchLanguage(persisted.language);
+      if (persisted.filter) setResearchFilter(persisted.filter);
+    }
+    setResearchHydrated(true);
+  }, [projectId]);
+
+  // Reconcile imported flag against actual articles in the project (covers manual deletes
+  // or imports made via the Articles tab using the same title/focus pair).
+  useEffect(() => {
+    if (!researchHydrated) return;
+    if (!researchResults.length) return;
+    if (!articles || !articles.length) return;
+    const titleToId = new Map<string, string>();
+    for (const a of articles) {
+      const k = (a.title || "").trim().toLowerCase();
+      if (!k) continue;
+      if (!titleToId.has(k)) titleToId.set(k, a.id);
+    }
+    let changed = false;
+    const next = researchResults.map((r) => {
+      const k = (r.title || "").trim().toLowerCase();
+      const matched = k ? titleToId.get(k) : undefined;
+      if (matched && (!r.imported || !r.imported_article_id)) {
+        changed = true;
+        return {
+          ...r,
+          imported: true,
+          imported_article_id: matched,
+          imported_at: r.imported_at || new Date().toISOString(),
+        };
+      }
+      return r;
+    });
+    if (changed) setResearchResults(next);
+  }, [articles, researchHydrated, researchResults]);
+
+  // Persist research state on changes (after hydration).
+  useEffect(() => {
+    if (!researchHydrated || !projectId) return;
+    persistResearch(projectId, {
+      v: 1,
+      seeds: researchSeeds,
+      results: researchResults,
+      latestRunId: researchLatestRunId,
+      brandNiche: researchBrandNiche,
+      intent: researchIntent,
+      tone: researchTone,
+      country: researchCountry,
+      language: researchLanguage,
+      filter: researchFilter,
+    });
+  }, [
+    researchHydrated,
+    projectId,
+    researchSeeds,
+    researchResults,
+    researchLatestRunId,
+    researchBrandNiche,
+    researchIntent,
+    researchTone,
+    researchCountry,
+    researchLanguage,
+    researchFilter,
+  ]);
 
   useEffect(() => {
     if (!token) {
@@ -1345,6 +1519,278 @@ export default function ProjectPage() {
     setMobileNavOpen(false);
   }
 
+  // ---------------------------------------------------------------------------
+  // Research helpers (seeds, runs, filters, import)
+  // ---------------------------------------------------------------------------
+
+  function addSeedKeywordsFromInput() {
+    const raw = (researchSeedInput || "").trim();
+    if (!raw) return;
+    const tokens = raw
+      .split(/[\n,]/g)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (!tokens.length) return;
+    setResearchSeeds((prev) => {
+      const next = [...prev];
+      const lower = new Set(prev.map((p) => p.toLowerCase()));
+      for (const t of tokens) {
+        const k = t.toLowerCase();
+        if (lower.has(k)) continue;
+        lower.add(k);
+        next.push(t);
+      }
+      return next.slice(0, 200);
+    });
+    setResearchSeedInput("");
+  }
+
+  function removeSeedAt(idx: number) {
+    setResearchSeeds((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  async function runResearch(opts: {
+    mode: "replace" | "append";
+    seeds: string[];
+    brandNiche: string;
+    intent: ResearchIntent;
+    tone: ResearchTone;
+    country: string;
+    language: string;
+  }) {
+    setError(null);
+    setResearchMsg(null);
+    setResearchImportMsg(null);
+    if (opts.mode === "replace") setResearchKeywordAnalysis(null);
+
+    const seeds = (opts.seeds || []).map((s) => s.trim()).filter(Boolean).slice(0, 25);
+    if (!seeds.length) {
+      setResearchMsg("Add at least one seed keyword/topic.");
+      return;
+    }
+
+    if (opts.mode === "append") setResearchGeneratingMore(true);
+    else setResearchBusy(true);
+
+    try {
+      const res = await api.researchIdeas(projectId, {
+        brand_niche: opts.brandNiche,
+        intent: opts.intent,
+        tone: opts.tone,
+        seed_keywords: seeds,
+        country: opts.country,
+        language: opts.language,
+      });
+      const rows = (res?.ideas || []) as ApiResearchIdeaRow[];
+      const ka = (res as unknown as { keyword_analysis?: unknown })?.keyword_analysis;
+
+      const runId = `run_${Date.now()}`;
+      const generatedAt = new Date().toISOString();
+
+      const incoming: ResearchIdeaRow[] = Array.isArray(rows)
+        ? rows
+            .filter((r) => r && typeof r === "object")
+            .map((r) => ({
+              id: String(
+                (r as ApiResearchIdeaRow).id ||
+                  `${(r as ApiResearchIdeaRow).title}:${(r as ApiResearchIdeaRow).focus_keyphrase}`
+              ),
+              title: String((r as ApiResearchIdeaRow).title || "").trim(),
+              focus_keyphrase: String((r as ApiResearchIdeaRow).focus_keyphrase || "").trim(),
+              keywords: Array.isArray((r as ApiResearchIdeaRow).keywords)
+                ? (r as ApiResearchIdeaRow).keywords.map((k) => String(k || "").trim()).filter(Boolean)
+                : [],
+              score: (r as ApiResearchIdeaRow).score ?? null,
+              rationale: (r as ApiResearchIdeaRow).rationale ?? null,
+              imported: false,
+              imported_at: null,
+              imported_article_id: null,
+              generated_at: generatedAt,
+              run_id: runId,
+            }))
+            .filter((r) => r.title && r.focus_keyphrase)
+        : [];
+
+      // Merge incoming with persisted (dedupe by title+focus_keyphrase, preserve imported flag).
+      setResearchResults((prev) => {
+        const base = opts.mode === "replace" ? [] : prev;
+        const indexByKey = new Map<string, number>();
+        const merged: ResearchIdeaRow[] = [];
+        for (const r of base) {
+          const k = makeResearchKey(r.title, r.focus_keyphrase);
+          if (!indexByKey.has(k)) {
+            indexByKey.set(k, merged.length);
+            merged.push(r);
+          }
+        }
+        for (const r of incoming) {
+          const k = makeResearchKey(r.title, r.focus_keyphrase);
+          const at = indexByKey.get(k);
+          if (at == null) {
+            indexByKey.set(k, merged.length);
+            merged.push({ ...r, run_id: runId, generated_at: generatedAt });
+          } else {
+            // Refresh the existing row's runId/generated_at and merge keywords; keep imported flag.
+            const existing = merged[at];
+            const seenK = new Set((existing.keywords || []).map((x) => x.toLowerCase()));
+            const extraK = (r.keywords || []).filter((x) => !seenK.has(x.toLowerCase()));
+            merged[at] = {
+              ...existing,
+              keywords: [...(existing.keywords || []), ...extraK].slice(0, 12),
+              rationale: existing.rationale || r.rationale || null,
+              run_id: runId,
+              generated_at: generatedAt,
+            };
+          }
+        }
+        return merged;
+      });
+
+      setResearchLatestRunId(runId);
+      setResearchFilter("latest");
+      setResearchSelected(new Set());
+
+      if (!incoming.length) setResearchMsg("No results returned. Try different seeds.");
+
+      if (ka && typeof ka === "object" && ka !== null) {
+        const obj = ka as Record<string, unknown>;
+        const asStringArray = (v: unknown) =>
+          Array.isArray(v) ? v.map((x) => String(x || "").trim()).filter(Boolean) : [];
+        const primary =
+          asStringArray(obj.primary_keywords) ||
+          asStringArray(obj.primary_topics) ||
+          asStringArray(obj.primaryTopics) ||
+          asStringArray(obj.primary) ||
+          [];
+        const supporting =
+          asStringArray(obj.supporting_keywords) ||
+          asStringArray(obj.supportingKeywords) ||
+          asStringArray(obj.supporting) ||
+          [];
+        const notes = String(obj.notes || obj.note || "").trim();
+        if (primary.length || supporting.length || notes) {
+          setResearchKeywordAnalysis({
+            primary_keywords: primary,
+            supporting_keywords: supporting,
+            notes,
+          });
+        }
+      }
+    } catch (e) {
+      setResearchMsg(e instanceof Error ? e.message : "Research failed");
+    } finally {
+      setResearchBusy(false);
+      setResearchGeneratingMore(false);
+    }
+  }
+
+  async function importSelectedIdeas(opts: { skipDuplicates: boolean }) {
+    setError(null);
+    setResearchMsg(null);
+    setResearchImportMsg(null);
+    if (researchImporting) return;
+
+    const selected = researchResults.filter((r) => researchSelected.has(r.id) && !r.imported);
+    if (!selected.length) return;
+    const rows: BulkUploadRow[] = selected.map((r) => ({
+      title: r.title,
+      focus_keyphrase: r.focus_keyphrase,
+      keywords: (r.keywords || []).slice(0, 10),
+    }));
+
+    setResearchImporting(true);
+    try {
+      const res = await api.bulkUploadArticles(projectId, rows, {
+        skipProjectDuplicateConflicts: opts.skipDuplicates,
+      });
+      const refreshedArticles = await api.listArticles(projectId);
+      setArticles(refreshedArticles);
+
+      // Build a title -> article-id map for newly imported items.
+      const titleToId = new Map<string, string>();
+      for (const a of refreshedArticles) {
+        const k = (a.title || "").trim().toLowerCase();
+        if (!k) continue;
+        if (!titleToId.has(k)) titleToId.set(k, a.id);
+      }
+      const importedIds = new Set(selected.map((r) => r.id));
+      const importedAt = new Date().toISOString();
+      setResearchResults((prev) =>
+        prev.map((r) => {
+          if (!importedIds.has(r.id)) return r;
+          const matchedId = titleToId.get((r.title || "").trim().toLowerCase()) || r.imported_article_id || null;
+          return { ...r, imported: true, imported_at: importedAt, imported_article_id: matchedId };
+        })
+      );
+
+      setResearchImportDupModal(null);
+      setResearchSelected(new Set());
+      const skipped = res.project_skipped_as_duplicates || 0;
+      setResearchImportMsg(
+        `Imported ${res.created} article${res.created === 1 ? "" : "s"}${skipped ? ` (${skipped} skipped as duplicates)` : ""}.`
+      );
+      setResearchFilter("imported");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409 && e.detail && typeof e.detail === "object" && e.detail !== null) {
+        const d = e.detail as Record<string, unknown>;
+        if (d.error === "duplicate_article_titles") {
+          const raw = d.project_duplicates;
+          const projectDuplicates: ProjectDupRow[] = Array.isArray(raw)
+            ? raw
+                .filter((x): x is Record<string, unknown> => x !== null && typeof x === "object")
+                .map((x) => ({
+                  submitted_title: String(x.submitted_title ?? ""),
+                  existing_title: String(x.existing_title ?? ""),
+                  existing_id: String(x.existing_id ?? ""),
+                }))
+            : [];
+          const inRaw = d.in_file_duplicate_titles;
+          const inFileDuplicateTitles = Array.isArray(inRaw)
+            ? inRaw.filter((x): x is string => typeof x === "string")
+            : [];
+          const wc = d.would_create_count;
+          setResearchImportDupModal({
+            projectDuplicates,
+            inFileDuplicateTitles,
+            wouldCreateCount: typeof wc === "number" ? wc : 0,
+          });
+          return;
+        }
+      }
+      setResearchImportMsg(e instanceof Error ? e.message : "Import failed");
+    } finally {
+      setResearchImporting(false);
+    }
+  }
+
+  const filteredResearchResults = useMemo(() => {
+    if (!researchResults.length) return [] as ResearchIdeaRow[];
+    switch (researchFilter) {
+      case "latest":
+        return researchLatestRunId
+          ? researchResults.filter((r) => r.run_id === researchLatestRunId)
+          : researchResults;
+      case "imported":
+        return researchResults.filter((r) => !!r.imported);
+      case "not_imported":
+        return researchResults.filter((r) => !r.imported);
+      case "all":
+      default:
+        return researchResults;
+    }
+  }, [researchResults, researchFilter, researchLatestRunId]);
+
+  const researchCounts = useMemo(() => {
+    const all = researchResults.length;
+    let imported = 0;
+    let latest = 0;
+    for (const r of researchResults) {
+      if (r.imported) imported += 1;
+      if (researchLatestRunId && r.run_id === researchLatestRunId) latest += 1;
+    }
+    return { all, imported, notImported: all - imported, latest };
+  }, [researchResults, researchLatestRunId]);
+
   const Icon = {
     Menu: (props: { className?: string }) => (
       <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
@@ -1361,7 +1807,45 @@ export default function ProjectPage() {
         <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
       </svg>
     ),
+    Refresh: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path
+          d="M20 12a8 8 0 1 1-2.34-5.66M20 4v6h-6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
   };
+
+  const scheduledVisible = useMemo(() => {
+    const q = scheduledSearch.trim().toLowerCase();
+    const titleFor = (articleId: string) => (articles.find((a) => a.id === articleId)?.title || "").trim();
+    const parseTs = (runAt: string | null | undefined) => {
+      const v = (runAt || "").trim();
+      if (!v) return 0;
+      const iso = v.includes("T") ? v : v.replace(" ", "T") + "Z";
+      const t = Date.parse(iso);
+      return Number.isFinite(t) ? t : 0;
+    };
+    let rows = (scheduledJobs || []).slice();
+    if (q) {
+      rows = rows.filter((j) => {
+        const t = titleFor(j.article_id).toLowerCase();
+        const id = String(j.article_id || "").toLowerCase();
+        return t.includes(q) || id.includes(q);
+      });
+    }
+    rows.sort((a, b) => {
+      const ta = parseTs(a.run_at);
+      const tb = parseTs(b.run_at);
+      return scheduledOrder === "asc" ? ta - tb : tb - ta;
+    });
+    return rows;
+  }, [articles, scheduledJobs, scheduledOrder, scheduledSearch]);
 
   return (
     <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
@@ -1560,8 +2044,8 @@ export default function ProjectPage() {
                 <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Filters">
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Filter</h3>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setShowMobileFilters(false)}>
-                      Close
+                    <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowMobileFilters(false)}>
+                      <Icon.X className={styles.icon20} />
                     </button>
                   </div>
                   <div className={styles.modalBody}>
@@ -1629,8 +2113,7 @@ export default function ProjectPage() {
                 <div className={styles.bulkPopup} role="dialog" aria-modal="true" aria-label="Bulk actions">
                   <div className={styles.bulkPopupHead}>
                     <div className={styles.bulkPopupTitle}>
-                      <strong>Bulk actions</strong>
-                      <span>{selectedIds.length} selected</span>
+                      <strong>Schedule articles</strong>
                     </div>
                     <button className={styles.iconButton} type="button" aria-label="Close bulk actions" onClick={() => setShowBulkPopup(false)}>
                       <Icon.X className={styles.icon20} />
@@ -1685,12 +2168,9 @@ export default function ProjectPage() {
                         <div className={styles.muted} style={{ fontWeight: 700 }}>
                           Schedule {bulkScheduleRows.length} article(s) {profileTz ? <span style={{ fontWeight: 500 }}>(Timezone: {profileTz})</span> : null}
                         </div>
-                        <button type="button" className={styles.btnSecondary} onClick={() => setBulkMode("root")} disabled={bulkScheduling}>
-                          Back
-                        </button>
                       </div>
 
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, paddingTop: 10 }}>
+                      <div className={styles.bulkScheduleGrid} style={{ paddingTop: 10 }}>
                         <label className={styles.label}>
                           WordPress post type (applies to all)
                           <select className={styles.input} value={bulkSchedulePostType} onChange={(e) => setBulkSchedulePostType(e.target.value)} disabled={bulkScheduling}>
@@ -1714,7 +2194,7 @@ export default function ProjectPage() {
                         </label>
                       </div>
 
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, paddingTop: 10 }}>
+                      <div className={styles.bulkScheduleGrid} style={{ paddingTop: 10 }}>
                         <label className={styles.label}>
                           Writing prompt (applies to all)
                           <select className={styles.input} value={scheduleWritingPromptId} onChange={(e) => setScheduleWritingPromptId(e.target.value)} disabled={bulkScheduling}>
@@ -1741,7 +2221,7 @@ export default function ProjectPage() {
 
                       <div style={{ paddingTop: 10, maxHeight: 340, overflow: "auto", borderTop: "1px solid var(--button-secondary-border)", marginTop: 12 }}>
                         {bulkScheduleRows.map((r, idx) => (
-                          <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr 220px", gap: 10, padding: "10px 0", borderBottom: "1px solid var(--button-secondary-border)" }}>
+                          <div key={r.id} className={styles.bulkScheduleRow}>
                             <div style={{ minWidth: 0 }}>
                               <div style={{ fontWeight: 800, fontSize: 13, wordBreak: "break-word" }}>{idx + 1}. {r.title}</div>
                               <div className={styles.muted} style={{ fontSize: 12 }}>{r.id}</div>
@@ -1781,7 +2261,7 @@ export default function ProjectPage() {
               </>
             ) : null}
 
-              <div className={`${styles.card} ${styles.cardWide} ${styles.hideOnMobile}`}>
+              <div className={`${styles.card} ${styles.cardWide} ${styles.hideOnMobile} ${styles.desktopFiltersWrap}`}>
                 <div className={styles.filtersGrid}>
                   <label className={styles.label}>
                     Status
@@ -1815,12 +2295,44 @@ export default function ProjectPage() {
                       <option value="asc">Oldest → Latest</option>
                     </select>
                   </label>
-                  <button className={styles.button} type="button" onClick={() => { setQ(""); setStatus(""); setDateFrom(""); setDateTo(""); }}>
-                    Clear filters
-                  </button>
+                  {q.trim() || status || dateFrom || dateTo ? (
+                    <button className={styles.button} type="button" onClick={() => { setQ(""); setStatus(""); setDateFrom(""); setDateTo(""); }}>
+                      Clear filters
+                    </button>
+                  ) : (
+                    <div />
+                  )}
                 </div>
 
                 <div className={styles.filtersActionsRow}>
+                  <div className={styles.filtersActionsLeft}>
+                    <button
+                      className={styles.btnSecondary}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setBulkUploadErrors([]);
+                        setBulkUploadRows([]);
+                        setBulkParseDupTitles([]);
+                        setShowBulkUpload(true);
+                      }}
+                    >
+                      Bulk Upload
+                    </button>
+                    <button
+                      className={styles.btnSecondary}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setExportFrom(dateFrom || "");
+                        setExportTo(dateTo || "");
+                        setExportStatus(status || "");
+                        setShowExportArticles(true);
+                      }}
+                    >
+                      Export Articles
+                    </button>
+                  </div>
                   <div className={styles.filtersActionsRight}>
                     <span className={styles.smallMuted}>{selectedIds.length} selected</span>
                     <button
@@ -1836,49 +2348,6 @@ export default function ProjectPage() {
                       Actions…
                     </button>
                   </div>
-                </div>
-              </div>
-
-              <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={`${styles.sectionHeadRow} ${styles.hideOnMobile}`}>
-                <div className={`${styles.sectionHeadActions} ${styles.pushRight}`}>
-                  <button
-                    className={styles.btnSecondary}
-                    type="button"
-                    onClick={() => {
-                      setError(null);
-                      setBulkUploadErrors([]);
-                      setBulkUploadRows([]);
-                      setBulkParseDupTitles([]);
-                      setShowBulkUpload(true);
-                    }}
-                  >
-                    Bulk Upload
-                  </button>
-                  <button
-                    className={styles.btnSecondary}
-                    type="button"
-                    onClick={() => {
-                      setError(null);
-                      setExportFrom(dateFrom || "");
-                      setExportTo(dateTo || "");
-                      setExportStatus(status || "");
-                      setShowExportArticles(true);
-                    }}
-                  >
-                    Export Articles
-                  </button>
-                  <button
-                    className={styles.button}
-                    type="button"
-                    onClick={() => {
-                      setError(null);
-                      setAddArticleDupModal(null);
-                      setShowAddArticle(true);
-                    }}
-                  >
-                    + Add article
-                  </button>
                 </div>
               </div>
 
@@ -1992,15 +2461,14 @@ export default function ProjectPage() {
                   Next
                 </button>
               </div>
-            </div>
 
             {confirmDeleteId ? (
               <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Confirm delete">
                 <div className={styles.modalPanel}>
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Delete article?</h3>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmDeleteId(null)}>
-                      Close
+                    <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setConfirmDeleteId(null)}>
+                      <Icon.X className={styles.icon20} />
                     </button>
                   </div>
                   <div className={styles.modalBody}>
@@ -2024,8 +2492,8 @@ export default function ProjectPage() {
                 <div className={styles.modalPanel}>
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Schedule article</h3>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setScheduleId(null)}>
-                      Close
+                    <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setScheduleId(null)}>
+                      <Icon.X className={styles.icon20} />
                     </button>
                   </div>
                   <div className={styles.modalBody}>
@@ -2129,14 +2597,15 @@ export default function ProjectPage() {
                     <h3 className={styles.modalTitle}>Request indexing</h3>
                     <button
                       type="button"
-                      className={styles.btnSecondary}
+                      className={styles.iconButton}
+                      aria-label="Close"
                       onClick={() => {
                         if (requestIndexingBusy) return;
                         setRequestIndexingId(null);
                         setRequestIndexingMsg("");
                       }}
                     >
-                      Close
+                      <Icon.X className={styles.icon20} />
                     </button>
                   </div>
                   <div className={styles.modalBody}>
@@ -2168,8 +2637,8 @@ export default function ProjectPage() {
                 <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Add article">
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Add article</h3>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setShowAddArticle(false)}>
-                      Close
+                    <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowAddArticle(false)}>
+                      <Icon.X className={styles.icon20} />
                     </button>
                   </div>
                   <div className={styles.modalBody}>
@@ -2202,8 +2671,8 @@ export default function ProjectPage() {
                 <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Export articles">
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Export Articles</h3>
-                    <button type="button" className={styles.btnSecondary} onClick={() => (exporting ? null : setShowExportArticles(false))}>
-                      Close
+                    <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => (exporting ? null : setShowExportArticles(false))}>
+                      <Icon.X className={styles.icon20} />
                     </button>
                   </div>
                   <div className={styles.modalBody}>
@@ -2264,14 +2733,15 @@ export default function ProjectPage() {
                     <h3 className={styles.modalTitle}>Bulk Upload</h3>
                     <button
                       type="button"
-                      className={styles.btnSecondary}
+                      className={styles.iconButton}
+                      aria-label="Close"
                       onClick={() => {
                         if (bulkUploading) return;
                         setBulkParseDupTitles([]);
                         setShowBulkUpload(false);
                       }}
                     >
-                      Close
+                      <Icon.X className={styles.icon20} />
                     </button>
                   </div>
                   <div className={styles.modalBody}>
@@ -2582,83 +3052,18 @@ export default function ProjectPage() {
                 <button
                   className={styles.button}
                   type="button"
-                  disabled={researchBusy || !researchSeed.trim()}
-                  onClick={async () => {
-                    setError(null);
-                    setResearchMsg(null);
-                    setResearchKeywordAnalysis(null);
-                    setResearchBusy(true);
-                    try {
-                      const seeds = researchSeed
-                        .split("\n")
-                        .map((s) => s.trim())
-                        .filter(Boolean)
-                        .slice(0, 25);
-                      if (!seeds.length) {
-                        setResearchMsg("Add at least one seed keyword/topic.");
-                        return;
-                      }
-
-                      const res = await api.researchIdeas(projectId, {
-                        brand_niche: researchBrandNiche,
-                        intent: researchIntent,
-                        tone: researchTone,
-                        seed_keywords: seeds,
-                        country: researchCountry,
-                        language: researchLanguage,
-                      });
-                      const rows = (res?.ideas || []) as ApiResearchIdeaRow[];
-                      const ka = (res as unknown as { keyword_analysis?: unknown })?.keyword_analysis;
-
-                      const normalized: ResearchIdeaRow[] = Array.isArray(rows)
-                        ? rows
-                            .filter((r) => r && typeof r === "object")
-                            .map((r) => ({
-                              id: String((r as ApiResearchIdeaRow).id || `${(r as ApiResearchIdeaRow).title}:${(r as ApiResearchIdeaRow).focus_keyphrase}`),
-                              title: String((r as ApiResearchIdeaRow).title || "").trim(),
-                              focus_keyphrase: String((r as ApiResearchIdeaRow).focus_keyphrase || "").trim(),
-                              keywords: Array.isArray((r as ApiResearchIdeaRow).keywords)
-                                ? (r as ApiResearchIdeaRow).keywords.map((k) => String(k || "").trim()).filter(Boolean)
-                                : [],
-                              score: (r as ApiResearchIdeaRow).score ?? null,
-                              rationale: (r as ApiResearchIdeaRow).rationale ?? null,
-                            }))
-                            .filter((r) => r.title && r.focus_keyphrase)
-                        : [];
-
-                      setResearchResults(normalized);
-                      setResearchSelected(new Set());
-                      if (!normalized.length) setResearchMsg("No results returned. Try different seeds.");
-                      if (ka && typeof ka === "object" && ka !== null) {
-                        const obj = ka as Record<string, unknown>;
-                        const asStringArray = (v: unknown) =>
-                          Array.isArray(v) ? v.map((x) => String(x || "").trim()).filter(Boolean) : [];
-                        const primary =
-                          asStringArray(obj.primary_keywords) ||
-                          asStringArray(obj.primary_topics) ||
-                          asStringArray(obj.primaryTopics) ||
-                          asStringArray(obj.primary) ||
-                          [];
-                        const supporting =
-                          asStringArray(obj.supporting_keywords) ||
-                          asStringArray(obj.supportingKeywords) ||
-                          asStringArray(obj.supporting) ||
-                          [];
-                        const notes = String(obj.notes || obj.note || "").trim();
-                        if (primary.length || supporting.length || notes) {
-                          setResearchKeywordAnalysis({
-                            primary_keywords: primary,
-                            supporting_keywords: supporting,
-                            notes,
-                          });
-                        }
-                      }
-                    } catch (e) {
-                      setResearchMsg(e instanceof Error ? e.message : "Research failed");
-                    } finally {
-                      setResearchBusy(false);
-                    }
-                  }}
+                  disabled={researchBusy || researchGeneratingMore || researchSeeds.length === 0}
+                  onClick={() =>
+                    runResearch({
+                      mode: "replace",
+                      seeds: researchSeeds,
+                      brandNiche: researchBrandNiche,
+                      intent: researchIntent,
+                      tone: researchTone,
+                      country: researchCountry,
+                      language: researchLanguage,
+                    })
+                  }
                 >
                   {researchBusy ? "Researching…" : "Run research"}
                 </button>
@@ -2690,17 +3095,23 @@ export default function ProjectPage() {
                 <label className={styles.label}>
                   Article tone
                   <select className={styles.select} value={researchTone} onChange={(e) => setResearchTone(e.target.value as ResearchTone)}>
-                    <option value="professional">Professional</option>
-                    <option value="friendly">Friendly</option>
-                    <option value="authoritative">Authoritative</option>
-                    <option value="conversational">Conversational</option>
-                    <option value="technical">Technical</option>
+                    {RESEARCH_TONE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
 
                 <label className={styles.label}>
                   Country
-                  <input className={styles.input} value={researchCountry} onChange={(e) => setResearchCountry(e.target.value)} placeholder="US" />
+                  <select className={styles.select} value={researchCountry} onChange={(e) => setResearchCountry(e.target.value)}>
+                    {COUNTRIES.map((c) => (
+                      <option key={c.code} value={c.code}>
+                        {c.name} ({c.code})
+                      </option>
+                    ))}
+                  </select>
                 </label>
 
                 <label className={styles.label}>
@@ -2708,16 +3119,80 @@ export default function ProjectPage() {
                   <input className={styles.input} value={researchLanguage} onChange={(e) => setResearchLanguage(e.target.value)} placeholder="en" />
                 </label>
 
-                <label className={styles.label} style={{ gridColumn: "1 / -1" }}>
-                  Seed keywords/topics (one per line)
-                  <textarea
-                    className={styles.textarea}
-                    value={researchSeed}
-                    onChange={(e) => setResearchSeed(e.target.value)}
-                    placeholder={"e.g.\nMSME lawyer\nMSME dispute resolution\ncommercial litigation"}
-                    style={{ minHeight: 140 }}
-                  />
-                </label>
+                <div className={styles.label} style={{ gridColumn: "1 / -1" }}>
+                  <span>Seed keywords/topics</span>
+                  <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                    <input
+                      className={styles.input}
+                      style={{ flex: "1 1 240px", minWidth: 200 }}
+                      value={researchSeedInput}
+                      onChange={(e) => setResearchSeedInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          addSeedKeywordsFromInput();
+                        }
+                      }}
+                      placeholder="Type a seed keyword/topic and press Enter or click Add"
+                    />
+                    <button
+                      type="button"
+                      className={styles.button}
+                      onClick={addSeedKeywordsFromInput}
+                      disabled={!researchSeedInput.trim()}
+                    >
+                      Add Keywords
+                    </button>
+                  </div>
+                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                    Tip: Paste comma-separated or newline-separated lists. Up to 200 seeds are saved with this project.
+                  </div>
+                  {researchSeeds.length ? (
+                    <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {researchSeeds.map((s, idx) => (
+                        <span
+                          key={`${s}-${idx}`}
+                          className={styles.pill}
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+                        >
+                          {s}
+                          <button
+                            type="button"
+                            aria-label={`Remove ${s}`}
+                            onClick={() => removeSeedAt(idx)}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              color: "inherit",
+                              cursor: "pointer",
+                              fontWeight: 900,
+                              padding: 0,
+                              lineHeight: 1,
+                              fontSize: 14,
+                            }}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                      {researchSeeds.length > 1 ? (
+                        <button
+                          type="button"
+                          className={styles.miniBtn}
+                          onClick={() => {
+                            if (confirm("Clear all seed keywords?")) setResearchSeeds([]);
+                          }}
+                        >
+                          Clear all
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
+                      No seed keywords yet. Add a few to start research.
+                    </div>
+                  )}
+                </div>
               </div>
 
               {researchMsg ? (
@@ -2783,67 +3258,90 @@ export default function ProjectPage() {
               <div className={styles.sectionHead}>
                 <div>
                   <h2 style={{ margin: 0 }}>Results</h2>
-                  <div className={styles.muted}>Select ideas and import them into your Articles list.</div>
+                  <div className={styles.muted}>Browse, filter, and import ideas into your Articles list.</div>
                 </div>
-                <button
-                  className={styles.button}
-                  type="button"
-                  disabled={!researchSelected.size || researchImporting}
-                  onClick={async () => {
-                    setError(null);
-                    setResearchMsg(null);
-                    setResearchImportMsg(null);
-                    try {
-                      const selected = researchResults.filter((r) => researchSelected.has(r.id));
-                      const rows: BulkUploadRow[] = selected.map((r) => ({
-                        title: r.title,
-                        focus_keyphrase: r.focus_keyphrase,
-                        keywords: (r.keywords || []).slice(0, 10),
-                      }));
-                      if (!rows.length) return;
-                      setResearchImporting(true);
-                      const res = await api.bulkUploadArticles(projectId, rows, { skipProjectDuplicateConflicts: false });
-                      setArticles(await api.listArticles(projectId));
-                      setResearchImportDupModal(null);
-                      setResearchSelected(new Set());
-                      const skipped = res.project_skipped_as_duplicates || 0;
-                      setResearchImportMsg(`Imported ${res.created} article${res.created === 1 ? "" : "s"}${skipped ? ` (${skipped} skipped as duplicates)` : ""}.`);
-                    } catch (e) {
-                      if (e instanceof ApiError && e.status === 409 && e.detail && typeof e.detail === "object" && e.detail !== null) {
-                        const d = e.detail as Record<string, unknown>;
-                        if (d.error === "duplicate_article_titles") {
-                          const raw = d.project_duplicates;
-                          const projectDuplicates: ProjectDupRow[] = Array.isArray(raw)
-                            ? raw
-                                .filter((x): x is Record<string, unknown> => x !== null && typeof x === "object")
-                                .map((x) => ({
-                                  submitted_title: String(x.submitted_title ?? ""),
-                                  existing_title: String(x.existing_title ?? ""),
-                                  existing_id: String(x.existing_id ?? ""),
-                                }))
-                            : [];
-                          const inRaw = d.in_file_duplicate_titles;
-                          const inFileDuplicateTitles = Array.isArray(inRaw)
-                            ? inRaw.filter((x): x is string => typeof x === "string")
-                            : [];
-                          const wc = d.would_create_count;
-                          setResearchImportDupModal({
-                            projectDuplicates,
-                            inFileDuplicateTitles,
-                            wouldCreateCount: typeof wc === "number" ? wc : 0,
-                          });
-                          return;
-                        }
-                      }
-                      setResearchImportMsg(e instanceof Error ? e.message : "Import failed");
-                    } finally {
-                      setResearchImporting(false);
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    disabled={researchBusy || researchGeneratingMore || researchSeeds.length === 0}
+                    onClick={() =>
+                      runResearch({
+                        mode: "append",
+                        seeds: researchSeeds,
+                        brandNiche: researchBrandNiche,
+                        intent: researchIntent,
+                        tone: researchTone,
+                        country: researchCountry,
+                        language: researchLanguage,
+                      })
                     }
-                  }}
-                >
-                  {researchImporting ? "Importing…" : "Import selected"}
-                </button>
+                    title={researchSeeds.length === 0 ? "Add seed keywords first" : "Generate more ideas using current seeds"}
+                  >
+                    {researchGeneratingMore ? "Generating…" : "Generate more"}
+                  </button>
+                  <button
+                    className={styles.button}
+                    type="button"
+                    disabled={!researchSelected.size || researchImporting}
+                    onClick={() => importSelectedIdeas({ skipDuplicates: false })}
+                  >
+                    {researchImporting ? "Importing…" : `Import selected${researchSelected.size ? ` (${researchSelected.size})` : ""}`}
+                  </button>
+                </div>
               </div>
+
+              {researchResults.length ? (
+                <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                  {([
+                    { key: "latest", label: `Latest${researchCounts.latest ? ` (${researchCounts.latest})` : ""}` },
+                    { key: "not_imported", label: `Not Imported (${researchCounts.notImported})` },
+                    { key: "imported", label: `Imported (${researchCounts.imported})` },
+                    { key: "all", label: `All (${researchCounts.all})` },
+                  ] as { key: ResearchFilter; label: string }[]).map((opt) => {
+                    const active = researchFilter === opt.key;
+                    return (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        onClick={() => {
+                          setResearchFilter(opt.key);
+                          setResearchSelected(new Set());
+                        }}
+                        className={styles.miniBtn}
+                        style={
+                          active
+                            ? {
+                                borderColor: "var(--aa-ink)",
+                                background: "var(--aa-ink)",
+                                color: "var(--aa-canvas)",
+                              }
+                            : undefined
+                        }
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                  <span className={styles.muted} style={{ fontSize: 12, marginLeft: "auto" }}>
+                    Persisted locally for this project.
+                  </span>
+                  <button
+                    type="button"
+                    className={styles.miniBtn}
+                    onClick={() => {
+                      if (!researchResults.length) return;
+                      if (confirm("Clear all saved research results for this project?")) {
+                        setResearchResults([]);
+                        setResearchSelected(new Set());
+                        setResearchLatestRunId(null);
+                      }
+                    }}
+                  >
+                    Clear results
+                  </button>
+                </div>
+              ) : null}
 
               {researchImportMsg ? (
                 <div className={styles.muted} style={{ marginTop: 10, whiteSpace: "pre-wrap" }}>
@@ -2856,32 +3354,45 @@ export default function ProjectPage() {
 
               {!researchResults.length ? <div className={styles.muted}>Run research to see results.</div> : null}
 
-              {researchResults.length ? (
+              {researchResults.length && !filteredResearchResults.length ? (
+                <div className={styles.muted} style={{ marginTop: 10 }}>No ideas match this filter.</div>
+              ) : null}
+
+              {filteredResearchResults.length ? (
                 <table className={styles.table} style={{ marginTop: 10 }}>
                   <thead>
                     <tr>
                       <th className={styles.th} style={{ width: 44 }}>
                         <input
                           type="checkbox"
-                          checked={researchSelected.size > 0 && researchSelected.size === researchResults.length}
+                          checked={(() => {
+                            const sel = filteredResearchResults.filter((r) => !r.imported);
+                            return sel.length > 0 && sel.every((r) => researchSelected.has(r.id));
+                          })()}
                           onChange={(e) => {
-                            const next = new Set<string>();
-                            if (e.target.checked) researchResults.forEach((r) => next.add(r.id));
-                            setResearchSelected(next);
+                            setResearchSelected((prev) => {
+                              const next = new Set(prev);
+                              const target = filteredResearchResults.filter((r) => !r.imported);
+                              if (e.target.checked) target.forEach((r) => next.add(r.id));
+                              else target.forEach((r) => next.delete(r.id));
+                              return next;
+                            });
                           }}
                         />
                       </th>
                       <th className={styles.th}>Title</th>
                       <th className={styles.th}>Focus keyphrase</th>
                       <th className={styles.th}>Keywords</th>
+                      <th className={styles.th} style={{ width: 110 }}>Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {researchResults.map((r) => (
-                      <tr key={r.id}>
+                    {filteredResearchResults.map((r) => (
+                      <tr key={r.id} style={r.imported ? { opacity: 0.7 } : undefined}>
                         <td className={styles.td}>
                           <input
                             type="checkbox"
+                            disabled={!!r.imported}
                             checked={researchSelected.has(r.id)}
                             onChange={(e) => {
                               setResearchSelected((prev) => {
@@ -2902,6 +3413,23 @@ export default function ProjectPage() {
                           <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
                             {(r.keywords || []).slice(0, 10).join(", ") || "—"}
                           </div>
+                        </td>
+                        <td className={styles.td}>
+                          {r.imported ? (
+                            <span
+                              className={styles.pill}
+                              style={{
+                                color: "#0a7a32",
+                                borderColor: "rgba(10, 122, 50, 0.35)",
+                                background: "rgba(10, 122, 50, 0.08)",
+                                fontWeight: 800,
+                              }}
+                            >
+                              Imported
+                            </span>
+                          ) : (
+                            <span className={styles.muted} style={{ fontSize: 12 }}>Not imported</span>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -2958,29 +3486,7 @@ export default function ProjectPage() {
                       type="button"
                       className={styles.button}
                       disabled={researchImporting}
-                      onClick={async () => {
-                        setError(null);
-                        setResearchImportMsg(null);
-                        setResearchImporting(true);
-                        try {
-                          const selected = researchResults.filter((r) => researchSelected.has(r.id));
-                          const rows: BulkUploadRow[] = selected.map((r) => ({
-                            title: r.title,
-                            focus_keyphrase: r.focus_keyphrase,
-                            keywords: (r.keywords || []).slice(0, 10),
-                          }));
-                          const res = await api.bulkUploadArticles(projectId, rows, { skipProjectDuplicateConflicts: true });
-                          setArticles(await api.listArticles(projectId));
-                          setResearchImportDupModal(null);
-                          setResearchSelected(new Set());
-                          const skipped = res.project_skipped_as_duplicates || 0;
-                          setResearchImportMsg(`Imported ${res.created} article${res.created === 1 ? "" : "s"}${skipped ? ` (${skipped} skipped as duplicates)` : ""}.`);
-                        } catch (e) {
-                          setResearchImportMsg(e instanceof Error ? e.message : "Import failed");
-                        } finally {
-                          setResearchImporting(false);
-                        }
-                      }}
+                      onClick={() => importSelectedIdeas({ skipDuplicates: true })}
                     >
                       Import unique only
                     </button>
@@ -2994,28 +3500,44 @@ export default function ProjectPage() {
         {tab === "scheduled_articles" ? (
           <>
             <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={styles.projectCardTop}>
-                <div>
-                  <h2 style={{ margin: 0 }}>Scheduled Articles</h2>
-                  <p style={{ color: "#666", lineHeight: 1.5, margin: "6px 0 0" }}>
-                    Articles queued to post to WordPress at a scheduled time.
-                  </p>
+              <div className={styles.scheduledHeadRow}>
+                <div className={styles.scheduledHeadFilters}>
+                  <label className={styles.label} style={{ margin: 0 }}>
+                    Order
+                    <select className={styles.input} value={scheduledOrder} onChange={(e) => setScheduledOrder(e.target.value as "asc" | "desc")}>
+                      <option value="desc">Latest → Oldest</option>
+                      <option value="asc">Oldest → Latest</option>
+                    </select>
+                  </label>
+                  <label className={styles.label} style={{ margin: 0 }}>
+                    Search
+                    <input
+                      className={styles.input}
+                      value={scheduledSearch}
+                      onChange={(e) => setScheduledSearch(e.target.value)}
+                      placeholder="Search by article title…"
+                    />
+                  </label>
                 </div>
-                <button className={styles.button} type="button" onClick={async () => {
-                  setScheduledLoading(true);
-                  try { setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId))); } finally { setScheduledLoading(false); }
-                }}>
-                  Refresh
-                </button>
-                <button
-                  className={styles.btnSecondary}
-                  type="button"
-                  onClick={() => setConfirmClearScheduled(true)}
-                  style={{ marginLeft: 10 }}
-                >
-                  Clear all
-                </button>
+                <div className={styles.scheduledHeadActions}>
+                  <button
+                    type="button"
+                    className={styles.iconButton}
+                    aria-label="Refresh scheduled articles"
+                    onClick={async () => {
+                      setScheduledLoading(true);
+                      try {
+                        setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
+                      } finally {
+                        setScheduledLoading(false);
+                      }
+                    }}
+                  >
+                    <Icon.Refresh className={styles.icon20} />
+                  </button>
+                </div>
               </div>
+
               {scheduledLoading ? <div className={styles.muted}>Loading…</div> : null}
               {error ? <p className={styles.error}>{error}</p> : null}
             </div>
@@ -3026,11 +3548,11 @@ export default function ProjectPage() {
                 <div style={{ marginLeft: "auto", fontSize: 12, color: "#666" }}>Schedule</div>
               </div>
 
-              {scheduledJobs.length === 0 && !scheduledLoading ? (
+              {scheduledVisible.length === 0 && !scheduledLoading ? (
                 <div style={{ padding: 14, color: "#666" }}>No scheduled articles yet.</div>
               ) : null}
 
-              {scheduledJobs.map((j) => {
+              {scheduledVisible.map((j) => {
                 const jobState = (j.state || "").toLowerCase();
                 const canPostNow = !["posted", "cancelled", "posting"].includes(jobState);
                 return (
@@ -3283,44 +3805,6 @@ export default function ProjectPage() {
               </div>
             ) : null}
 
-            {confirmClearScheduled ? (
-              <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Clear scheduled articles">
-                <div className={styles.modalPanel}>
-                  <div className={styles.modalHead}>
-                    <h3 className={styles.modalTitle}>Clear all scheduled articles</h3>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmClearScheduled(false)}>
-                      Close
-                    </button>
-                  </div>
-                  <div className={styles.modalBody}>
-                    <p style={{ marginTop: 0 }}>
-                      This will remove all scheduled jobs for this project so you can start fresh. Are you sure?
-                    </p>
-                  </div>
-                  <div className={styles.modalFooter}>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmClearScheduled(false)}>
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className={`${styles.button} ${styles.miniDanger}`}
-                      onClick={async () => {
-                        try {
-                          setError(null);
-                          await api.clearScheduledJobs(projectId);
-                          setScheduledJobs([]);
-                          setConfirmClearScheduled(false);
-                        } catch (e) {
-                          setError(e instanceof Error ? e.message : "Failed to clear scheduled articles");
-                        }
-                      }}
-                    >
-                      Yes, clear all
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
           </>
         ) : null}
 

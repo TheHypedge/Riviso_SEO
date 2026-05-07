@@ -6,7 +6,26 @@ from pydantic import BaseModel, Field
 
 
 ResearchIntent = Literal["informational", "commercial", "transactional", "navigational"]
-ResearchTone = Literal["professional", "friendly", "authoritative", "conversational", "technical"]
+ResearchTone = Literal[
+    "professional",
+    "friendly",
+    "authoritative",
+    "conversational",
+    "technical",
+    "casual",
+    "formal",
+    "witty",
+    "humorous",
+    "empathetic",
+    "persuasive",
+    "inspirational",
+    "confident",
+    "educational",
+    "storytelling",
+    "neutral",
+    "enthusiastic",
+    "analytical",
+]
 
 
 class ResearchIdeasRequest(BaseModel):

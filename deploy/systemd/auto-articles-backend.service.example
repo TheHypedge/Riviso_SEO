@@ -9,7 +9,7 @@ Group=www-data
 WorkingDirectory=/var/www/auto-articles/backend
 Environment=ENVIRONMENT=production
 EnvironmentFile=/var/www/auto-articles/backend/.env
-ExecStart=/var/www/auto-articles/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+ExecStart=/var/www/auto-articles/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=*
 Restart=always
 RestartSec=3
 

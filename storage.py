@@ -72,6 +72,8 @@ def _user_row_to_public(u: dict[str, Any]) -> dict[str, Any]:
         "usage_daily_articles_count": int(u.get("usage_daily_articles_count") or 0),
         "usage_monthly_articles_month": (u.get("usage_monthly_articles_month") or "").strip(),
         "usage_monthly_articles_count": int(u.get("usage_monthly_articles_count") or 0),
+        "usage_monthly_llm_tokens_month": (u.get("usage_monthly_llm_tokens_month") or "").strip(),
+        "usage_monthly_llm_tokens_used": int(u.get("usage_monthly_llm_tokens_used") or 0),
         "created_at": (u.get("created_at") or "").strip(),
         "pending_product_tour": bool(u.get("pending_product_tour", False)),
         # Google Search Console OAuth (stored per-user)
@@ -227,6 +229,8 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "usage_monthly_export_count": int(d.get("usage_monthly_export_count") or 0),
         "usage_monthly_scheduled_month": (d.get("usage_monthly_scheduled_month") or "").strip()[:16],
         "usage_monthly_scheduled_count": int(d.get("usage_monthly_scheduled_count") or 0),
+        "usage_monthly_llm_tokens_month": (d.get("usage_monthly_llm_tokens_month") or "").strip()[:16],
+        "usage_monthly_llm_tokens_used": int(d.get("usage_monthly_llm_tokens_used") or 0),
         "created_at": (d.get("created_at") or "")[:64],
         "pending_product_tour": bool(d.get("pending_product_tour", False)),
         # Google Search Console OAuth (stored per-user)
@@ -390,6 +394,69 @@ def consume_article_usage(user_id: str, *, day_limit: int | None, month_limit: i
         return True, ""
 
 
+def refund_article_usage(user_id: str, *, amount: int = 1) -> tuple[bool, str]:
+    """
+    Decrement the per-user article counters previously incremented by
+    :func:`consume_article_usage`. Used when generation fails after quota was consumed,
+    so a transient OpenAI/network error does not burn a user's daily/monthly slot.
+
+    Counters are only refunded when the stored day/month key still matches "now"; if a
+    day/month rollover happened between consume and refund, the refund is a no-op (the
+    historical counter was already reset).
+
+    Counters never drop below zero. The function is idempotent if the article was never
+    consumed (counters at zero stay at zero).
+    """
+    if amount <= 0:
+        return True, ""
+    uid = (user_id or "").strip()
+    if not uid:
+        return False, "Missing user id"
+    day_key = _utc_day_key_now()
+    month_key = _utc_month_key_now()
+
+    def _apply(d: dict[str, Any]) -> dict[str, Any]:
+        d2 = dict(d)
+        cur_day = (d2.get("usage_daily_articles_date") or "").strip()
+        if cur_day == day_key:
+            day_count = int(d2.get("usage_daily_articles_count") or 0)
+            d2["usage_daily_articles_count"] = max(0, day_count - amount)
+        cur_month = (d2.get("usage_monthly_articles_month") or "").strip()
+        if cur_month == month_key:
+            month_count = int(d2.get("usage_monthly_articles_count") or 0)
+            d2["usage_monthly_articles_count"] = max(0, month_count - amount)
+        return d2
+
+    if _storage_mode == "json":
+        with _db_write_lock:
+            users = _load_json_users()
+            for i, u in enumerate(users):
+                if (u.get("id") or "").strip() != uid:
+                    continue
+                users[i] = _normalize_user_dict(_apply(dict(u)))
+                _save_json_users(users)
+                return True, ""
+        return False, "User not found"
+
+    if _storage_mode != "mongo":
+        return True, ""
+
+    with _db_write_lock:
+        db = get_db()
+        doc = db.users.find_one({"id": uid})
+        if not doc:
+            return False, "User not found"
+        d = dict(doc)
+        d.pop("_id", None)
+        upd = _apply(d)
+        norm = _normalize_user_dict(upd)
+        new_doc = {**norm, "_id": norm["id"]}
+        res = db.users.replace_one({"id": uid}, new_doc)
+        if not (res.acknowledged and res.matched_count == 1):
+            return False, "Failed to refund usage"
+        return True, ""
+
+
 def consume_export_usage(user_id: str, *, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
     uid = (user_id or "").strip()
     if not uid:
@@ -498,6 +565,124 @@ def consume_scheduled_usage(user_id: str, *, month_limit: int | None, amount: in
         return True, ""
 
 
+def check_llm_token_budget(user_id: str, estimated_tokens: int, month_limit: int | None) -> tuple[bool, str]:
+    """
+    Verify the user can afford ``estimated_tokens`` this month against ``month_limit``.
+
+    ``month_limit`` of ``None`` or ``<= 0`` means unlimited (no token-wallet enforcement).
+    """
+    if estimated_tokens <= 0:
+        return True, ""
+    uid = (user_id or "").strip()
+    if not uid:
+        return False, "Missing user id"
+    if month_limit is None:
+        return True, ""
+    try:
+        lim = int(month_limit)
+    except Exception:
+        return True, ""
+    if lim <= 0:
+        return True, ""
+
+    month_key = _utc_month_key_now()
+
+    def _used_for_month(d: dict[str, Any]) -> int:
+        cur_month = (d.get("usage_monthly_llm_tokens_month") or "").strip()
+        used = int(d.get("usage_monthly_llm_tokens_used") or 0)
+        if cur_month != month_key:
+            return 0
+        return used
+
+    if _storage_mode == "json":
+        with _db_write_lock:
+            users = _load_json_users()
+            for u in users:
+                if (u.get("id") or "").strip() != uid:
+                    continue
+                used = _used_for_month(u)
+                if used + estimated_tokens > lim:
+                    return (
+                        False,
+                        "Requested generation exceeds your tier AI token budget. Please try again next month or upgrade your plan.",
+                    )
+                return True, ""
+        return False, "User not found"
+
+    if _storage_mode != "mongo":
+        return True, ""
+
+    with _db_write_lock:
+        db = get_db()
+        doc = db.users.find_one({"id": uid})
+        if not doc:
+            return False, "User not found"
+        d = dict(doc)
+        d.pop("_id", None)
+        used = _used_for_month(d)
+        if used + estimated_tokens > lim:
+            return (
+                False,
+                "Requested generation exceeds your tier AI token budget. Please try again next month or upgrade your plan.",
+            )
+        return True, ""
+
+
+def consume_llm_generation_tokens(user_id: str, amount: int) -> tuple[bool, str]:
+    """Increment monthly LLM token usage (call after a successful OpenAI generation)."""
+    if amount <= 0:
+        return True, ""
+    uid = (user_id or "").strip()
+    if not uid:
+        return False, "Missing user id"
+    month_key = _utc_month_key_now()
+
+    def _apply(d: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+        cur_month = (d.get("usage_monthly_llm_tokens_month") or "").strip()
+        used = int(d.get("usage_monthly_llm_tokens_used") or 0)
+        if cur_month != month_key:
+            cur_month = month_key
+            used = 0
+        d2 = dict(d)
+        d2["usage_monthly_llm_tokens_month"] = cur_month
+        d2["usage_monthly_llm_tokens_used"] = used + amount
+        return True, "", d2
+
+    if _storage_mode == "json":
+        with _db_write_lock:
+            users = _load_json_users()
+            for i, u in enumerate(users):
+                if (u.get("id") or "").strip() != uid:
+                    continue
+                ok, msg, upd = _apply(dict(u))
+                if not ok:
+                    return False, msg
+                users[i] = _normalize_user_dict(upd)
+                _save_json_users(users)
+                return True, ""
+        return False, "User not found"
+
+    if _storage_mode != "mongo":
+        return True, ""
+
+    with _db_write_lock:
+        db = get_db()
+        doc = db.users.find_one({"id": uid})
+        if not doc:
+            return False, "User not found"
+        d = dict(doc)
+        d.pop("_id", None)
+        ok, msg, upd = _apply(d)
+        if not ok:
+            return False, msg
+        norm = _normalize_user_dict(upd)
+        new_doc = {**norm, "_id": norm["id"]}
+        res = db.users.replace_one({"id": uid}, new_doc)
+        if not (res.acknowledged and res.matched_count == 1):
+            return False, "Failed to update token usage"
+        return True, ""
+
+
 def _plans_json_path() -> str:
     return _data_path("plans.json")
 
@@ -516,6 +701,7 @@ def _default_plans() -> dict[str, Any]:
             "writing_prompt_char_limit": 4000,
             "max_image_prompts": 1,
             "image_prompt_char_limit": 2000,
+            "max_llm_tokens_per_month": 0,
             "allow_scheduling": True,
             "max_scheduled_per_month": 0,
             "allow_export": True,
@@ -667,6 +853,8 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
         "usage_daily_articles_count": int(doc.get("usage_daily_articles_count") or 0),
         "usage_monthly_articles_month": (doc.get("usage_monthly_articles_month") or "").strip(),
         "usage_monthly_articles_count": int(doc.get("usage_monthly_articles_count") or 0),
+        "usage_monthly_llm_tokens_month": (doc.get("usage_monthly_llm_tokens_month") or "").strip(),
+        "usage_monthly_llm_tokens_used": int(doc.get("usage_monthly_llm_tokens_used") or 0),
         "created_at": (doc.get("created_at") or "").strip(),
         "pending_product_tour": bool(doc.get("pending_product_tour", False)),
         # Google Search Console OAuth (stored per-user)
@@ -708,6 +896,8 @@ def get_user_by_email(email: str) -> dict[str, Any] | None:
         "usage_daily_articles_count": int(doc.get("usage_daily_articles_count") or 0),
         "usage_monthly_articles_month": (doc.get("usage_monthly_articles_month") or "").strip(),
         "usage_monthly_articles_count": int(doc.get("usage_monthly_articles_count") or 0),
+        "usage_monthly_llm_tokens_month": (doc.get("usage_monthly_llm_tokens_month") or "").strip(),
+        "usage_monthly_llm_tokens_used": int(doc.get("usage_monthly_llm_tokens_used") or 0),
         "created_at": (doc.get("created_at") or "").strip(),
         "pending_product_tour": bool(doc.get("pending_product_tour", False)),
     }

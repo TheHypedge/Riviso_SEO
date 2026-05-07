@@ -957,7 +957,25 @@ export const api = {
     payload: {
       brand_niche?: string;
       intent?: "informational" | "commercial" | "transactional" | "navigational";
-      tone?: "professional" | "friendly" | "authoritative" | "conversational" | "technical";
+      tone?:
+        | "professional"
+        | "friendly"
+        | "authoritative"
+        | "conversational"
+        | "technical"
+        | "casual"
+        | "formal"
+        | "witty"
+        | "humorous"
+        | "empathetic"
+        | "persuasive"
+        | "inspirational"
+        | "confident"
+        | "educational"
+        | "storytelling"
+        | "neutral"
+        | "enthusiastic"
+        | "analytical";
       seed_keywords: string[];
       country?: string;
       language?: string;

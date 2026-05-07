@@ -684,7 +684,7 @@
 }
 
 .offcanvasItemActive {
-  background: var(--aa-surface-cream-strong);
+  background: var(--aa-primary);
   color: var(--aa-ink);
   border-color: transparent;
 }
@@ -724,7 +724,7 @@
 .bulkBackdrop {
   position: fixed;
   inset: 0;
-  background: rgba(20, 20, 19, 0.35);
+  background: rgba(19, 19, 19, 0.652);
   z-index: 50;
 }
 
@@ -769,11 +769,77 @@
 
 /* bulkPopupClose replaced by iconButton */
 
+.bulkScheduleGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.bulkScheduleRow {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--button-secondary-border);
+}
+
+@media (max-width: 560px) {
+  .bulkScheduleGrid {
+    grid-template-columns: 1fr;
+  }
+  .bulkScheduleRow {
+    grid-template-columns: 1fr;
+  }
+}
+
 .sectionHeadRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.scheduledHeadRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.scheduledHeadTitle {
+  margin: 0;
+  min-width: 0;
+}
+
+.scheduledHeadActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.scheduledHeadFilters {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 10px;
+  align-items: end;
+}
+
+@media (max-width: 640px) {
+  .scheduledHeadRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .scheduledHeadActions {
+    justify-content: flex-end;
+  }
+  .scheduledHeadFilters {
+    width: 100%;
+    grid-template-columns: 1fr;
+  }
 }
 
 .sectionHeadActions {
@@ -893,6 +959,31 @@
   gap: 10px;
 }
 
+.desktopFiltersWrap {
+  padding: 12px;
+  background: var(--aa-surface-card);
+}
+
+.desktopTopActions {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (min-width: 981px) {
+  .filtersGrid {
+    grid-template-columns: 200px 150px 150px 190px auto;
+    align-items: end;
+  }
+  .filtersGrid button {
+    justify-self: end;
+    min-width: 130px;
+    height: 40px;
+  }
+}
+
 .filtersActionsRow {
   display: flex;
   flex-wrap: wrap;
@@ -900,11 +991,29 @@
   align-items: center;
 }
 
+.filtersActionsLeft {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 .filtersActionsRight {
   margin-left: auto;
   display: flex;
   gap: 10px;
   align-items: center;
+}
+
+@media (min-width: 981px) {
+  /* Desktop: keep action row on a single line */
+  .filtersActionsRow {
+    flex-wrap: nowrap;
+  }
+  .filtersActionsLeft,
+  .filtersActionsRight {
+    flex-wrap: nowrap;
+  }
 }
 
 .smallMuted {
@@ -1620,7 +1729,7 @@
 .projectTitle {
   font-size: 16px;
   font-weight: 800;
-  color: var(--text-primary);
+  color: #fff;
   line-height: 1.25;
   word-break: break-word;
 }
@@ -1969,7 +2078,7 @@
   top: 50%;
   transform: translate(-50%, -50%);
   width: min(640px, calc(100% - 24px));
-  background: var(--foreground);
+  background: var(--background);
   border: 1px solid var(--button-secondary-border);
   border-radius: 18px;
   padding: 16px;
@@ -1991,6 +2100,7 @@
   font-size: 16px;
   font-weight: 800;
   margin: 0;
+  color: var(--text-primary);
 }
 
 .modalBody {

@@ -11,6 +11,11 @@ from app.schemas.prompts import PromptCreate, PromptItem, PromptListResponse, Pr
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["image-prompts"])
 
+_IMAGE_PROMPT_LOCKED_DETAIL = (
+    "Featured images are generated automatically from each article's focus keyphrase "
+    "and your project's brand niche. Custom image prompt text is not accepted."
+)
+
 _DEFAULT_IMAGE_PROMPT_NAME = "Default image prompt"
 _DEFAULT_IMAGE_PROMPT_TEXT = (
     "Create a realistic, professional featured image that matches the article topic.\n"
@@ -76,15 +81,10 @@ async def list_image_prompts(project_id: str, user: dict = Depends(get_current_u
 
 
 @router.post("/image-prompts", response_model=PromptItem, status_code=201)
-async def create_image_prompt(project_id: str, payload: PromptCreate, user: dict = Depends(get_current_user)) -> PromptItem:
+async def create_image_prompt(project_id: str, _payload: PromptCreate, user: dict = Depends(get_current_user)) -> PromptItem:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
-    prompts = [p for p in (proj.get("image_prompts") or []) if isinstance(p, dict)]
-    pid = str(uuid.uuid4())
-    row = {"id": pid, "name": payload.name.strip()[:200], "text": payload.text.strip()[:100_000]}
-    prompts.append(row)
-    st.update_project_fields(project_id, {"image_prompts": prompts})
-    return PromptItem(**row)
+    _require_project_access(st=st, user=user, project_id=project_id)
+    raise HTTPException(status_code=400, detail=_IMAGE_PROMPT_LOCKED_DETAIL)
 
 
 @router.patch("/image-prompts/{prompt_id}", response_model=PromptItem)
@@ -98,6 +98,8 @@ async def update_image_prompt(
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     pid = (prompt_id or "").strip()
     prompts = [p for p in (proj.get("image_prompts") or []) if isinstance(p, dict)]
+    if payload.text is not None:
+        raise HTTPException(status_code=400, detail=_IMAGE_PROMPT_LOCKED_DETAIL)
     found = None
     for p in prompts:
         if (p.get("id") or "").strip() == pid:

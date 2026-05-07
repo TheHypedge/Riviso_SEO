@@ -5,13 +5,23 @@ import logging
 from datetime import datetime
 
 from app.core.config import settings
+from app.services.content_sanitizer import (
+    sanitize_article_body,
+    sanitize_meta_description,
+    sanitize_meta_title,
+)
 from app.services.openai_client import OpenAIClient
+from app.services.seo_guardrails import (
+    ANCHOR_SYSTEM_PREFIX,
+    build_programmatic_image_prompt,
+    enforce_strict_article_json,
+    estimate_generation_token_budget,
+)
 
 log = logging.getLogger(__name__)
 
 
 def _apply_placeholders(prompt: str, *, title: str, keywords: list[str], focus_keyphrase: str) -> str:
-    # Back-compat placeholders from legacy UI (best-effort).
     out = (prompt or "").replace("{article_title}", title)
     out = out.replace("{targeting_keywords}", ", ".join([k for k in keywords if k]))
     out = out.replace("{focus_keyphrase}", focus_keyphrase or "")
@@ -19,7 +29,7 @@ def _apply_placeholders(prompt: str, *, title: str, keywords: list[str], focus_k
     return out
 
 
-async def generate_article_bundle(
+def build_generation_messages(
     *,
     title: str,
     keywords: list[str],
@@ -27,11 +37,8 @@ async def generate_article_bundle(
     writing_prompt_text: str,
     brand_identity: str | None = None,
     niche_identifier: str | None = None,
-    generate_image: bool,
-    image_prompt_text: str | None,
-) -> dict:
-    client = OpenAIClient()
-
+) -> tuple[str, str]:
+    """Build (system, user) chat payloads — single source of truth for token estimation and generation."""
     bi = (brand_identity or "").strip()
     ni = (niche_identifier or "").strip()
     flavor = ""
@@ -43,10 +50,20 @@ async def generate_article_bundle(
         )
 
     sys = (
-        "You are an expert SEO content writer.\n"
-        "Return ONLY a JSON object with keys: article_markdown, meta_title, meta_description.\n"
+        ANCHOR_SYSTEM_PREFIX
+        + "You are an expert SEO content writer.\n"
+        "Return ONLY a JSON object with exactly these keys and no others: "
+        '"article_markdown", "meta_title", "meta_description".\n'
+        "Do not add commentary, explanations, or keys such as title, body, keywords, or choices.\n"
         "Write in clear, human-friendly tone. Use headings and lists where helpful.\n"
-        "Meta title must be <= 60 chars if possible. Meta description <= 155 chars if possible."
+        "Meta title must be <= 60 chars if possible. Meta description <= 155 chars if possible.\n"
+        "STRICT OUTPUT RULES — article_markdown MUST contain ONLY the article body:\n"
+        "- Do NOT include 'Meta Title:', 'Meta Description:', 'SEO Title:' or any meta block inside article_markdown.\n"
+        "- Do NOT include 'Focus Keyphrase:', 'Keywords:', 'Tags:', 'Slug:' or 'AI suggested keywords' inside article_markdown.\n"
+        "- Do NOT include AI preamble or postamble.\n"
+        "- Do NOT wrap article_markdown in code fences. Output it as plain markdown.\n"
+        "- meta_title and meta_description must be plain text only — no quotes, no 'Meta Title:' prefix, no markdown.\n"
+        "- Do NOT output code, poetry, scripts, or conversational text outside the JSON object."
         f"{flavor}"
     )
 
@@ -63,35 +80,82 @@ async def generate_article_bundle(
         f"Focus keyphrase: {focus_keyphrase}\n\n"
         f"Prompt:\n{up}\n"
     )
+    return sys, user
+
+
+def estimate_tokens_for_generation_bundle(
+    *,
+    title: str,
+    keywords: list[str],
+    focus_keyphrase: str,
+    writing_prompt_text: str,
+    brand_identity: str | None = None,
+    niche_identifier: str | None = None,
+    generate_image: bool,
+    max_completion_tokens: int = 6_000,
+) -> int:
+    sys, user = build_generation_messages(
+        title=title,
+        keywords=keywords,
+        focus_keyphrase=focus_keyphrase,
+        writing_prompt_text=writing_prompt_text,
+        brand_identity=brand_identity,
+        niche_identifier=niche_identifier,
+    )
+    return estimate_generation_token_budget(
+        system_prompt=sys,
+        user_message=user,
+        max_completion_tokens=max_completion_tokens,
+        include_image=generate_image,
+    )
+
+
+async def generate_article_bundle(
+    *,
+    title: str,
+    keywords: list[str],
+    focus_keyphrase: str,
+    writing_prompt_text: str,
+    brand_identity: str | None = None,
+    niche_identifier: str | None = None,
+    generate_image: bool,
+) -> dict:
+    """
+    Generate article markdown + meta + optional image.
+
+    Image prompts are never taken from user-authored template text; they are derived
+    server-side from focus keyphrase, niche, brand, title, and keywords.
+    """
+    client = OpenAIClient()
+
+    sys, user = build_generation_messages(
+        title=title,
+        keywords=keywords,
+        focus_keyphrase=focus_keyphrase,
+        writing_prompt_text=writing_prompt_text,
+        brand_identity=brand_identity,
+        niche_identifier=niche_identifier,
+    )
 
     obj = await client.chat_json(model=settings.openai_text_model, system=sys, user=user)
+    obj = enforce_strict_article_json(dict(obj))
 
-    article_md = str(obj.get("article_markdown") or "").strip()
-    meta_title = str(obj.get("meta_title") or "").strip()
-    meta_desc = str(obj.get("meta_description") or "").strip()
+    article_md = sanitize_article_body(obj.get("article_markdown"))
+    meta_title = sanitize_meta_title(obj.get("meta_title"))
+    meta_desc = sanitize_meta_description(obj.get("meta_description"))
 
     if not article_md:
         raise RuntimeError("Generated article is empty")
 
     image_url: str | None = None
-    if generate_image and image_prompt_text:
-        ip = _apply_placeholders(
-            image_prompt_text,
+    if generate_image:
+        image_prompt = build_programmatic_image_prompt(
             title=title,
             keywords=keywords,
             focus_keyphrase=focus_keyphrase,
-        ).strip()
-        # Force "ultra realistic" photography-style image direction.
-        # Keep prompts consistent and avoid text overlays / logos.
-        realism = (
-            "Ultra-realistic professional photography, 8k detail, natural skin/textures, "
-            "cinematic lighting, shallow depth of field, high dynamic range, sharp focus.\n"
-            "No text, no letters, no logos, no watermarks, no UI.\n"
-            "Photorealistic, not illustration, not 3D render, not cartoon."
+            brand_identity=brand_identity,
+            niche_identifier=niche_identifier,
         )
-        image_prompt = f"{ip}\n\n{realism}\n\nTitle: {title}\nFocus: {focus_keyphrase}\nKeywords: {', '.join(keywords[:12])}\n"
-        # Image generation can be slow and may exceed reverse-proxy timeouts in dev.
-        # We fail open: return the article even if image generation times out/fails.
         try:
             image_url = await asyncio.wait_for(
                 client.generate_image_url(model=settings.openai_image_model, prompt=image_prompt),
@@ -109,4 +173,3 @@ async def generate_article_bundle(
         "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         "models": {"text": settings.openai_text_model, "image": settings.openai_image_model},
     }
-

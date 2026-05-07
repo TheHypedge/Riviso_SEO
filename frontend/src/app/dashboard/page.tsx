@@ -948,8 +948,8 @@ export default function DashboardPage() {
           <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Google Search Console connected">
             <div className={styles.modalHead}>
               <h3 className={styles.modalTitle}>Congratulations!</h3>
-              <button type="button" className={styles.btnSecondary} onClick={() => setShowGscCongrats(false)}>
-                Close
+              <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowGscCongrats(false)}>
+                <Icon.X className={styles.icon20} />
               </button>
             </div>
             <div className={styles.modalBody}>
@@ -1014,8 +1014,8 @@ export default function DashboardPage() {
           <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Add project">
             <div className={styles.modalHead}>
               <h3 className={styles.modalTitle}>Add project</h3>
-              <button type="button" className={styles.btnSecondary} onClick={() => setShowAddProject(false)}>
-                Close
+              <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowAddProject(false)}>
+                <Icon.X className={styles.icon20} />
               </button>
             </div>
 
@@ -1049,8 +1049,8 @@ export default function DashboardPage() {
           <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Connect WordPress">
             <div className={styles.modalHead}>
               <h3 className={styles.modalTitle}>Connect your WordPress site</h3>
-              <button type="button" className={styles.btnSecondary} onClick={() => setShowWpConnect(false)}>
-                Close
+              <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowWpConnect(false)}>
+                <Icon.X className={styles.icon20} />
               </button>
             </div>
             <div className={styles.modalBody}>

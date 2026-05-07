@@ -40,14 +40,19 @@ from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.core.config import settings
 from app.legacy.storage import get_legacy_storage_module
-from app.services.article_generation import generate_article_bundle
+from app.services.article_generation import estimate_tokens_for_generation_bundle, generate_article_bundle
+from app.services.content_sanitizer import (
+    sanitize_article_body,
+    sanitize_meta_description,
+    sanitize_meta_title,
+)
 from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient
 from app.services.gsc_actions import maybe_request_url_inspection, request_url_inspection_now
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.scheduler import prepare_article_for_scheduled_job
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
-from app.services.to_thread import run_sync
+from app.services.prompt_validation import assert_writing_prompt_allowed
 from app.schemas.articles import (
     ArticleCreate,
     ArticleDetailResponse,
@@ -763,11 +768,11 @@ async def update_article(
     if payload.focus_keyphrase is not None:
         updates["focus_keyphrase"] = (payload.focus_keyphrase or "").strip()[:500]
     if payload.article is not None:
-        updates["article"] = payload.article
+        updates["article"] = sanitize_article_body(payload.article)
     if payload.meta_title is not None:
-        updates["meta_title"] = (payload.meta_title or "").strip()[:400]
+        updates["meta_title"] = sanitize_meta_title(payload.meta_title, max_len=400)
     if payload.meta_description is not None:
-        updates["meta_description"] = (payload.meta_description or "").strip()[:600]
+        updates["meta_description"] = sanitize_meta_description(payload.meta_description, max_len=600)
 
     if updates:
         await run_sync(st.update_article_fields, article_id, updates)
@@ -804,28 +809,10 @@ async def generate_article_and_image(
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
-    # Plan enforcement: generation consumes the per-day / per-month article quota.
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    if role != "admin" and uid and hasattr(st, "consume_article_usage"):
-        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
-        plan = {}
-        try:
-            plans = st.load_plans() or {}
-            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
-            if not isinstance(plan, dict):
-                plan = {}
-        except Exception:
-            plan = {}
-        day_lim = plan.get("max_articles_per_day")
-        month_lim = plan.get("max_articles_per_month")
-        ok, msg = st.consume_article_usage(uid, day_limit=day_lim, month_limit=month_lim, amount=1)
-        if not ok:
-            raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
 
-    # Resolve prompt ids: explicit override > project default > None
     writing_prompt_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
-    image_prompt_id = (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
 
     def _resolve_prompt(prompts: list, pid: str | None) -> dict | None:
         if not pid:
@@ -836,7 +823,6 @@ async def generate_article_and_image(
         raise HTTPException(status_code=404, detail="Prompt not found")
 
     resolved_writing = _resolve_prompt(proj.get("prompts") or [], writing_prompt_id)
-    resolved_image = _resolve_prompt(proj.get("image_prompts") or [], image_prompt_id)
 
     if not (settings.openai_api_key or "").strip():
         raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
@@ -850,16 +836,74 @@ async def generate_article_and_image(
     if not resolved_writing:
         raise HTTPException(status_code=400, detail="No writing prompt selected and no project default set")
 
-    gen = await generate_article_bundle(
+    try:
+        assert_writing_prompt_allowed(resolved_writing["text"], user_id=uid or None)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    generate_image = bool(payload.generate_image)
+    token_estimate = estimate_tokens_for_generation_bundle(
         title=title,
         keywords=keywords,
         focus_keyphrase=focus,
         writing_prompt_text=resolved_writing["text"],
         brand_identity=(proj.get("brand_identity") or ""),
         niche_identifier=(proj.get("niche_identifier") or ""),
-        generate_image=bool(payload.generate_image),
-        image_prompt_text=(resolved_image["text"] if resolved_image else None),
+        generate_image=generate_image,
     )
+
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    plan: dict = {}
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+        if not isinstance(plan, dict):
+            plan = {}
+    except Exception:
+        plan = {}
+
+    if role != "admin" and uid:
+        ok_t, msg_t = st.check_llm_token_budget(uid, token_estimate, plan.get("max_llm_tokens_per_month"))
+        if not ok_t:
+            raise HTTPException(status_code=403, detail=msg_t or "Token budget exceeded")
+
+    quota_consumed = False
+    if role != "admin" and uid and hasattr(st, "consume_article_usage"):
+        day_lim = plan.get("max_articles_per_day")
+        month_lim = plan.get("max_articles_per_month")
+        ok, msg = st.consume_article_usage(uid, day_limit=day_lim, month_limit=month_lim, amount=1)
+        if not ok:
+            raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
+        quota_consumed = True
+
+    try:
+        gen = await generate_article_bundle(
+            title=title,
+            keywords=keywords,
+            focus_keyphrase=focus,
+            writing_prompt_text=resolved_writing["text"],
+            brand_identity=(proj.get("brand_identity") or ""),
+            niche_identifier=(proj.get("niche_identifier") or ""),
+            generate_image=generate_image,
+        )
+    except HTTPException:
+        # Refund the article quota slot — generation never produced output.
+        if quota_consumed and hasattr(st, "refund_article_usage"):
+            try:
+                st.refund_article_usage(uid, amount=1)
+            except Exception:
+                pass
+        raise
+    except Exception:
+        if quota_consumed and hasattr(st, "refund_article_usage"):
+            try:
+                st.refund_article_usage(uid, amount=1)
+            except Exception:
+                pass
+        raise
+
+    if role != "admin" and uid:
+        st.consume_llm_generation_tokens(uid, token_estimate)
 
     updates = {
         "article": gen["article"],
@@ -877,9 +921,10 @@ async def generate_article_and_image(
         "message": "Article generated successfully.",
         "resolved": {
             "writing_prompt": {"id": resolved_writing["id"], "name": resolved_writing["name"]} if resolved_writing else None,
-            "image_prompt": {"id": resolved_image["id"], "name": resolved_image["name"]} if resolved_image else None,
+            "image_prompt": None,
+            "image_prompt_source": "programmatic",
             "focus_keyphrase": focus,
-            "generate_image": bool(payload.generate_image),
+            "generate_image": generate_image,
             "models": gen.get("models"),
         },
         "generated": {

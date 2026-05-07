@@ -29,4 +29,7 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers + --forwarded-allow-ips: required behind nginx/load balancers so
+# request.client.host (rate limiting, audit logs) reflects the real client and not
+# the proxy IP. Tighten --forwarded-allow-ips=<comma list of proxy IPs> for stricter setups.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
