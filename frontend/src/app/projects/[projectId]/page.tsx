@@ -102,6 +102,7 @@ export default function ProjectPage() {
   const [tab, setTab] = useState<TabKey>("articles");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settings, setSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
+  const [projectMeta, setProjectMeta] = useState<import("@/lib/api").ProjectPublic | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsVerify, setSettingsVerify] = useState<import("@/lib/api").WordpressVerifyResponse | null>(null);
@@ -118,6 +119,8 @@ export default function ProjectPage() {
   const [sWpDefaultCategoryIds, setSWpDefaultCategoryIds] = useState<number[]>([]);
   const [sGscPropertyUrl, setSGscPropertyUrl] = useState("");
   const [sGscIndexOnPublish, setSGscIndexOnPublish] = useState(true);
+  const [brandIdentity, setBrandIdentity] = useState("");
+  const [nicheIdentifier, setNicheIdentifier] = useState("");
   const [settingsPostTypes, setSettingsPostTypes] = useState<import("@/lib/api").WordpressPostType[]>([]);
   const [settingsCategories, setSettingsCategories] = useState<import("@/lib/api").WordpressCategory[]>([]);
   const [gscStatus, setGscStatus] = useState<import("@/lib/api").GscStatus | null>(null);
@@ -139,6 +142,13 @@ export default function ProjectPage() {
       !!sWpPass.trim()
     );
   }, [sName, sUrl, sWpUser, sWpPass, settings, sWpDefaultPostType, sWpDefaultStatus, sWpDefaultCategoryIds, sGscPropertyUrl, sGscIndexOnPublish]);
+
+  const identityDirty = useMemo(() => {
+    if (!projectMeta) return false;
+    const b0 = (projectMeta.brand_identity || "").trim();
+    const n0 = (projectMeta.niche_identifier || "").trim();
+    return brandIdentity.trim() !== b0 || nicheIdentifier.trim() !== n0;
+  }, [projectMeta, brandIdentity, nicheIdentifier]);
   const [articles, setArticles] = useState<ArticlePublic[]>([]);
   const [scheduledJobs, setScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [scheduledLoading, setScheduledLoading] = useState(false);
@@ -460,12 +470,15 @@ export default function ProjectPage() {
       setSettingsLoading(true);
       setGscLoading(true);
       try {
-        const [s, gs] = await Promise.all([api.getProjectSettings(projectId), api.gscStatus()]);
+        const [s, gs, pm] = await Promise.all([api.getProjectSettings(projectId), api.gscStatus(), api.getProject(projectId)]);
         setSettings(s);
+        setProjectMeta(pm);
         setSName(s.name || "");
         setSUrl(s.wp_site_url || s.website_url || "");
         setSWpUser(s.wp_username || "");
         setSWpPass("");
+        setBrandIdentity((pm?.brand_identity || "") as string);
+        setNicheIdentifier((pm?.niche_identifier || "") as string);
         setSWpDefaultPostType((s.default_wp_rest_base || "posts") as string);
         setSWpDefaultStatus(((s.default_wp_status || "draft") as "draft" | "publish"));
         setSWpDefaultCategoryIds((s.default_wp_category_ids || []) as number[]);
@@ -526,6 +539,13 @@ export default function ProjectPage() {
       });
       setSettings(saved);
       setSWpPass("");
+      if (identityDirty) {
+        const pm2 = await api.updateProject(projectId, {
+          brand_identity: brandIdentity.trim(),
+          niche_identifier: nicheIdentifier.trim(),
+        });
+        setProjectMeta(pm2);
+      }
       setGscSaveMsg(
         saved.gsc_property_url
           ? "Google Search Console property linked to this project."
@@ -3582,7 +3602,7 @@ export default function ProjectPage() {
           <>
             <div className={`${styles.card} ${styles.cardWide}`}>
               <div className={styles.projectCardTop}>
-                {settingsDirty ? (
+                {settingsDirty || identityDirty ? (
                   <button className={styles.button} type="button" onClick={saveSettings} disabled={settingsSaving || settingsLoading}>
                     {settingsSaving ? "Saving…" : "Save"}
                   </button>
@@ -3611,6 +3631,43 @@ export default function ProjectPage() {
                     Application password
                     <input className={styles.input} value={sWpPass} onChange={(e) => setSWpPass(e.target.value)} placeholder={settings.wp_app_password_set ? "•••••••••• (set)" : "xxxx xxxx xxxx xxxx"} />
                   </label>
+                </div>
+
+                <div style={{ marginTop: 14, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
+                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Brand identity & niche</div>
+                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>
+                    This flavors all AI research and generation for this project. Keep it specific: audience, tone, POV, do/don’t rules, and what makes you different.
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <label className={styles.label}>
+                      Brand identity (voice, tone, rules)
+                      <textarea
+                        className={styles.input}
+                        value={brandIdentity}
+                        onChange={(e) => setBrandIdentity(e.target.value)}
+                        rows={8}
+                        placeholder="Example: We write as a senior consultant. Direct, evidence-driven, no hype. Use short paragraphs, practical checklists, and cite data when available. Avoid buzzwords and exaggerated claims."
+                        style={{ resize: "vertical" }}
+                      />
+                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                        {brandIdentity.trim().length}/20000
+                      </div>
+                    </label>
+                    <label className={styles.label}>
+                      Niche identifier (who/what/where)
+                      <textarea
+                        className={styles.input}
+                        value={nicheIdentifier}
+                        onChange={(e) => setNicheIdentifier(e.target.value)}
+                        rows={8}
+                        placeholder="Example: India-focused MSME dispute resolution. Audience: founders and finance heads. Topics: arbitration, mediation, commercial courts, debt recovery. Primary cities: Delhi, Mumbai, Bengaluru."
+                        style={{ resize: "vertical" }}
+                      />
+                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                        {nicheIdentifier.trim().length}/20000
+                      </div>
+                    </label>
+                  </div>
                 </div>
 
                 <div style={{ marginTop: 14, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>

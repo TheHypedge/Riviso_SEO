@@ -855,6 +855,8 @@ async def generate_article_and_image(
         keywords=keywords,
         focus_keyphrase=focus,
         writing_prompt_text=resolved_writing["text"],
+        brand_identity=(proj.get("brand_identity") or ""),
+        niche_identifier=(proj.get("niche_identifier") or ""),
         generate_image=bool(payload.generate_image),
         image_prompt_text=(resolved_image["text"] if resolved_image else None),
     )

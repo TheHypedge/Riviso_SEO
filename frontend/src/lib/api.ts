@@ -106,6 +106,8 @@ export type ProjectPublic = {
   owner_user_id: string;
   name: string;
   website_url?: string | null;
+  brand_identity?: string | null;
+  niche_identifier?: string | null;
 };
 
 export type ProjectSettings = {
@@ -550,6 +552,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, website_url: website_url || null }),
     });
+  },
+  async getProject(projectId: string) {
+    return apiFetch<ProjectPublic>(`/api/projects/${projectId}`);
+  },
+  async updateProject(
+    projectId: string,
+    patch: Partial<{ name: string; website_url: string | null; brand_identity: string | null; niche_identifier: string | null }>,
+  ) {
+    return apiFetch<ProjectPublic>(`/api/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(patch) });
   },
   async deleteProject(projectId: string) {
     await apiFetch<unknown>(`/api/projects/${projectId}`, { method: "DELETE" });

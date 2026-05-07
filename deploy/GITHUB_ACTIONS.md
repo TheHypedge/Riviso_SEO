@@ -1,6 +1,6 @@
 # GitHub Actions deploy to VPS
 
-Pushing to **`main`** runs `.github/workflows/deploy.yml`, which SSHs into the server, updates the repo to **`origin/main`**, installs Python deps, and restarts **`auto-articles`**.
+Pushing to **`main`** runs `.github/workflows/deploy.yml`, which SSHs into the server, updates the repo to **`origin/main`**, installs backend Python deps, builds the frontend, and restarts backend/frontend services.
 
 ## What the workflow preserves (no manual steps)
 
@@ -21,7 +21,9 @@ Pushing to **`main`** runs `.github/workflows/deploy.yml`, which SSHs into the s
 - App directory: **`/var/www/auto-articles`**
 - Clone is a **git** checkout of this repo (`origin` points at GitHub).
 - **`.env`** lives only on the server; the workflow restores it after every deploy (see above).
-- **systemd** unit **`auto-articles.service`** runs Gunicorn.
+- **systemd** units:
+  - **`auto-articles-backend.service`** (FastAPI / uvicorn)
+  - **`auto-articles-frontend.service`** (Next.js)
 
 ### 3. SSH access for GitHub Actions
 
@@ -54,7 +56,7 @@ The deploy user must be able to **`git pull`** without typing a password:
 The workflow runs `sudo -n true` before `deploy/deploy.sh`. The deploy user must be able to run **`sudo` without a password** for the commands in `deploy/deploy.sh` (at minimum **`systemctl restart`** and **`systemctl is-active`**). Example for user **`deploy`**:
 
 ```bash
-echo 'deploy ALL=(ALL) NOPASSWD: /bin/systemctl restart auto-articles, /bin/systemctl is-active auto-articles, /bin/systemctl status auto-articles, /usr/bin/journalctl' | sudo tee /etc/sudoers.d/auto-articles-deploy
+echo 'deploy ALL=(ALL) NOPASSWD: /bin/systemctl restart auto-articles-backend.service, /bin/systemctl restart auto-articles-frontend.service, /bin/systemctl restart nginx.service, /bin/systemctl is-active auto-articles-backend.service, /bin/systemctl is-active auto-articles-frontend.service, /bin/systemctl status auto-articles-backend.service, /bin/systemctl status auto-articles-frontend.service, /usr/bin/journalctl' | sudo tee /etc/sudoers.d/auto-articles-deploy
 sudo chmod 440 /etc/sudoers.d/auto-articles-deploy
 ```
 

@@ -88,6 +88,8 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
         keywords=[str(x).strip() for x in (art.get("keywords") or []) if str(x).strip()],
         focus_keyphrase=(art.get("focus_keyphrase") or "").strip(),
         writing_prompt_text=writing_text,
+        brand_identity=(proj.get("brand_identity") or ""),
+        niche_identifier=(proj.get("niche_identifier") or ""),
         generate_image=generate_image,
         image_prompt_text=image_text,
     )

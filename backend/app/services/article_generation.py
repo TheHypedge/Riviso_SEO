@@ -25,16 +25,29 @@ async def generate_article_bundle(
     keywords: list[str],
     focus_keyphrase: str,
     writing_prompt_text: str,
+    brand_identity: str | None = None,
+    niche_identifier: str | None = None,
     generate_image: bool,
     image_prompt_text: str | None,
 ) -> dict:
     client = OpenAIClient()
+
+    bi = (brand_identity or "").strip()
+    ni = (niche_identifier or "").strip()
+    flavor = ""
+    if bi or ni:
+        flavor = (
+            "\n\nProject context (must follow):\n"
+            f"- Brand identity: {bi or '(not set)'}\n"
+            f"- Niche identifier: {ni or '(not set)'}\n"
+        )
 
     sys = (
         "You are an expert SEO content writer.\n"
         "Return ONLY a JSON object with keys: article_markdown, meta_title, meta_description.\n"
         "Write in clear, human-friendly tone. Use headings and lists where helpful.\n"
         "Meta title must be <= 60 chars if possible. Meta description <= 155 chars if possible."
+        f"{flavor}"
     )
 
     up = _apply_placeholders(

@@ -47,6 +47,8 @@ def _to_public(p: dict) -> ProjectPublic:
         owner_user_id=(p.get("owner_user_id") or "").strip(),
         name=(p.get("name") or "").strip(),
         website_url=(p.get("website_url") or "").strip() or None,
+        brand_identity=(p.get("brand_identity") or "").strip() or None,
+        niche_identifier=(p.get("niche_identifier") or "").strip() or None,
     )
 
 
@@ -168,6 +170,10 @@ async def update_project(project_id: str, payload: ProjectUpdate, user: dict = D
         url = _normalize_url(payload.website_url)
         updates["website_url"] = url
         updates.setdefault("wp_site_url", url)
+    if payload.brand_identity is not None:
+        updates["brand_identity"] = (payload.brand_identity or "").strip()[:20000]
+    if payload.niche_identifier is not None:
+        updates["niche_identifier"] = (payload.niche_identifier or "").strip()[:20000]
 
     if updates:
         st.update_project_fields(pid, updates)

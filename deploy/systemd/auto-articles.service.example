@@ -4,7 +4,7 @@
 # Adjust paths and User= to match your VM (e.g. /var/www/auto-articles).
 
 [Unit]
-Description=Auto Articles (Gunicorn)
+Description=Auto Articles (legacy Flask/gunicorn)
 After=network.target
 
 [Service]
@@ -12,20 +12,18 @@ Type=simple
 User=www-data
 Group=www-data
 WorkingDirectory=/var/www/auto-articles
-# Gunicorn writes control state under $HOME/.gunicorn; default HOME for www-data is /var/www (not writable).
 Environment=HOME=/var/www/auto-articles
 Environment=FLASK_ENV=production
 EnvironmentFile=/var/www/auto-articles/.env
-ExecStart=/var/www/auto-articles/.venv/bin/gunicorn wsgi:app \
-  --bind 127.0.0.1:8000 \
-  --workers 2 \
-  --threads 4 \
-  --timeout 180 \
-  --graceful-timeout 30 \
-  --max-requests 500 \
-  --max-requests-jitter 50
+ExecStart=/var/www/auto-articles/.venv/bin/gunicorn wsgi:app --bind 127.0.0.1:8000 --workers 2 --threads 4 --timeout 180
 Restart=always
 RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
+
+# NOTE:
+# This unit is kept only as a reference for the legacy Flask app.
+# For the current system, use:
+# - deploy/systemd/auto-articles-backend.service.example (FastAPI)
+# - deploy/systemd/auto-articles-frontend.service.example (Next.js)
