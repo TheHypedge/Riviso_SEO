@@ -51,6 +51,7 @@ from app.services.wordpress_client import WordpressClient
 from app.services.gsc_actions import inspect_url_status, maybe_request_url_inspection, request_url_inspection_now
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.scheduler import prepare_article_for_scheduled_job
+from app.services.to_thread import run_sync
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.prompt_validation import assert_writing_prompt_allowed
 from app.schemas.articles import (
