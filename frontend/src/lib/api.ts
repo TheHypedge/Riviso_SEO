@@ -168,6 +168,107 @@ export type GscSitemapList = {
   sitemaps: GscSitemap[];
 };
 
+/* --- Feature 1: GSC ROI Dashboard ---------------------------------------- */
+
+export type GscAnalyticsSeriesPoint = {
+  date: string; // YYYY-MM-DD
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+};
+
+export type GscAnalyticsTotals = {
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+  days_with_data: number;
+};
+
+export type GscAnalyticsTopPage = {
+  url: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+};
+
+export type GscAnalyticsMarker = {
+  date: string; // YYYY-MM-DD
+  article_id: string;
+  title: string;
+  url: string;
+};
+
+export type GscAnalyticsResponse = {
+  property_url?: string | null;
+  range: { start_date: string; end_date: string; days: number };
+  totals: GscAnalyticsTotals;
+  series: GscAnalyticsSeriesPoint[];
+  top_pages: GscAnalyticsTopPage[];
+  markers: GscAnalyticsMarker[];
+};
+
+/* --- Feature 2: Topic Cluster (foundations) ------------------------------ */
+
+export type TopicClusterPillar = {
+  id: string;
+  title: string;
+  intent?: string;
+  keywords?: string[];
+  outline?: string[];
+  imported_article_id?: string;
+};
+
+export type TopicClusterTopic = {
+  id: string;
+  title: string;
+  intent?: string;
+  keywords?: string[];
+  imported_article_id?: string;
+};
+
+export type TopicCluster = {
+  id: string;
+  project_id: string;
+  owner_user_id?: string;
+  seed_intent: string;
+  country_code: string;
+  tone: string;
+  status: string;
+  pillar: TopicClusterPillar;
+  clusters: TopicClusterTopic[];
+  created_at?: string;
+  updated_at?: string;
+};
+
+/* --- Feature 3: Site Map -------------------------------------------------- */
+
+export type SiteMapEntry = {
+  id: string;
+  project_id: string;
+  post_url: string;
+  post_title: string;
+  focus_keyphrase: string;
+  focus_keywords: string[];
+  post_id: string;
+  post_modified_at: string;
+  fetched_at: string;
+};
+
+export type SiteMapListResponse = {
+  count: number;
+  entries: SiteMapEntry[];
+  wp_site_url?: string | null;
+};
+
+export type SiteMapSyncResponse = {
+  count: number;
+  truncated: boolean;
+  fetched_at: string;
+};
+
 /**
  * Response from POST /api/projects/:id/articles/:articleId/gsc/request-indexing.
  *
@@ -253,6 +354,9 @@ export type ArticlePublic = {
   wp_link?: string | null;
   gsc_status?: string | null;
   hasBody?: boolean | null;
+  monitor_status?: string | null; // Feature 4: "fresh" | "stale" | "unknown" | ""
+  monitor_last_checked_at?: string | null;
+  internal_links_count?: number | null; // Feature 3
 };
 
 export type BulkUploadRow = {
@@ -1051,6 +1155,54 @@ export const api = {
     return apiFetch<{ ok: boolean; sitemap_url: string }>(
       `/api/projects/${projectId}/gsc/sitemaps?${qs.toString()}`,
       { method: "DELETE" },
+    );
+  },
+
+  // Feature 1 — GSC ROI Dashboard
+  async gscProjectAnalytics(projectId: string, days: number = 30, topPagesLimit: number = 25) {
+    const qs = new URLSearchParams({ days: String(days), top_pages_limit: String(topPagesLimit) });
+    return apiFetch<GscAnalyticsResponse>(
+      `/api/projects/${projectId}/gsc/analytics?${qs.toString()}`,
+    );
+  },
+
+  // Feature 3 — Site Map (Internal Linking ingestion)
+  async siteMapList(projectId: string) {
+    return apiFetch<SiteMapListResponse>(`/api/projects/${projectId}/site-map`);
+  },
+  async siteMapSync(projectId: string) {
+    return apiFetch<SiteMapSyncResponse>(`/api/projects/${projectId}/site-map/sync`, {
+      method: "POST",
+    });
+  },
+
+  // Feature 2 — Topic Clusters (foundations)
+  async topicClusterList(projectId: string) {
+    return apiFetch<{ clusters: TopicCluster[] }>(`/api/projects/${projectId}/topic-clusters`);
+  },
+  async topicClusterPlan(
+    projectId: string,
+    payload: { seed_intent: string; country_code?: string; tone?: string },
+  ) {
+    // Backend currently 501s; helper exists so the UI's "Plan cluster" button has a typed call site.
+    return apiFetch<TopicCluster>(`/api/projects/${projectId}/topic-clusters/plan`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // Feature 4 — Smart Refresh (foundations)
+  async articleMarkMonitor(projectId: string, articleId: string, status: "fresh" | "stale" | "unknown") {
+    return apiFetch<{ ok: boolean; monitor: { status: string; last_checked_at: string } }>(
+      `/api/projects/${projectId}/articles/${articleId}/monitor/mark`,
+      { method: "POST", body: JSON.stringify({ status }) },
+    );
+  },
+  async articleSmartRefresh(projectId: string, articleId: string) {
+    // Backend currently 501s; the helper is here so the UI can render a typed CTA.
+    return apiFetch<{ ok: boolean; article_id: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/monitor/refresh`,
+      { method: "POST" },
     );
   },
 

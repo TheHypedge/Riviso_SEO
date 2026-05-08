@@ -1015,6 +1015,14 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "gsc_inspection_last_attempt_at": (d.get("gsc_inspection_last_attempt_at") or "")[:64],
         "gsc_inspection_error": (d.get("gsc_inspection_error") or "")[:500],
         "gsc_inspection_url": (d.get("gsc_inspection_url") or "")[:2048],
+        # Rank-monitor / "Smart Refresh" (Feature 4). status: "fresh" | "stale" | "" (unknown).
+        "monitor_status": (d.get("monitor_status") or "")[:16],
+        "monitor_last_checked_at": (d.get("monitor_last_checked_at") or "")[:64],
+        "monitor_score": str(d.get("monitor_score") or "")[:32],
+        "monitor_signature": (d.get("monitor_signature") or "")[:512],
+        # Automated internal-linking (Feature 3) — counters only; the actual links live in the body.
+        "internal_links_applied_at": (d.get("internal_links_applied_at") or "")[:64],
+        "internal_links_count": int(d.get("internal_links_count") or 0),
     }
 
 
@@ -1221,6 +1229,14 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
         "wp_schedule_batch_index": d.get("wp_schedule_batch_index") or "",
         "wp_schedule_batch_total": d.get("wp_schedule_batch_total") or "",
         "gsc_status": d.get("gsc_status") or "pending",
+        # Feature 4 — rank monitor / smart refresh.
+        "monitor_status": d.get("monitor_status") or "",
+        "monitor_last_checked_at": d.get("monitor_last_checked_at") or "",
+        "monitor_score": d.get("monitor_score") or "",
+        "monitor_signature": d.get("monitor_signature") or "",
+        # Feature 3 — internal linking telemetry.
+        "internal_links_applied_at": d.get("internal_links_applied_at") or "",
+        "internal_links_count": int(d.get("internal_links_count") or 0),
     }
 
 
@@ -1442,6 +1458,11 @@ def load_articles_listing_for_project(
                 "gsc_status": 1,
                 "gsc_inspection_requested_at": 1,
                 "gsc_inspection_error": 1,
+                # Feature 4 — rank monitor status surfaced for the "Optimization status" column.
+                "monitor_status": 1,
+                "monitor_last_checked_at": 1,
+                # Feature 3 — count of internal links injected into the body (currently 0 in v1).
+                "internal_links_count": 1,
                 "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
             }
         },
@@ -2097,6 +2118,297 @@ def bulk_update_articles(updates: list[tuple[str, dict[str, Any]]]) -> None:
 def export_tables_to_json() -> tuple[list[dict], list[dict]]:
     """Snapshot for backup."""
     return load_projects(), load_articles()
+
+
+# ===========================================================================
+# Feature foundations (v1 schema — see docstrings for spec)
+# ===========================================================================
+#
+# These three collections back the new "Undefeated" features. They share a
+# uniform shape: project-scoped, opaque ``id`` per row, and each row stores its
+# own ``created_at`` / ``updated_at`` for auditability.
+#
+# - ``site_maps``        — Feature 3 (Automated Internal Linking)
+# - ``topic_clusters``   — Feature 2 (Topical Authority Cluster Mapping)
+# - ``content_monitors`` — Feature 4 (Rank Monitoring & Smart Refresh)
+#
+# They keep the "JSON fallback" code path for parity with the rest of the
+# module so dev-without-mongo and tests still work.
+
+
+def _now_iso_seconds() -> str:
+    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+
+# ---------------------------------------------------------------------------
+# site_maps  (Feature 3 — Internal Linking)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_site_map_entry(d: dict[str, Any]) -> dict[str, Any]:
+    """One row per WordPress post mirrored into Riviso for internal-link matching."""
+    pid = (d.get("project_id") or "").strip()
+    url = (d.get("post_url") or "").strip()
+    if not pid or not url:
+        raise ValueError("site_map entry requires project_id and post_url")
+    keywords = d.get("focus_keywords") or []
+    if not isinstance(keywords, list):
+        keywords = []
+    keywords_clean = [str(k).strip()[:120] for k in keywords if str(k).strip()][:20]
+    return {
+        "id": (d.get("id") or "").strip() or f"sm_{pid[:8]}_{url[-32:]}",
+        "project_id": pid,
+        "post_url": url[:2048],
+        "post_title": (d.get("post_title") or "")[:500],
+        "focus_keyphrase": (d.get("focus_keyphrase") or "")[:200],
+        "focus_keywords": keywords_clean,
+        "post_id": str(d.get("post_id") or "")[:64],
+        "post_modified_at": (d.get("post_modified_at") or "")[:64],
+        "fetched_at": (d.get("fetched_at") or _now_iso_seconds())[:64],
+    }
+
+
+def replace_site_map_for_project(project_id: str, entries: list[dict[str, Any]]) -> int:
+    """
+    Replace the project's site map with ``entries`` (atomic from the API caller's POV).
+
+    Used by :class:`InternalLinkService.sync_site_map_from_wp`. Returns the number of rows written.
+    """
+    pid = (project_id or "").strip()
+    if not pid:
+        raise ValueError("project_id is required")
+    rows = [_normalize_site_map_entry({**e, "project_id": pid}) for e in (entries or []) if isinstance(e, dict)]
+    if _storage_mode != "mongo":
+        existing = _load_json_list("site_maps.json")
+        kept = [r for r in existing if (r.get("project_id") or "") != pid]
+        with _db_write_lock:
+            with open(_data_path("site_maps.json"), "w", encoding="utf-8") as f:
+                json.dump(kept + rows, f, indent=2)
+        return len(rows)
+    db = get_db()
+    with _db_write_lock:
+        db.site_maps.delete_many({"project_id": pid})
+        if rows:
+            db.site_maps.insert_many([{**r, "_id": r["id"]} for r in rows])
+    return len(rows)
+
+
+def load_site_map_for_project(project_id: str, *, limit: int = 5000) -> list[dict[str, Any]]:
+    """Read the site map; only fields needed for matching are returned."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    lim = max(1, min(int(limit or 5000), 20000))
+    if _storage_mode != "mongo":
+        rows = [r for r in _load_json_list("site_maps.json") if (r.get("project_id") or "") == pid]
+        return rows[:lim]
+    cur = (
+        get_db()
+        .site_maps.find({"project_id": pid}, {"_id": 0})
+        .sort("post_modified_at", -1)
+        .limit(lim)
+    )
+    return list(cur)
+
+
+# ---------------------------------------------------------------------------
+# topic_clusters  (Feature 2 — Topical Authority Cluster Mapping)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_topic_cluster(d: dict[str, Any]) -> dict[str, Any]:
+    cid = (d.get("id") or "").strip()
+    pid = (d.get("project_id") or "").strip()
+    uid = (d.get("owner_user_id") or "").strip()
+    if not cid or not pid:
+        raise ValueError("topic_cluster requires id and project_id")
+    pillar = d.get("pillar") or {}
+    if not isinstance(pillar, dict):
+        pillar = {}
+    clusters = d.get("clusters") or []
+    if not isinstance(clusters, list):
+        clusters = []
+    clusters_clean: list[dict[str, Any]] = []
+    for c in clusters:
+        if not isinstance(c, dict):
+            continue
+        clusters_clean.append(
+            {
+                "id": (c.get("id") or "").strip()[:64],
+                "title": (c.get("title") or "")[:300],
+                "intent": (c.get("intent") or "")[:80],
+                "keywords": [str(k).strip()[:120] for k in (c.get("keywords") or []) if str(k).strip()][:10],
+                "imported_article_id": (c.get("imported_article_id") or "")[:64],
+            }
+        )
+    return {
+        "id": cid,
+        "project_id": pid,
+        "owner_user_id": uid,
+        "seed_intent": (d.get("seed_intent") or "")[:500],
+        "country_code": (d.get("country_code") or "IN")[:8],
+        "tone": (d.get("tone") or "informative")[:32],
+        "status": (d.get("status") or "draft")[:32],  # draft|generating|ready|imported
+        "pillar": {
+            "id": (pillar.get("id") or "").strip()[:64],
+            "title": (pillar.get("title") or "")[:300],
+            "intent": (pillar.get("intent") or "")[:80],
+            "keywords": [str(k).strip()[:120] for k in (pillar.get("keywords") or []) if str(k).strip()][:10],
+            "outline": list(pillar.get("outline") or [])[:20],
+            "imported_article_id": (pillar.get("imported_article_id") or "")[:64],
+        },
+        "clusters": clusters_clean[:8],
+        "created_at": (d.get("created_at") or _now_iso_seconds())[:64],
+        "updated_at": (d.get("updated_at") or _now_iso_seconds())[:64],
+    }
+
+
+def save_topic_cluster(cluster: dict[str, Any]) -> dict[str, Any]:
+    norm = _normalize_topic_cluster(cluster)
+    if _storage_mode != "mongo":
+        existing = _load_json_list("topic_clusters.json")
+        existing = [r for r in existing if (r.get("id") or "") != norm["id"]]
+        existing.append(norm)
+        with _db_write_lock:
+            with open(_data_path("topic_clusters.json"), "w", encoding="utf-8") as f:
+                json.dump(existing, f, indent=2)
+        return norm
+    with _db_write_lock:
+        get_db().topic_clusters.replace_one({"_id": norm["id"]}, {**norm, "_id": norm["id"]}, upsert=True)
+    return norm
+
+
+def list_topic_clusters_for_project(project_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    lim = max(1, min(int(limit or 100), 500))
+    if _storage_mode != "mongo":
+        rows = [r for r in _load_json_list("topic_clusters.json") if (r.get("project_id") or "") == pid]
+        rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+        return rows[:lim]
+    cur = (
+        get_db()
+        .topic_clusters.find({"project_id": pid}, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(lim)
+    )
+    return list(cur)
+
+
+def get_topic_cluster_by_id(cluster_id: str) -> dict[str, Any] | None:
+    cid = (cluster_id or "").strip()
+    if not cid:
+        return None
+    if _storage_mode != "mongo":
+        for r in _load_json_list("topic_clusters.json"):
+            if (r.get("id") or "") == cid:
+                return r
+        return None
+    doc = get_db().topic_clusters.find_one({"_id": cid}, {"_id": 0})
+    return doc if isinstance(doc, dict) else None
+
+
+def update_topic_cluster_fields(cluster_id: str, updates: dict[str, Any]) -> bool:
+    cid = (cluster_id or "").strip()
+    if not cid or not isinstance(updates, dict) or not updates:
+        return False
+    updates = {**updates, "updated_at": _now_iso_seconds()}
+    if _storage_mode != "mongo":
+        rows = _load_json_list("topic_clusters.json")
+        changed = False
+        for r in rows:
+            if (r.get("id") or "") == cid:
+                r.update(updates)
+                changed = True
+        if changed:
+            with _db_write_lock:
+                with open(_data_path("topic_clusters.json"), "w", encoding="utf-8") as f:
+                    json.dump(rows, f, indent=2)
+        return changed
+    with _db_write_lock:
+        res = get_db().topic_clusters.update_one({"_id": cid}, {"$set": updates})
+    return bool(res.matched_count)
+
+
+# ---------------------------------------------------------------------------
+# content_monitors  (Feature 4 — Rank Monitoring & Smart Refresh)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_content_monitor(d: dict[str, Any]) -> dict[str, Any]:
+    pid = (d.get("project_id") or "").strip()
+    aid = (d.get("article_id") or "").strip()
+    if not pid or not aid:
+        raise ValueError("content_monitor requires project_id and article_id")
+    return {
+        # One monitor per article — easy to upsert by article_id.
+        "id": aid,
+        "project_id": pid,
+        "article_id": aid,
+        "url": (d.get("url") or "")[:2048],
+        "status": (d.get("status") or "")[:16],  # fresh | stale | unknown | ""
+        "score": str(d.get("score") or "")[:32],
+        "signature": (d.get("signature") or "")[:512],
+        "last_checked_at": (d.get("last_checked_at") or "")[:64],
+        "next_check_at": (d.get("next_check_at") or "")[:64],
+        "created_at": (d.get("created_at") or _now_iso_seconds())[:64],
+        "updated_at": _now_iso_seconds()[:64],
+    }
+
+
+def upsert_content_monitor(monitor: dict[str, Any]) -> dict[str, Any]:
+    norm = _normalize_content_monitor(monitor)
+    if _storage_mode != "mongo":
+        rows = _load_json_list("content_monitors.json")
+        rows = [r for r in rows if (r.get("article_id") or "") != norm["article_id"]]
+        rows.append(norm)
+        with _db_write_lock:
+            with open(_data_path("content_monitors.json"), "w", encoding="utf-8") as f:
+                json.dump(rows, f, indent=2)
+        return norm
+    with _db_write_lock:
+        get_db().content_monitors.replace_one({"_id": norm["id"]}, {**norm, "_id": norm["id"]}, upsert=True)
+    return norm
+
+
+def list_content_monitors_for_project(project_id: str, *, status: str | None = None) -> list[dict[str, Any]]:
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    if _storage_mode != "mongo":
+        rows = [r for r in _load_json_list("content_monitors.json") if (r.get("project_id") or "") == pid]
+        if status:
+            rows = [r for r in rows if (r.get("status") or "") == status]
+        return rows
+    q: dict[str, Any] = {"project_id": pid}
+    if status:
+        q["status"] = status
+    cur = get_db().content_monitors.find(q, {"_id": 0}).sort("updated_at", -1)
+    return list(cur)
+
+
+def list_due_content_monitors(*, before_iso: str, limit: int = 200) -> list[dict[str, Any]]:
+    """Used by the scheduler sweep: returns monitors whose ``next_check_at`` <= ``before_iso``."""
+    cutoff = (before_iso or "").strip()
+    if not cutoff:
+        return []
+    lim = max(1, min(int(limit or 200), 1000))
+    if _storage_mode != "mongo":
+        rows = [
+            r
+            for r in _load_json_list("content_monitors.json")
+            if (r.get("next_check_at") or "") and r["next_check_at"] <= cutoff
+        ]
+        rows.sort(key=lambda r: r.get("next_check_at") or "")
+        return rows[:lim]
+    cur = (
+        get_db()
+        .content_monitors.find({"next_check_at": {"$lte": cutoff}}, {"_id": 0})
+        .sort("next_check_at", 1)
+        .limit(lim)
+    )
+    return list(cur)
 
 
 def init_storage() -> None:

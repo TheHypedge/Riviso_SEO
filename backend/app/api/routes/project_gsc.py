@@ -13,6 +13,7 @@ the project record (see :mod:`app.api.routes.gsc`). The endpoints below expose:
 - ``GET    /api/projects/{project_id}/gsc/sitemaps``    — list sitemaps registered with the property
 - ``POST   /api/projects/{project_id}/gsc/sitemaps``    — submit / re-submit a sitemap URL
 - ``DELETE /api/projects/{project_id}/gsc/sitemaps``    — unregister a sitemap URL
+- ``GET    /api/projects/{project_id}/gsc/analytics``   — ROI dashboard data (Feature 1)
 """
 
 from __future__ import annotations
@@ -235,3 +236,73 @@ async def delete_sitemap(
         return await delete_sitemap_for_project(st=st, proj=proj, sitemap_url=sitemap_url)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e) or "Sitemap delete failed") from e
+
+
+# ---------------------------------------------------------------------------
+# Search Analytics — Feature 1: GSC ROI Dashboard
+# ---------------------------------------------------------------------------
+
+
+@router.get("/analytics")
+async def analytics(
+    project_id: str,
+    days: int = 30,
+    top_pages_limit: int = 25,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    ROI dashboard data: daily clicks/impressions, headline KPIs, top pages, and
+    publication markers (one per Riviso article published inside the window whose
+    live URL belongs to the linked Search Console property).
+
+    The frontend renders ``series`` as a continuous line and ``markers`` as vertical
+    annotations to visualise the lift each new article delivered.
+    """
+    from datetime import datetime, timedelta
+    from app.services.google_console_service import GoogleConsoleService, _normalise_property_for_query
+    from app.services.to_thread import run_sync
+
+    st = get_legacy_storage_module()
+    proj = _require_project(st=st, user=user, project_id=project_id)
+
+    if not (proj.get("gsc_property_url") or "").strip():
+        raise HTTPException(status_code=400, detail="Search Console property is not linked for this project. Open Tools → Search Console.")
+
+    try:
+        svc = GoogleConsoleService(st=st, project=proj)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e) or "Analytics service is not available") from e
+
+    d = max(7, min(int(days or 30), 365))
+    start_iso = (datetime.utcnow() - timedelta(days=d)).strftime("%Y-%m-%d")
+    end_iso = datetime.utcnow().strftime("%Y-%m-%d")
+
+    try:
+        raw_series = await svc.query_traffic_series(days=d)
+        top_pages = await svc.query_top_pages(days=d, limit=top_pages_limit)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e) or "Search Analytics query failed") from e
+
+    series = svc.fill_zero_days(raw_series, start_date=start_iso, end_date=end_iso)
+    totals = svc.aggregate_totals(raw_series)
+
+    # Pull article rows once (listing projection — cheap) and compute publication markers.
+    articles: list[dict] = []
+    if hasattr(st, "load_articles_listing_for_project"):
+        try:
+            articles = await run_sync(st.load_articles_listing_for_project, project_id, limit=5000)
+        except Exception:
+            articles = []
+    _site, host = _normalise_property_for_query(proj.get("gsc_property_url") or "")
+    markers = svc.collect_publication_markers(
+        articles, property_host=host, start_date=start_iso, end_date=end_iso,
+    )
+
+    return {
+        "property_url": (proj.get("gsc_property_url") or "").strip() or None,
+        "range": {"start_date": start_iso, "end_date": end_iso, "days": d},
+        "totals": totals,
+        "series": series,
+        "top_pages": top_pages,
+        "markers": markers,
+    }

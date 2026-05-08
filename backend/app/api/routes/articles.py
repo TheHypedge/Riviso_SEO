@@ -1371,3 +1371,69 @@ async def indexing_status(project_id: str, article_id: str, user: dict = Depends
         raise HTTPException(status_code=400, detail=str(e) or "Search Console URL Inspection failed.") from e
     return result
 
+
+# ---------------------------------------------------------------------------
+# Rank monitoring — Feature 4 (Smart Refresh foundations)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{article_id}/monitor/mark", status_code=200)
+async def monitor_mark(
+    project_id: str,
+    article_id: str,
+    payload: dict,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Manual override for the Optimization-status column. ``status`` must be one of
+    ``fresh|stale|unknown``. Used by the dashboard before automated SERP-shift
+    detection lands; once the scheduler sweep is online this becomes the override path.
+    """
+    from app.services.rank_monitor_service import RankMonitorService
+
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+
+    status = ((payload or {}).get("status") or "").strip().lower()
+    if status not in {"fresh", "stale", "unknown"}:
+        raise HTTPException(status_code=400, detail="status must be one of fresh|stale|unknown")
+
+    svc = RankMonitorService(project=proj)
+    monitor = svc.mark_status(article_id=(a.get("id") or "").strip(), status=status)
+    # Also reflect the status on the article row so list views update without a separate fetch.
+    if hasattr(st, "update_article_fields"):
+        try:
+            st.update_article_fields(
+                (a.get("id") or "").strip(),
+                {
+                    "monitor_status": monitor.get("status") or "",
+                    "monitor_last_checked_at": monitor.get("last_checked_at") or "",
+                },
+            )
+        except Exception:
+            pass
+    return {"ok": True, "monitor": monitor}
+
+
+@router.post("/{article_id}/monitor/refresh", status_code=501)
+async def monitor_refresh(
+    project_id: str,
+    article_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    One-click "Smart Refresh" — regenerate body using updated SERP signals. v1 stub.
+
+    Schema, monitor lifecycle, and "Mark stale" override are already in place; the
+    SERP-diff + regeneration pipeline lands in the follow-up PR.
+    """
+    raise HTTPException(
+        status_code=501,
+        detail=(
+            "Smart Refresh ships in the next iteration. Use the standard Edit / regenerate flow "
+            "in the meantime; once SERP-diff detection is live, this endpoint will return the "
+            "refreshed article without manual intervention."
+        ),
+    )
+

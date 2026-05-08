@@ -184,6 +184,117 @@ function makeResearchKey(title: string, focus: string): string {
   return `${(title || "").trim().toLowerCase()}::${(focus || "").trim().toLowerCase()}`;
 }
 
+/**
+ * Dependency-free SVG line chart for the GSC ROI Dashboard.
+ *
+ * Renders two series (clicks + impressions) sharing the X axis, with vertical
+ * dashed markers for each Riviso article published inside the window. The chart
+ * is responsive — `viewBox` keeps the geometry fixed while CSS scales the SVG
+ * to its container.
+ *
+ * Designed to keep a low surface area: no tooltip portal, no axis library, no
+ * deps. If/when product asks for richer interactions we can swap to a chart lib
+ * without changing the call sites in this page.
+ */
+function AnalyticsLineChart(props: {
+  series: import("@/lib/api").GscAnalyticsSeriesPoint[];
+  markers: import("@/lib/api").GscAnalyticsMarker[];
+}) {
+  const { series, markers } = props;
+  const W = 800;
+  const H = 280;
+  const padL = 44;
+  const padR = 16;
+  const padT = 16;
+  const padB = 36;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+
+  if (!series || series.length === 0) {
+    return (
+      <div style={{ padding: "24px 12px", textAlign: "center" }} className="aa-muted">
+        No traffic data in this window yet.
+      </div>
+    );
+  }
+
+  const dates = series.map((p) => p.date);
+  const xIndex = (i: number) => padL + (innerW * i) / Math.max(1, series.length - 1);
+
+  const maxClicks = Math.max(1, ...series.map((p) => p.clicks || 0));
+  const maxImpr = Math.max(1, ...series.map((p) => p.impressions || 0));
+
+  const yClicks = (v: number) => padT + innerH - (innerH * (v || 0)) / maxClicks;
+  const yImpr = (v: number) => padT + innerH - (innerH * (v || 0)) / maxImpr;
+
+  const clicksPath = series.map((p, i) => `${i === 0 ? "M" : "L"} ${xIndex(i).toFixed(1)} ${yClicks(p.clicks).toFixed(1)}`).join(" ");
+  const imprPath = series.map((p, i) => `${i === 0 ? "M" : "L"} ${xIndex(i).toFixed(1)} ${yImpr(p.impressions).toFixed(1)}`).join(" ");
+
+  const tickCount = 4;
+  const yTicks = Array.from({ length: tickCount + 1 }, (_, i) => Math.round((maxClicks * i) / tickCount));
+
+  const labelEvery = Math.max(1, Math.floor(series.length / 6));
+  const xLabels = series
+    .map((p, i) => ({ p, i }))
+    .filter(({ i }) => i % labelEvery === 0 || i === series.length - 1);
+
+  const dateToIndex = new Map<string, number>();
+  dates.forEach((d, i) => dateToIndex.set(d, i));
+
+  const markerDots = markers
+    .map((m) => ({ ...m, idx: dateToIndex.get(m.date) }))
+    .filter((m) => typeof m.idx === "number") as Array<import("@/lib/api").GscAnalyticsMarker & { idx: number }>;
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      width="100%"
+      height={H}
+      role="img"
+      aria-label="Search Console traffic over time with article publication markers"
+      style={{ display: "block", maxWidth: "100%" }}
+    >
+      <rect x={padL} y={padT} width={innerW} height={innerH} fill="transparent" stroke="rgba(0,0,0,0.06)" />
+      {yTicks.map((v, i) => {
+        const y = padT + innerH - (innerH * i) / tickCount;
+        return (
+          <g key={`yt-${i}`}>
+            <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="rgba(0,0,0,0.06)" strokeDasharray="2 3" />
+            <text x={padL - 6} y={y + 4} textAnchor="end" fontSize={10} fill="rgba(0,0,0,0.55)">
+              {v.toLocaleString()}
+            </text>
+          </g>
+        );
+      })}
+      {xLabels.map(({ p, i }) => (
+        <text key={`xl-${i}`} x={xIndex(i)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill="rgba(0,0,0,0.55)">
+          {p.date.slice(5)}
+        </text>
+      ))}
+      {markerDots.map((m, i) => {
+        const x = xIndex(m.idx);
+        return (
+          <g key={`mk-${i}`}>
+            <line x1={x} y1={padT} x2={x} y2={padT + innerH} stroke="#7c3aed" strokeDasharray="4 3" strokeOpacity={0.55} />
+            <circle cx={x} cy={padT + 6} r={4} fill="#7c3aed">
+              <title>{`${m.title || "Article"} — published ${m.date}\n${m.url}`}</title>
+            </circle>
+          </g>
+        );
+      })}
+      <path d={imprPath} fill="none" stroke="#94a3b8" strokeWidth={2} strokeOpacity={0.85} />
+      <path d={clicksPath} fill="none" stroke="#2563eb" strokeWidth={2.4} />
+      {series.map((p, i) => (
+        <g key={`pt-${i}`}>
+          <circle cx={xIndex(i)} cy={yClicks(p.clicks)} r={3.2} fill="#2563eb">
+            <title>{`${p.date}\nClicks: ${p.clicks}\nImpressions: ${p.impressions}\nPosition: ${(p.position || 0).toFixed(1)}`}</title>
+          </circle>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 export default function ProjectPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -244,6 +355,25 @@ export default function ProjectPage() {
   const [sitemapBusy, setSitemapBusy] = useState<"submit" | "delete" | "load" | null>(null);
   const [sitemapMsg, setSitemapMsg] = useState<string | null>(null);
   const [sitemapDeletingPath, setSitemapDeletingPath] = useState<string | null>(null);
+
+  // ---- Feature 1: GSC ROI Dashboard ----------------------------------------
+  // Range is one of 7 / 28 / 90 to keep server cache hit-rate high. ``analytics``
+  // is the most recent payload from the backend; ``analyticsBusy`` drives the spinner.
+  const [analytics, setAnalytics] = useState<import("@/lib/api").GscAnalyticsResponse | null>(null);
+  const [analyticsBusy, setAnalyticsBusy] = useState<boolean>(false);
+  const [analyticsErr, setAnalyticsErr] = useState<string | null>(null);
+  const [analyticsRangeDays, setAnalyticsRangeDays] = useState<number>(28);
+
+  // ---- Feature 3: Site map (Internal Linking) -------------------------------
+  const [siteMap, setSiteMap] = useState<import("@/lib/api").SiteMapListResponse | null>(null);
+  const [siteMapBusy, setSiteMapBusy] = useState<boolean>(false);
+  const [siteMapMsg, setSiteMapMsg] = useState<string | null>(null);
+
+  // ---- Feature 2: Topic Clusters (foundations) -----------------------------
+  // No loader in v1 — the planner ships next iteration. Reserved here to keep the
+  // call sites typed when the planner UI lands; leaving as a constant 0 prevents
+  // eslint/no-unused-vars from flagging this during the transitional rollout.
+  const topicClusterCount = 0;
   const settingsDirty = useMemo(() => {
     if (!settings) return false;
     return (
@@ -945,6 +1075,81 @@ export default function ProjectPage() {
     }
   }
 
+  // ---- Feature 1: GSC ROI Dashboard handlers -------------------------------
+  async function reloadAnalytics(opts: { silent?: boolean } = {}) {
+    if (!projectId) return;
+    if (!opts.silent) setAnalyticsBusy(true);
+    setAnalyticsErr(null);
+    try {
+      const res = await api.gscProjectAnalytics(projectId, analyticsRangeDays);
+      setAnalytics(res);
+    } catch (e) {
+      // Backend versions before this rollout will 404 the route — surface a clear message.
+      const status = e instanceof ApiError ? e.status : null;
+      if (status === 404) {
+        setAnalyticsErr(
+          "Backend is missing the new analytics route. Pull the latest code on the VPS and restart the FastAPI service (or recreate the Docker container).",
+        );
+      } else {
+        setAnalyticsErr(e instanceof Error ? e.message : "Failed to load analytics");
+      }
+      setAnalytics(null);
+    } finally {
+      if (!opts.silent) setAnalyticsBusy(false);
+    }
+  }
+
+  // ---- Feature 3: Site Map handlers ----------------------------------------
+  async function reloadSiteMap(opts: { silent?: boolean } = {}) {
+    if (!projectId) return;
+    if (!opts.silent) setSiteMapBusy(true);
+    try {
+      const res = await api.siteMapList(projectId);
+      setSiteMap(res);
+    } catch (e) {
+      setSiteMap({ count: 0, entries: [], wp_site_url: null });
+      setSiteMapMsg(e instanceof Error ? e.message : "Failed to load site map");
+    } finally {
+      if (!opts.silent) setSiteMapBusy(false);
+    }
+  }
+
+  async function syncSiteMap() {
+    if (!projectId) return;
+    setSiteMapBusy(true);
+    setSiteMapMsg(null);
+    try {
+      const res = await api.siteMapSync(projectId);
+      setSiteMapMsg(
+        res.truncated
+          ? `Synced ${res.count} posts (truncated — your site has more than 5,000 posts; the WP plugin push path lands next iteration).`
+          : `Synced ${res.count} posts. Internal-link engine will use this list for new articles.`,
+      );
+      await reloadSiteMap({ silent: true });
+    } catch (e) {
+      setSiteMapMsg(e instanceof Error ? e.message : "Site-map sync failed");
+    } finally {
+      setSiteMapBusy(false);
+    }
+  }
+
+  // ---- Feature 4: monitor mark (used in articles list) ---------------------
+  async function markArticleMonitor(articleId: string, status: "fresh" | "stale" | "unknown") {
+    if (!projectId || !articleId) return;
+    try {
+      const res = await api.articleMarkMonitor(projectId, articleId, status);
+      const newStatus = res?.monitor?.status || status;
+      // Optimistic local update so the list re-renders immediately.
+      setArticles((rows) =>
+        rows.map((r) => (r.id === articleId ? { ...r, monitor_status: newStatus } : r)),
+      );
+    } catch (e) {
+      // Errors here surface in the row's tooltip via the next list reload.
+      // eslint-disable-next-line no-console
+      console.warn("Mark monitor failed:", e);
+    }
+  }
+
   async function saveGscPropertyForProject(propertyUrl: string, indexOnPublish: boolean) {
     setGscSaveMsg(null);
     try {
@@ -1107,6 +1312,28 @@ export default function ProjectPage() {
     void reloadProjectSitemaps({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, token, gscStatus?.connected, gscStatus?.property_url]);
+
+  // Feature 1: load analytics whenever the Tools tab is open AND a property is linked.
+  // Re-fetches when the user changes the range chip.
+  useEffect(() => {
+    if (!token) return;
+    if (tab !== "tools") return;
+    if (!gscStatus?.connected || !gscStatus?.property_url) {
+      setAnalytics(null);
+      setAnalyticsErr(null);
+      return;
+    }
+    void reloadAnalytics();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, tab, token, gscStatus?.connected, gscStatus?.property_url, analyticsRangeDays]);
+
+  // Feature 3: load the stored site map whenever Tools opens. Sync is manual (button).
+  useEffect(() => {
+    if (!token) return;
+    if (tab !== "tools") return;
+    void reloadSiteMap({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, tab, token]);
 
   // Handle the OAuth redirect (URL contains ?tab=tools#gsc=connected|error&msg=...)
   useEffect(() => {
@@ -2718,6 +2945,45 @@ export default function ProjectPage() {
                               </span>
                             ) : null}
                             {a.wp_schedule_error ? <span style={{ color: "#ff4d4f" }}> · Schedule error</span> : null}
+                            {a.wp_link ? (
+                              <span style={{ marginLeft: 6 }}>
+                                ·{" "}
+                                <span
+                                  title={
+                                    a.monitor_status === "fresh"
+                                      ? "Optimization status: fresh — recently published or refreshed."
+                                      : a.monitor_status === "stale"
+                                      ? "Optimization status: stale — schedule a Smart Refresh to keep rankings."
+                                      : "Optimization status not yet evaluated. Mark manually below; auto rank-monitoring lands in the next iteration."
+                                  }
+                                  style={{
+                                    display: "inline-block",
+                                    padding: "1px 6px",
+                                    borderRadius: 4,
+                                    fontWeight: 700,
+                                    fontSize: 11,
+                                    color:
+                                      a.monitor_status === "stale"
+                                        ? "#b00020"
+                                        : a.monitor_status === "fresh"
+                                        ? "#2f7d32"
+                                        : "#666",
+                                    background:
+                                      a.monitor_status === "stale"
+                                        ? "rgba(176,0,32,0.08)"
+                                        : a.monitor_status === "fresh"
+                                        ? "rgba(47,125,50,0.10)"
+                                        : "rgba(0,0,0,0.05)",
+                                  }}
+                                >
+                                  {a.monitor_status === "stale"
+                                    ? "Stale"
+                                    : a.monitor_status === "fresh"
+                                    ? "Fresh"
+                                    : "Optimization: —"}
+                                </span>
+                              </span>
+                            ) : null}
                           </div>
 
                           <div className={styles.articleActions}>
@@ -2753,6 +3019,25 @@ export default function ProjectPage() {
                             >
                               Request Indexing
                             </button>
+                            {a.wp_link ? (
+                              <button
+                                type="button"
+                                className={styles.miniBtn}
+                                onClick={() =>
+                                  markArticleMonitor(
+                                    a.id,
+                                    (a.monitor_status === "fresh" ? "stale" : "fresh") as "fresh" | "stale",
+                                  )
+                                }
+                                title={
+                                  a.monitor_status === "fresh"
+                                    ? "Mark this article stale — once Smart Refresh ships, it will queue an updated regeneration."
+                                    : "Mark this article fresh — clears the stale flag in the dashboard."
+                                }
+                              >
+                                {a.monitor_status === "fresh" ? "Mark stale" : "Mark fresh"}
+                              </button>
+                            ) : null}
                             <button type="button" className={`${styles.miniBtn} ${styles.miniDanger}`} onClick={() => setConfirmDeleteId(a.id)}>
                               Delete
                             </button>
@@ -3396,6 +3681,33 @@ export default function ProjectPage() {
 
         {tab === "research" ? (
           <>
+            {/* Feature 2 — Topical Authority Cluster Mapping (foundations only in v1) */}
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <div className={styles.sectionHead}>
+                <div>
+                  <h2 style={{ margin: 0 }}>Topical authority — Cluster planner</h2>
+                  <div className={styles.muted}>
+                    Generate a Pillar + 4-6 Cluster topical map from a single seed intent (planner ships next iteration).
+                  </div>
+                </div>
+                <button
+                  className={styles.button}
+                  type="button"
+                  disabled
+                  title="Cluster planner ships in the next iteration. Schema and API surface are in place; SERP analyzer + LLM decomposition land in the follow-up PR."
+                >
+                  Plan cluster (soon)
+                </button>
+              </div>
+              <div className={styles.muted} style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
+                When this lands you'll input a seed intent, Riviso will analyze the top 10 SERP results,
+                and you'll see a tree with one Pillar article and 4-6 cluster topics — all generatable in one click.
+                {topicClusterCount > 0 ? (
+                  <span> &nbsp;Saved drafts: {topicClusterCount}.</span>
+                ) : null}
+              </div>
+            </div>
+
             <div className={`${styles.card} ${styles.cardWide}`}>
               <div className={styles.sectionHead}>
                 <div>
@@ -4628,6 +4940,144 @@ export default function ProjectPage() {
                     {gscSaveMsg}
                   </div>
                 ) : null}
+              </div>
+            </div>
+
+            {/* Feature 1 — GSC ROI Dashboard */}
+            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+              <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 0 }}>ROI dashboard — Search traffic over time</h3>
+                <div className={styles.row} style={{ gap: 6 }}>
+                  {[7, 28, 90].map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      className={styles.miniBtn}
+                      onClick={() => setAnalyticsRangeDays(d)}
+                      style={{
+                        fontWeight: analyticsRangeDays === d ? 800 : 500,
+                        background: analyticsRangeDays === d ? "var(--surface-hover, rgba(0,0,0,0.06))" : undefined,
+                      }}
+                      disabled={analyticsBusy}
+                    >
+                      {d}d
+                    </button>
+                  ))}
+                  <button type="button" className={styles.miniBtn} onClick={() => reloadAnalytics()} disabled={analyticsBusy}>
+                    {analyticsBusy ? "Loading…" : "Refresh"}
+                  </button>
+                </div>
+              </div>
+              <div className={styles.muted} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+                Daily clicks (blue) and impressions (grey) from Search Console for the linked property.
+                Vertical purple markers show when Riviso published an article on this site — hover a marker
+                to see which article. Google delays final data ~2-3 days; the latest two points may shift slightly.
+              </div>
+
+              {!gscStatus?.connected || !gscStatus?.property_url ? (
+                <div className={styles.muted} style={{ fontSize: 13, marginTop: 12 }}>
+                  Connect Google and link a Search Console property above to see traffic data here.
+                </div>
+              ) : analyticsErr ? (
+                <div className={styles.error} style={{ marginTop: 12 }}>{analyticsErr}</div>
+              ) : analyticsBusy && !analytics ? (
+                <div className={styles.muted} style={{ fontSize: 13, marginTop: 12 }}>Loading Search Console data…</div>
+              ) : analytics ? (
+                <>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                      gap: 10,
+                      marginTop: 14,
+                    }}
+                  >
+                    <div className={styles.card} style={{ padding: 10 }}>
+                      <div className={styles.muted} style={{ fontSize: 11, textTransform: "uppercase" }}>Clicks</div>
+                      <div style={{ fontSize: 22, fontWeight: 800 }}>{(analytics.totals.clicks || 0).toLocaleString()}</div>
+                    </div>
+                    <div className={styles.card} style={{ padding: 10 }}>
+                      <div className={styles.muted} style={{ fontSize: 11, textTransform: "uppercase" }}>Impressions</div>
+                      <div style={{ fontSize: 22, fontWeight: 800 }}>{(analytics.totals.impressions || 0).toLocaleString()}</div>
+                    </div>
+                    <div className={styles.card} style={{ padding: 10 }}>
+                      <div className={styles.muted} style={{ fontSize: 11, textTransform: "uppercase" }}>Avg CTR</div>
+                      <div style={{ fontSize: 22, fontWeight: 800 }}>
+                        {((analytics.totals.ctr || 0) * 100).toFixed(2)}%
+                      </div>
+                    </div>
+                    <div className={styles.card} style={{ padding: 10 }}>
+                      <div className={styles.muted} style={{ fontSize: 11, textTransform: "uppercase" }}>Avg position</div>
+                      <div style={{ fontSize: 22, fontWeight: 800 }}>{(analytics.totals.position || 0).toFixed(1)}</div>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: 14 }}>
+                    <AnalyticsLineChart series={analytics.series} markers={analytics.markers} />
+                    <div className={styles.muted} style={{ fontSize: 11, marginTop: 4, lineHeight: 1.45 }}>
+                      <span style={{ color: "#2563eb", fontWeight: 800 }}>■</span> Clicks &nbsp;
+                      <span style={{ color: "#94a3b8", fontWeight: 800 }}>■</span> Impressions &nbsp;
+                      <span style={{ color: "#7c3aed", fontWeight: 800 }}>┊</span> Article published
+                      &nbsp;·&nbsp; {analytics.markers.length} article{analytics.markers.length === 1 ? "" : "s"} in this window.
+                    </div>
+                  </div>
+
+                  {analytics.top_pages.length > 0 ? (
+                    <div style={{ marginTop: 16 }}>
+                      <div style={{ fontWeight: 700, marginBottom: 6 }}>Top pages by clicks</div>
+                      <div style={{ overflowX: "auto" }}>
+                        <table className={styles.table}>
+                          <thead>
+                            <tr>
+                              <th style={{ textAlign: "left" }}>URL</th>
+                              <th>Clicks</th>
+                              <th>Impr.</th>
+                              <th>CTR</th>
+                              <th>Pos.</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {analytics.top_pages.slice(0, 10).map((row) => (
+                              <tr key={row.url}>
+                                <td style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                  <a href={row.url} target="_blank" rel="noopener noreferrer">{row.url}</a>
+                                </td>
+                                <td>{row.clicks.toLocaleString()}</td>
+                                <td>{row.impressions.toLocaleString()}</td>
+                                <td>{(row.ctr * 100).toFixed(2)}%</td>
+                                <td>{row.position.toFixed(1)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+
+            {/* Feature 3 — Site Map (Internal Linking ingestion) */}
+            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+              <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 0 }}>Internal linking — Site map</h3>
+                <button type="button" className={styles.button} onClick={syncSiteMap} disabled={siteMapBusy}>
+                  {siteMapBusy ? "Syncing…" : "Sync from WordPress"}
+                </button>
+              </div>
+              <div className={styles.muted} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+                Riviso pulls every published post from your WordPress REST API and stores
+                <code> URL · title · focus keyphrase</code>. New articles will use this list to auto-insert
+                contextual <code>&lt;a&gt;</code> tags before posting (matching engine ships in the next iteration —
+                today this card mirrors the data so you can verify nothing's stale).
+              </div>
+              {siteMapMsg ? (
+                <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }}>{siteMapMsg}</div>
+              ) : null}
+              <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>
+                {siteMap
+                  ? `Stored: ${siteMap.count} post${siteMap.count === 1 ? "" : "s"}` + (siteMap.wp_site_url ? ` from ${siteMap.wp_site_url}` : "")
+                  : "Site map not synced yet."}
               </div>
             </div>
 

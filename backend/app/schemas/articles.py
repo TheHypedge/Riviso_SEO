@@ -30,6 +30,11 @@ class ArticlePublic(BaseModel):
     gsc_inspection_last_attempt_at: str | None = None
     gsc_inspection_error: str | None = None
     gsc_inspection_url: str | None = None
+    # Feature 4 — Rank Monitor / Smart Refresh.
+    monitor_status: str | None = Field(default=None, description="fresh | stale | unknown | empty when not registered yet.")
+    monitor_last_checked_at: str | None = None
+    # Feature 3 — Internal Linking telemetry; 0 in v1 until the matcher lands.
+    internal_links_count: int | None = None
     hasBody: bool | None = Field(default=None, description="Optional hint that body HTML exists without loading full text.")
 
 
