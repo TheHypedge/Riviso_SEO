@@ -183,6 +183,78 @@ async def update_project(project_id: str, payload: ProjectUpdate, user: dict = D
     return _to_public(proj2)
 
 
+@router.get("/{project_id}/article-quota")
+async def get_article_quota(project_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """
+    Return the user's remaining article-generation slots so the UI can pre-flight
+    bulk actions (e.g. Cluster Planner's "Generate selected") and surface a
+    clean modal *before* the user fires a request that's doomed to a 403.
+
+    Admins always show as unlimited. The route is per-project so it can also
+    deny access for users who don't own the project (consistent with the rest
+    of the API surface).
+    """
+    st = get_legacy_storage_module()
+    pid = (project_id or "").strip()
+    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Not found")
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    plan: dict = {}
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+        if not isinstance(plan, dict):
+            plan = {}
+    except Exception:
+        plan = {}
+
+    if role == "admin":
+        return {
+            "plan_key": plan_key,
+            "is_admin": True,
+            "unlimited": True,
+            "max_can_consume_now": None,
+            "day_used": 0,
+            "day_limit": None,
+            "day_remaining": None,
+            "month_used": 0,
+            "month_limit": None,
+            "month_remaining": None,
+        }
+
+    if not hasattr(st, "peek_article_usage_remaining"):
+        return {
+            "plan_key": plan_key,
+            "is_admin": False,
+            "unlimited": True,
+            "max_can_consume_now": None,
+            "day_used": 0,
+            "day_limit": None,
+            "day_remaining": None,
+            "month_used": 0,
+            "month_limit": None,
+            "month_remaining": None,
+        }
+
+    snap = st.peek_article_usage_remaining(
+        uid,
+        day_limit=plan.get("max_articles_per_day"),
+        month_limit=plan.get("max_articles_per_month"),
+    )
+    return {
+        "plan_key": plan_key,
+        "is_admin": False,
+        "unlimited": snap.get("max_can_consume_now") is None,
+        **snap,
+    }
+
+
 @router.delete("/{project_id}")
 async def delete_project(project_id: str, user: dict = Depends(get_current_user)) -> Response:
     st = get_legacy_storage_module()

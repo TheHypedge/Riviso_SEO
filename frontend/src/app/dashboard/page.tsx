@@ -123,7 +123,7 @@ export default function DashboardPage() {
         setMeEmail(me.email);
         const items = await api.listProjects();
         setProjects(items);
-      } catch (e) {
+      } catch {
         clearAuth();
         router.replace("/login");
       } finally {

@@ -38,9 +38,7 @@ from pymongo.errors import PyMongoError
 
 from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
-from app.core.config import settings
 from app.legacy.storage import get_legacy_storage_module
-from app.services.article_generation import estimate_tokens_for_generation_bundle, generate_article_bundle
 from app.services.content_sanitizer import (
     sanitize_article_body,
     sanitize_meta_description,
@@ -54,6 +52,9 @@ from app.services.scheduler import prepare_article_for_scheduled_job
 from app.services.to_thread import run_sync
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.prompt_validation import assert_writing_prompt_allowed
+from app.services.article_pipeline import execute_article_generation
+from app.core.article_duplicates import normalize_article_title_key as _normalize_article_title_key
+from app.core.article_duplicates import sync_project_title_index as _sync_project_title_index
 from app.schemas.articles import (
     ArticleCreate,
     ArticleDetailResponse,
@@ -301,50 +302,8 @@ def _get_article_or_404(*, st, project_id: str, article_id: str) -> dict:
 # ---------------------------------------------------------------------------
 # Duplicate title detection (per project, case-insensitive)
 # ---------------------------------------------------------------------------
-
-
-def _normalize_article_title_key(raw: str) -> str:
-    """Stable case-insensitive key for duplicate detection within a project (Unicode-safe)."""
-    s = (raw or "").strip()
-    if not s:
-        return ""
-    try:
-        s = unicodedata.normalize("NFKC", s)
-    except Exception:
-        pass
-    return s.casefold()
-
-
-def _sync_project_title_index(st, project_id: str) -> dict[str, tuple[str, str]]:
-    """
-    Map normalized title key -> (stored display title, article id) for one project.
-    First occurrence wins when legacy data somehow contains inconsistent casing for the same logical title.
-    """
-    pid = (project_id or "").strip()
-    if hasattr(st, "load_articles_listing_for_project"):
-        rows = st.load_articles_listing_for_project(pid, limit=20000) or []
-    else:
-        rows = [
-            a
-            for a in (st.load_articles() or [])
-            if isinstance(a, dict) and (a.get("project_id") or "").strip() == pid
-        ]
-    out: dict[str, tuple[str, str]] = {}
-    for a in rows:
-        if not isinstance(a, dict):
-            continue
-        t = (a.get("title") or "").strip()
-        if not t:
-            continue
-        k = _normalize_article_title_key(t)
-        if not k:
-            continue
-        aid = (a.get("id") or "").strip()
-        if not aid:
-            continue
-        if k not in out:
-            out[k] = (t[:500], aid)
-    return out
+# ``_normalize_article_title_key`` / ``_sync_project_title_index`` live in
+# :mod:`app.core.article_duplicates` (shared with topic-cluster generation).
 
 
 def _duplicate_title_http_detail(
@@ -809,132 +768,18 @@ async def generate_article_and_image(
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
-
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-
-    writing_prompt_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
-
-    def _resolve_prompt(prompts: list, pid: str | None) -> dict | None:
-        if not pid:
-            return None
-        for p in prompts or []:
-            if isinstance(p, dict) and (p.get("id") or "").strip() == pid:
-                return {"id": pid, "name": (p.get("name") or "").strip(), "text": (p.get("text") or "").strip()}
-        raise HTTPException(status_code=404, detail="Prompt not found")
-
-    resolved_writing = _resolve_prompt(proj.get("prompts") or [], writing_prompt_id)
-
-    if not (settings.openai_api_key or "").strip():
-        raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
-
-    title = (row.get("title") or "").strip()
-    keywords = [str(x).strip() for x in (row.get("keywords") or []) if str(x).strip()]
-    focus = (payload.focus_keyphrase or (row.get("focus_keyphrase") or "")).strip()
-
-    if not title:
-        raise HTTPException(status_code=400, detail="Article title is required for generation")
-    if not resolved_writing:
-        raise HTTPException(status_code=400, detail="No writing prompt selected and no project default set")
-
-    try:
-        assert_writing_prompt_allowed(resolved_writing["text"], user_id=uid or None)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
-    generate_image = bool(payload.generate_image)
-    token_estimate = estimate_tokens_for_generation_bundle(
-        title=title,
-        keywords=keywords,
-        focus_keyphrase=focus,
-        writing_prompt_text=resolved_writing["text"],
-        brand_identity=(proj.get("brand_identity") or ""),
-        niche_identifier=(proj.get("niche_identifier") or ""),
-        generate_image=generate_image,
+    wp_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
+    return await execute_article_generation(
+        st=st,
+        user=user,
+        proj=proj,
+        project_id=project_id,
+        article_id=(article_id or "").strip(),
+        row=row,
+        writing_prompt_id=wp_id,
+        generate_image=bool(payload.generate_image),
+        focus_keyphrase_override=payload.focus_keyphrase,
     )
-
-    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
-    plan: dict = {}
-    try:
-        plans = st.load_plans() or {}
-        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
-        if not isinstance(plan, dict):
-            plan = {}
-    except Exception:
-        plan = {}
-
-    if role != "admin" and uid:
-        ok_t, msg_t = st.check_llm_token_budget(uid, token_estimate, plan.get("max_llm_tokens_per_month"))
-        if not ok_t:
-            raise HTTPException(status_code=403, detail=msg_t or "Token budget exceeded")
-
-    quota_consumed = False
-    if role != "admin" and uid and hasattr(st, "consume_article_usage"):
-        day_lim = plan.get("max_articles_per_day")
-        month_lim = plan.get("max_articles_per_month")
-        ok, msg = st.consume_article_usage(uid, day_limit=day_lim, month_limit=month_lim, amount=1)
-        if not ok:
-            raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
-        quota_consumed = True
-
-    try:
-        gen = await generate_article_bundle(
-            title=title,
-            keywords=keywords,
-            focus_keyphrase=focus,
-            writing_prompt_text=resolved_writing["text"],
-            brand_identity=(proj.get("brand_identity") or ""),
-            niche_identifier=(proj.get("niche_identifier") or ""),
-            generate_image=generate_image,
-        )
-    except HTTPException:
-        # Refund the article quota slot — generation never produced output.
-        if quota_consumed and hasattr(st, "refund_article_usage"):
-            try:
-                st.refund_article_usage(uid, amount=1)
-            except Exception:
-                pass
-        raise
-    except Exception:
-        if quota_consumed and hasattr(st, "refund_article_usage"):
-            try:
-                st.refund_article_usage(uid, amount=1)
-            except Exception:
-                pass
-        raise
-
-    if role != "admin" and uid:
-        st.consume_llm_generation_tokens(uid, token_estimate)
-
-    updates = {
-        "article": gen["article"],
-        "meta_title": gen["meta_title"],
-        "meta_description": gen["meta_description"],
-        "generated_at": gen["generated_at"],
-        "image_url": gen.get("image_url") or "",
-        "status": "draft" if ((row.get("status") or "pending").strip().lower() != "published") else (row.get("status") or "published"),
-    }
-    await run_sync(st.update_article_fields, article_id, updates)
-
-    return {
-        "ok": True,
-        "status": "generated",
-        "message": "Article generated successfully.",
-        "resolved": {
-            "writing_prompt": {"id": resolved_writing["id"], "name": resolved_writing["name"]} if resolved_writing else None,
-            "image_prompt": None,
-            "image_prompt_source": "programmatic",
-            "focus_keyphrase": focus,
-            "generate_image": generate_image,
-            "models": gen.get("models"),
-        },
-        "generated": {
-            "article": gen["article"],
-            "meta_title": gen["meta_title"],
-            "meta_description": gen["meta_description"],
-            "image_url": gen.get("image_url"),
-        },
-    }
 
 
 @router.post("/{article_id}/schedule", status_code=200)

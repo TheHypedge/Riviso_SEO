@@ -401,6 +401,95 @@ def consume_article_usage(user_id: str, *, day_limit: int | None, month_limit: i
         return True, ""
 
 
+def peek_article_usage_remaining(
+    user_id: str,
+    *,
+    day_limit: int | None,
+    month_limit: int | None,
+) -> dict[str, Any]:
+    """
+    Return a snapshot of how many articles the user can still consume right now,
+    *without* mutating any counters.
+
+    Limits of ``None``/``0`` mean "unlimited"; we surface that as
+    ``*_remaining = None`` and ``max_can_consume_now = None`` so callers can
+    distinguish "unlimited" from "0 remaining".
+
+    Used by:
+
+    - ``GET /api/projects/{id}/article-quota`` — frontend pre-flight before the
+      Cluster Planner's "Generate selected" button is clicked, so the user
+      sees a clear modal instead of a 403 mid-batch.
+    - ``POST /topic-clusters/{id}/generate-all`` — server-side guard so a
+      partially-generated cluster doesn't burn quota when the request was
+      doomed from the start.
+    """
+    uid = (user_id or "").strip()
+    out: dict[str, Any] = {
+        "day_used": 0,
+        "day_limit": day_limit,
+        "day_remaining": None,
+        "month_used": 0,
+        "month_limit": month_limit,
+        "month_remaining": None,
+        "max_can_consume_now": None,
+        "day_key": _utc_day_key_now(),
+        "month_key": _utc_month_key_now(),
+    }
+    if not uid:
+        return out
+
+    # Fetch the user record without taking a write lock — this is a peek.
+    if _storage_mode == "json":
+        users = _load_json_users()
+        user = next((u for u in users if (u.get("id") or "").strip() == uid), None)
+    elif _storage_mode == "mongo":
+        doc = get_db().users.find_one({"id": uid})
+        user = dict(doc) if doc else None
+    else:
+        user = None
+
+    if not isinstance(user, dict):
+        return out
+
+    cur_day = (user.get("usage_daily_articles_date") or "").strip()
+    day_count = int(user.get("usage_daily_articles_count") or 0)
+    if cur_day != out["day_key"]:
+        # Day rolled over — counters are effectively zero for the purpose of this peek.
+        day_count = 0
+    cur_month = (user.get("usage_monthly_articles_month") or "").strip()
+    month_count = int(user.get("usage_monthly_articles_count") or 0)
+    if cur_month != out["month_key"]:
+        month_count = 0
+
+    out["day_used"] = day_count
+    out["month_used"] = month_count
+
+    def _remaining(used: int, limit: int | None) -> int | None:
+        if limit is None:
+            return None
+        try:
+            lim = int(limit)
+        except Exception:
+            return None
+        if lim <= 0:
+            return None  # 0 / negative → unlimited
+        return max(0, lim - used)
+
+    out["day_remaining"] = _remaining(day_count, day_limit)
+    out["month_remaining"] = _remaining(month_count, month_limit)
+
+    if out["day_remaining"] is None and out["month_remaining"] is None:
+        out["max_can_consume_now"] = None  # unlimited
+    elif out["day_remaining"] is None:
+        out["max_can_consume_now"] = out["month_remaining"]
+    elif out["month_remaining"] is None:
+        out["max_can_consume_now"] = out["day_remaining"]
+    else:
+        out["max_can_consume_now"] = min(out["day_remaining"], out["month_remaining"])
+    return out
+
+
 def refund_article_usage(user_id: str, *, amount: int = 1) -> tuple[bool, str]:
     """
     Decrement the per-user article counters previously incremented by
@@ -2211,6 +2300,34 @@ def load_site_map_for_project(project_id: str, *, limit: int = 5000) -> list[dic
     return list(cur)
 
 
+def site_map_cache_age_seconds(project_id: str) -> int | None:
+    """
+    Return how old the *freshest* site-map row for ``project_id`` is, in seconds.
+
+    Used by the cluster-validation service to decide whether to fire a background
+    WordPress refetch (24h staleness window). Returns ``None`` when the project
+    has no site map cached at all (caller treats that as "infinitely stale").
+    """
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    rows = load_site_map_for_project(pid, limit=1)
+    if not rows:
+        return None
+    raw = (rows[0].get("fetched_at") or "").strip()
+    if not raw:
+        return None
+    # ``fetched_at`` is stored as ``YYYY-MM-DD HH:MM:SS`` (UTC) by ``_now_iso_seconds``.
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            ts = datetime.strptime(raw[:19], fmt)
+        except ValueError:
+            continue
+        delta = datetime.utcnow() - ts
+        return max(0, int(delta.total_seconds()))
+    return None
+
+
 # ---------------------------------------------------------------------------
 # topic_clusters  (Feature 2 — Topical Authority Cluster Mapping)
 # ---------------------------------------------------------------------------
@@ -2241,7 +2358,41 @@ def _normalize_topic_cluster(d: dict[str, Any]) -> dict[str, Any]:
                 "imported_article_id": (c.get("imported_article_id") or "")[:64],
             }
         )
-    return {
+    serp_summary = d.get("serp_summary")
+    if not isinstance(serp_summary, dict):
+        serp_summary = {}
+    serp_out: dict[str, Any] = {
+        "query": str(serp_summary.get("query") or "")[:200],
+        "gl": str(serp_summary.get("gl") or "")[:8],
+        "hl": str(serp_summary.get("hl") or "")[:8],
+        "fetched_at": float(serp_summary.get("fetched_at") or 0) or 0.0,
+        "result_count": int(serp_summary.get("result_count") or 0),
+        "results": [],
+    }
+    for r in (serp_summary.get("results") or [])[:10]:
+        if not isinstance(r, dict):
+            continue
+        serp_out["results"].append(
+            {
+                "title": str(r.get("title") or "")[:200],
+                "url": str(r.get("url") or "")[:2048],
+                "snippet": str(r.get("snippet") or "")[:400],
+            }
+        )
+    gen_err_in = d.get("generation_errors") or []
+    gen_err_out: list[dict[str, str]] = []
+    if isinstance(gen_err_in, list):
+        for e in gen_err_in[:12]:
+            if not isinstance(e, dict):
+                continue
+            gen_err_out.append(
+                {
+                    "topic_id": str(e.get("topic_id") or "")[:64],
+                    "message": str(e.get("message") or "")[:500],
+                }
+            )
+
+    base = {
         "id": cid,
         "project_id": pid,
         "owner_user_id": uid,
@@ -2260,7 +2411,10 @@ def _normalize_topic_cluster(d: dict[str, Any]) -> dict[str, Any]:
         "clusters": clusters_clean[:8],
         "created_at": (d.get("created_at") or _now_iso_seconds())[:64],
         "updated_at": (d.get("updated_at") or _now_iso_seconds())[:64],
+        "serp_summary": serp_out,
+        "generation_errors": gen_err_out,
     }
+    return base
 
 
 def save_topic_cluster(cluster: dict[str, Any]) -> dict[str, Any]:

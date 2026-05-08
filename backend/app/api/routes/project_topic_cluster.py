@@ -1,24 +1,18 @@
 """
 Topic-cluster routes — Feature 2 (Topical Authority Cluster Mapping).
 
-v1 surface (CRUD + listing only — generator skeleton):
-
 - ``GET  /api/projects/{project_id}/topic-clusters``           — list saved clusters
 - ``GET  /api/projects/{project_id}/topic-clusters/{id}``      — fetch one
-- ``POST /api/projects/{project_id}/topic-clusters/plan``      — generate a draft cluster (stub)
-- ``POST /api/projects/{project_id}/topic-clusters/{id}/generate-all`` — fan-out (stub)
-
-The two generator endpoints return ``501`` with a friendly message until the SERP
-analyzer + LLM decomposition lands. Listing/fetching is fully wired so a
-client-side draft (e.g. shipped from local state) can already be persisted via
-:meth:`TopicClusterService.persist`.
+- ``POST /api/projects/{project_id}/topic-clusters/plan``      — SERP + LLM plan → persisted cluster
+- ``POST /api/projects/{project_id}/topic-clusters/{id}/generate-all`` — generate all articles
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
@@ -50,6 +44,42 @@ async def list_clusters(project_id: str, user: dict = Depends(get_current_user))
     return {"clusters": svc.list_for_project()}
 
 
+class TopicClusterPlanPayload(BaseModel):
+    """Request body for the cluster planner."""
+
+    seed_intent: str = Field(min_length=3, max_length=500)
+    country_code: str = Field(default="IN", min_length=2, max_length=8)
+    tone: str = Field(default="informative", max_length=32)
+    language: str = Field(default="en", min_length=2, max_length=8)
+
+
+@router.post("/plan")
+async def plan_cluster(
+    project_id: str,
+    payload: TopicClusterPlanPayload,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """SERP snapshot + LLM topical map → saved cluster (draft)."""
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
+    st = get_legacy_storage_module()
+    proj = _require_project(st=st, user=user, project_id=project_id)
+    svc = TopicClusterService(project=proj, owner_user_id=(user.get("id") or "").strip())
+    try:
+        return await svc.plan_and_persist(
+            seed_intent=payload.seed_intent,
+            country_code=payload.country_code,
+            tone=payload.tone,
+            language=payload.language,
+        )
+    except HTTPException:
+        raise
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cluster planning failed: {e}") from e
+
+
 @router.get("/{cluster_id}")
 async def get_cluster(project_id: str, cluster_id: str, user: dict = Depends(get_current_user)) -> dict:
     st = get_legacy_storage_module()
@@ -61,44 +91,99 @@ async def get_cluster(project_id: str, cluster_id: str, user: dict = Depends(get
     return row
 
 
-class TopicClusterPlanPayload(BaseModel):
-    """Request body for the (currently stubbed) cluster planner."""
-
-    seed_intent: str = Field(min_length=3, max_length=500)
-    country_code: str = Field(default="IN", min_length=2, max_length=8)
-    tone: str = Field(default="informative", max_length=32)
-
-
-@router.post("/plan")
-async def plan_cluster(
-    project_id: str,
-    payload: TopicClusterPlanPayload,
-    user: dict = Depends(get_current_user),
-) -> dict:
-    """Generate a draft cluster (Pillar + 4-6 sub-topics). v1 stub."""
-    st = get_legacy_storage_module()
-    _require_project(st=st, user=user, project_id=project_id)
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Topic-cluster planner ships in the next iteration. The schema, persistence layer, "
-            "and listing endpoints are already in place — this endpoint will return a saved "
-            "cluster row with one Pillar + 4-6 cluster topics once the SERP analyzer is wired."
-        ),
+class TopicClusterGenerateAllPayload(BaseModel):
+    generate_image: bool = Field(
+        default=False,
+        description="Whether to generate a featured image per article (slower).",
     )
+    writing_prompt_id: str | None = Field(default=None, max_length=64)
+    # ``None`` (omitted) means "every pending topic in the cluster". When
+    # provided, only the pillar (slot id = pillar id) and cluster topic ids
+    # listed here are generated; the rest stay pending.
+    topic_ids: list[str] | None = Field(default=None, max_length=20)
 
 
 @router.post("/{cluster_id}/generate-all")
 async def generate_all(
     project_id: str,
     cluster_id: str,
+    payload: TopicClusterGenerateAllPayload | None = Body(default=None),
     user: dict = Depends(get_current_user),
 ) -> dict:
-    """Fan-out generation for the whole cluster. v1 stub."""
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Cluster fan-out generation ships in the next iteration. Existing per-article generation "
-            "remains available via the Articles tab; the bulk path lands once the planner endpoint goes live."
-        ),
+    """Create + generate articles for pillar and clusters missing ``imported_article_id``."""
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
+    st = get_legacy_storage_module()
+    proj = _require_project(st=st, user=user, project_id=project_id)
+    svc = TopicClusterService(project=proj, owner_user_id=(user.get("id") or "").strip())
+    body = payload or TopicClusterGenerateAllPayload()
+    try:
+        return await svc.generate_all(
+            user=user,
+            cluster_id=(cluster_id or "").strip(),
+            generate_image=bool(body.generate_image),
+            writing_prompt_id=(body.writing_prompt_id or "").strip() or None,
+            topic_ids=body.topic_ids,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cluster generation failed: {e}") from e
+
+
+class TopicClusterImportPayload(BaseModel):
+    """Body for ``POST /topic-clusters/{cluster_id}/import``."""
+
+    topic_ids: list[str] | None = Field(
+        default=None,
+        max_length=20,
+        description="Pillar+cluster slot ids to import. ``null`` = every pending topic.",
     )
+    # When set, the imported articles are also added to the scheduler so the
+    # backend will generate + publish them at this UTC instant. Subsequent
+    # imports in the batch are staggered 5 minutes apart.
+    schedule_at: str | None = Field(default=None, max_length=64)
+    post_type: str | None = Field(default=None, max_length=64)
+    wp_status: str = Field(default="draft", max_length=16)
+    writing_prompt_id: str | None = Field(default=None, max_length=64)
+    image_prompt_id: str | None = Field(default=None, max_length=64)
+    generate_image: bool = Field(default=True)
+
+
+@router.post("/{cluster_id}/import")
+async def import_topics(
+    project_id: str,
+    cluster_id: str,
+    payload: TopicClusterImportPayload | None = Body(default=None),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Insert *pending* article rows for the selected (or all-pending) topics in
+    the cluster. Optionally schedule them via ``schedule_at`` (UTC ISO or a
+    ``YYYY-MM-DDTHH:mm`` value in the user's timezone).
+
+    Cheap and **quota-free** when not scheduled (no LLM invocation), so users
+    can stage drafts without burning generation credits. Scheduling each
+    imported topic consumes the user's monthly schedule quota when their plan
+    enforces one.
+    """
+    st = get_legacy_storage_module()
+    proj = _require_project(st=st, user=user, project_id=project_id)
+    svc = TopicClusterService(project=proj, owner_user_id=(user.get("id") or "").strip())
+    body = payload or TopicClusterImportPayload()
+    try:
+        return await svc.import_topics(
+            user=user,
+            cluster_id=(cluster_id or "").strip(),
+            topic_ids=body.topic_ids,
+            schedule_at=(body.schedule_at or "").strip() or None,
+            post_type=(body.post_type or "").strip() or None,
+            wp_status=(body.wp_status or "draft").strip().lower(),
+            writing_prompt_id=(body.writing_prompt_id or "").strip() or None,
+            image_prompt_id=(body.image_prompt_id or "").strip() or None,
+            generate_image=bool(body.generate_image),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cluster import failed: {e}") from e

@@ -229,6 +229,18 @@ export type TopicClusterTopic = {
   imported_article_id?: string;
 };
 
+export type TopicClusterSerpRow = { title: string; url: string; snippet?: string };
+export type TopicClusterSerpSummary = {
+  query: string;
+  gl: string;
+  hl: string;
+  fetched_at: number;
+  result_count: number;
+  results: TopicClusterSerpRow[];
+};
+
+export type TopicClusterGenError = { topic_id: string; message: string };
+
 export type TopicCluster = {
   id: string;
   project_id: string;
@@ -241,6 +253,65 @@ export type TopicCluster = {
   clusters: TopicClusterTopic[];
   created_at?: string;
   updated_at?: string;
+  serp_summary?: TopicClusterSerpSummary;
+  generation_errors?: TopicClusterGenError[];
+};
+
+export type TopicClusterGenerateAllResponse = {
+  ok: boolean;
+  cluster: TopicCluster;
+  errors: TopicClusterGenError[];
+};
+
+export type TopicClusterImportResponse = {
+  ok: boolean;
+  cluster: TopicCluster;
+  errors: TopicClusterGenError[];
+  imported_count: number;
+  scheduled_count: number;
+};
+
+/* --- Article quota (per-user, plan-aware) --------------------------------- */
+
+export type ArticleQuota = {
+  plan_key: string;
+  is_admin: boolean;
+  unlimited: boolean;
+  /** ``null`` ⇒ unlimited; otherwise the largest batch size the user can consume right now. */
+  max_can_consume_now: number | null;
+  day_used: number;
+  day_limit: number | null;
+  day_remaining: number | null;
+  month_used: number;
+  month_limit: number | null;
+  month_remaining: number | null;
+};
+
+/* --- Cluster Validation: existence & intent ------------------------------ */
+
+export type ClusterValidationStatus = "new" | "similar" | "duplicate";
+
+export type ClusterValidationItemPayload = {
+  temp_id: string;
+  title: string;
+  focus_keyphrase?: string;
+  keywords?: string[];
+};
+
+export type ClusterValidationOutcome = {
+  status: ClusterValidationStatus;
+  reason: string;
+  existing_url: string | null;
+  existing_article_id: string | null;
+  similarity: number | null;
+};
+
+export type ClusterValidationResponse = {
+  results: Record<string, ClusterValidationOutcome>;
+  cache_age_seconds: number | null;
+  cache_refresh_started: boolean;
+  embedding_used: boolean;
+  elapsed_ms: number;
 };
 
 /* --- Feature 3: Site Map -------------------------------------------------- */
@@ -1193,15 +1264,89 @@ export const api = {
   async topicClusterList(projectId: string) {
     return apiFetch<{ clusters: TopicCluster[] }>(`/api/projects/${projectId}/topic-clusters`);
   },
+  async topicClusterGet(projectId: string, clusterId: string) {
+    return apiFetch<TopicCluster>(
+      `/api/projects/${projectId}/topic-clusters/${encodeURIComponent(clusterId)}`,
+    );
+  },
   async topicClusterPlan(
     projectId: string,
-    payload: { seed_intent: string; country_code?: string; tone?: string },
+    payload: { seed_intent: string; country_code?: string; tone?: string; language?: string },
   ) {
-    // Backend currently 501s; helper exists so the UI's "Plan cluster" button has a typed call site.
     return apiFetch<TopicCluster>(`/api/projects/${projectId}/topic-clusters/plan`, {
       method: "POST",
       body: JSON.stringify(payload),
-    });
+      headers: { "Content-Type": "application/json" },
+    }, { timeoutMs: LONG_API_TIMEOUT_MS });
+  },
+  async validateClusterTopics(
+    projectId: string,
+    payload: {
+      items: ClusterValidationItemPayload[];
+      similarity_threshold?: number;
+    },
+    signal?: AbortSignal,
+  ) {
+    return apiFetch<ClusterValidationResponse>(
+      `/api/projects/${projectId}/validate-clusters`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          items: payload.items,
+          similarity_threshold: payload.similarity_threshold ?? 0.8,
+        }),
+        headers: { "Content-Type": "application/json" },
+        signal,
+      },
+    );
+  },
+
+  async topicClusterGenerateAll(
+    projectId: string,
+    clusterId: string,
+    body?: {
+      generate_image?: boolean;
+      writing_prompt_id?: string | null;
+      /** ``null``/omitted ⇒ generate every pending topic. */
+      topic_ids?: string[] | null;
+    },
+  ) {
+    return apiFetch<TopicClusterGenerateAllResponse>(
+      `/api/projects/${projectId}/topic-clusters/${encodeURIComponent(clusterId)}/generate-all`,
+      {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
+        headers: { "Content-Type": "application/json" },
+      },
+      { timeoutMs: LONG_API_TIMEOUT_MS },
+    );
+  },
+
+  async topicClusterImport(
+    projectId: string,
+    clusterId: string,
+    body?: {
+      topic_ids?: string[] | null;
+      schedule_at?: string | null;
+      post_type?: string | null;
+      wp_status?: "draft" | "publish";
+      writing_prompt_id?: string | null;
+      image_prompt_id?: string | null;
+      generate_image?: boolean;
+    },
+  ) {
+    return apiFetch<TopicClusterImportResponse>(
+      `/api/projects/${projectId}/topic-clusters/${encodeURIComponent(clusterId)}/import`,
+      {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  },
+
+  async articleQuota(projectId: string) {
+    return apiFetch<ArticleQuota>(`/api/projects/${projectId}/article-quota`);
   },
 
   // Feature 4 — Smart Refresh (foundations)

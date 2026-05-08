@@ -21,6 +21,7 @@ from app.api.routes import wordpress
 from app.api.routes import scheduled_jobs
 from app.api.routes import gsc
 from app.api.routes import project_gsc
+from app.api.routes import project_cluster_validation
 from app.api.routes import project_site_map
 from app.api.routes import project_topic_cluster
 from app.api.routes import research
@@ -42,5 +43,6 @@ api_router.include_router(gsc.router)
 api_router.include_router(project_gsc.router)
 api_router.include_router(project_site_map.router)
 api_router.include_router(project_topic_cluster.router)
+api_router.include_router(project_cluster_validation.router)
 api_router.include_router(research.router)
 

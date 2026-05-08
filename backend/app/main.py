@@ -13,6 +13,7 @@ FastAPI ASGI entrypoint: middleware stack, API router, lifespan hooks.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -32,6 +33,8 @@ from app.core.logging import configure_logging
 from app.core.production import run_startup_checks
 from app.services.scheduler import scheduler_loop
 from app.legacy.storage import get_legacy_storage_module
+
+_log = logging.getLogger("uvicorn.error")
 
 # Next.js local dev always hits the API from these origins (even when API is 127.0.0.1:8000).
 _LOCAL_DEV_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
@@ -94,6 +97,25 @@ async def lifespan(app: FastAPI):
         except Exception:
             # Legacy JSON fallback may still run if Mongo is unavailable.
             pass
+    if hasattr(st, "storage_mode"):
+        try:
+            mode = await asyncio.to_thread(st.storage_mode)
+            err = (
+                await asyncio.to_thread(st.storage_init_error)
+                if hasattr(st, "storage_init_error")
+                else None
+            )
+            if (mode or "").strip().lower() != "mongo":
+                _log.warning(
+                    "Storage backend is %r (not MongoDB). You will not see production/live Atlas data. "
+                    "Unset FORCE_JSON_STORAGE and fix MONGODB_URI if you expected mongo. Detail: %s",
+                    mode,
+                    err or "unknown",
+                )
+            else:
+                _log.info("Storage backend: mongo")
+        except Exception as e:
+            _log.warning("Could not read storage mode after init: %s", e)
 
     scheduler_task: asyncio.Task | None = None
     enable = (os.environ.get("ENABLE_SCHEDULER", "1") or "1").strip()

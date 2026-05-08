@@ -21,6 +21,55 @@ class OpenAIClient:
             "content-type": "application/json",
         }
 
+    async def embed_batch(
+        self,
+        *,
+        model: str,
+        inputs: list[str],
+        timeout_s: float = 8.0,
+    ) -> list[list[float]]:
+        """
+        Return embeddings for each input in the same order, in a single HTTP call.
+
+        Used by :class:`app.services.cluster_validation.ClusterValidationService`
+        for cosine-similarity intent overlap detection. We keep this method
+        side-effect free (no logging of payload contents) so it's safe to call
+        from request paths under tight latency budgets — the OpenAI batch API
+        comfortably handles ~500 short strings per call within ~150ms.
+
+        Returns ``[]`` on transport / decode failure rather than raising, so
+        validators can degrade to exact-match-only without breaking the response.
+        """
+        if not inputs:
+            return []
+        # OpenAI's embeddings endpoint caps at 2048 inputs per request; we stay
+        # well below that — the validator batches client-side before calling.
+        payload = {"model": model, "input": [s[:2000] for s in inputs]}
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout_s, read=timeout_s)
+            ) as client:
+                res = await client.post(
+                    "https://api.openai.com/v1/embeddings",
+                    headers=self._headers(),
+                    json=payload,
+                )
+            res.raise_for_status()
+            data = res.json()
+        except Exception:
+            return []
+        items = data.get("data") or []
+        if not isinstance(items, list):
+            return []
+        out: list[list[float]] = []
+        for it in items:
+            vec = (it or {}).get("embedding") if isinstance(it, dict) else None
+            if isinstance(vec, list) and vec and all(isinstance(v, (int, float)) for v in vec):
+                out.append([float(v) for v in vec])
+            else:
+                out.append([])
+        return out
+
     async def chat_json(self, *, model: str, system: str, user: str) -> dict[str, Any]:
         payload = {
             "model": model,

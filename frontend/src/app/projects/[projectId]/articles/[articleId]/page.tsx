@@ -62,7 +62,10 @@ export default function ArticleEditPage() {
   const router = useRouter();
   const token = useMemo(() => getAccessToken(), []);
 
-  const [loading, setLoading] = useState(true);
+  // ``loading`` value isn't rendered directly — the global loading provider
+  // shows the typewriter overlay instead — but ``setLoading`` is wired up so
+  // we can re-enable a local skeleton later without touching call sites.
+  const [, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -158,7 +161,6 @@ export default function ArticleEditPage() {
   // Background prefetch (non-blocking) for better perceived performance.
   useEffect(() => {
     if (!token) return;
-    const pid = params.projectId;
     const prefetch = () => {
       // Fire-and-forget: keep editor responsive.
       void ensurePromptsLoaded();

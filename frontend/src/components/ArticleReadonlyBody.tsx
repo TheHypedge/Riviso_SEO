@@ -18,7 +18,6 @@ export function ArticleReadonlyBody({ markdown }: Props) {
   return (
     <div className={`${styles.articleRichEditorWrap} ${styles.articleRichEditorReadonly}`}>
       <div className={`${styles.articleReadonlyArticleHtml} article-readonly-html`}>
-        {/* eslint-disable-next-line react/no-danger */}
         <div dangerouslySetInnerHTML={{ __html: html }} />
       </div>
       <div className={styles.muted} style={{ fontSize: 11, padding: "6px 10px", borderTop: "1px solid var(--aa-hairline-soft)" }}>

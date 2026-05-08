@@ -2045,6 +2045,631 @@
 .tableZebra tbody tr:hover td {
   background: color-mix(in oklab, var(--aa-primary), transparent 90%);
 }
+
+/* Performance tab — chart bleeds to card edges; legend + top-pages table read on dark. */
+.analyticsChartBleed {
+  margin-left: calc(-1 * var(--aa-s-md));
+  margin-right: calc(-1 * var(--aa-s-md));
+  width: calc(100% + 2 * var(--aa-s-md));
+  max-width: none;
+  box-sizing: border-box;
+}
+@media (max-width: 640px) {
+  .analyticsChartBleed {
+    margin-left: 0;
+    margin-right: 0;
+    width: 100%;
+  }
+}
+
+.analyticsChartLegend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--aa-muted);
+  line-height: 1.5;
+}
+
+.analyticsLegendSwatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--aa-on-dark), transparent 78%);
+}
+.analyticsLegendSwatch[data-series="clicks"] {
+  background: var(--aa-primary);
+}
+.analyticsLegendSwatch[data-series="impr"] {
+  background: var(--aa-surface-cream-strong);
+}
+.analyticsLegendSwatch[data-series="marker"] {
+  background: var(--aa-warning);
+  border-radius: 999px;
+  width: 10px;
+  height: 10px;
+}
+
+.analyticsLegendMeta {
+  font-weight: 600;
+  color: var(--aa-muted-soft);
+}
+
+.analyticsTopPagesTable {
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 30%);
+}
+.analyticsTopPagesTable thead th {
+  color: var(--aa-muted);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 15%);
+}
+.analyticsTopPagesTable tbody td {
+  color: var(--aa-body);
+}
+.analyticsTopPagesTable tbody tr:nth-child(even) td {
+  background: color-mix(in oklab, var(--aa-on-dark), transparent 92%);
+}
+.analyticsTopPagesTable tbody tr:hover td {
+  background: color-mix(in oklab, var(--aa-primary), transparent 86%);
+}
+.analyticsTopPagesTable .tableLink {
+  color: color-mix(in oklab, var(--aa-primary), #ffffff 22%);
+  border-bottom-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
+}
+.analyticsTopPagesTable .tableLink:hover {
+  color: color-mix(in oklab, var(--aa-primary), #ffffff 36%);
+  border-bottom-color: color-mix(in oklab, var(--aa-primary), transparent 28%);
+}
+
+/* ---------------------------------------------------------------------------
+ * Topical authority — Cluster planner (Feature 2)
+ *
+ * Designed for the dark project shell (see projectsDark.module.css). All colors
+ * resolve through theme variables so the same markup also reads fine on the
+ * light dashboard surface — `--aa-ink` is the strongest text token (white on
+ * dark, near-black on light), and `--aa-body` is one step softer for subtitles.
+ * --------------------------------------------------------------------------- */
+
+.clusterPlanner {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.clusterPlannerHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--aa-hairline);
+  padding-bottom: 12px;
+}
+
+.clusterCardTitle {
+  margin: 0;
+  font-family: var(--aa-font-display);
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  color: var(--aa-ink);
+}
+
+.clusterCardSubtitle {
+  margin: 6px 0 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--aa-body);
+  max-width: 640px;
+}
+
+.clusterPlannerActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.clusterPlannerHint {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--aa-muted);
+}
+.clusterPlannerHint strong {
+  color: var(--aa-body-strong);
+  font-weight: 800;
+}
+
+.clusterEmptyHint {
+  margin-top: 6px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px dashed var(--aa-hairline);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 35%);
+  font-size: 13px;
+  color: var(--aa-body);
+  line-height: 1.5;
+}
+
+/* One saved-cluster row */
+.clusterRow {
+  border: 1px solid var(--aa-hairline);
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 22%);
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.clusterRowHead {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.clusterRowTitleBlock {
+  min-width: 0;
+  flex: 1 1 320px;
+}
+
+.clusterRowSeed {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.3;
+  color: var(--aa-ink);
+  word-break: break-word;
+}
+
+.clusterRowMeta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.clusterMetaChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--aa-hairline);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 30%);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--aa-body);
+}
+.clusterMetaChip[data-variant="status-draft"] {
+  border-color: color-mix(in oklab, var(--aa-warning), transparent 55%);
+  color: color-mix(in oklab, var(--aa-warning), #ffffff 24%);
+  background: color-mix(in oklab, var(--aa-warning), transparent 86%);
+}
+.clusterMetaChip[data-variant="status-generating"] {
+  border-color: color-mix(in oklab, #38bdf8, transparent 55%);
+  color: #bae6fd;
+  background: rgba(56, 189, 248, 0.12);
+}
+.clusterMetaChip[data-variant="status-ready"] {
+  border-color: color-mix(in oklab, var(--aa-success), transparent 55%);
+  color: color-mix(in oklab, var(--aa-success), #ffffff 24%);
+  background: color-mix(in oklab, var(--aa-success), transparent 86%);
+}
+.clusterMetaChip[data-variant="status-partial_error"] {
+  border-color: color-mix(in oklab, var(--aa-error), transparent 55%);
+  color: color-mix(in oklab, var(--aa-error), #ffffff 30%);
+  background: color-mix(in oklab, var(--aa-error), transparent 86%);
+}
+
+.clusterRowActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Tree sections inside one cluster row */
+.clusterTreeSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.clusterTreeLabel {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--aa-ink), transparent 12%);
+}
+
+.clusterPillarBox {
+  position: relative;
+  padding: 12px 14px 12px 16px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 35%);
+  border: 1px solid var(--aa-hairline);
+  border-left: 3px solid var(--aa-primary);
+}
+
+.clusterTopicTitle {
+  margin: 0;
+  font-size: 14.5px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--aa-ink);
+}
+
+.clusterTopicIntent {
+  margin: 4px 0 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--aa-body);
+}
+
+.clusterTopicFooter {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.clusterTopicList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.clusterTopicItem {
+  position: relative;
+  padding: 10px 12px 10px 16px;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 50%);
+  border: 1px solid var(--aa-hairline);
+  border-left: 2px solid color-mix(in oklab, var(--aa-primary), transparent 40%);
+}
+
+/* Per-topic status pills */
+.clusterTopicPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  line-height: 1.4;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.clusterTopicPill[data-state="pending"] {
+  color: color-mix(in oklab, var(--aa-warning), #ffffff 22%);
+  background: color-mix(in oklab, var(--aa-warning), transparent 84%);
+  border-color: color-mix(in oklab, var(--aa-warning), transparent 60%);
+}
+.clusterTopicPill[data-state="imported"] {
+  color: color-mix(in oklab, var(--aa-success), #ffffff 24%);
+  background: color-mix(in oklab, var(--aa-success), transparent 84%);
+  border-color: color-mix(in oklab, var(--aa-success), transparent 60%);
+}
+
+.clusterOpenLink {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: color-mix(in oklab, var(--aa-primary), #ffffff 28%);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in oklab, var(--aa-primary), transparent 55%);
+}
+.clusterOpenLink:hover {
+  color: color-mix(in oklab, var(--aa-primary), #ffffff 44%);
+  border-bottom-color: color-mix(in oklab, var(--aa-primary), transparent 30%);
+}
+
+.clusterErrorsBox {
+  border: 1px solid color-mix(in oklab, var(--aa-error), transparent 55%);
+  background: color-mix(in oklab, var(--aa-error), transparent 88%);
+  color: color-mix(in oklab, var(--aa-error), #ffffff 26%);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  display: grid;
+  gap: 4px;
+}
+.clusterErrorsBox code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11.5px;
+  margin-right: 4px;
+}
+
+.clusterPlanFeedback {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--aa-body);
+  border-left: 3px solid color-mix(in oklab, var(--aa-primary), transparent 35%);
+  padding: 8px 12px;
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 35%);
+  border-radius: 0 8px 8px 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Sub-tabs (used inside Research to split Cluster Planner / Custom Curations).
+ * Designed to coexist with the main top-level pill tabs without imitating them
+ * — these are flatter, segmented controls so visual hierarchy stays clear.
+ * --------------------------------------------------------------------------- */
+
+.subTabs {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--aa-hairline);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 30%);
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.subTab {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--aa-body);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.subTab:hover {
+  color: var(--aa-ink);
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 35%);
+}
+.subTab:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 40%);
+  outline-offset: 2px;
+}
+
+.subTabActive {
+  color: var(--aa-ink);
+  background: var(--aa-surface-card);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 65%);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--aa-primary), transparent 80%);
+}
+
+.subTabBadge {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--aa-primary), transparent 78%);
+  color: color-mix(in oklab, var(--aa-primary), #ffffff 30%);
+  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 60%);
+}
+
+/* ---------------------------------------------------------------------------
+ * Cluster Existence & Intent Validation badges (Cluster Planner cards).
+ * Four states: validating / new / similar / duplicate. Colors are picked to
+ * read clearly on the dark cluster card surface and to stay accessible at
+ * 4.5:1+ for body text inside the badge.
+ * --------------------------------------------------------------------------- */
+
+.validationBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 30%);
+  color: var(--aa-body);
+  white-space: nowrap;
+  line-height: 1.2;
+}
+.validationBadge[data-state="validating"] {
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 20%);
+  color: var(--aa-body);
+  border-color: color-mix(in oklab, var(--aa-hairline), transparent 0%);
+}
+.validationBadge[data-state="validating"]::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--aa-body), transparent 50%);
+  border-top-color: var(--aa-ink);
+  animation: validatingSpin 0.9s linear infinite;
+}
+@keyframes validatingSpin {
+  to { transform: rotate(360deg); }
+}
+.validationBadge[data-state="new"] {
+  background: color-mix(in oklab, #16a34a, transparent 80%);
+  color: color-mix(in oklab, #16a34a, #ffffff 35%);
+  border-color: color-mix(in oklab, #16a34a, transparent 55%);
+}
+.validationBadge[data-state="similar"] {
+  background: color-mix(in oklab, #f59e0b, transparent 78%);
+  color: color-mix(in oklab, #f59e0b, #ffffff 30%);
+  border-color: color-mix(in oklab, #f59e0b, transparent 50%);
+}
+.validationBadge[data-state="duplicate"] {
+  background: color-mix(in oklab, #ef4444, transparent 78%);
+  color: color-mix(in oklab, #ef4444, #ffffff 28%);
+  border-color: color-mix(in oklab, #ef4444, transparent 48%);
+}
+
+.validationLink {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-decoration: underline;
+  color: var(--aa-body-strong, var(--aa-ink));
+}
+.validationLink:hover { color: var(--aa-ink); }
+
+.validationMeta {
+  font-size: 11px;
+  color: var(--aa-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Cluster Planner — selection toolbar, checkboxes, and topic-row layout.
+ * The selection bar sits above the pillar/cluster trees so users always see
+ * how many rows the next bulk action will affect.
+ * --------------------------------------------------------------------------- */
+
+.clusterSelectionBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 14px;
+  margin: 12px 0 6px;
+  border-radius: 10px;
+  border: 1px solid var(--aa-hairline);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 35%);
+}
+
+.clusterSelectionCount {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--aa-body-strong, var(--aa-ink));
+  letter-spacing: 0.01em;
+}
+
+.clusterSelectionLinks {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.miniLinkBtn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--aa-body-strong, var(--aa-ink));
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.miniLinkBtn:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 35%);
+  color: var(--aa-ink);
+}
+.miniLinkBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.clusterTopicHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.clusterTopicHeadBody {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.clusterTopicCheckbox {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  border-radius: 5px;
+  border: 1.5px solid color-mix(in oklab, var(--aa-body), transparent 55%);
+  background: var(--aa-canvas);
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.clusterTopicCheckbox:hover {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 25%);
+}
+.clusterTopicCheckbox:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 40%);
+  outline-offset: 2px;
+}
+.clusterTopicCheckbox:checked {
+  background: var(--aa-primary);
+  border-color: var(--aa-primary);
+}
+.clusterTopicCheckbox:checked::after {
+  content: "";
+  width: 5px;
+  height: 9px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+/* Action buttons in the cluster card flex row — make sure secondary buttons
+ * line up nicely with the primary one and don't grow to fill space. */
+.clusterRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Modal detail block (used by the cluster error popup to show per-topic causes
+ * without losing the monospace-friendly formatting). */
+.clusterModalDetail {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 25%);
+  border: 1px solid var(--aa-hairline);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--aa-body);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+}
 /* Numeric columns right-aligned for fast comparison. */
 .tdNum {
   text-align: right;

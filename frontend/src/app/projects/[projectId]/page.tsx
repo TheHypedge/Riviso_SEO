@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
-import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse, ResearchIdeaRow as ApiResearchIdeaRow } from "@/lib/api";
+import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse, ResearchIdeaRow as ApiResearchIdeaRow, TopicCluster } from "@/lib/api";
 import { COUNTRIES, DEFAULT_COUNTRY_CODE } from "@/lib/countries";
+import { useClusterValidation, type ValidatableTopic } from "@/hooks/useClusterValidation";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 type TabKey =
@@ -20,6 +21,51 @@ type TabKey =
   | "tools"
   | "performance"
   | "project_settings";
+
+type ResearchSubTabKey = "cluster" | "curations";
+
+// Whitelist of valid tab values from the URL — anything else falls back to the
+// default. Keeping the source of truth here (vs. re-deriving from ``tabLabel``
+// inside the component) lets the lazy ``useState`` initializer read the URL
+// before the component body runs.
+const TAB_KEYS: ReadonlySet<TabKey> = new Set<TabKey>([
+  "articles",
+  "research",
+  "scheduled_articles",
+  "configuration",
+  "prompts",
+  "context_links",
+  "tools",
+  "performance",
+  "project_settings",
+]);
+
+const RESEARCH_SUBTAB_KEYS: ReadonlySet<ResearchSubTabKey> = new Set<ResearchSubTabKey>([
+  "cluster",
+  "curations",
+]);
+
+function readTabFromLocation(): TabKey {
+  if (typeof window === "undefined") return "articles";
+  try {
+    const raw = (new URLSearchParams(window.location.search).get("tab") || "").toLowerCase();
+    return TAB_KEYS.has(raw as TabKey) ? (raw as TabKey) : "articles";
+  } catch {
+    return "articles";
+  }
+}
+
+function readResearchSubTabFromLocation(): ResearchSubTabKey {
+  if (typeof window === "undefined") return "cluster";
+  try {
+    const raw = (new URLSearchParams(window.location.search).get("subtab") || "").toLowerCase();
+    return RESEARCH_SUBTAB_KEYS.has(raw as ResearchSubTabKey)
+      ? (raw as ResearchSubTabKey)
+      : "cluster";
+  } catch {
+    return "cluster";
+  }
+}
 
 function parseDateOnly(s: string): Date | null {
   const v = (s || "").trim();
@@ -210,14 +256,24 @@ function AnalyticsLineChart(props: {
   markers: import("@/lib/api").GscAnalyticsMarker[];
 }) {
   const { series, markers } = props;
-  const W = 800;
-  const H = 280;
-  const padL = 44;
-  const padR = 16;
-  const padT = 16;
-  const padB = 36;
+  const W = 920;
+  const H = 300;
+  const padL = 48;
+  const padR = 10;
+  const padT = 14;
+  const padB = 40;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
+
+  /** Theme tokens — readable on dark project cards and aligned with Riviso brand (coral + cream + gold). */
+  const gridStroke = "var(--aa-hairline)";
+  const plotOutline = "color-mix(in oklab, var(--aa-hairline), transparent 35%)";
+  const axisFill = "var(--aa-muted)";
+  const lineClicks = "var(--aa-primary)";
+  const lineImpr = "var(--aa-surface-cream-strong)";
+  const markerLine = "color-mix(in oklab, var(--aa-warning), transparent 22%)";
+  const markerDot = "var(--aa-warning)";
+  const pointRing = "rgba(255, 255, 255, 0.92)";
 
   if (!series || series.length === 0) {
     return (
@@ -258,25 +314,41 @@ function AnalyticsLineChart(props: {
     <svg
       viewBox={`0 0 ${W} ${H}`}
       width="100%"
-      height={H}
+      height="auto"
+      preserveAspectRatio="xMidYMid meet"
       role="img"
       aria-label="Search Console traffic over time with article publication markers"
-      style={{ display: "block", maxWidth: "100%" }}
+      style={{ display: "block", maxWidth: "100%", minHeight: 220 }}
     >
-      <rect x={padL} y={padT} width={innerW} height={innerH} fill="transparent" stroke="rgba(0,0,0,0.06)" />
+      <rect x={padL} y={padT} width={innerW} height={innerH} fill="transparent" stroke={plotOutline} strokeWidth={1} />
       {yTicks.map((v, i) => {
         const y = padT + innerH - (innerH * i) / tickCount;
         return (
           <g key={`yt-${i}`}>
-            <line x1={padL} y1={y} x2={W - padR} y2={y} stroke="rgba(0,0,0,0.06)" strokeDasharray="2 3" />
-            <text x={padL - 6} y={y + 4} textAnchor="end" fontSize={10} fill="rgba(0,0,0,0.55)">
+            <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={gridStroke} strokeDasharray="2 4" strokeOpacity={0.95} />
+            <text
+              x={padL - 8}
+              y={y + 4}
+              textAnchor="end"
+              fontSize={11}
+              fill={axisFill}
+              style={{ fontFamily: "var(--aa-font-ui)" }}
+            >
               {v.toLocaleString()}
             </text>
           </g>
         );
       })}
       {xLabels.map(({ p, i }) => (
-        <text key={`xl-${i}`} x={xIndex(i)} y={H - padB + 16} textAnchor="middle" fontSize={10} fill="rgba(0,0,0,0.55)">
+        <text
+          key={`xl-${i}`}
+          x={xIndex(i)}
+          y={H - 10}
+          textAnchor="middle"
+          fontSize={11}
+          fill={axisFill}
+          style={{ fontFamily: "var(--aa-font-ui)" }}
+        >
           {p.date.slice(5)}
         </text>
       ))}
@@ -284,23 +356,95 @@ function AnalyticsLineChart(props: {
         const x = xIndex(m.idx);
         return (
           <g key={`mk-${i}`}>
-            <line x1={x} y1={padT} x2={x} y2={padT + innerH} stroke="#7c3aed" strokeDasharray="4 3" strokeOpacity={0.55} />
-            <circle cx={x} cy={padT + 6} r={4} fill="#7c3aed">
+            <line
+              x1={x}
+              y1={padT}
+              x2={x}
+              y2={padT + innerH}
+              stroke={markerLine}
+              strokeWidth={1.25}
+              strokeDasharray="5 4"
+            />
+            <circle cx={x} cy={padT + 7} r={5} fill={markerDot} stroke={pointRing} strokeWidth={1.25}>
               <title>{`${m.title || "Article"} — published ${m.date}\n${m.url}`}</title>
             </circle>
           </g>
         );
       })}
-      <path d={imprPath} fill="none" stroke="#94a3b8" strokeWidth={2} strokeOpacity={0.85} />
-      <path d={clicksPath} fill="none" stroke="#2563eb" strokeWidth={2.4} />
+      <path d={imprPath} fill="none" stroke={lineImpr} strokeWidth={2.25} strokeOpacity={0.92} strokeLinecap="round" strokeLinejoin="round" />
+      <path d={clicksPath} fill="none" stroke={lineClicks} strokeWidth={2.75} strokeLinecap="round" strokeLinejoin="round" />
       {series.map((p, i) => (
-        <g key={`pt-${i}`}>
-          <circle cx={xIndex(i)} cy={yClicks(p.clicks)} r={3.2} fill="#2563eb">
-            <title>{`${p.date}\nClicks: ${p.clicks}\nImpressions: ${p.impressions}\nPosition: ${(p.position || 0).toFixed(1)}`}</title>
-          </circle>
-        </g>
+        <circle
+          key={`im-${i}`}
+          cx={xIndex(i)}
+          cy={yImpr(p.impressions)}
+          r={4}
+          fill={lineImpr}
+          stroke={pointRing}
+          strokeWidth={1}
+          fillOpacity={0.95}
+        >
+          <title>{`${p.date}\nImpressions: ${p.impressions}`}</title>
+        </circle>
+      ))}
+      {series.map((p, i) => (
+        <circle key={`cl-${i}`} cx={xIndex(i)} cy={yClicks(p.clicks)} r={5.5} fill={lineClicks} stroke={pointRing} strokeWidth={1.35}>
+          <title>{`${p.date}\nClicks: ${p.clicks}\nImpressions: ${p.impressions}\nPosition: ${(p.position || 0).toFixed(1)}`}</title>
+        </circle>
       ))}
     </svg>
+  );
+}
+
+/**
+ * Small badge that surfaces the result of the Cluster Validation engine for a
+ * single Pillar/Cluster topic. Renders in four states:
+ *   - validating  — grey pill with a spinner (request in flight or queued).
+ *   - new         — green pill, "NEW TOPIC".
+ *   - similar     — orange pill, "POTENTIAL DUPLICATE" + optional "View existing →".
+ *   - duplicate   — red pill, "EXISTS ON SITE" or "EXISTS IN PROJECT".
+ *
+ * Returns ``null`` when no entry is available *and* nothing is loading — this
+ * prevents the badge column from rendering an empty placeholder for already-
+ * imported topics or before the first validation pass kicks off.
+ */
+function ValidationBadge({ entry }: { entry?: import("@/hooks/useClusterValidation").ClusterValidationEntry | null }) {
+  if (!entry) return null;
+  if (entry.loading) {
+    return (
+      <span className={styles.validationBadge} data-state="validating" title="Validating against your library and live site…">
+        Validating…
+      </span>
+    );
+  }
+  const onSite = entry.status === "duplicate" && !!entry.existing_url;
+  const label =
+    entry.status === "new"
+      ? "New topic"
+      : entry.status === "similar"
+        ? "Potential duplicate"
+        : onSite
+          ? "Exists on site"
+          : "Exists in project";
+  return (
+    <>
+      <span className={styles.validationBadge} data-state={entry.status} title={entry.reason || undefined}>
+        {label}
+      </span>
+      {entry.existing_url ? (
+        <a
+          className={styles.validationLink}
+          href={entry.existing_url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          View existing →
+        </a>
+      ) : null}
+      {entry.status === "similar" && typeof entry.similarity === "number" ? (
+        <span className={styles.validationMeta}>cos {entry.similarity.toFixed(2)}</span>
+      ) : null}
+    </>
   );
 }
 
@@ -310,7 +454,78 @@ export default function ProjectPage() {
   const projectId = params.projectId;
 
   const token = useMemo(() => getAccessToken(), []);
-  const [tab, setTab] = useState<TabKey>("articles");
+  const searchParams = useSearchParams();
+
+  // The active section of the project page is mirrored into ``?tab=…`` (and
+  // ``?subtab=…`` for Research) so a hard refresh, browser back/forward, or a
+  // shared link all land on the same view. The lazy initializers read the URL
+  // synchronously on mount so we never flash the default "Articles" tab when
+  // restoring state.
+  const [tab, setTabState] = useState<TabKey>(() => readTabFromLocation());
+  const [researchSubTab, setResearchSubTabState] = useState<ResearchSubTabKey>(() =>
+    readResearchSubTabFromLocation(),
+  );
+
+  // Single helper that mutates ``window.location`` query params and asks the
+  // App Router to replace the URL without scrolling. ``null``/empty values
+  // delete the key so we keep URLs minimal (e.g. omit ``?tab=articles``).
+  const updateUrlParams = useCallback(
+    (updates: Record<string, string | null | undefined>) => {
+      if (typeof window === "undefined") return;
+      try {
+        const url = new URL(window.location.href);
+        for (const [key, value] of Object.entries(updates)) {
+          if (value === null || value === undefined || value === "") {
+            url.searchParams.delete(key);
+          } else {
+            url.searchParams.set(key, value);
+          }
+        }
+        const next = `${url.pathname}${url.search ? url.search : ""}${url.hash || ""}`;
+        router.replace(next, { scroll: false });
+      } catch {
+        // Best-effort URL sync; state is still authoritative for rendering.
+      }
+    },
+    [router],
+  );
+
+  const setTab = useCallback(
+    (next: TabKey) => {
+      setTabState(next);
+      // Keep URLs tidy: drop the param entirely for the default tab, and clear
+      // ``subtab`` whenever we leave Research so stale sub-tab state can't leak
+      // into other sections via shared links.
+      const updates: Record<string, string | null> = {
+        tab: next === "articles" ? null : next,
+      };
+      if (next !== "research") updates.subtab = null;
+      updateUrlParams(updates);
+    },
+    [updateUrlParams],
+  );
+
+  const setResearchSubTab = useCallback(
+    (next: ResearchSubTabKey) => {
+      setResearchSubTabState(next);
+      updateUrlParams({ subtab: next === "cluster" ? null : next });
+    },
+    [updateUrlParams],
+  );
+
+  // Sync state ← URL when the user navigates with browser back/forward or when
+  // another effect updates the query string (e.g. OAuth redirect handler).
+  useEffect(() => {
+    const rawTab = (searchParams?.get("tab") || "").toLowerCase();
+    const nextTab: TabKey = TAB_KEYS.has(rawTab as TabKey) ? (rawTab as TabKey) : "articles";
+    setTabState((prev) => (prev === nextTab ? prev : nextTab));
+
+    const rawSub = (searchParams?.get("subtab") || "").toLowerCase();
+    const nextSub: ResearchSubTabKey = RESEARCH_SUBTAB_KEYS.has(rawSub as ResearchSubTabKey)
+      ? (rawSub as ResearchSubTabKey)
+      : "cluster";
+    setResearchSubTabState((prev) => (prev === nextSub ? prev : nextSub));
+  }, [searchParams]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settings, setSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
   const [projectMeta, setProjectMeta] = useState<import("@/lib/api").ProjectPublic | null>(null);
@@ -391,11 +606,73 @@ export default function ProjectPage() {
   const [siteMapBusy, setSiteMapBusy] = useState<boolean>(false);
   const [siteMapMsg, setSiteMapMsg] = useState<string | null>(null);
 
-  // ---- Feature 2: Topic Clusters (foundations) -----------------------------
-  // No loader in v1 — the planner ships next iteration. Reserved here to keep the
-  // call sites typed when the planner UI lands; leaving as a constant 0 prevents
-  // eslint/no-unused-vars from flagging this during the transitional rollout.
-  const topicClusterCount = 0;
+  // ---- Feature 2: Topic Clusters (Topical Authority) -----------------------
+  const [topicClusters, setTopicClusters] = useState<TopicCluster[]>([]);
+  const [topicClustersLoading, setTopicClustersLoading] = useState(false);
+  const [topicClustersErr, setTopicClustersErr] = useState<string | null>(null);
+  const [clusterSeedIntent, setClusterSeedIntent] = useState("");
+  const [clusterPlanBusy, setClusterPlanBusy] = useState(false);
+  const [clusterPlanMsg, setClusterPlanMsg] = useState<string | null>(null);
+  // ``selected[clusterId] = Set<slotId>`` — per-cluster selection of slot ids
+  // ("pillar" + each cluster topic id). Keeping selections per cluster (vs. a
+  // global flat set) lets the bulk-action toolbar in each card act
+  // independently when the user has multiple clusters open.
+  const [clusterSelected, setClusterSelected] = useState<Record<string, Set<string>>>({});
+  type BulkActionKind = "generate" | "import" | "schedule";
+  const [clusterBulkBusy, setClusterBulkBusy] = useState<{ clusterId: string; kind: BulkActionKind } | null>(null);
+  // Modal payloads. ``error`` shows a polished popup for quota / generation
+  // errors. ``schedule`` opens the datetime + WP-status picker for the
+  // "Schedule selected/all" action.
+  const [clusterErrorModal, setClusterErrorModal] = useState<{
+    title: string;
+    message: string;
+    detail?: string | null;
+  } | null>(null);
+  const [clusterScheduleModal, setClusterScheduleModal] = useState<{
+    clusterId: string;
+    topicIds: string[] | null; // null = all pending
+    runAt: string; // datetime-local value
+    wpStatus: "draft" | "publish";
+    busy: boolean;
+  } | null>(null);
+
+  // Flatten every cluster's pillar + topics into a single validation batch so
+  // we make at most one network call per cluster set (vs. one per cluster).
+  // ``temp_id`` namespaces by cluster so two clusters with overlapping topic ids
+  // don't collide. ``skip`` is set for already-imported topics — those are
+  // settled so re-validating wastes a backend hop.
+  const validatableTopics = useMemo<ValidatableTopic[]>(() => {
+    const out: ValidatableTopic[] = [];
+    for (const cl of topicClusters) {
+      const pillar = cl.pillar || ({} as TopicCluster["pillar"]);
+      const pillarTitle = (pillar.title || "").trim();
+      if (pillarTitle) {
+        out.push({
+          temp_id: `${cl.id}::pillar`,
+          title: pillarTitle,
+          focus_keyphrase: (pillar.keywords || [])[0] || pillarTitle,
+          keywords: pillar.keywords || [],
+          skip: !!(pillar.imported_article_id || "").trim(),
+        });
+      }
+      for (const c of cl.clusters || []) {
+        const t = (c.title || "").trim();
+        if (!t) continue;
+        out.push({
+          temp_id: `${cl.id}::${c.id}`,
+          title: t,
+          focus_keyphrase: (c.keywords || [])[0] || t,
+          keywords: c.keywords || [],
+          skip: !!(c.imported_article_id || "").trim(),
+        });
+      }
+    }
+    return out;
+  }, [topicClusters]);
+
+  const clusterValidation = useClusterValidation(projectId, validatableTopics, {
+    enabled: tab === "research" && researchSubTab === "cluster",
+  });
   const settingsDirty = useMemo(() => {
     if (!settings) return false;
     return (
@@ -663,6 +940,39 @@ export default function ProjectPage() {
       }
     })();
   }, [projectId, router, token]);
+
+  // Bootstrap GSC status (and analytics, if a property is linked) once per project mount,
+  // independent of the active tab. Without this the "Performance & Analysis" nav entry
+  // only appears after the user opens Tools, because ``performanceTabAvailable`` depends
+  // on both ``gscStatus.connected`` and a non-empty analytics payload.
+  useEffect(() => {
+    if (!token || !projectId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const gs = await api.gscProjectStatus(projectId);
+        if (cancelled) return;
+        setGscStatus(gs);
+        setGscApiUnavailable(false);
+        if (gs?.connected && (gs?.property_url || "").trim()) {
+          try {
+            const res = await api.gscProjectAnalytics(projectId, { days: 28 });
+            if (!cancelled) setAnalytics(res);
+          } catch {
+            // Silent — the Performance tab simply won't appear until data is available.
+          }
+        }
+      } catch (e) {
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 404) {
+          setGscApiUnavailable(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, token]);
 
   async function ensureScheduleMetaLoaded() {
     if (wpTypesForSchedule.length || wpCatsForSchedule.length || scheduleWritingPrompts || scheduleImagePrompts) return;
@@ -1189,7 +1499,6 @@ export default function ProjectPage() {
       );
     } catch (e) {
       // Errors here surface in the row's tooltip via the next list reload.
-      // eslint-disable-next-line no-console
       console.warn("Mark monitor failed:", e);
     }
   }
@@ -1386,6 +1695,13 @@ export default function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, token]);
 
+  useEffect(() => {
+    if (!token) return;
+    if (tab !== "research") return;
+    void reloadTopicClusters();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, tab, token]);
+
   // Handle the OAuth redirect (URL contains ?tab=tools#gsc=connected|error&msg=...)
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1405,9 +1721,14 @@ export default function ProjectPage() {
         } else {
           setGscMsg(msg || "Google connect failed. Please try again.");
         }
-        url.hash = "";
-        url.searchParams.delete("tab");
-        window.history.replaceState({}, "", url.toString());
+        // Strip only the OAuth hash artefacts. ``setTab("tools")`` already
+        // wrote ``?tab=tools`` into the URL via ``router.replace``, and we
+        // intentionally keep that param so a refresh leaves the user on the
+        // Tools tab where the connection result is shown.
+        if (url.hash) {
+          url.hash = "";
+          window.history.replaceState({}, "", url.toString());
+        }
       }
     } catch {
       // ignore
@@ -2132,6 +2453,335 @@ export default function ProjectPage() {
   // ---------------------------------------------------------------------------
   // Research helpers (seeds, runs, filters, import)
   // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // Topic cluster planner (Research tab)
+  // ---------------------------------------------------------------------------
+
+  async function reloadTopicClusters() {
+    if (!projectId) return;
+    setTopicClustersLoading(true);
+    setTopicClustersErr(null);
+    try {
+      const res = await api.topicClusterList(projectId);
+      setTopicClusters(res.clusters || []);
+    } catch (e) {
+      const msg =
+        e instanceof ApiError && e.status === 404
+          ? "Topic cluster API not available on this backend (deploy the latest backend)."
+          : e instanceof Error
+            ? e.message
+            : "Failed to load topic clusters";
+      setTopicClustersErr(msg);
+      setTopicClusters([]);
+    } finally {
+      setTopicClustersLoading(false);
+    }
+  }
+
+  async function planTopicClusterFromResearch() {
+    const seed = clusterSeedIntent.trim();
+    if (seed.length < 3) {
+      setClusterPlanMsg("Enter a seed intent (at least 3 characters).");
+      return;
+    }
+    setClusterPlanBusy(true);
+    setClusterPlanMsg(null);
+    try {
+      const row = await api.topicClusterPlan(projectId, {
+        seed_intent: seed,
+        country_code: researchCountry,
+        tone: researchTone,
+        language: researchLanguage,
+      });
+      setTopicClusters((prev) => [row, ...prev.filter((c) => c.id !== row.id)]);
+      setClusterPlanMsg("Cluster map saved. Review below, then run Generate all for drafts + content.");
+    } catch (e) {
+      setClusterPlanMsg(e instanceof Error ? e.message : "Planning failed");
+    } finally {
+      setClusterPlanBusy(false);
+    }
+  }
+
+  /**
+   * Pull the slot ids the user has currently selected inside ``clusterId``. When
+   * the selection is empty we treat that as "act on every pending topic", which
+   * matches the natural reading of "Generate all" / "Import all" buttons.
+   *
+   * Returns ``null`` to express "all pending" (the backend interprets a missing
+   * ``topic_ids`` as exactly that), or a deduped list when the user selected
+   * specific rows. Slot ids that are *already imported* are filtered out here
+   * too so the backend never receives a no-op selection.
+   */
+  function effectiveSelectionForCluster(clusterId: string): {
+    topicIds: string[] | null;
+    pendingCount: number;
+  } {
+    const cluster = topicClusters.find((c) => c.id === clusterId);
+    if (!cluster) return { topicIds: null, pendingCount: 0 };
+    const pillarSlot = (cluster.pillar?.id || "pillar").trim() || "pillar";
+    const pillarPending = !(cluster.pillar?.imported_article_id || "").trim();
+    const pendingClusterIds = (cluster.clusters || [])
+      .filter((c) => !!(c.title || "").trim() && !(c.imported_article_id || "").trim())
+      .map((c) => (c.id || "").trim() || "cluster");
+    const allPendingCount = (pillarPending ? 1 : 0) + pendingClusterIds.length;
+
+    const sel = clusterSelected[clusterId] || new Set<string>();
+    if (sel.size === 0) return { topicIds: null, pendingCount: allPendingCount };
+
+    const filtered: string[] = [];
+    if (sel.has(pillarSlot) && pillarPending) filtered.push(pillarSlot);
+    for (const id of pendingClusterIds) {
+      if (sel.has(id)) filtered.push(id);
+    }
+    // If the user selected only already-imported rows, fall back to "all pending"
+    // so the action button doesn't silently 400 with "nothing to do".
+    if (filtered.length === 0) return { topicIds: null, pendingCount: allPendingCount };
+    return { topicIds: filtered, pendingCount: filtered.length };
+  }
+
+  function clearClusterSelection(clusterId: string) {
+    setClusterSelected((prev) => {
+      if (!prev[clusterId] || prev[clusterId].size === 0) return prev;
+      const next = { ...prev };
+      next[clusterId] = new Set();
+      return next;
+    });
+  }
+
+  function toggleClusterSlot(clusterId: string, slotId: string) {
+    setClusterSelected((prev) => {
+      const cur = new Set(prev[clusterId] || []);
+      if (cur.has(slotId)) cur.delete(slotId);
+      else cur.add(slotId);
+      return { ...prev, [clusterId]: cur };
+    });
+  }
+
+  function selectAllPendingForCluster(clusterId: string) {
+    const cluster = topicClusters.find((c) => c.id === clusterId);
+    if (!cluster) return;
+    const next = new Set<string>();
+    if (!(cluster.pillar?.imported_article_id || "").trim() && (cluster.pillar?.title || "").trim()) {
+      next.add((cluster.pillar?.id || "pillar").trim() || "pillar");
+    }
+    for (const c of cluster.clusters || []) {
+      if (!(c.title || "").trim()) continue;
+      if ((c.imported_article_id || "").trim()) continue;
+      next.add((c.id || "").trim() || "cluster");
+    }
+    setClusterSelected((prev) => ({ ...prev, [clusterId]: next }));
+  }
+
+  /**
+   * Translate a backend error (raw ``ApiError``) into the structured payload our
+   * ``clusterErrorModal`` consumes. The backend returns a structured ``detail``
+   * object for ``quota_exceeded`` so the modal can show actionable numbers; for
+   * everything else we fall back to the message text.
+   */
+  function buildErrorModalFromApiError(e: unknown, fallbackTitle: string): {
+    title: string;
+    message: string;
+    detail?: string | null;
+  } {
+    if (e instanceof ApiError && e.detail && typeof e.detail === "object" && !Array.isArray(e.detail)) {
+      {
+        const d = e.detail as Record<string, unknown>;
+        const code = typeof d.code === "string" ? d.code : "";
+        const msg = typeof d.message === "string" ? d.message : "";
+        if (code === "quota_exceeded") {
+          const needed = typeof d.needed === "number" ? d.needed : null;
+          const allowed = typeof d.allowed === "number" ? d.allowed : null;
+          const dayRemaining = d.day_remaining as number | null | undefined;
+          const monthRemaining = d.month_remaining as number | null | undefined;
+          const lines: string[] = [];
+          if (needed !== null && allowed !== null) {
+            lines.push(`Requested: ${needed} article${needed === 1 ? "" : "s"}.`);
+            lines.push(`Allowed right now: ${allowed}.`);
+          }
+          if (typeof dayRemaining === "number") lines.push(`Daily remaining: ${dayRemaining}.`);
+          if (typeof monthRemaining === "number") lines.push(`Monthly remaining: ${monthRemaining}.`);
+          return {
+            title: "Article generation limit reached",
+            message:
+              msg ||
+              "Your plan doesn't have enough remaining article generations to cover this batch.",
+            detail: lines.join(" "),
+          };
+        }
+        if (typeof d.message === "string" && d.message) {
+          return { title: fallbackTitle, message: d.message };
+        }
+      }
+    }
+    const msg = e instanceof Error ? e.message : "Something went wrong. Please try again.";
+    return { title: fallbackTitle, message: msg };
+  }
+
+  /**
+   * "Generate all"/"Generate selected": pre-flight the user's article quota and
+   * pop a clear modal when there aren't enough credits, otherwise fire the
+   * batched generate endpoint. Errors land in the same modal — never inline-
+   * truncated like before.
+   */
+  async function generateForCluster(clusterId: string) {
+    const { topicIds, pendingCount } = effectiveSelectionForCluster(clusterId);
+    if (pendingCount === 0) {
+      setClusterErrorModal({
+        title: "Nothing to generate",
+        message: "Every topic in this cluster has already been generated.",
+      });
+      return;
+    }
+
+    setClusterBulkBusy({ clusterId, kind: "generate" });
+    setClusterPlanMsg(null);
+    try {
+      // Pre-flight: ask the backend how many credits are left before we kick
+      // off a request that would otherwise 403 partway through.
+      try {
+        const q = await api.articleQuota(projectId);
+        if (!q.unlimited && (q.max_can_consume_now ?? 0) < pendingCount) {
+          setClusterErrorModal({
+            title: "Article generation limit reached",
+            message:
+              `Your ${q.plan_key || "current"} plan only allows ${q.max_can_consume_now ?? 0} more article ` +
+              `${(q.max_can_consume_now ?? 0) === 1 ? "generation" : "generations"} right now, but you're ` +
+              `trying to generate ${pendingCount}.`,
+            detail:
+              [
+                typeof q.day_remaining === "number" ? `Daily remaining: ${q.day_remaining}.` : null,
+                typeof q.month_remaining === "number" ? `Monthly remaining: ${q.month_remaining}.` : null,
+                "Tip: import the topics first (no credits used) and generate them later, or upgrade your plan.",
+              ]
+                .filter(Boolean)
+                .join(" "),
+          });
+          return;
+        }
+      } catch {
+        // Quota endpoint failure is non-fatal — fall through and let the
+        // generate endpoint enforce the same limit server-side.
+      }
+
+      const res = await api.topicClusterGenerateAll(projectId, clusterId, {
+        generate_image: false,
+        writing_prompt_id: null,
+        topic_ids: topicIds,
+      });
+      setTopicClusters((prev) => prev.map((c) => (c.id === res.cluster.id ? res.cluster : c)));
+      clearClusterSelection(clusterId);
+      if (res.errors?.length) {
+        setClusterErrorModal({
+          title: "Some articles couldn't be generated",
+          message: `Finished with ${res.errors.length} error${res.errors.length === 1 ? "" : "s"}. The successful drafts are now linked in the cluster.`,
+          detail: res.errors.map((e) => `• ${e.topic_id}: ${e.message}`).join("\n"),
+        });
+      } else {
+        setClusterPlanMsg("All selected articles generated. Open them from the links below.");
+      }
+    } catch (e) {
+      setClusterErrorModal(buildErrorModalFromApiError(e, "Generation failed"));
+    } finally {
+      setClusterBulkBusy(null);
+    }
+  }
+
+  /**
+   * "Import all"/"Import selected": create pending article rows in the project's
+   * Articles tab without consuming any generation credits. Useful when the user
+   * wants to review/edit titles or focus keyphrases before generation.
+   */
+  async function importForCluster(clusterId: string) {
+    const { topicIds, pendingCount } = effectiveSelectionForCluster(clusterId);
+    if (pendingCount === 0) {
+      setClusterErrorModal({
+        title: "Nothing to import",
+        message: "Every topic in this cluster has already been imported.",
+      });
+      return;
+    }
+    setClusterBulkBusy({ clusterId, kind: "import" });
+    setClusterPlanMsg(null);
+    try {
+      const res = await api.topicClusterImport(projectId, clusterId, {
+        topic_ids: topicIds,
+      });
+      setTopicClusters((prev) => prev.map((c) => (c.id === res.cluster.id ? res.cluster : c)));
+      clearClusterSelection(clusterId);
+      if (res.errors?.length) {
+        setClusterErrorModal({
+          title: "Some topics couldn't be imported",
+          message: `Imported ${res.imported_count}, ${res.errors.length} failed.`,
+          detail: res.errors.map((e) => `• ${e.topic_id}: ${e.message}`).join("\n"),
+        });
+      } else {
+        setClusterPlanMsg(
+          `Imported ${res.imported_count} topic${res.imported_count === 1 ? "" : "s"} into Articles as pending drafts.`,
+        );
+      }
+    } catch (e) {
+      setClusterErrorModal(buildErrorModalFromApiError(e, "Import failed"));
+    } finally {
+      setClusterBulkBusy(null);
+    }
+  }
+
+  /** Open the schedule picker modal for a cluster (selected slots or all pending). */
+  function openScheduleForCluster(clusterId: string) {
+    const { topicIds, pendingCount } = effectiveSelectionForCluster(clusterId);
+    if (pendingCount === 0) {
+      setClusterErrorModal({
+        title: "Nothing to schedule",
+        message: "Every topic in this cluster has already been imported.",
+      });
+      return;
+    }
+    // Default schedule: ~24h from now, rounded to the next 5-min boundary.
+    const dt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    dt.setSeconds(0, 0);
+    dt.setMinutes(dt.getMinutes() + (5 - (dt.getMinutes() % 5 || 5)));
+    setClusterScheduleModal({
+      clusterId,
+      topicIds,
+      runAt: toDatetimeLocalValue(dt),
+      wpStatus: "draft",
+      busy: false,
+    });
+  }
+
+  /** Submit handler for the schedule modal. */
+  async function confirmScheduleForCluster() {
+    const m = clusterScheduleModal;
+    if (!m || m.busy) return;
+    setClusterScheduleModal({ ...m, busy: true });
+    try {
+      const res = await api.topicClusterImport(projectId, m.clusterId, {
+        topic_ids: m.topicIds,
+        schedule_at: m.runAt,
+        wp_status: m.wpStatus,
+      });
+      setTopicClusters((prev) => prev.map((c) => (c.id === res.cluster.id ? res.cluster : c)));
+      clearClusterSelection(m.clusterId);
+      setClusterScheduleModal(null);
+      if (res.errors?.length) {
+        setClusterErrorModal({
+          title: "Some topics couldn't be scheduled",
+          message: `Scheduled ${res.scheduled_count}, ${res.errors.length} failed.`,
+          detail: res.errors.map((e) => `• ${e.topic_id}: ${e.message}`).join("\n"),
+        });
+      } else {
+        setClusterPlanMsg(
+          `Scheduled ${res.scheduled_count} article${res.scheduled_count === 1 ? "" : "s"} starting ${m.runAt.replace("T", " ")}. Track them in the Scheduled Articles tab.`,
+        );
+      }
+    } catch (e) {
+      setClusterScheduleModal(m); // restore busy=false
+      setClusterErrorModal(buildErrorModalFromApiError(e, "Scheduling failed"));
+    } finally {
+      setClusterScheduleModal((prev) => (prev ? { ...prev, busy: false } : null));
+    }
+  }
 
   function addSeedKeywordsFromInput() {
     const raw = (researchSeedInput || "").trim();
@@ -3747,38 +4397,410 @@ export default function ProjectPage() {
 
         {tab === "research" ? (
           <>
-            {/* Feature 2 — Topical Authority Cluster Mapping (foundations only in v1) */}
-            <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={styles.sectionHead}>
-                <div>
-                  <h2 style={{ margin: 0 }}>Topical authority — Cluster planner</h2>
-                  <div className={styles.muted}>
-                    Generate a Pillar + 4-6 Cluster topical map from a single seed intent (planner ships next iteration).
-                  </div>
-                </div>
-                <button
-                  className={styles.button}
-                  type="button"
-                  disabled
-                  title="Cluster planner ships in the next iteration. Schema and API surface are in place; SERP analyzer + LLM decomposition land in the follow-up PR."
-                >
-                  Plan cluster (soon)
-                </button>
-              </div>
-              <div className={styles.muted} style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
-                When this lands you'll input a seed intent, Riviso will analyze the top 10 SERP results,
-                and you'll see a tree with one Pillar article and 4-6 cluster topics — all generatable in one click.
-                {topicClusterCount > 0 ? (
-                  <span> &nbsp;Saved drafts: {topicClusterCount}.</span>
+            {/* Sub-tab strip — switches the Research panel between Cluster Planner
+                (Feature 2) and the existing keyword-driven Custom Curations flow. */}
+            <div
+              className={styles.subTabs}
+              role="tablist"
+              aria-label="Research sub-sections"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={researchSubTab === "cluster"}
+                className={`${styles.subTab} ${researchSubTab === "cluster" ? styles.subTabActive : ""}`}
+                onClick={() => setResearchSubTab("cluster")}
+              >
+                Cluster Planner
+                {topicClusters.length > 0 ? (
+                  <span className={styles.subTabBadge}>{topicClusters.length}</span>
                 ) : null}
-              </div>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={researchSubTab === "curations"}
+                className={`${styles.subTab} ${researchSubTab === "curations" ? styles.subTabActive : ""}`}
+                onClick={() => setResearchSubTab("curations")}
+              >
+                Custom Curations
+                {researchResults.length > 0 ? (
+                  <span className={styles.subTabBadge}>{researchResults.length}</span>
+                ) : null}
+              </button>
             </div>
 
+            {researchSubTab === "cluster" ? (
+              <>
+            {/* Feature 2 — Topical Authority Cluster Mapping */}
+            <div className={`${styles.card} ${styles.cardWide} ${styles.clusterPlanner}`}>
+              <div className={styles.clusterPlannerHead}>
+                <div style={{ minWidth: 0, flex: "1 1 320px" }}>
+                  <h2 className={styles.clusterCardTitle}>Topical authority — Cluster planner</h2>
+                  <p className={styles.clusterCardSubtitle}>
+                    Seed intent → live Google SERP snapshot (best-effort) → one Pillar + 4–6 Cluster
+                    articles. Uses the same country, language, and tone you set in Research curation
+                    below.
+                  </p>
+                </div>
+                <div className={styles.clusterPlannerActions}>
+                  <button
+                    type="button"
+                    className={styles.miniBtn}
+                    onClick={() => reloadTopicClusters()}
+                    disabled={topicClustersLoading}
+                  >
+                    {topicClustersLoading ? "Refreshing…" : "Refresh list"}
+                  </button>
+                  <button
+                    className={styles.button}
+                    type="button"
+                    disabled={
+                      clusterPlanBusy ||
+                      !clusterSeedIntent.trim() ||
+                      clusterSeedIntent.trim().length < 3
+                    }
+                    onClick={() => planTopicClusterFromResearch()}
+                  >
+                    {clusterPlanBusy ? "Planning…" : "Plan cluster"}
+                  </button>
+                </div>
+              </div>
+
+              <label className={styles.label}>
+                Seed intent
+                <textarea
+                  className={styles.textarea}
+                  rows={3}
+                  value={clusterSeedIntent}
+                  onChange={(e) => setClusterSeedIntent(e.target.value)}
+                  placeholder="e.g. Best RERA lawyers in Chandigarh for homebuyer disputes"
+                />
+              </label>
+
+              {topicClustersErr ? (
+                <div className={styles.error}>{topicClustersErr}</div>
+              ) : null}
+              {clusterPlanMsg ? (
+                <div className={styles.clusterPlanFeedback}>{clusterPlanMsg}</div>
+              ) : null}
+
+              <p className={styles.clusterPlannerHint}>
+                Pick the topics you want, then choose an action: <strong>Generate</strong> uses one
+                credit per article, <strong>Import</strong> stages drafts in Articles for free, and
+                <strong> Schedule</strong> imports + auto-publishes them to WordPress. Tick rows
+                individually, or leave selection empty to act on every pending topic.
+              </p>
+
+              {topicClusters.length === 0 && !topicClustersLoading ? (
+                <div className={styles.clusterEmptyHint}>
+                  No saved clusters yet. Plan one above — it will appear here with a pillar plus
+                  supporting topics tree.
+                </div>
+              ) : null}
+
+              {topicClusters.map((cl) => {
+                const serpN = cl.serp_summary?.result_count ?? 0;
+                const pillarDone = !!(cl.pillar?.imported_article_id || "").trim();
+                const clusterRows = cl.clusters || [];
+                const clusterSlots = clusterRows.length;
+                const clusterDone = clusterRows.filter(
+                  (c) => !!(c.imported_article_id || "").trim(),
+                ).length;
+                const totalDone = (pillarDone ? 1 : 0) + clusterDone;
+                const totalSlots = (clusterSlots > 0 ? clusterSlots : 0) + 1;
+                const allDone = pillarDone && clusterDone === clusterSlots && clusterSlots > 0;
+                const statusKey = (cl.status || "draft").toLowerCase();
+                // Pull validation outcomes for this cluster's pillar + topics so we
+                // can render badges and disable Generate-all if every remaining
+                // (non-imported) row is a confirmed duplicate.
+                const pillarValidation = clusterValidation.results[`${cl.id}::pillar`];
+                const remainingValidations: typeof pillarValidation[] = [];
+                if (!pillarDone && pillarValidation) remainingValidations.push(pillarValidation);
+                for (const c of clusterRows) {
+                  if ((c.imported_article_id || "").trim()) continue;
+                  const v = clusterValidation.results[`${cl.id}::${c.id}`];
+                  if (v) remainingValidations.push(v);
+                }
+                const allDuplicates =
+                  remainingValidations.length > 0 &&
+                  remainingValidations.every((v) => v && v.status === "duplicate");
+                return (
+                  <div key={cl.id} className={styles.clusterRow}>
+                    <div className={styles.clusterRowHead}>
+                      <div className={styles.clusterRowTitleBlock}>
+                        <h3 className={styles.clusterRowSeed}>{cl.seed_intent}</h3>
+                        <div className={styles.clusterRowMeta}>
+                          <span className={styles.clusterMetaChip}>{cl.country_code}</span>
+                          <span className={styles.clusterMetaChip}>{cl.tone}</span>
+                          <span
+                            className={styles.clusterMetaChip}
+                            data-variant={`status-${statusKey}`}
+                          >
+                            {statusKey.replace("_", " ")}
+                          </span>
+                          <span className={styles.clusterMetaChip}>
+                            SERP {serpN ? `${serpN} rows` : "0 (LLM-inferred)"}
+                          </span>
+                          <span className={styles.clusterMetaChip}>
+                            {totalDone}/{totalSlots} generated
+                          </span>
+                          {cl.created_at ? (
+                            <span className={styles.clusterMetaChip}>{cl.created_at}</span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className={styles.clusterRowActions}>
+                        {(() => {
+                          const sel = clusterSelected[cl.id] || new Set<string>();
+                          const selN = sel.size;
+                          const bulk =
+                            clusterBulkBusy && clusterBulkBusy.clusterId === cl.id
+                              ? clusterBulkBusy
+                              : null;
+                          const generateBusy = bulk?.kind === "generate";
+                          const importBusy = bulk?.kind === "import";
+                          const scheduleBusy = bulk?.kind === "schedule";
+                          const anyBusy = !!bulk || clusterPlanBusy;
+                          const target = selN > 0 ? `${selN} selected` : `${totalSlots - totalDone} pending`;
+                          const noPending = totalDone >= totalSlots;
+                          const generateDisabled = anyBusy || allDuplicates || noPending;
+                          return (
+                            <>
+                              <button
+                                type="button"
+                                className={styles.button}
+                                disabled={generateDisabled}
+                                onClick={() => generateForCluster(cl.id)}
+                                title={
+                                  allDuplicates
+                                    ? "Every remaining topic already exists on your site or in this project."
+                                    : noPending
+                                      ? "Every topic in this cluster is already generated."
+                                      : `Generate ${target} — uses one credit per article.`
+                                }
+                              >
+                                {generateBusy
+                                  ? "Generating…"
+                                  : allDone
+                                    ? "All generated"
+                                    : allDuplicates
+                                      ? "All duplicates"
+                                      : `Generate ${selN > 0 ? "selected" : "all"}`}
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.btnSecondary}
+                                disabled={anyBusy || noPending}
+                                onClick={() => importForCluster(cl.id)}
+                                title={
+                                  noPending
+                                    ? "Every topic is already imported."
+                                    : `Import ${target} into Articles as pending drafts (no credits used).`
+                                }
+                              >
+                                {importBusy ? "Importing…" : `Import ${selN > 0 ? "selected" : "all"}`}
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.btnSecondary}
+                                disabled={anyBusy || noPending}
+                                onClick={() => openScheduleForCluster(cl.id)}
+                                title={
+                                  noPending
+                                    ? "Every topic is already imported."
+                                    : `Import ${target} and schedule them for auto-generation + publish.`
+                                }
+                              >
+                                {scheduleBusy ? "Scheduling…" : `Schedule ${selN > 0 ? "selected" : "all"}`}
+                              </button>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
+
+                    {(cl.generation_errors || []).length > 0 ? (
+                      <div className={styles.clusterErrorsBox}>
+                        {(cl.generation_errors || []).map((er) => (
+                          <div key={`${er.topic_id}-${er.message.slice(0, 24)}`}>
+                            <code>{er.topic_id}</code>
+                            {er.message}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {(() => {
+                      const sel = clusterSelected[cl.id] || new Set<string>();
+                      const pendingTotal = totalSlots - totalDone;
+                      if (pendingTotal === 0) return null;
+                      return (
+                        <div className={styles.clusterSelectionBar}>
+                          <span className={styles.clusterSelectionCount}>
+                            {sel.size > 0
+                              ? `${sel.size} of ${pendingTotal} selected`
+                              : `${pendingTotal} pending — bulk action will use all`}
+                          </span>
+                          <div className={styles.clusterSelectionLinks}>
+                            <button
+                              type="button"
+                              className={styles.miniLinkBtn}
+                              onClick={() => selectAllPendingForCluster(cl.id)}
+                              disabled={sel.size === pendingTotal}
+                            >
+                              Select all pending
+                            </button>
+                            <button
+                              type="button"
+                              className={styles.miniLinkBtn}
+                              onClick={() => clearClusterSelection(cl.id)}
+                              disabled={sel.size === 0}
+                            >
+                              Clear selection
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    <div className={styles.clusterTreeSection}>
+                      <h4 className={styles.clusterTreeLabel}>Pillar article</h4>
+                      {(() => {
+                        const pillarSlot = (cl.pillar?.id || "pillar").trim() || "pillar";
+                        const sel = clusterSelected[cl.id] || new Set<string>();
+                        const checked = sel.has(pillarSlot);
+                        return (
+                          <div className={styles.clusterPillarBox}>
+                            <div className={styles.clusterTopicHead}>
+                              {!pillarDone ? (
+                                <input
+                                  type="checkbox"
+                                  className={styles.clusterTopicCheckbox}
+                                  checked={checked}
+                                  onChange={() => toggleClusterSlot(cl.id, pillarSlot)}
+                                  aria-label="Select pillar article"
+                                />
+                              ) : null}
+                              <div className={styles.clusterTopicHeadBody}>
+                                <h5 className={styles.clusterTopicTitle}>
+                                  {cl.pillar?.title || "(no pillar title)"}
+                                </h5>
+                                {cl.pillar?.intent ? (
+                                  <p className={styles.clusterTopicIntent}>{cl.pillar.intent}</p>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div className={styles.clusterTopicFooter}>
+                              {pillarDone ? (
+                                <>
+                                  <span className={styles.clusterTopicPill} data-state="imported">
+                                    Imported
+                                  </span>
+                                  <Link
+                                    className={styles.clusterOpenLink}
+                                    href={`/projects/${projectId}/articles/${(
+                                      cl.pillar?.imported_article_id || ""
+                                    ).trim()}`}
+                                  >
+                                    Open article →
+                                  </Link>
+                                </>
+                              ) : (
+                                <>
+                                  <span className={styles.clusterTopicPill} data-state="pending">
+                                    Pending generation
+                                  </span>
+                                  <ValidationBadge entry={pillarValidation} />
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    <div className={styles.clusterTreeSection}>
+                      <h4 className={styles.clusterTreeLabel}>
+                        Cluster articles ({clusterSlots})
+                      </h4>
+                      <ul className={styles.clusterTopicList}>
+                        {clusterRows.map((c) => {
+                          const done = !!(c.imported_article_id || "").trim();
+                          const v = clusterValidation.results[`${cl.id}::${c.id}`];
+                          const slotId = (c.id || "").trim() || "cluster";
+                          const sel = clusterSelected[cl.id] || new Set<string>();
+                          const checked = sel.has(slotId);
+                          return (
+                            <li key={c.id} className={styles.clusterTopicItem}>
+                              <div className={styles.clusterTopicHead}>
+                                {!done ? (
+                                  <input
+                                    type="checkbox"
+                                    className={styles.clusterTopicCheckbox}
+                                    checked={checked}
+                                    onChange={() => toggleClusterSlot(cl.id, slotId)}
+                                    aria-label={`Select topic ${c.title}`}
+                                  />
+                                ) : null}
+                                <div className={styles.clusterTopicHeadBody}>
+                                  <h5 className={styles.clusterTopicTitle}>{c.title}</h5>
+                                  {c.intent ? (
+                                    <p className={styles.clusterTopicIntent}>{c.intent}</p>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <div className={styles.clusterTopicFooter}>
+                                {done ? (
+                                  <>
+                                    <span
+                                      className={styles.clusterTopicPill}
+                                      data-state="imported"
+                                    >
+                                      Imported
+                                    </span>
+                                    <Link
+                                      className={styles.clusterOpenLink}
+                                      href={`/projects/${projectId}/articles/${(
+                                        c.imported_article_id || ""
+                                      ).trim()}`}
+                                    >
+                                      Open article →
+                                    </Link>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span
+                                      className={styles.clusterTopicPill}
+                                      data-state="pending"
+                                    >
+                                      Pending
+                                    </span>
+                                    <ValidationBadge entry={v} />
+                                  </>
+                                )}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+              </>
+            ) : null}
+
+            {researchSubTab === "curations" ? (
+              <>
             <div className={`${styles.card} ${styles.cardWide}`}>
               <div className={styles.sectionHead}>
                 <div>
-                  <h2 style={{ margin: 0 }}>Curation</h2>
-                  <div className={styles.muted}>Fine-tune results for your brand and intent.</div>
+                  <h2 className={styles.clusterCardTitle}>Curation</h2>
+                  <p className={styles.clusterCardSubtitle}>
+                    Fine-tune results for your brand and intent.
+                  </p>
                 </div>
                 <button
                   className={styles.button}
@@ -4225,6 +5247,8 @@ export default function ProjectPage() {
                 </div>
               </>
             ) : null}
+              </>
+            ) : null}
           </>
         ) : null}
 
@@ -4541,10 +5565,11 @@ export default function ProjectPage() {
 
         {tab === "configuration" ? (
           <div className={`${styles.card} ${styles.cardWide}`}>
-            <h2>Configuration</h2>
-            <p style={{ color: "#666", lineHeight: 1.5 }}>
-              This will contain WordPress defaults, featured image settings, and Search Console settings (ported from the legacy page).
-              Next step is to expose these project fields via the backend API and bind this form to them.
+            <h2 className={styles.clusterCardTitle}>Configuration</h2>
+            <p className={styles.clusterCardSubtitle}>
+              WordPress defaults, featured-image settings, and Search Console wiring live in
+              <strong> Project Settings</strong> and <strong>Tools</strong> for now. We&apos;ll move
+              the most-used controls back here once the dedicated form lands.
             </p>
           </div>
         ) : null}
@@ -4554,9 +5579,10 @@ export default function ProjectPage() {
             <div className={`${styles.card} ${styles.cardWide}`}>
               <div className={styles.projectCardTop}>
                 <div>
-                  <h2 style={{ margin: 0 }}>Prompts</h2>
-                  <p style={{ color: "#666", lineHeight: 1.5, margin: "6px 0 0" }}>
-                    Manage writing prompts and image prompts. Set defaults used by generation and scheduling.
+                  <h2 className={styles.clusterCardTitle}>Prompts</h2>
+                  <p className={styles.clusterCardSubtitle}>
+                    Manage writing prompts and image prompts. Set the defaults used by generation
+                    and scheduling — individual articles can override them anytime.
                   </p>
                 </div>
                 <button className={styles.button} type="button" onClick={savePrompts} disabled={promptsSaving || promptsLoading}>
@@ -4570,12 +5596,12 @@ export default function ProjectPage() {
             <div className={styles.twoCol}>
               <div className={`${styles.card} ${styles.cardWide}`}>
                 <div className={styles.projectCardTop}>
-                  <h2 style={{ margin: 0 }}>Article writing prompts</h2>
+                  <h3 className={styles.clusterTreeLabel}>Article writing prompts</h3>
                   <button className={styles.btnSecondary} type="button" onClick={() => startAddPrompt("writing")}>
                     + Add new
                   </button>
                 </div>
-                <div className={styles.muted} style={{ fontSize: 12 }}>
+                <div className={styles.clusterCardSubtitle} style={{ fontSize: 12.5 }}>
                   Default is used when you generate or schedule unless you override on the article.
                 </div>
 
@@ -4611,12 +5637,12 @@ export default function ProjectPage() {
 
               <div className={`${styles.card} ${styles.cardWide}`}>
                 <div className={styles.projectCardTop}>
-                  <h2 style={{ margin: 0 }}>Image prompts</h2>
+                  <h3 className={styles.clusterTreeLabel}>Image prompts</h3>
                   <button className={styles.btnSecondary} type="button" onClick={() => startAddPrompt("image")}>
                     + Add new
                   </button>
                 </div>
-                <div className={styles.muted} style={{ fontSize: 12 }}>
+                <div className={styles.clusterCardSubtitle} style={{ fontSize: 12.5 }}>
                   Default is used when generating featured images unless overridden.
                 </div>
 
@@ -4715,9 +5741,10 @@ export default function ProjectPage() {
             <div className={`${styles.card} ${styles.cardWide}`}>
               <div className={styles.projectCardTop}>
                 <div>
-                  <h2 style={{ margin: 0 }}>Context links</h2>
-                  <p style={{ color: "#666", lineHeight: 1.5, margin: "6px 0 0" }}>
-                    Add exact phrases with links. When publishing to WordPress, matching phrases are linked on the live site (case-insensitive).
+                  <h2 className={styles.clusterCardTitle}>Context links</h2>
+                  <p className={styles.clusterCardSubtitle}>
+                    Add exact phrases with target URLs. When an article publishes to WordPress,
+                    every match is linked on the live site (case-insensitive).
                   </p>
                 </div>
                 <div className={styles.row} style={{ justifyContent: "flex-end" }}>
@@ -4878,11 +5905,12 @@ export default function ProjectPage() {
         {tab === "tools" ? (
           <>
             <div className={`${styles.card} ${styles.cardWide}`}>
-              <h2 style={{ marginTop: 0 }} className={`${styles.sectionTitle}`}>Search Console</h2>
-              <div className={styles.muted} style={{ fontSize: 13, lineHeight: 1.5 }}>
-                Connect this project to its own Google account and Search Console property. After a live publish,
-                we automatically request indexing for the post URL. Each project can use a different Google account.
-              </div>
+              <h2 className={styles.clusterCardTitle} style={{ marginTop: 0 }}>Search Console</h2>
+              <p className={styles.clusterCardSubtitle}>
+                Connect this project to its own Google account and Search Console property. After a
+                live publish we automatically request indexing for the post URL — and each project
+                can use a different Google account.
+              </p>
 
               {gscMsg ? <div className={styles.error} style={{ marginTop: 10 }}>{gscMsg}</div> : null}
               {gscOpenedFromOAuth && gscStatus?.connected ? (
@@ -5072,7 +6100,7 @@ export default function ProjectPage() {
                 Riviso pulls every published post from your WordPress REST API and stores
                 <code> URL · title · focus keyphrase</code>. New articles will use this list to auto-insert
                 contextual <code>&lt;a&gt;</code> tags before posting (matching engine ships in the next iteration —
-                today this card mirrors the data so you can verify nothing's stale).
+                today this card mirrors the data so you can verify nothing&apos;s stale).
               </div>
               {siteMapMsg ? (
                 <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }}>{siteMapMsg}</div>
@@ -5231,7 +6259,7 @@ export default function ProjectPage() {
                 <em>not</em> reflected in URL Inspection’s history) and pings your sitemap, then opens
                 Search Console’s URL Inspection panel pre-filled with the URL. Pressing{" "}
                 <strong>REQUEST INDEXING</strong> there is the only action that produces the visible
-                "Indexing requested" entry in Search Console.
+                &ldquo;Indexing requested&rdquo; entry in Search Console.
               </div>
 
               {!gscStatus?.connected || !gscStatus?.property_url ? (
@@ -5510,7 +6538,7 @@ export default function ProjectPage() {
                   <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
                     Search Console clicks and impressions for{" "}
                     <code>{(analytics?.property_url || gscStatus?.property_url || "—").toString()}</code>.
-                    Vertical purple markers show when Riviso published an article — hover to see which.
+                    Gold markers show when Riviso published an article — hover to see which.
                     Google delays final data ~2-3 days; the latest two points may shift slightly.
                   </div>
                 </div>
@@ -5653,14 +6681,16 @@ export default function ProjectPage() {
                     </div>
                   </div>
 
-                  {/* Chart */}
-                  <div style={{ marginTop: 18 }}>
+                  {/* Chart — edge-to-edge within the card (horizontal bleed cancels card padding). */}
+                  <div className={styles.analyticsChartBleed} style={{ marginTop: 18 }}>
                     <AnalyticsLineChart series={analytics.series} markers={analytics.markers} />
-                    <div className={styles.muted} style={{ fontSize: 11, marginTop: 6, lineHeight: 1.45 }}>
-                      <span style={{ color: "#60a5fa", fontWeight: 800 }}>■</span> Clicks &nbsp;
-                      <span style={{ color: "#cbd5e1", fontWeight: 800 }}>■</span> Impressions &nbsp;
-                      <span style={{ color: "#a78bfa", fontWeight: 800 }}>┊</span> Article published
-                      &nbsp;·&nbsp; {analytics.markers.length} article{analytics.markers.length === 1 ? "" : "s"} in this window.
+                    <div className={styles.analyticsChartLegend}>
+                      <span className={styles.analyticsLegendSwatch} data-series="clicks" /> Clicks
+                      <span className={styles.analyticsLegendSwatch} data-series="impr" /> Impressions
+                      <span className={styles.analyticsLegendSwatch} data-series="marker" /> Article published
+                      <span className={styles.analyticsLegendMeta}>
+                        · {analytics.markers.length} article{analytics.markers.length === 1 ? "" : "s"} in this window
+                      </span>
                     </div>
                   </div>
                 </>
@@ -5679,7 +6709,7 @@ export default function ProjectPage() {
                   Up to {analytics.top_pages.length} URLs from the linked property, sorted by clicks within the active window.
                 </div>
                 <div style={{ overflowX: "auto", border: "1px solid var(--aa-hairline)", borderRadius: 12 }}>
-                  <table className={`${styles.table} ${styles.tableZebra}`} style={{ border: 0 }}>
+                  <table className={`${styles.table} ${styles.tableZebra} ${styles.analyticsTopPagesTable}`} style={{ border: 0 }}>
                     <thead>
                       <tr>
                         <th className={styles.th} style={{ width: "60%" }}>URL</th>
@@ -5925,6 +6955,125 @@ export default function ProjectPage() {
                 </button>
                 <button type="button" className={`${styles.miniBtn} ${styles.miniDanger}`} onClick={() => void deleteProjectNow()} disabled={deletingProject}>
                   {deletingProject ? "Deleting…" : "Yes, delete project"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {clusterErrorModal ? (
+          <div
+            className={styles.modalBackdrop}
+            role="dialog"
+            aria-modal="true"
+            aria-label={clusterErrorModal.title}
+          >
+            <div className={styles.modalPanel}>
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>{clusterErrorModal.title}</h3>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label="Close"
+                  onClick={() => setClusterErrorModal(null)}
+                >
+                  <Icon.X className={styles.icon20} />
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                <p style={{ margin: 0, lineHeight: 1.55 }}>{clusterErrorModal.message}</p>
+                {clusterErrorModal.detail ? (
+                  <pre className={styles.clusterModalDetail}>{clusterErrorModal.detail}</pre>
+                ) : null}
+              </div>
+              <div className={styles.modalFooter}>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={() => setClusterErrorModal(null)}
+                >
+                  Got it
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {clusterScheduleModal ? (
+          <div
+            className={styles.modalBackdrop}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Schedule cluster articles"
+          >
+            <div className={styles.modalPanel}>
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>
+                  Schedule {clusterScheduleModal.topicIds ? `${clusterScheduleModal.topicIds.length} topic${clusterScheduleModal.topicIds.length === 1 ? "" : "s"}` : "all pending topics"}
+                </h3>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label="Close"
+                  onClick={() => setClusterScheduleModal(null)}
+                  disabled={clusterScheduleModal.busy}
+                >
+                  <Icon.X className={styles.icon20} />
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
+                  Each topic will be imported as a pending article and queued for the scheduler.
+                  Subsequent imports are staggered 5 minutes apart so WordPress doesn&apos;t reject
+                  them for rate limiting.
+                </p>
+                <label className={styles.label}>
+                  Start time
+                  <input
+                    type="datetime-local"
+                    className={styles.input}
+                    value={clusterScheduleModal.runAt}
+                    step={300}
+                    onChange={(e) =>
+                      setClusterScheduleModal((m) => (m ? { ...m, runAt: e.target.value } : m))
+                    }
+                  />
+                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                    Times are interpreted in your profile timezone. Minimum 5 minutes from now.
+                  </div>
+                </label>
+                <label className={styles.label}>
+                  WordPress status on publish
+                  <select
+                    className={styles.input}
+                    value={clusterScheduleModal.wpStatus}
+                    onChange={(e) =>
+                      setClusterScheduleModal((m) =>
+                        m ? { ...m, wpStatus: e.target.value as "draft" | "publish" } : m,
+                      )
+                    }
+                  >
+                    <option value="draft">Draft (review on WordPress before going live)</option>
+                    <option value="publish">Publish immediately at the scheduled time</option>
+                  </select>
+                </label>
+              </div>
+              <div className={styles.modalFooter}>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => setClusterScheduleModal(null)}
+                  disabled={clusterScheduleModal.busy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={() => void confirmScheduleForCluster()}
+                  disabled={clusterScheduleModal.busy || !clusterScheduleModal.runAt}
+                >
+                  {clusterScheduleModal.busy ? "Scheduling…" : "Schedule"}
                 </button>
               </div>
             </div>

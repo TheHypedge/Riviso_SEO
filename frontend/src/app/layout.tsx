@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter, Cormorant_Garamond } from "next/font/google";
-import Script from "next/script";
 import "./globals.css";
+import ExtensionCleanup from "@/components/ExtensionCleanup";
 import { GlobalLoadingProvider } from "@/components/GlobalLoadingProvider";
 
 const geistSans = Geist({
@@ -69,19 +69,16 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body suppressHydrationWarning>
-        {/* Some browser extensions inject DOM nodes before hydration (e.g. ChatGPT Translate).
-            Removing them early prevents a client/server mismatch crash while remaining a safe no-op. */}
-        <Script id="aa-extension-cleanup" strategy="beforeInteractive">
-          {`(function () {
-            try {
-              var ids = ["chatgpt_translate_widget_root"];
-              for (var i = 0; i < ids.length; i++) {
-                var el = document.getElementById(ids[i]);
-                if (el && el.parentNode) el.parentNode.removeChild(el);
-              }
-            } catch (e) {}
-          })();`}
-        </Script>
+        {/*
+          Browser extensions (e.g. ChatGPT-Translate) inject siblings into
+          <body> before React hydrates. ``suppressHydrationWarning`` on
+          <body> is the supported way to tolerate them during hydration;
+          ``ExtensionCleanup`` removes the known offenders post-hydration as
+          a hygiene step. This replaces the previous inline
+          <Script strategy="beforeInteractive"> which tripped React 19's
+          "Scripts inside React components are never executed" warning.
+        */}
+        <ExtensionCleanup />
         <GlobalLoadingProvider>{children}</GlobalLoadingProvider>
       </body>
     </html>

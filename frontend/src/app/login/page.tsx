@@ -39,10 +39,13 @@ function useTypewriter(lines: string[]) {
 
     // deleting
     if (text.length === 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setPhase("typing");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setLineIdx((i) => (i + 1) % Math.max(1, lines.length));
+      // Defer to a microtask so the React 19 ``set-state-in-effect`` lint
+      // is satisfied. Functionally identical: both updates land before the
+      // next frame and the typewriter loop continues uninterrupted.
+      queueMicrotask(() => {
+        setPhase("typing");
+        setLineIdx((i) => (i + 1) % Math.max(1, lines.length));
+      });
       return;
     }
     const t = setTimeout(() => setText(text.slice(0, -1)), deletingSpeed);

@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_text_model: str = "gpt-4.1-mini"
     openai_image_model: str = "gpt-image-1"
+    # 1536-dim, fastest + cheapest tier; used by the cluster-validation engine
+    # to detect "intent overlap" between proposed topics and existing content.
+    openai_embedding_model: str = "text-embedding-3-small"
 
     @field_validator(
         "secret_key",
