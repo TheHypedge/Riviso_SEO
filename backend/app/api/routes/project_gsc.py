@@ -243,17 +243,45 @@ async def delete_sitemap(
 # ---------------------------------------------------------------------------
 
 
+_ISO_DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_iso_date_or_none(s: str | None) -> str | None:
+    """Accept YYYY-MM-DD only; return ``None`` for empty / malformed input."""
+    if not s:
+        return None
+    s = s.strip()
+    if not _ISO_DATE_RE.match(s):
+        return None
+    try:
+        from datetime import datetime as _dt
+        _dt.strptime(s, "%Y-%m-%d")
+    except Exception:
+        return None
+    return s
+
+
 @router.get("/analytics")
 async def analytics(
     project_id: str,
     days: int = 30,
     top_pages_limit: int = 25,
+    start_date: str | None = None,
+    end_date: str | None = None,
     user: dict = Depends(get_current_user),
 ) -> dict:
     """
     ROI dashboard data: daily clicks/impressions, headline KPIs, top pages, and
     publication markers (one per Riviso article published inside the window whose
     live URL belongs to the linked Search Console property).
+
+    Two ways to specify the window:
+
+    - **Preset**: pass ``days=N`` (7-365). Window is ``[today - N, today]``.
+    - **Custom**: pass ``start_date=YYYY-MM-DD`` AND ``end_date=YYYY-MM-DD``.
+      When both are provided and well-formed, ``days`` is ignored and the
+      custom window is used as-is. ``start_date`` must be <= ``end_date`` and
+      the maximum window is capped at 16 months (Google's own retention limit).
 
     The frontend renders ``series`` as a continuous line and ``markers`` as vertical
     annotations to visualise the lift each new article delivered.
@@ -273,13 +301,31 @@ async def analytics(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e) or "Analytics service is not available") from e
 
-    d = max(7, min(int(days or 30), 365))
-    start_iso = (datetime.utcnow() - timedelta(days=d)).strftime("%Y-%m-%d")
-    end_iso = datetime.utcnow().strftime("%Y-%m-%d")
+    # Resolve the effective window. Custom range wins when both ends are valid.
+    sd = _parse_iso_date_or_none(start_date)
+    ed = _parse_iso_date_or_none(end_date)
+    if (start_date or end_date) and not (sd and ed):
+        raise HTTPException(status_code=400, detail="start_date and end_date must both be YYYY-MM-DD")
+    if sd and ed:
+        if sd > ed:
+            raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
+        # Sanity cap — GSC Search Analytics retains ~16 months max.
+        try:
+            span = (datetime.strptime(ed, "%Y-%m-%d") - datetime.strptime(sd, "%Y-%m-%d")).days
+        except Exception:
+            span = 0
+        if span > 16 * 31:
+            raise HTTPException(status_code=400, detail="Custom range cannot exceed 16 months (Search Console retention limit)")
+        start_iso, end_iso = sd, ed
+        d = span + 1
+    else:
+        d = max(7, min(int(days or 30), 365))
+        start_iso = (datetime.utcnow() - timedelta(days=d)).strftime("%Y-%m-%d")
+        end_iso = datetime.utcnow().strftime("%Y-%m-%d")
 
     try:
-        raw_series = await svc.query_traffic_series(days=d)
-        top_pages = await svc.query_top_pages(days=d, limit=top_pages_limit)
+        raw_series = await svc.query_traffic_series(start_date=start_iso, end_date=end_iso)
+        top_pages = await svc.query_top_pages(start_date=start_iso, end_date=end_iso, limit=top_pages_limit)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e) or "Search Analytics query failed") from e
 

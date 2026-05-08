@@ -19,6 +19,22 @@
   background-color: var(--background);
 }
 
+.sectionTitle{
+  color: var(--aa-ink);
+  font-size: 24px;
+  font-weight: 900;
+  margin: 0;
+  line-height: 1.2;
+  text-wrap: balance;
+  text-align: left;
+  text-wrap: balance;
+}
+
+.sectionSecondaryTitle{
+  color: var(--aa-ink);
+  font-weight: 900;
+}
+
 .authPage {
   min-height: 100vh;
   min-height: 100dvh;
@@ -1964,6 +1980,164 @@
   font-weight: 800;
   cursor: pointer;
   font-size: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Analytics / GSC tables — high-contrast pieces designed for the dark cards
+ * used inside the project Tools and Performance & Analysis tabs.
+ * ---------------------------------------------------------------------------
+ *
+ * These are scoped utilities (not a full design system change) so they can be
+ * applied surgically to the analytics surfaces without touching dashboards.
+ */
+
+/* KPI tile shown above the analytics chart. Uses a faint accent border and
+ * subtle gradient so the value pops without relying on color alone. */
+.kpiTile {
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 0%);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--aa-primary), transparent 92%) 0%, transparent 60%),
+    color-mix(in oklab, var(--aa-surface-card), transparent 0%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.kpiLabel {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: color-mix(in oklab, var(--text-primary), transparent 35%);
+}
+.kpiValue {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.kpiSub {
+  font-size: 11px;
+  color: color-mix(in oklab, var(--text-primary), transparent 50%);
+}
+
+/* Anchor styling inside data tables — readable on either light or dark card.
+ * Picks a cool accent (cyan-tinted) instead of the warm orange used for nav
+ * links so URLs stand out clearly against the surface. */
+.tableLink {
+  color: color-mix(in oklab, #60a5fa, var(--text-primary) 18%);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in oklab, #60a5fa, transparent 65%);
+  word-break: break-all;
+}
+.tableLink:hover {
+  color: #93c5fd;
+  border-bottom-color: #93c5fd;
+}
+
+/* Zebra-striped rows for analytics & indexing tables — improves scanability. */
+.tableZebra tbody tr:nth-child(even) td {
+  background: color-mix(in oklab, var(--text-primary), transparent 96%);
+}
+.tableZebra tbody tr:hover td {
+  background: color-mix(in oklab, var(--aa-primary), transparent 90%);
+}
+/* Numeric columns right-aligned for fast comparison. */
+.tdNum {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.thNum {
+  text-align: right;
+}
+
+/* Status pills used in the indexing-status table. Solid-tinted so they are
+ * visible on dark surfaces; consistent vocabulary across coverage states. */
+.statusPill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  text-transform: uppercase;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.pillNeutral {
+  color: color-mix(in oklab, var(--text-primary), transparent 25%);
+  background: color-mix(in oklab, var(--text-primary), transparent 90%);
+  border-color: color-mix(in oklab, var(--text-primary), transparent 80%);
+}
+.pillInfo {
+  color: #bae6fd;
+  background: rgba(56, 189, 248, 0.15);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+.pillSuccess {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+.pillWarn {
+  color: #fde68a;
+  background: rgba(234, 179, 8, 0.15);
+  border-color: rgba(234, 179, 8, 0.35);
+}
+.pillDanger {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+/* Pager bar shared by the indexing-status table and any other paged view. */
+.pagerBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--aa-hairline);
+  background: color-mix(in oklab, var(--text-primary), transparent 96%);
+  font-size: 12px;
+  color: color-mix(in oklab, var(--text-primary), transparent 30%);
+}
+.pagerBar .row {
+  flex-wrap: wrap;
+}
+
+/* Light theme overrides — most values inherit fine, but the pill text colors
+ * need re-grading because they were tuned for the dark card. */
+@media (prefers-color-scheme: light) {
+  .pillInfo {
+    color: #0369a1;
+    background: rgba(56, 189, 248, 0.18);
+  }
+  .pillSuccess {
+    color: #166534;
+    background: rgba(34, 197, 94, 0.18);
+  }
+  .pillWarn {
+    color: #854d0e;
+    background: rgba(234, 179, 8, 0.18);
+  }
+  .pillDanger {
+    color: #991b1b;
+    background: rgba(239, 68, 68, 0.18);
+  }
+  .tableLink {
+    color: #1d4ed8;
+    border-bottom-color: rgba(29, 78, 216, 0.35);
+  }
+  .tableLink:hover {
+    color: #1e40af;
+    border-bottom-color: #1e40af;
+  }
 }
 
 .miniDanger {

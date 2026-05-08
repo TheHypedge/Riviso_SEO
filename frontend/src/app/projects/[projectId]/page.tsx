@@ -10,7 +10,16 @@ import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken,
 import { COUNTRIES, DEFAULT_COUNTRY_CODE } from "@/lib/countries";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
-type TabKey = "articles" | "research" | "scheduled_articles" | "configuration" | "prompts" | "context_links" | "tools" | "project_settings";
+type TabKey =
+  | "articles"
+  | "research"
+  | "scheduled_articles"
+  | "configuration"
+  | "prompts"
+  | "context_links"
+  | "tools"
+  | "performance"
+  | "project_settings";
 
 function parseDateOnly(s: string): Date | null {
   const v = (s || "").trim();
@@ -356,13 +365,26 @@ export default function ProjectPage() {
   const [sitemapMsg, setSitemapMsg] = useState<string | null>(null);
   const [sitemapDeletingPath, setSitemapDeletingPath] = useState<string | null>(null);
 
+  // Pagination + filtering for the "Existing articles — indexing status" table on the
+  // Tools tab. Defaults to 10 rows/page; status filter aligns with the coverage states
+  // surfaced by the backend (pending / inspected / requested).
+  const [indexingPage, setIndexingPage] = useState<number>(1);
+  const [indexingPageSize, setIndexingPageSize] = useState<number>(10);
+  const [indexingStatusFilter, setIndexingStatusFilter] = useState<string>("");
+  const [indexingSearch, setIndexingSearch] = useState<string>("");
+
   // ---- Feature 1: GSC ROI Dashboard ----------------------------------------
-  // Range is one of 7 / 28 / 90 to keep server cache hit-rate high. ``analytics``
-  // is the most recent payload from the backend; ``analyticsBusy`` drives the spinner.
+  // ``analyticsRangePreset`` is the active range chip on the Performance tab — one of
+  // 7 / 28 / 90 / 180 / 365 days, or the literal string ``"custom"`` which uses
+  // ``analyticsCustomStart`` / ``analyticsCustomEnd`` as the [start, end] window.
+  // We always keep the last ``analytics`` payload around so the Performance tab can
+  // be hidden until at least one fetch has succeeded.
   const [analytics, setAnalytics] = useState<import("@/lib/api").GscAnalyticsResponse | null>(null);
   const [analyticsBusy, setAnalyticsBusy] = useState<boolean>(false);
   const [analyticsErr, setAnalyticsErr] = useState<string | null>(null);
-  const [analyticsRangeDays, setAnalyticsRangeDays] = useState<number>(28);
+  const [analyticsRangePreset, setAnalyticsRangePreset] = useState<number | "custom">(28);
+  const [analyticsCustomStart, setAnalyticsCustomStart] = useState<string>("");
+  const [analyticsCustomEnd, setAnalyticsCustomEnd] = useState<string>("");
 
   // ---- Feature 3: Site map (Internal Linking) -------------------------------
   const [siteMap, setSiteMap] = useState<import("@/lib/api").SiteMapListResponse | null>(null);
@@ -1081,8 +1103,30 @@ export default function ProjectPage() {
     if (!opts.silent) setAnalyticsBusy(true);
     setAnalyticsErr(null);
     try {
-      const res = await api.gscProjectAnalytics(projectId, analyticsRangeDays);
+      // Resolve the active window: explicit [start,end] when both are filled and the
+      // ``"custom"`` chip is selected; otherwise the active preset's day count.
+      const callOpts: { days?: number; start?: string; end?: string } = {};
+      if (
+        analyticsRangePreset === "custom" &&
+        analyticsCustomStart &&
+        analyticsCustomEnd
+      ) {
+        callOpts.start = analyticsCustomStart;
+        callOpts.end = analyticsCustomEnd;
+      } else {
+        callOpts.days =
+          typeof analyticsRangePreset === "number" ? analyticsRangePreset : 28;
+      }
+      const res = await api.gscProjectAnalytics(projectId, callOpts);
       setAnalytics(res);
+      // Seed the custom-range pickers with whatever the server actually used so the
+      // user can tweak from a sensible starting point without re-typing dates.
+      if (res?.range?.start_date && !analyticsCustomStart) {
+        setAnalyticsCustomStart(res.range.start_date);
+      }
+      if (res?.range?.end_date && !analyticsCustomEnd) {
+        setAnalyticsCustomEnd(res.range.end_date);
+      }
     } catch (e) {
       // Backend versions before this rollout will 404 the route — surface a clear message.
       const status = e instanceof ApiError ? e.status : null;
@@ -1313,19 +1357,26 @@ export default function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, token, gscStatus?.connected, gscStatus?.property_url]);
 
-  // Feature 1: load analytics whenever the Tools tab is open AND a property is linked.
-  // Re-fetches when the user changes the range chip.
+  // Feature 1: load analytics when either the Tools tab (mini view, optional) or the
+  // Performance & Analysis tab is open AND a property is linked. Re-fetches when the
+  // active preset changes; the custom-range chip only refetches when the user clicks
+  // "Apply" inside the Performance tab so partial date input doesn't fire requests.
   useEffect(() => {
     if (!token) return;
-    if (tab !== "tools") return;
+    if (tab !== "tools" && tab !== "performance") return;
     if (!gscStatus?.connected || !gscStatus?.property_url) {
       setAnalytics(null);
       setAnalyticsErr(null);
       return;
     }
+    if (analyticsRangePreset === "custom") {
+      // Custom range fetches are explicit (button click) — skip the auto-fetch.
+      if (!analytics) void reloadAnalytics();
+      return;
+    }
     void reloadAnalytics();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, tab, token, gscStatus?.connected, gscStatus?.property_url, analyticsRangeDays]);
+  }, [projectId, tab, token, gscStatus?.connected, gscStatus?.property_url, analyticsRangePreset]);
 
   // Feature 3: load the stored site map whenever Tools opens. Sync is manual (button).
   useEffect(() => {
@@ -2053,6 +2104,11 @@ export default function ProjectPage() {
     prompts: "Prompts",
     context_links: "Context links",
     tools: "Tools",
+    // The Performance & Analysis tab is only useful once Search Console is connected
+    // *and* the analytics endpoint has returned data — we hide the nav entry until
+    // both conditions are true (see ``visibleTabs`` below). The label still lives
+    // in this map so deep-links and persistence keep working.
+    performance: "Performance & Analysis",
     project_settings: "Project Settings",
   };
 
@@ -2062,6 +2118,16 @@ export default function ProjectPage() {
     setTab(next);
     setMobileNavOpen(false);
   }
+
+  // Performance & Analysis is conditional on Search Console being connected and at least
+  // one analytics payload having been fetched. Tabs are otherwise listed in ``tabLabel`` order.
+  const performanceTabAvailable = Boolean(
+    gscStatus?.connected && gscStatus?.property_url && analytics && (analytics.series || []).length > 0,
+  );
+  const visibleTabs: TabKey[] = (Object.keys(tabLabel) as TabKey[]).filter((k) => {
+    if (k === "performance") return performanceTabAvailable;
+    return true;
+  });
 
   // ---------------------------------------------------------------------------
   // Research helpers (seeds, runs, filters, import)
@@ -2430,7 +2496,7 @@ export default function ProjectPage() {
                 </button>
               </div>
               <div className={styles.offcanvasBody}>
-                {(Object.keys(tabLabel) as TabKey[]).map((k) => (
+                {visibleTabs.map((k) => (
                   <button
                     key={k}
                     type="button"
@@ -2456,7 +2522,7 @@ export default function ProjectPage() {
 
             <div className={styles.sidebarTitle}>SECTIONS</div>
             <div className={styles.navGroup} role="navigation" aria-label="Project sections">
-              {(Object.keys(tabLabel) as TabKey[]).map((k) => (
+              {visibleTabs.map((k) => (
                 <button
                   key={k}
                   type="button"
@@ -4812,7 +4878,7 @@ export default function ProjectPage() {
         {tab === "tools" ? (
           <>
             <div className={`${styles.card} ${styles.cardWide}`}>
-              <h2 style={{ marginTop: 0 }}>Search Console</h2>
+              <h2 style={{ marginTop: 0 }} className={`${styles.sectionTitle}`}>Search Console</h2>
               <div className={styles.muted} style={{ fontSize: 13, lineHeight: 1.5 }}>
                 Connect this project to its own Google account and Search Console property. After a live publish,
                 we automatically request indexing for the post URL. Each project can use a different Google account.
@@ -4943,124 +5009,61 @@ export default function ProjectPage() {
               </div>
             </div>
 
-            {/* Feature 1 — GSC ROI Dashboard */}
+            {/* Feature 1 — GSC ROI summary (full chart lives on Performance & Analysis tab) */}
             <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
               <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 0 }}>ROI dashboard — Search traffic over time</h3>
-                <div className={styles.row} style={{ gap: 6 }}>
-                  {[7, 28, 90].map((d) => (
-                    <button
-                      key={d}
-                      type="button"
-                      className={styles.miniBtn}
-                      onClick={() => setAnalyticsRangeDays(d)}
-                      style={{
-                        fontWeight: analyticsRangeDays === d ? 800 : 500,
-                        background: analyticsRangeDays === d ? "var(--surface-hover, rgba(0,0,0,0.06))" : undefined,
-                      }}
-                      disabled={analyticsBusy}
-                    >
-                      {d}d
-                    </button>
-                  ))}
-                  <button type="button" className={styles.miniBtn} onClick={() => reloadAnalytics()} disabled={analyticsBusy}>
-                    {analyticsBusy ? "Loading…" : "Refresh"}
+                <h3 style={{ marginTop: 0, marginBottom: 0 }} className={`${styles.sectionSecondaryTitle}`}>Performance summary (last 28 days)</h3>
+                {performanceTabAvailable ? (
+                  <button type="button" className={styles.button} onClick={() => goTab("performance")}>
+                    Open Performance & Analysis →
                   </button>
-                </div>
-              </div>
-              <div className={styles.muted} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
-                Daily clicks (blue) and impressions (grey) from Search Console for the linked property.
-                Vertical purple markers show when Riviso published an article on this site — hover a marker
-                to see which article. Google delays final data ~2-3 days; the latest two points may shift slightly.
+                ) : null}
               </div>
 
               {!gscStatus?.connected || !gscStatus?.property_url ? (
-                <div className={styles.muted} style={{ fontSize: 13, marginTop: 12 }}>
-                  Connect Google and link a Search Console property above to see traffic data here.
+                <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>
+                  Connect Google and link a Search Console property above to unlock the
+                  Performance & Analysis tab.
                 </div>
               ) : analyticsErr ? (
-                <div className={styles.error} style={{ marginTop: 12 }}>{analyticsErr}</div>
+                <div className={styles.error} style={{ marginTop: 10 }}>{analyticsErr}</div>
               ) : analyticsBusy && !analytics ? (
-                <div className={styles.muted} style={{ fontSize: 13, marginTop: 12 }}>Loading Search Console data…</div>
+                <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>
+                  Loading Search Console data…
+                </div>
               ) : analytics ? (
-                <>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-                      gap: 10,
-                      marginTop: 14,
-                    }}
-                  >
-                    <div className={styles.card} style={{ padding: 10 }}>
-                      <div className={styles.muted} style={{ fontSize: 11, textTransform: "uppercase" }}>Clicks</div>
-                      <div style={{ fontSize: 22, fontWeight: 800 }}>{(analytics.totals.clicks || 0).toLocaleString()}</div>
-                    </div>
-                    <div className={styles.card} style={{ padding: 10 }}>
-                      <div className={styles.muted} style={{ fontSize: 11, textTransform: "uppercase" }}>Impressions</div>
-                      <div style={{ fontSize: 22, fontWeight: 800 }}>{(analytics.totals.impressions || 0).toLocaleString()}</div>
-                    </div>
-                    <div className={styles.card} style={{ padding: 10 }}>
-                      <div className={styles.muted} style={{ fontSize: 11, textTransform: "uppercase" }}>Avg CTR</div>
-                      <div style={{ fontSize: 22, fontWeight: 800 }}>
-                        {((analytics.totals.ctr || 0) * 100).toFixed(2)}%
-                      </div>
-                    </div>
-                    <div className={styles.card} style={{ padding: 10 }}>
-                      <div className={styles.muted} style={{ fontSize: 11, textTransform: "uppercase" }}>Avg position</div>
-                      <div style={{ fontSize: 22, fontWeight: 800 }}>{(analytics.totals.position || 0).toFixed(1)}</div>
-                    </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                    gap: 12,
+                    marginTop: 14,
+                  }}
+                >
+                  <div className={styles.kpiTile}>
+                    <div className={styles.kpiLabel}>Clicks</div>
+                    <div className={styles.kpiValue}>{(analytics.totals.clicks || 0).toLocaleString()}</div>
                   </div>
-
-                  <div style={{ marginTop: 14 }}>
-                    <AnalyticsLineChart series={analytics.series} markers={analytics.markers} />
-                    <div className={styles.muted} style={{ fontSize: 11, marginTop: 4, lineHeight: 1.45 }}>
-                      <span style={{ color: "#2563eb", fontWeight: 800 }}>■</span> Clicks &nbsp;
-                      <span style={{ color: "#94a3b8", fontWeight: 800 }}>■</span> Impressions &nbsp;
-                      <span style={{ color: "#7c3aed", fontWeight: 800 }}>┊</span> Article published
-                      &nbsp;·&nbsp; {analytics.markers.length} article{analytics.markers.length === 1 ? "" : "s"} in this window.
-                    </div>
+                  <div className={styles.kpiTile}>
+                    <div className={styles.kpiLabel}>Impressions</div>
+                    <div className={styles.kpiValue}>{(analytics.totals.impressions || 0).toLocaleString()}</div>
                   </div>
-
-                  {analytics.top_pages.length > 0 ? (
-                    <div style={{ marginTop: 16 }}>
-                      <div style={{ fontWeight: 700, marginBottom: 6 }}>Top pages by clicks</div>
-                      <div style={{ overflowX: "auto" }}>
-                        <table className={styles.table}>
-                          <thead>
-                            <tr>
-                              <th style={{ textAlign: "left" }}>URL</th>
-                              <th>Clicks</th>
-                              <th>Impr.</th>
-                              <th>CTR</th>
-                              <th>Pos.</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {analytics.top_pages.slice(0, 10).map((row) => (
-                              <tr key={row.url}>
-                                <td style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                  <a href={row.url} target="_blank" rel="noopener noreferrer">{row.url}</a>
-                                </td>
-                                <td>{row.clicks.toLocaleString()}</td>
-                                <td>{row.impressions.toLocaleString()}</td>
-                                <td>{(row.ctr * 100).toFixed(2)}%</td>
-                                <td>{row.position.toFixed(1)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  ) : null}
-                </>
+                  <div className={styles.kpiTile}>
+                    <div className={styles.kpiLabel}>Avg CTR</div>
+                    <div className={styles.kpiValue}>{((analytics.totals.ctr || 0) * 100).toFixed(2)}%</div>
+                  </div>
+                  <div className={styles.kpiTile}>
+                    <div className={styles.kpiLabel}>Avg position</div>
+                    <div className={styles.kpiValue}>{(analytics.totals.position || 0).toFixed(1)}</div>
+                  </div>
+                </div>
               ) : null}
             </div>
 
             {/* Feature 3 — Site Map (Internal Linking ingestion) */}
             <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
               <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 0 }}>Internal linking — Site map</h3>
+                <h3 style={{ marginTop: 0, marginBottom: 0 }} className={`${styles.sectionSecondaryTitle}`}>Internal linking — Site map</h3>
                 <button type="button" className={styles.button} onClick={syncSiteMap} disabled={siteMapBusy}>
                   {siteMapBusy ? "Syncing…" : "Sync from WordPress"}
                 </button>
@@ -5082,7 +5085,7 @@ export default function ProjectPage() {
             </div>
 
             <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-              <h3 style={{ marginTop: 0 }}>Sitemap submission</h3>
+              <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Sitemap submission</h3>
               <div className={styles.muted} style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
                 Register your sitemap once and Google will recrawl it on its own schedule — every
                 future article gets discovered without per-post action. Sitemap submission is the
@@ -5143,48 +5146,48 @@ export default function ProjectPage() {
                       </div>
                     ) : (
                       <div style={{ overflowX: "auto" }}>
-                        <table className={styles.table}>
+                        <table className={`${styles.table} ${styles.tableZebra}`}>
                           <thead>
                             <tr>
-                              <th>Sitemap URL</th>
-                              <th>Last submitted</th>
-                              <th>Submitted / Indexed</th>
-                              <th>Errors</th>
-                              <th style={{ textAlign: "right" }}>Actions</th>
+                              <th className={styles.th}>Sitemap URL</th>
+                              <th className={styles.th}>Last submitted</th>
+                              <th className={`${styles.th} ${styles.thNum}`}>Submitted</th>
+                              <th className={`${styles.th} ${styles.thNum}`}>Indexed</th>
+                              <th className={styles.th}>Status</th>
+                              <th className={styles.th} style={{ textAlign: "right" }}>Actions</th>
                             </tr>
                           </thead>
                           <tbody>
                             {gscSitemaps.map((s) => {
                               const isDeleting = sitemapBusy === "delete" && sitemapDeletingPath === s.path;
+                              const errs = s.errors || 0;
+                              const warns = s.warnings || 0;
+                              const pillClass = errs > 0
+                                ? `${styles.statusPill} ${styles.pillDanger}`
+                                : warns > 0
+                                ? `${styles.statusPill} ${styles.pillWarn}`
+                                : `${styles.statusPill} ${styles.pillSuccess}`;
+                              const pillLabel = errs > 0
+                                ? `${errs} error${errs === 1 ? "" : "s"}`
+                                : warns > 0
+                                ? `${warns} warning${warns === 1 ? "" : "s"}`
+                                : "OK";
                               return (
                                 <tr key={s.path}>
-                                  <td style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    <a href={s.path} target="_blank" rel="noopener noreferrer">
+                                  <td className={styles.td} style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    <a href={s.path} target="_blank" rel="noopener noreferrer" className={styles.tableLink}>
                                       {s.path}
                                     </a>
                                   </td>
-                                  <td>
-                                    <span className={styles.muted} style={{ fontSize: 12 }}>
-                                      {s.last_submitted ? new Date(s.last_submitted).toLocaleString() : "—"}
-                                    </span>
+                                  <td className={`${styles.td} ${styles.tdMuted}`} style={{ fontSize: 12 }}>
+                                    {s.last_submitted ? new Date(s.last_submitted).toLocaleString() : "—"}
                                   </td>
-                                  <td>
-                                    <span className={styles.muted} style={{ fontSize: 12 }}>
-                                      {(s.submitted_urls || "—") + " / " + (s.indexed_urls || "—")}
-                                    </span>
+                                  <td className={`${styles.td} ${styles.tdNum}`}>{s.submitted_urls || "—"}</td>
+                                  <td className={`${styles.td} ${styles.tdNum}`}>{s.indexed_urls || "—"}</td>
+                                  <td className={styles.td}>
+                                    <span className={pillClass}>{pillLabel}</span>
                                   </td>
-                                  <td>
-                                    <span
-                                      className={styles.muted}
-                                      style={{
-                                        fontSize: 12,
-                                        color: (s.errors || 0) > 0 ? "var(--error-text, #b00020)" : undefined,
-                                      }}
-                                    >
-                                      {(s.errors || 0) + (s.warnings ? ` (${s.warnings} warning${s.warnings === 1 ? "" : "s"})` : "")}
-                                    </span>
-                                  </td>
-                                  <td style={{ textAlign: "right" }}>
+                                  <td className={styles.td} style={{ textAlign: "right" }}>
                                     <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
                                       <button
                                         type="button"
@@ -5199,7 +5202,7 @@ export default function ProjectPage() {
                                       </button>
                                       <button
                                         type="button"
-                                        className={styles.miniBtn}
+                                        className={`${styles.miniBtn} ${styles.miniDanger}`}
                                         onClick={() => deleteProjectSitemap(s.path)}
                                         disabled={Boolean(sitemapBusy)}
                                       >
@@ -5220,7 +5223,7 @@ export default function ProjectPage() {
             </div>
 
             <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-              <h3 style={{ marginTop: 0 }}>Existing articles — indexing status</h3>
+              <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Existing articles — indexing status</h3>
               <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
                 <strong>Check</strong> reads the URL’s current coverage from Search Console (read-only).{" "}
                 <strong>Index now</strong> pings Google’s Indexing API (officially supported only for
@@ -5236,91 +5239,220 @@ export default function ProjectPage() {
                   Connect Google and link a property above to use these actions.
                 </div>
               ) : (() => {
-                const published = (articles || [])
-                  .filter((a) => (a.wp_link || "").trim())
-                  .slice(0, 50);
-                if (!published.length) {
+                const allPublished = (articles || []).filter((a) => (a.wp_link || "").trim());
+                if (!allPublished.length) {
                   return (
                     <div className={styles.muted} style={{ fontSize: 13 }}>
                       No published articles yet. Once an article goes live, it will appear here.
                     </div>
                   );
                 }
+
+                const q = indexingSearch.trim().toLowerCase();
+                const filtered = allPublished.filter((a) => {
+                  // Effective coverage: live status from a "Check" if available, else stored gsc_status.
+                  const status = articleIndexStatus[a.id];
+                  const coverage = (status?.coverage_state || a.gsc_status || "").toString().toLowerCase();
+                  if (indexingStatusFilter && coverage !== indexingStatusFilter) return false;
+                  if (!q) return true;
+                  const hay = `${a.title || ""} ${a.wp_link || ""}`.toLowerCase();
+                  return hay.includes(q);
+                });
+
+                const total = filtered.length;
+                const totalPages = Math.max(1, Math.ceil(total / indexingPageSize));
+                const safePage = Math.min(Math.max(1, indexingPage), totalPages);
+                const pageStart = (safePage - 1) * indexingPageSize;
+                const pageRows = filtered.slice(pageStart, pageStart + indexingPageSize);
+
+                // Map a coverage / gsc_status string to a status pill class + label.
+                const pillFor = (coverage: string) => {
+                  const s = (coverage || "").toLowerCase();
+                  if (s === "indexed" || s === "valid")
+                    return { cls: `${styles.statusPill} ${styles.pillSuccess}`, label: "Indexed" };
+                  if (s === "requested" || s === "manual_required" || s === "sitemap_pinged" || s === "index_api_pinged")
+                    return { cls: `${styles.statusPill} ${styles.pillInfo}`, label: "Requested" };
+                  if (s === "inspected")
+                    return { cls: `${styles.statusPill} ${styles.pillInfo}`, label: "Inspected" };
+                  if (s === "error" || s === "failed")
+                    return { cls: `${styles.statusPill} ${styles.pillDanger}`, label: "Error" };
+                  if (s === "pending" || !s)
+                    return { cls: `${styles.statusPill} ${styles.pillNeutral}`, label: "Pending" };
+                  return { cls: `${styles.statusPill} ${styles.pillNeutral}`, label: coverage };
+                };
+
                 return (
-                  <div style={{ overflowX: "auto" }}>
-                    <table className={styles.table}>
-                      <thead>
-                        <tr>
-                          <th>Title</th>
-                          <th>Live URL</th>
-                          <th>Status</th>
-                          <th style={{ textAlign: "right" }}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {published.map((a) => {
-                          const busy = articleIndexBusy[a.id];
-                          const msg = articleIndexMsg[a.id];
-                          const status = articleIndexStatus[a.id];
-                          const result = articleIndexResult[a.id];
-                          const inspectUrl = result?.inspect_panel_url || "";
-                          return (
-                            <tr key={a.id}>
-                              <td style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={a.title}>
-                                {a.title || "(untitled)"}
-                              </td>
-                              <td style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                <a href={a.wp_link || "#"} target="_blank" rel="noopener noreferrer">
-                                  {a.wp_link}
-                                </a>
-                              </td>
-                              <td>
-                                <span className={styles.muted} style={{ fontSize: 12 }}>
-                                  {status?.coverage_state || a.gsc_status || "—"}
-                                </span>
-                                {msg ? (
-                                  <div className={styles.muted} style={{ fontSize: 11, marginTop: 2, lineHeight: 1.45 }}>
-                                    {msg}
-                                  </div>
-                                ) : null}
-                              </td>
-                              <td style={{ textAlign: "right" }}>
-                                <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                                  <button
-                                    type="button"
-                                    className={styles.miniBtn}
-                                    onClick={() => checkArticleIndexing(a.id)}
-                                    disabled={Boolean(busy)}
+                  <>
+                    <div
+                      className={styles.row}
+                      style={{ gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}
+                    >
+                      <input
+                        className={styles.input}
+                        type="search"
+                        placeholder="Search title or URL…"
+                        value={indexingSearch}
+                        onChange={(e) => {
+                          setIndexingSearch(e.target.value);
+                          setIndexingPage(1);
+                        }}
+                        style={{ maxWidth: 260, height: 36 }}
+                      />
+                      <select
+                        className={styles.input}
+                        value={indexingStatusFilter}
+                        onChange={(e) => {
+                          setIndexingStatusFilter(e.target.value);
+                          setIndexingPage(1);
+                        }}
+                        style={{ maxWidth: 200, height: 36 }}
+                      >
+                        <option value="">All statuses</option>
+                        <option value="pending">Pending</option>
+                        <option value="inspected">Inspected</option>
+                        <option value="requested">Requested</option>
+                        <option value="indexed">Indexed</option>
+                        <option value="manual_required">Manual required</option>
+                      </select>
+                      <select
+                        className={styles.input}
+                        value={String(indexingPageSize)}
+                        onChange={(e) => {
+                          setIndexingPageSize(parseInt(e.target.value, 10) || 10);
+                          setIndexingPage(1);
+                        }}
+                        style={{ maxWidth: 130, height: 36 }}
+                        title="Rows per page"
+                      >
+                        <option value="10">10 / page</option>
+                        <option value="25">25 / page</option>
+                        <option value="50">50 / page</option>
+                        <option value="100">100 / page</option>
+                      </select>
+                      <span className={styles.muted} style={{ fontSize: 12, marginLeft: "auto" }}>
+                        Showing {pageRows.length} of {total} (
+                        {allPublished.length} published)
+                      </span>
+                    </div>
+
+                    <div style={{ overflowX: "auto", border: "1px solid var(--aa-hairline)", borderRadius: 12 }}>
+                      <table className={`${styles.table} ${styles.tableZebra}`} style={{ border: "0" }}>
+                        <thead>
+                          <tr>
+                            <th className={styles.th} style={{ width: "30%" }}>Title</th>
+                            <th className={styles.th} style={{ width: "40%" }}>Live URL</th>
+                            <th className={styles.th} style={{ width: 110 }}>Status</th>
+                            <th className={styles.th} style={{ textAlign: "right" }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pageRows.map((a) => {
+                            const busy = articleIndexBusy[a.id];
+                            const msg = articleIndexMsg[a.id];
+                            const status = articleIndexStatus[a.id];
+                            const result = articleIndexResult[a.id];
+                            const inspectUrl = result?.inspect_panel_url || "";
+                            const coverage = (status?.coverage_state || a.gsc_status || "").toString();
+                            const pill = pillFor(coverage);
+                            return (
+                              <tr key={a.id}>
+                                <td
+                                  className={styles.td}
+                                  style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                                  title={a.title}
+                                >
+                                  {a.title || "(untitled)"}
+                                </td>
+                                <td
+                                  className={styles.td}
+                                  style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                                >
+                                  <a
+                                    href={a.wp_link || "#"}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={styles.tableLink}
+                                    title={a.wp_link || ""}
                                   >
-                                    {busy === "check" ? "Checking…" : "Check"}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={styles.miniBtn}
-                                    onClick={() => requestArticleIndexing(a.id)}
-                                    disabled={Boolean(busy)}
-                                  >
-                                    {busy === "request" ? "Submitting…" : "Index now"}
-                                  </button>
-                                  {inspectUrl ? (
-                                    <a
-                                      href={inspectUrl}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className={styles.miniBtn}
-                                      title="Opens Google Search Console URL Inspection pre-filled with this URL — press REQUEST INDEXING there to actually queue a crawl that shows up in URL Inspection history."
-                                    >
-                                      Open in Search Console ↗
-                                    </a>
+                                    {a.wp_link}
+                                  </a>
+                                </td>
+                                <td className={styles.td}>
+                                  <span className={pill.cls}>{pill.label}</span>
+                                  {msg ? (
+                                    <div className={styles.muted} style={{ fontSize: 11, marginTop: 4, lineHeight: 1.45 }}>
+                                      {msg}
+                                    </div>
                                   ) : null}
-                                </div>
+                                </td>
+                                <td className={styles.td} style={{ textAlign: "right" }}>
+                                  <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                                    <button
+                                      type="button"
+                                      className={styles.miniBtn}
+                                      onClick={() => checkArticleIndexing(a.id)}
+                                      disabled={Boolean(busy)}
+                                    >
+                                      {busy === "check" ? "Checking…" : "Check"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={`${styles.miniBtn} ${styles.miniPrimary}`}
+                                      onClick={() => requestArticleIndexing(a.id)}
+                                      disabled={Boolean(busy)}
+                                    >
+                                      {busy === "request" ? "Submitting…" : "Index now"}
+                                    </button>
+                                    {inspectUrl ? (
+                                      <a
+                                        href={inspectUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className={styles.miniBtn}
+                                        title="Opens Google Search Console URL Inspection pre-filled with this URL — press REQUEST INDEXING there to actually queue a crawl that shows up in URL Inspection history."
+                                      >
+                                        GSC ↗
+                                      </a>
+                                    ) : null}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {pageRows.length === 0 ? (
+                            <tr>
+                              <td className={`${styles.td} ${styles.tdMuted}`} colSpan={4} style={{ textAlign: "center", padding: 18 }}>
+                                No articles match the current filters.
                               </td>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                          ) : null}
+                        </tbody>
+                      </table>
+                      <div className={styles.pagerBar}>
+                        <span>
+                          Page {safePage} / {totalPages}
+                        </span>
+                        <div className={styles.row} style={{ gap: 6 }}>
+                          <button
+                            type="button"
+                            className={styles.miniBtn}
+                            onClick={() => setIndexingPage((p) => Math.max(1, p - 1))}
+                            disabled={safePage <= 1}
+                          >
+                            ← Prev
+                          </button>
+                          <button
+                            type="button"
+                            className={styles.miniBtn}
+                            onClick={() => setIndexingPage((p) => Math.min(totalPages, p + 1))}
+                            disabled={safePage >= totalPages}
+                          >
+                            Next →
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </>
                 );
               })()}
             </div>
@@ -5362,6 +5494,228 @@ export default function ProjectPage() {
                   </div>
                 </div>
               </>
+            ) : null}
+          </>
+        ) : null}
+
+        {tab === "performance" ? (
+          <>
+            {/* Performance & Analysis — full-width chart with rich range controls. */}
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <h2 style={{ marginTop: 0, marginBottom: 4 }} className={`${styles.sectionTitle}`}>
+                    Performance & Analysis
+                  </h2>
+                  <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
+                    Search Console clicks and impressions for{" "}
+                    <code>{(analytics?.property_url || gscStatus?.property_url || "—").toString()}</code>.
+                    Vertical purple markers show when Riviso published an article — hover to see which.
+                    Google delays final data ~2-3 days; the latest two points may shift slightly.
+                  </div>
+                </div>
+                <button type="button" className={styles.miniBtn} onClick={() => reloadAnalytics()} disabled={analyticsBusy}>
+                  {analyticsBusy ? "Refreshing…" : "Refresh"}
+                </button>
+              </div>
+
+              {/* Range controls: presets + custom range */}
+              <div
+                className={styles.row}
+                style={{ gap: 8, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}
+              >
+                {[
+                  { d: 7, label: "7d" },
+                  { d: 28, label: "28d" },
+                  { d: 90, label: "90d" },
+                  { d: 180, label: "6m" },
+                  { d: 365, label: "12m" },
+                ].map(({ d, label }) => (
+                  <button
+                    key={d}
+                    type="button"
+                    className={styles.miniBtn}
+                    onClick={() => {
+                      setAnalyticsRangePreset(d);
+                    }}
+                    style={{
+                      fontWeight: analyticsRangePreset === d ? 800 : 600,
+                      background:
+                        analyticsRangePreset === d
+                          ? "color-mix(in oklab, var(--aa-primary), transparent 80%)"
+                          : undefined,
+                      borderColor:
+                        analyticsRangePreset === d
+                          ? "color-mix(in oklab, var(--aa-primary), transparent 50%)"
+                          : undefined,
+                    }}
+                    disabled={analyticsBusy}
+                    aria-pressed={analyticsRangePreset === d}
+                  >
+                    {label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className={styles.miniBtn}
+                  onClick={() => setAnalyticsRangePreset("custom")}
+                  style={{
+                    fontWeight: analyticsRangePreset === "custom" ? 800 : 600,
+                    background:
+                      analyticsRangePreset === "custom"
+                        ? "color-mix(in oklab, var(--aa-primary), transparent 80%)"
+                        : undefined,
+                    borderColor:
+                      analyticsRangePreset === "custom"
+                        ? "color-mix(in oklab, var(--aa-primary), transparent 50%)"
+                        : undefined,
+                  }}
+                  disabled={analyticsBusy}
+                  aria-pressed={analyticsRangePreset === "custom"}
+                >
+                  Custom…
+                </button>
+
+                {analyticsRangePreset === "custom" ? (
+                  <div className={styles.row} style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <span className={styles.muted} style={{ fontSize: 12 }}>From</span>
+                    <input
+                      type="date"
+                      className={styles.input}
+                      value={analyticsCustomStart}
+                      onChange={(e) => setAnalyticsCustomStart(e.target.value)}
+                      max={analyticsCustomEnd || undefined}
+                      style={{ height: 36, maxWidth: 170 }}
+                    />
+                    <span className={styles.muted} style={{ fontSize: 12 }}>to</span>
+                    <input
+                      type="date"
+                      className={styles.input}
+                      value={analyticsCustomEnd}
+                      onChange={(e) => setAnalyticsCustomEnd(e.target.value)}
+                      min={analyticsCustomStart || undefined}
+                      max={new Date().toISOString().slice(0, 10)}
+                      style={{ height: 36, maxWidth: 170 }}
+                    />
+                    <button
+                      type="button"
+                      className={styles.button}
+                      onClick={() => reloadAnalytics()}
+                      disabled={
+                        analyticsBusy ||
+                        !analyticsCustomStart ||
+                        !analyticsCustomEnd ||
+                        analyticsCustomStart > analyticsCustomEnd
+                      }
+                    >
+                      Apply
+                    </button>
+                  </div>
+                ) : null}
+                {analytics?.range ? (
+                  <span className={styles.muted} style={{ fontSize: 12, marginLeft: "auto" }}>
+                    {analytics.range.start_date} → {analytics.range.end_date} ({analytics.range.days} days)
+                  </span>
+                ) : null}
+              </div>
+
+              {analyticsErr ? (
+                <div className={styles.error} style={{ marginTop: 14 }}>{analyticsErr}</div>
+              ) : analyticsBusy && !analytics ? (
+                <div className={styles.muted} style={{ fontSize: 13, marginTop: 14 }}>Loading Search Console data…</div>
+              ) : analytics ? (
+                <>
+                  {/* KPI tiles */}
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                      gap: 12,
+                      marginTop: 16,
+                    }}
+                  >
+                    <div className={styles.kpiTile}>
+                      <div className={styles.kpiLabel}>Clicks</div>
+                      <div className={styles.kpiValue}>{(analytics.totals.clicks || 0).toLocaleString()}</div>
+                      <div className={styles.kpiSub}>{analytics.totals.days_with_data} days with data</div>
+                    </div>
+                    <div className={styles.kpiTile}>
+                      <div className={styles.kpiLabel}>Impressions</div>
+                      <div className={styles.kpiValue}>{(analytics.totals.impressions || 0).toLocaleString()}</div>
+                    </div>
+                    <div className={styles.kpiTile}>
+                      <div className={styles.kpiLabel}>Avg CTR</div>
+                      <div className={styles.kpiValue}>{((analytics.totals.ctr || 0) * 100).toFixed(2)}%</div>
+                    </div>
+                    <div className={styles.kpiTile}>
+                      <div className={styles.kpiLabel}>Avg position</div>
+                      <div className={styles.kpiValue}>{(analytics.totals.position || 0).toFixed(1)}</div>
+                    </div>
+                  </div>
+
+                  {/* Chart */}
+                  <div style={{ marginTop: 18 }}>
+                    <AnalyticsLineChart series={analytics.series} markers={analytics.markers} />
+                    <div className={styles.muted} style={{ fontSize: 11, marginTop: 6, lineHeight: 1.45 }}>
+                      <span style={{ color: "#60a5fa", fontWeight: 800 }}>■</span> Clicks &nbsp;
+                      <span style={{ color: "#cbd5e1", fontWeight: 800 }}>■</span> Impressions &nbsp;
+                      <span style={{ color: "#a78bfa", fontWeight: 800 }}>┊</span> Article published
+                      &nbsp;·&nbsp; {analytics.markers.length} article{analytics.markers.length === 1 ? "" : "s"} in this window.
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className={styles.muted} style={{ fontSize: 13, marginTop: 14 }}>
+                  No analytics data yet for this property.
+                </div>
+              )}
+            </div>
+
+            {/* Top pages table — high-contrast version */}
+            {analytics && analytics.top_pages.length > 0 ? (
+              <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+                <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Top pages by clicks</h3>
+                <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>
+                  Up to {analytics.top_pages.length} URLs from the linked property, sorted by clicks within the active window.
+                </div>
+                <div style={{ overflowX: "auto", border: "1px solid var(--aa-hairline)", borderRadius: 12 }}>
+                  <table className={`${styles.table} ${styles.tableZebra}`} style={{ border: 0 }}>
+                    <thead>
+                      <tr>
+                        <th className={styles.th} style={{ width: "60%" }}>URL</th>
+                        <th className={`${styles.th} ${styles.thNum}`}>Clicks</th>
+                        <th className={`${styles.th} ${styles.thNum}`}>Impressions</th>
+                        <th className={`${styles.th} ${styles.thNum}`}>CTR</th>
+                        <th className={`${styles.th} ${styles.thNum}`}>Position</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {analytics.top_pages.map((row) => (
+                        <tr key={row.url}>
+                          <td
+                            className={styles.td}
+                            style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                          >
+                            <a
+                              href={row.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={styles.tableLink}
+                              title={row.url}
+                            >
+                              {row.url}
+                            </a>
+                          </td>
+                          <td className={`${styles.td} ${styles.tdNum}`}>{row.clicks.toLocaleString()}</td>
+                          <td className={`${styles.td} ${styles.tdNum}`}>{row.impressions.toLocaleString()}</td>
+                          <td className={`${styles.td} ${styles.tdNum}`}>{(row.ctr * 100).toFixed(2)}%</td>
+                          <td className={`${styles.td} ${styles.tdNum}`}>{row.position.toFixed(1)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             ) : null}
           </>
         ) : null}

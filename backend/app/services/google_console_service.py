@@ -161,16 +161,30 @@ class GoogleConsoleService:
         rows = data.get("rows") if isinstance(data, dict) else None
         return list(rows) if isinstance(rows, list) else []
 
-    async def query_traffic_series(self, *, days: int = 30) -> list[dict[str, Any]]:
+    async def query_traffic_series(
+        self,
+        *,
+        days: int = 30,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
-        Daily totals over the last ``days`` days. Returns a list sorted ascending by date.
+        Daily totals for either the last ``days`` days OR an explicit ``[start_date, end_date]``
+        window (inclusive). Returns a list sorted ascending by date.
 
         Each row: ``{date, clicks, impressions, ctr, position}``. Days with zero traffic
         are *not* returned by Google; the frontend should fill gaps as zeroes.
+
+        When ``start_date``/``end_date`` are provided the ``days`` arg is ignored. Custom
+        ranges allow the Performance & Analysis tab to render arbitrary windows (e.g.
+        a single quarter, year-to-date) without the caller having to compute a day count.
         """
-        d = max(7, min(int(days or 30), 365))
-        start = _date_n_days_ago_iso(d)
-        end = _today_iso()
+        if start_date and end_date:
+            start, end = start_date, end_date
+        else:
+            d = max(7, min(int(days or 30), 365))
+            start = _date_n_days_ago_iso(d)
+            end = _today_iso()
         cache_key = (self.project.get("id"), "date", start, end)
         cached = self._cache_get(cache_key)
         if cached is not None:
@@ -194,11 +208,21 @@ class GoogleConsoleService:
         self._cache_put(cache_key, out)
         return out
 
-    async def query_top_pages(self, *, days: int = 30, limit: int = 25) -> list[dict[str, Any]]:
-        """Top pages by clicks for the same window."""
-        d = max(7, min(int(days or 30), 365))
-        start = _date_n_days_ago_iso(d)
-        end = _today_iso()
+    async def query_top_pages(
+        self,
+        *,
+        days: int = 30,
+        limit: int = 25,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Top pages by clicks for the same window. Custom range parity with the series query."""
+        if start_date and end_date:
+            start, end = start_date, end_date
+        else:
+            d = max(7, min(int(days or 30), 365))
+            start = _date_n_days_ago_iso(d)
+            end = _today_iso()
         cache_key = (self.project.get("id"), "page", start, end)
         cached = self._cache_get(cache_key)
         if cached is not None:

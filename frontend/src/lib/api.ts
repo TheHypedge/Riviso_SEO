@@ -1159,8 +1159,21 @@ export const api = {
   },
 
   // Feature 1 — GSC ROI Dashboard
-  async gscProjectAnalytics(projectId: string, days: number = 30, topPagesLimit: number = 25) {
-    const qs = new URLSearchParams({ days: String(days), top_pages_limit: String(topPagesLimit) });
+  // Pass either ``days`` (preset) OR ``start``/``end`` (custom range, YYYY-MM-DD).
+  // The backend prefers explicit start/end when both are present, otherwise falls
+  // back to ``days``. ``topPagesLimit`` controls how many rows the top-pages list returns.
+  async gscProjectAnalytics(
+    projectId: string,
+    opts: { days?: number; start?: string; end?: string; topPagesLimit?: number } = {},
+  ) {
+    const qs = new URLSearchParams();
+    qs.set("top_pages_limit", String(opts.topPagesLimit ?? 25));
+    if (opts.start && opts.end) {
+      qs.set("start_date", opts.start);
+      qs.set("end_date", opts.end);
+    } else {
+      qs.set("days", String(opts.days ?? 30));
+    }
     return apiFetch<GscAnalyticsResponse>(
       `/api/projects/${projectId}/gsc/analytics?${qs.toString()}`,
     );
