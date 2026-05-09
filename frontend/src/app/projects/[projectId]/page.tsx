@@ -8,6 +8,12 @@ import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
 import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse, ResearchIdeaRow as ApiResearchIdeaRow, TopicCluster } from "@/lib/api";
 import { COUNTRIES, DEFAULT_COUNTRY_CODE } from "@/lib/countries";
+import {
+  AUDIENCE_PRESETS,
+  BRAND_TONES,
+  BRAND_VOICES,
+  citiesForCountry,
+} from "@/lib/brand_dictionaries";
 import { useClusterValidation, type ValidatableTopic } from "@/hooks/useClusterValidation";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
@@ -45,26 +51,23 @@ const RESEARCH_SUBTAB_KEYS: ReadonlySet<ResearchSubTabKey> = new Set<ResearchSub
   "curations",
 ]);
 
-function readTabFromLocation(): TabKey {
-  if (typeof window === "undefined") return "articles";
-  try {
-    const raw = (new URLSearchParams(window.location.search).get("tab") || "").toLowerCase();
-    return TAB_KEYS.has(raw as TabKey) ? (raw as TabKey) : "articles";
-  } catch {
-    return "articles";
-  }
+/**
+ * Initial tab values used by both the server render and the first client
+ * render. We deliberately do **not** read ``window.location.search`` from
+ * the lazy ``useState`` initializer — doing so produces a different value
+ * on the server (no ``window``) than on the client (real URL), which
+ * trips React 19's hydration-mismatch detector against the sidebar's
+ * ``navItemActive`` class. The post-mount ``useEffect`` in the page
+ * component upgrades the state to the URL-derived tab on the first frame
+ * after hydration, so deep-linked URLs (?tab=project_settings, …) still
+ * restore correctly.
+ */
+function defaultInitialTab(): TabKey {
+  return "articles";
 }
 
-function readResearchSubTabFromLocation(): ResearchSubTabKey {
-  if (typeof window === "undefined") return "cluster";
-  try {
-    const raw = (new URLSearchParams(window.location.search).get("subtab") || "").toLowerCase();
-    return RESEARCH_SUBTAB_KEYS.has(raw as ResearchSubTabKey)
-      ? (raw as ResearchSubTabKey)
-      : "cluster";
-  } catch {
-    return "cluster";
-  }
+function defaultInitialResearchSubTab(): ResearchSubTabKey {
+  return "cluster";
 }
 
 function parseDateOnly(s: string): Date | null {
@@ -458,12 +461,18 @@ export default function ProjectPage() {
 
   // The active section of the project page is mirrored into ``?tab=…`` (and
   // ``?subtab=…`` for Research) so a hard refresh, browser back/forward, or a
-  // shared link all land on the same view. The lazy initializers read the URL
-  // synchronously on mount so we never flash the default "Articles" tab when
-  // restoring state.
-  const [tab, setTabState] = useState<TabKey>(() => readTabFromLocation());
-  const [researchSubTab, setResearchSubTabState] = useState<ResearchSubTabKey>(() =>
-    readResearchSubTabFromLocation(),
+  // shared link all land on the same view.
+  //
+  // Important: we initialise both state values to a fixed default that the
+  // server can also render. Reading ``window.location.search`` here would
+  // produce different values during SSR vs. hydration and trip React 19's
+  // ``navItem`` / ``navItemActive`` hydration mismatch warning. The
+  // ``useEffect`` below picks up the real URL on the first frame after
+  // hydration, so deep-linked tabs (?tab=project_settings, etc.) still
+  // restore correctly without the visible flicker hurting hydration.
+  const [tab, setTabState] = useState<TabKey>(defaultInitialTab);
+  const [researchSubTab, setResearchSubTabState] = useState<ResearchSubTabKey>(
+    defaultInitialResearchSubTab,
   );
 
   // Single helper that mutates ``window.location`` query params and asks the
@@ -529,6 +538,11 @@ export default function ProjectPage() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settings, setSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
   const [projectMeta, setProjectMeta] = useState<import("@/lib/api").ProjectPublic | null>(null);
+  // List of every project the user owns. Powers the in-sidebar project
+  // switcher so users can hop between projects without bouncing through
+  // the dashboard. Loaded once per mount; refreshed silently when a
+  // rename happens (see ``saveSettings``).
+  const [projectsList, setProjectsList] = useState<import("@/lib/api").ProjectPublic[]>([]);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsVerify, setSettingsVerify] = useState<import("@/lib/api").WordpressVerifyResponse | null>(null);
@@ -545,8 +559,20 @@ export default function ProjectPage() {
   const [sWpDefaultCategoryIds, setSWpDefaultCategoryIds] = useState<number[]>([]);
   const [sGscPropertyUrl, setSGscPropertyUrl] = useState("");
   const [sGscIndexOnPublish, setSGscIndexOnPublish] = useState(true);
-  const [brandIdentity, setBrandIdentity] = useState("");
-  const [nicheIdentifier, setNicheIdentifier] = useState("");
+  // Structured Brand identity inputs.
+  const [brandVoice, setBrandVoice] = useState("");
+  const [brandTones, setBrandTones] = useState<string[]>([]);
+  const [brandRules, setBrandRules] = useState("");
+  // Structured Niche identifier inputs.
+  const [nicheTopic, setNicheTopic] = useState("");
+  const [audienceList, setAudienceList] = useState<string[]>([]);
+  const [audienceCustomDraft, setAudienceCustomDraft] = useState("");
+  const [targetCountries, setTargetCountries] = useState<string[]>([]);
+  const [targetCountriesAll, setTargetCountriesAll] = useState(false);
+  const [targetCitiesAll, setTargetCitiesAll] = useState(false);
+  const [targetCities, setTargetCities] = useState<string[]>([]);
+  const [cityCustomDraft, setCityCustomDraft] = useState("");
+  const [countryFilter, setCountryFilter] = useState("");
   const [settingsPostTypes, setSettingsPostTypes] = useState<import("@/lib/api").WordpressPostType[]>([]);
   const [settingsCategories, setSettingsCategories] = useState<import("@/lib/api").WordpressCategory[]>([]);
   const [gscStatus, setGscStatus] = useState<import("@/lib/api").ProjectGscStatus | null>(null);
@@ -689,10 +715,33 @@ export default function ProjectPage() {
 
   const identityDirty = useMemo(() => {
     if (!projectMeta) return false;
-    const b0 = (projectMeta.brand_identity || "").trim();
-    const n0 = (projectMeta.niche_identifier || "").trim();
-    return brandIdentity.trim() !== b0 || nicheIdentifier.trim() !== n0;
-  }, [projectMeta, brandIdentity, nicheIdentifier]);
+    const sortedJoin = (xs: string[] | null | undefined) =>
+      JSON.stringify((xs || []).slice().sort());
+    return (
+      (brandVoice || "").trim() !== ((projectMeta.brand_voice || "") as string).trim() ||
+      sortedJoin(brandTones) !== sortedJoin((projectMeta.brand_tones || []) as string[]) ||
+      (brandRules || "").trim() !== ((projectMeta.brand_rules || "") as string).trim() ||
+      (nicheTopic || "").trim() !== ((projectMeta.niche_topic || "") as string).trim() ||
+      sortedJoin(audienceList) !== sortedJoin((projectMeta.audience || []) as string[]) ||
+      sortedJoin(targetCountries) !==
+        sortedJoin((projectMeta.target_countries || []) as string[]) ||
+      Boolean(targetCountriesAll) !== Boolean(projectMeta.target_countries_all) ||
+      sortedJoin(targetCities) !==
+        sortedJoin((projectMeta.target_cities || []) as string[]) ||
+      Boolean(targetCitiesAll) !== Boolean(projectMeta.target_cities_all)
+    );
+  }, [
+    projectMeta,
+    brandVoice,
+    brandTones,
+    brandRules,
+    nicheTopic,
+    audienceList,
+    targetCountries,
+    targetCountriesAll,
+    targetCities,
+    targetCitiesAll,
+  ]);
   const [articles, setArticles] = useState<ArticlePublic[]>([]);
   const [scheduledJobs, setScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [scheduledLoading, setScheduledLoading] = useState(false);
@@ -941,6 +990,28 @@ export default function ProjectPage() {
     })();
   }, [projectId, router, token]);
 
+  // Load the user's full project list so the sidebar switcher can render
+  // every project they own. Runs once per mount — projects rarely change
+  // mid-session and any rename inside *this* page already mutates the
+  // entry locally (see ``saveSettings``). A failure is non-fatal: the
+  // dropdown simply falls back to a single read-only entry showing the
+  // current project's name.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await api.listProjects();
+        if (!cancelled) setProjectsList(list || []);
+      } catch {
+        // Silent — sidebar dropdown gracefully degrades to "current project only".
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
   // Bootstrap GSC status (and analytics, if a property is linked) once per project mount,
   // independent of the active tab. Without this the "Performance & Analysis" nav entry
   // only appears after the user opens Tools, because ``performanceTabAvailable`` depends
@@ -1165,8 +1236,20 @@ export default function ProjectPage() {
       setSUrl(s.wp_site_url || s.website_url || "");
       setSWpUser(s.wp_username || "");
       setSWpPass("");
-      setBrandIdentity((pm?.brand_identity || "") as string);
-      setNicheIdentifier((pm?.niche_identifier || "") as string);
+      setBrandVoice((pm?.brand_voice || "") as string);
+      setBrandTones(((pm?.brand_tones || []) as string[]).slice());
+      setBrandRules((pm?.brand_rules || "") as string);
+      setNicheTopic((pm?.niche_topic || "") as string);
+      setAudienceList(((pm?.audience || []) as string[]).slice());
+      setTargetCountries(
+        ((pm?.target_countries || []) as string[]).map((c) => (c || "").toUpperCase()),
+      );
+      setTargetCountriesAll(Boolean(pm?.target_countries_all));
+      setTargetCitiesAll(Boolean(pm?.target_cities_all));
+      setTargetCities(((pm?.target_cities || []) as string[]).slice());
+      setAudienceCustomDraft("");
+      setCityCustomDraft("");
+      setCountryFilter("");
       setSWpDefaultPostType((s.default_wp_rest_base || "posts") as string);
       setSWpDefaultStatus(((s.default_wp_status || "draft") as "draft" | "publish"));
       setSWpDefaultCategoryIds((s.default_wp_category_ids || []) as number[]);
@@ -1232,10 +1315,25 @@ export default function ProjectPage() {
       });
       setSettings(saved);
       setSWpPass("");
+      // Keep the sidebar project switcher in sync with project renames
+      // without forcing a refetch of the entire list.
+      setProjectsList((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, name: saved.name || p.name } : p)),
+      );
       if (identityDirty) {
         const pm2 = await api.updateProject(projectId, {
-          brand_identity: brandIdentity.trim(),
-          niche_identifier: nicheIdentifier.trim(),
+          brand_voice: (brandVoice || "").trim(),
+          brand_tones: brandTones.slice(),
+          brand_rules: (brandRules || "").trim(),
+          niche_topic: (nicheTopic || "").trim(),
+          audience: audienceList.slice(),
+          // When "all countries" is on we send the flag and an empty list
+          // (the backend treats the flag as the source of truth so this
+          // stays internally consistent).
+          target_countries: targetCountriesAll ? [] : targetCountries.slice(),
+          target_countries_all: !!targetCountriesAll,
+          target_cities: targetCitiesAll ? [] : targetCities.slice(),
+          target_cities_all: !!targetCitiesAll,
         });
         setProjectMeta(pm2);
       }
@@ -1246,16 +1344,63 @@ export default function ProjectPage() {
     }
   }
 
+  /**
+   * Verify the WordPress connection from the Project Settings tab.
+   *
+   * The dashboard's "Connect WordPress" popup persists the credentials
+   * *before* hitting the verify endpoint so the saved record always matches
+   * what was tested. We follow the same pattern here: PATCH the current form
+   * values into ``/settings`` first, then call ``/verify`` (which will pick
+   * up the freshly-saved credentials), then reload settings so the persisted
+   * ``wp_verified_at`` snapshot drives the green status pill on next render.
+   *
+   * If the user only changed ``sUrl``/``sWpUser`` we still send those —
+   * patching same-as-before fields is a safe no-op and the backend's
+   * "creds_changed" guard will only invalidate the verification cache when
+   * something actually changed.
+   */
   async function verifySettings() {
     setSettingsVerify(null);
     setSettingsVerifying(true);
     try {
+      // Step 1: persist whatever the user currently typed so the verification
+      // snapshot lines up with what's stored. ``wp_app_password`` is only
+      // included when typed (the input shows "•••••• (set)" when not).
+      const patch: Parameters<typeof api.updateProjectSettings>[1] = {
+        wp_site_url: sUrl.trim(),
+        wp_username: sWpUser.trim(),
+      };
+      if (sWpPass.trim()) {
+        patch.wp_app_password = sWpPass.trim();
+      }
+      try {
+        await api.updateProjectSettings(projectId, patch);
+      } catch {
+        // Persisting is best-effort here — proceed to verify anyway with
+        // overrides so the user can still see the result of their input.
+      }
+
+      // Step 2: verify. We pass overrides too so an unsaved password is still
+      // tested if the patch above failed.
       const res = await api.verifyWordpress(projectId, {
-        wp_site_url: sUrl,
-        wp_username: sWpUser,
-        ...(sWpPass.trim() ? { wp_app_password: sWpPass } : {}),
+        wp_site_url: sUrl.trim(),
+        wp_username: sWpUser.trim(),
+        ...(sWpPass.trim() ? { wp_app_password: sWpPass.trim() } : {}),
       });
       setSettingsVerify(res);
+
+      // Step 3: pull the new ``wp_verified_at`` / ``wp_verified_status``
+      // snapshot from the backend so the persistent status pill is up-to-date.
+      try {
+        const fresh = await api.getProjectSettings(projectId);
+        setSettings(fresh);
+        // Clear the typed app-password field on success — the value is now
+        // stored server-side and the placeholder will switch to "•••••• (set)".
+        if (res.ok) setSWpPass("");
+      } catch {
+        // Settings refresh failure is non-fatal; the inline ``settingsVerify``
+        // result still shows the immediate outcome.
+      }
     } catch (e) {
       setSettingsVerify({ ok: false, status: "error", message: e instanceof Error ? e.message : "Verify failed" });
     } finally {
@@ -2440,6 +2585,24 @@ export default function ProjectPage() {
     setMobileNavOpen(false);
   }
 
+  /**
+   * Hop to another project from the sidebar switcher. Preserves the
+   * current ``tab`` (and ``subtab`` for Research) in the URL so the user
+   * lands on the same screen in the new project. Honours the unsaved-
+   * changes guard exactly the same way ``goTab`` does so users can't
+   * lose half-typed Project Settings or Tools edits by accident.
+   */
+  function switchProject(nextId: string) {
+    if (!nextId || nextId === projectId) return;
+    if ((tab === "tools" || tab === "project_settings") && !confirmLoseChanges()) return;
+    const params = new URLSearchParams();
+    if (tab && tab !== "articles") params.set("tab", tab);
+    if (tab === "research" && researchSubTab) params.set("subtab", researchSubTab);
+    const qs = params.toString();
+    setMobileNavOpen(false);
+    router.push(`/projects/${nextId}${qs ? `?${qs}` : ""}`);
+  }
+
   // Performance & Analysis is conditional on Search Console being connected and at least
   // one analytics payload having been fetched. Tabs are otherwise listed in ``tabLabel`` order.
   const performanceTabAvailable = Boolean(
@@ -2513,6 +2676,43 @@ export default function ProjectPage() {
    * specific rows. Slot ids that are *already imported* are filtered out here
    * too so the backend never receives a no-op selection.
    */
+  /**
+   * Look up the cluster validation entry for a given selection-slot id.
+   *
+   * Selection slot ids and the validation hook's ``temp_id`` keys are NOT
+   * the same string for the pillar row — the validation hook always uses
+   * the literal ``::pillar`` suffix while the selection set uses
+   * ``cluster.pillar?.id`` (which may be a uuid or "pillar" depending on
+   * how the planner generated the document). This helper bridges the two.
+   */
+  function clusterSlotValidation(
+    clusterId: string,
+    slotId: string,
+  ): import("@/hooks/useClusterValidation").ClusterValidationEntry | null {
+    const cluster = topicClusters.find((c) => c.id === clusterId);
+    if (!cluster) return null;
+    const pillarSlot = (cluster.pillar?.id || "pillar").trim() || "pillar";
+    const key =
+      slotId === pillarSlot
+        ? `${clusterId}::pillar`
+        : `${clusterId}::${slotId}`;
+    return clusterValidation.results[key] ?? null;
+  }
+
+  /**
+   * ``true`` iff the validation engine has confirmed this slot already
+   * exists either in the project's article library or on the live
+   * WordPress site (``status === "duplicate"``). Topics in this state are
+   * un-selectable and excluded from every bulk action.
+   *
+   * Note: ``"similar"`` (potential duplicate) is intentionally NOT
+   * blocked here — those rows still let the user opt in once they've
+   * eyeballed the suggested existing URL.
+   */
+  function isClusterSlotDuplicate(clusterId: string, slotId: string): boolean {
+    return clusterSlotValidation(clusterId, slotId)?.status === "duplicate";
+  }
+
   function effectiveSelectionForCluster(clusterId: string): {
     topicIds: string[] | null;
     pendingCount: number;
@@ -2520,10 +2720,13 @@ export default function ProjectPage() {
     const cluster = topicClusters.find((c) => c.id === clusterId);
     if (!cluster) return { topicIds: null, pendingCount: 0 };
     const pillarSlot = (cluster.pillar?.id || "pillar").trim() || "pillar";
-    const pillarPending = !(cluster.pillar?.imported_article_id || "").trim();
+    const pillarPending =
+      !(cluster.pillar?.imported_article_id || "").trim() &&
+      !isClusterSlotDuplicate(clusterId, pillarSlot);
     const pendingClusterIds = (cluster.clusters || [])
       .filter((c) => !!(c.title || "").trim() && !(c.imported_article_id || "").trim())
-      .map((c) => (c.id || "").trim() || "cluster");
+      .map((c) => (c.id || "").trim() || "cluster")
+      .filter((id) => !isClusterSlotDuplicate(clusterId, id));
     const allPendingCount = (pillarPending ? 1 : 0) + pendingClusterIds.length;
 
     const sel = clusterSelected[clusterId] || new Set<string>();
@@ -2534,8 +2737,10 @@ export default function ProjectPage() {
     for (const id of pendingClusterIds) {
       if (sel.has(id)) filtered.push(id);
     }
-    // If the user selected only already-imported rows, fall back to "all pending"
-    // so the action button doesn't silently 400 with "nothing to do".
+    // If the user selected only already-imported / duplicate rows, fall
+    // back to "all pending" so the action button doesn't silently 400
+    // with "nothing to do" — but ``allPendingCount`` already excludes
+    // duplicates so the fallback is also safe.
     if (filtered.length === 0) return { topicIds: null, pendingCount: allPendingCount };
     return { topicIds: filtered, pendingCount: filtered.length };
   }
@@ -2550,6 +2755,13 @@ export default function ProjectPage() {
   }
 
   function toggleClusterSlot(clusterId: string, slotId: string) {
+    // Confirmed-duplicate rows are un-selectable: the engine has already
+    // matched them to an existing article in this project or on the live
+    // site, so any bulk action would be a no-op (or worse, a duplicate
+    // import). The checkbox is also withheld at the JSX level — this is
+    // a defence in depth for stale state where validation flipped from
+    // ``new`` to ``duplicate`` after the row was selected.
+    if (isClusterSlotDuplicate(clusterId, slotId)) return;
     setClusterSelected((prev) => {
       const cur = new Set(prev[clusterId] || []);
       if (cur.has(slotId)) cur.delete(slotId);
@@ -2562,13 +2774,20 @@ export default function ProjectPage() {
     const cluster = topicClusters.find((c) => c.id === clusterId);
     if (!cluster) return;
     const next = new Set<string>();
-    if (!(cluster.pillar?.imported_article_id || "").trim() && (cluster.pillar?.title || "").trim()) {
-      next.add((cluster.pillar?.id || "pillar").trim() || "pillar");
+    const pillarSlot = (cluster.pillar?.id || "pillar").trim() || "pillar";
+    if (
+      !(cluster.pillar?.imported_article_id || "").trim() &&
+      (cluster.pillar?.title || "").trim() &&
+      !isClusterSlotDuplicate(clusterId, pillarSlot)
+    ) {
+      next.add(pillarSlot);
     }
     for (const c of cluster.clusters || []) {
       if (!(c.title || "").trim()) continue;
       if ((c.imported_article_id || "").trim()) continue;
-      next.add((c.id || "").trim() || "cluster");
+      const slotId = (c.id || "").trim() || "cluster";
+      if (isClusterSlotDuplicate(clusterId, slotId)) continue;
+      next.add(slotId);
     }
     setClusterSelected((prev) => ({ ...prev, [clusterId]: next }));
   }
@@ -3169,6 +3388,61 @@ export default function ProjectPage() {
                 ← Back to dashboard
               </Link>
             </div>
+
+            {/* Project switcher lives in its own labelled block so it
+                reads as a stand-alone control, not "another nav item"
+                stacked under the Back-to-dashboard button. The dotted
+                hairline + Current-project caption gives it the same
+                visual rhythm as the SECTIONS group below. */}
+            {(() => {
+              const list = projectsList.slice();
+              const hasCurrent = list.some((p) => p.id === projectId);
+              if (!hasCurrent) {
+                list.unshift({
+                  id: projectId,
+                  owner_user_id: "",
+                  name: (projectMeta?.name || "Current project").trim() || "Current project",
+                } as import("@/lib/api").ProjectPublic);
+              }
+              const currentName =
+                (list.find((p) => p.id === projectId)?.name || "").trim() ||
+                "Current project";
+              return (
+                <div className={styles.projectSwitcherBlock}>
+                  <label
+                    className={styles.sidebarTitle}
+                    htmlFor="aa-project-switcher"
+                    style={{ marginBottom: 8 }}
+                  >
+                    CURRENT PROJECT
+                  </label>
+                  <div className={styles.projectSwitcherField}>
+                    <select
+                      id="aa-project-switcher"
+                      className={styles.projectSwitcher}
+                      value={projectId}
+                      onChange={(e) => switchProject(e.target.value)}
+                      aria-label="Switch project"
+                      title={currentName}
+                    >
+                      {list.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {(p.name || "").trim() || "Untitled project"}
+                        </option>
+                      ))}
+                    </select>
+                    <span className={styles.projectSwitcherChevron} aria-hidden="true">
+                      ▾
+                    </span>
+                  </div>
+                  <div className={styles.projectSwitcherCaption}>
+                    Switch to another project — your active section is preserved.
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className={styles.sidebarDivider} aria-hidden="true" />
 
             <div className={styles.sidebarTitle}>SECTIONS</div>
             <div className={styles.navGroup} role="navigation" aria-label="Project sections">
@@ -4525,6 +4799,19 @@ export default function ProjectPage() {
                 const allDuplicates =
                   remainingValidations.length > 0 &&
                   remainingValidations.every((v) => v && v.status === "duplicate");
+                // Number of non-imported AND non-duplicate rows. This drives
+                // the bulk action buttons + "X pending" copy so we never
+                // promise "Import 6" when 1 of those 6 already exists on
+                // the site.
+                const pillarActionable =
+                  !pillarDone && !(pillarValidation?.status === "duplicate");
+                const clusterActionable = clusterRows.filter((c) => {
+                  if ((c.imported_article_id || "").trim()) return false;
+                  const v = clusterValidation.results[`${cl.id}::${c.id}`];
+                  return v?.status !== "duplicate";
+                }).length;
+                const actionablePending =
+                  (pillarActionable ? 1 : 0) + clusterActionable;
                 return (
                   <div key={cl.id} className={styles.clusterRow}>
                     <div className={styles.clusterRowHead}>
@@ -4562,9 +4849,16 @@ export default function ProjectPage() {
                           const importBusy = bulk?.kind === "import";
                           const scheduleBusy = bulk?.kind === "schedule";
                           const anyBusy = !!bulk || clusterPlanBusy;
-                          const target = selN > 0 ? `${selN} selected` : `${totalSlots - totalDone} pending`;
+                          const target =
+                            selN > 0
+                              ? `${selN} selected`
+                              : `${actionablePending} pending`;
                           const noPending = totalDone >= totalSlots;
-                          const generateDisabled = anyBusy || allDuplicates || noPending;
+                          // ``noActionable`` includes confirmed duplicates so we
+                          // disable bulk import/schedule whenever every remaining
+                          // pending row already exists in the project / on site.
+                          const noActionable = actionablePending === 0 && selN === 0;
+                          const generateDisabled = anyBusy || allDuplicates || noPending || noActionable;
                           return (
                             <>
                               <button
@@ -4591,12 +4885,14 @@ export default function ProjectPage() {
                               <button
                                 type="button"
                                 className={styles.btnSecondary}
-                                disabled={anyBusy || noPending}
+                                disabled={anyBusy || noPending || noActionable}
                                 onClick={() => importForCluster(cl.id)}
                                 title={
                                   noPending
                                     ? "Every topic is already imported."
-                                    : `Import ${target} into Articles as pending drafts (no credits used).`
+                                    : noActionable
+                                      ? "Every remaining topic already exists on your site or in this project."
+                                      : `Import ${target} into Articles as pending drafts (no credits used).`
                                 }
                               >
                                 {importBusy ? "Importing…" : `Import ${selN > 0 ? "selected" : "all"}`}
@@ -4604,12 +4900,14 @@ export default function ProjectPage() {
                               <button
                                 type="button"
                                 className={styles.btnSecondary}
-                                disabled={anyBusy || noPending}
+                                disabled={anyBusy || noPending || noActionable}
                                 onClick={() => openScheduleForCluster(cl.id)}
                                 title={
                                   noPending
                                     ? "Every topic is already imported."
-                                    : `Import ${target} and schedule them for auto-generation + publish.`
+                                    : noActionable
+                                      ? "Every remaining topic already exists on your site or in this project."
+                                      : `Import ${target} and schedule them for auto-generation + publish.`
                                 }
                               >
                                 {scheduleBusy ? "Scheduling…" : `Schedule ${selN > 0 ? "selected" : "all"}`}
@@ -4635,19 +4933,32 @@ export default function ProjectPage() {
                       const sel = clusterSelected[cl.id] || new Set<string>();
                       const pendingTotal = totalSlots - totalDone;
                       if (pendingTotal === 0) return null;
+                      // Show duplicates excluded count separately so the
+                      // user understands why "X pending" might be lower
+                      // than the visual list of un-imported topics.
+                      const dupExcluded = pendingTotal - actionablePending;
                       return (
                         <div className={styles.clusterSelectionBar}>
                           <span className={styles.clusterSelectionCount}>
                             {sel.size > 0
-                              ? `${sel.size} of ${pendingTotal} selected`
-                              : `${pendingTotal} pending — bulk action will use all`}
+                              ? `${sel.size} of ${actionablePending} selected`
+                              : actionablePending > 0
+                                ? `${actionablePending} pending — bulk action will use all${
+                                    dupExcluded > 0
+                                      ? ` (${dupExcluded} already exists)`
+                                      : ""
+                                  }`
+                                : `0 actionable — every remaining topic already exists`}
                           </span>
                           <div className={styles.clusterSelectionLinks}>
                             <button
                               type="button"
                               className={styles.miniLinkBtn}
                               onClick={() => selectAllPendingForCluster(cl.id)}
-                              disabled={sel.size === pendingTotal}
+                              disabled={
+                                actionablePending === 0 ||
+                                sel.size === actionablePending
+                              }
                             >
                               Select all pending
                             </button>
@@ -4670,10 +4981,15 @@ export default function ProjectPage() {
                         const pillarSlot = (cl.pillar?.id || "pillar").trim() || "pillar";
                         const sel = clusterSelected[cl.id] || new Set<string>();
                         const checked = sel.has(pillarSlot);
+                        const pillarDup = pillarValidation?.status === "duplicate";
+                        const pillarMuted = !pillarDone && pillarDup;
                         return (
                           <div className={styles.clusterPillarBox}>
-                            <div className={styles.clusterTopicHead}>
-                              {!pillarDone ? (
+                            <div
+                              className={styles.clusterTopicHead}
+                              data-duplicate={pillarMuted ? "true" : undefined}
+                            >
+                              {!pillarDone && !pillarDup ? (
                                 <input
                                   type="checkbox"
                                   className={styles.clusterTopicCheckbox}
@@ -4731,10 +5047,18 @@ export default function ProjectPage() {
                           const slotId = (c.id || "").trim() || "cluster";
                           const sel = clusterSelected[cl.id] || new Set<string>();
                           const checked = sel.has(slotId);
+                          // ``isDup`` excludes already-imported rows (those
+                          // already render with the green "Imported" pill +
+                          // their own muted state) so we only dim NEW rows
+                          // the engine confirmed already exist elsewhere.
+                          const isDup = !done && v?.status === "duplicate";
                           return (
                             <li key={c.id} className={styles.clusterTopicItem}>
-                              <div className={styles.clusterTopicHead}>
-                                {!done ? (
+                              <div
+                                className={styles.clusterTopicHead}
+                                data-duplicate={isDup ? "true" : undefined}
+                              >
+                                {!done && !isDup ? (
                                   <input
                                     type="checkbox"
                                     className={styles.clusterTopicCheckbox}
@@ -6037,95 +6361,86 @@ export default function ProjectPage() {
               </div>
             </div>
 
-            {/* Feature 1 — GSC ROI summary (full chart lives on Performance & Analysis tab) */}
-            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-              <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 0 }} className={`${styles.sectionSecondaryTitle}`}>Performance summary (last 28 days)</h3>
-                {performanceTabAvailable ? (
-                  <button type="button" className={styles.button} onClick={() => goTab("performance")}>
-                    Open Performance & Analysis →
-                  </button>
-                ) : null}
-              </div>
-
-              {!gscStatus?.connected || !gscStatus?.property_url ? (
-                <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>
-                  Connect Google and link a Search Console property above to unlock the
-                  Performance & Analysis tab.
-                </div>
-              ) : analyticsErr ? (
-                <div className={styles.error} style={{ marginTop: 10 }}>{analyticsErr}</div>
-              ) : analyticsBusy && !analytics ? (
-                <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>
-                  Loading Search Console data…
-                </div>
-              ) : analytics ? (
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                    gap: 12,
-                    marginTop: 14,
-                  }}
-                >
-                  <div className={styles.kpiTile}>
-                    <div className={styles.kpiLabel}>Clicks</div>
-                    <div className={styles.kpiValue}>{(analytics.totals.clicks || 0).toLocaleString()}</div>
+            {gscStatus?.connected && (gscStatus?.property_url || "").trim() ? (
+              <>
+                {/* Feature 1 — GSC ROI summary (full chart lives on Performance & Analysis tab) */}
+                <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+                  <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <h3 style={{ marginTop: 0, marginBottom: 0 }} className={`${styles.sectionSecondaryTitle}`}>Performance summary (last 28 days)</h3>
+                    {performanceTabAvailable ? (
+                      <button type="button" className={styles.button} onClick={() => goTab("performance")}>
+                        Open Performance & Analysis →
+                      </button>
+                    ) : null}
                   </div>
-                  <div className={styles.kpiTile}>
-                    <div className={styles.kpiLabel}>Impressions</div>
-                    <div className={styles.kpiValue}>{(analytics.totals.impressions || 0).toLocaleString()}</div>
+
+                  {analyticsErr ? (
+                    <div className={styles.error} style={{ marginTop: 10 }}>{analyticsErr}</div>
+                  ) : analyticsBusy && !analytics ? (
+                    <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>
+                      Loading Search Console data…
+                    </div>
+                  ) : analytics ? (
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                        gap: 12,
+                        marginTop: 14,
+                      }}
+                    >
+                      <div className={styles.kpiTile}>
+                        <div className={styles.kpiLabel}>Clicks</div>
+                        <div className={styles.kpiValue}>{(analytics.totals.clicks || 0).toLocaleString()}</div>
+                      </div>
+                      <div className={styles.kpiTile}>
+                        <div className={styles.kpiLabel}>Impressions</div>
+                        <div className={styles.kpiValue}>{(analytics.totals.impressions || 0).toLocaleString()}</div>
+                      </div>
+                      <div className={styles.kpiTile}>
+                        <div className={styles.kpiLabel}>Avg CTR</div>
+                        <div className={styles.kpiValue}>{((analytics.totals.ctr || 0) * 100).toFixed(2)}%</div>
+                      </div>
+                      <div className={styles.kpiTile}>
+                        <div className={styles.kpiLabel}>Avg position</div>
+                        <div className={styles.kpiValue}>{(analytics.totals.position || 0).toFixed(1)}</div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* Feature 3 — Site Map (Internal Linking ingestion) */}
+                <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+                  <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <h3 style={{ marginTop: 0, marginBottom: 0 }} className={`${styles.sectionSecondaryTitle}`}>Internal linking — Site map</h3>
+                    <button type="button" className={styles.button} onClick={syncSiteMap} disabled={siteMapBusy}>
+                      {siteMapBusy ? "Syncing…" : "Sync from WordPress"}
+                    </button>
                   </div>
-                  <div className={styles.kpiTile}>
-                    <div className={styles.kpiLabel}>Avg CTR</div>
-                    <div className={styles.kpiValue}>{((analytics.totals.ctr || 0) * 100).toFixed(2)}%</div>
+                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+                    Riviso pulls every published post from your WordPress REST API and stores
+                    <code> URL · title · focus keyphrase</code>. New articles will use this list to auto-insert
+                    contextual <code>&lt;a&gt;</code> tags before posting (matching engine ships in the next iteration —
+                    today this card mirrors the data so you can verify nothing&apos;s stale).
                   </div>
-                  <div className={styles.kpiTile}>
-                    <div className={styles.kpiLabel}>Avg position</div>
-                    <div className={styles.kpiValue}>{(analytics.totals.position || 0).toFixed(1)}</div>
+                  {siteMapMsg ? (
+                    <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }}>{siteMapMsg}</div>
+                  ) : null}
+                  <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>
+                    {siteMap
+                      ? `Stored: ${siteMap.count} post${siteMap.count === 1 ? "" : "s"}` + (siteMap.wp_site_url ? ` from ${siteMap.wp_site_url}` : "")
+                      : "Site map not synced yet."}
                   </div>
                 </div>
-              ) : null}
-            </div>
 
-            {/* Feature 3 — Site Map (Internal Linking ingestion) */}
-            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-              <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 0 }} className={`${styles.sectionSecondaryTitle}`}>Internal linking — Site map</h3>
-                <button type="button" className={styles.button} onClick={syncSiteMap} disabled={siteMapBusy}>
-                  {siteMapBusy ? "Syncing…" : "Sync from WordPress"}
-                </button>
-              </div>
-              <div className={styles.muted} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
-                Riviso pulls every published post from your WordPress REST API and stores
-                <code> URL · title · focus keyphrase</code>. New articles will use this list to auto-insert
-                contextual <code>&lt;a&gt;</code> tags before posting (matching engine ships in the next iteration —
-                today this card mirrors the data so you can verify nothing&apos;s stale).
-              </div>
-              {siteMapMsg ? (
-                <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }}>{siteMapMsg}</div>
-              ) : null}
-              <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>
-                {siteMap
-                  ? `Stored: ${siteMap.count} post${siteMap.count === 1 ? "" : "s"}` + (siteMap.wp_site_url ? ` from ${siteMap.wp_site_url}` : "")
-                  : "Site map not synced yet."}
-              </div>
-            </div>
+                <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+                  <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Sitemap submission</h3>
+                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
+                    Register your sitemap once and Google will recrawl it on its own schedule — every
+                    future article gets discovered without per-post action. Sitemap submission is the
+                    officially supported public API for telling Search Console about new URLs.
+                  </div>
 
-            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-              <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Sitemap submission</h3>
-              <div className={styles.muted} style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
-                Register your sitemap once and Google will recrawl it on its own schedule — every
-                future article gets discovered without per-post action. Sitemap submission is the
-                officially supported public API for telling Search Console about new URLs.
-              </div>
-
-              {!gscStatus?.connected || !gscStatus?.property_url ? (
-                <div className={styles.muted} style={{ fontSize: 13 }}>
-                  Connect Google and link a property above to submit sitemaps.
-                </div>
-              ) : (
-                <>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "stretch" }}>
                     <input
                       type="url"
@@ -6246,9 +6561,17 @@ export default function ProjectPage() {
                       </div>
                     )}
                   </div>
-                </>
-              )}
-            </div>
+                </div>
+              </>
+            ) : (
+              <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+                <p className={styles.clusterCardSubtitle} style={{ margin: 0, lineHeight: 1.55 }}>
+                  <strong>Performance summary</strong>, <strong>internal site-map sync</strong>, and <strong>sitemap submission</strong>{" "}
+                  appear here after you connect Google above, pick a Search Console property, and click <strong>Save</strong> so this project is
+                  fully linked to a verified property.
+                </p>
+              </div>
+            )}
 
             <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
               <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Existing articles — indexing status</h3>
@@ -6754,11 +7077,18 @@ export default function ProjectPage() {
           <>
             <div className={`${styles.card} ${styles.cardWide}`}>
               <div className={styles.projectCardTop}>
-                {settingsDirty || identityDirty ? (
-                  <button className={styles.button} type="button" onClick={saveSettings} disabled={settingsSaving || settingsLoading}>
-                    {settingsSaving ? "Saving…" : "Save"}
-                  </button>
-                ) : null}
+                {(() => {
+                  const wpOkForSave =
+                    !!settings &&
+                    (settings.wp_verified_status || "").toLowerCase() === "connected" &&
+                    !!(settings.wp_verified_at || "").trim();
+                  const showSave = settings ? settingsDirty || (wpOkForSave && identityDirty) : settingsDirty || identityDirty;
+                  return showSave ? (
+                    <button className={styles.button} type="button" onClick={saveSettings} disabled={settingsSaving || settingsLoading}>
+                      {settingsSaving ? "Saving…" : "Save"}
+                    </button>
+                  ) : null;
+                })()}
               </div>
               {settingsLoading ? <div className={styles.muted}>Loading settings…</div> : null}
               {error ? <p className={styles.error}>{error}</p> : null}
@@ -6766,6 +7096,110 @@ export default function ProjectPage() {
 
             {settings ? (
               <div className={`${styles.card} ${styles.cardWide}`}>
+                {/*
+                  WordPress connection block: header + clear status pill so a user
+                  who skipped the "Connect WordPress" popup at project creation
+                  can see exactly what's missing and fix it from here. The pill
+                  reads from the persisted ``wp_verified_at`` snapshot the
+                  backend records on every successful verify call, so it stays
+                  honest across reloads.
+                */}
+                <div className={styles.wpConnectionHead}>
+                  <div>
+                    <h3 className={styles.clusterTreeLabel} style={{ margin: 0 }}>
+                      WordPress connection
+                    </h3>
+                    <p className={styles.clusterCardSubtitle}>
+                      Riviso publishes generated articles via WordPress&apos;s REST API. Provide
+                      your site URL, username, and an{" "}
+                      <a
+                        href="https://wordpress.org/documentation/article/application-passwords/"
+                        target="_blank"
+                        rel="noreferrer"
+                        className={styles.clusterOpenLink}
+                      >
+                        Application Password
+                      </a>{" "}
+                      (Users → Profile → Application Passwords), then click <strong>Verify
+                      connection</strong>.
+                    </p>
+                  </div>
+                  {(() => {
+                    const status = (settings.wp_verified_status || "").toLowerCase();
+                    const verifiedAt = (settings.wp_verified_at || "").trim();
+                    let label = "Not connected";
+                    let dataState: "verified" | "warning" | "failed" | "pending" = "pending";
+                    let title = "No WordPress credentials saved yet. Fill in the fields below and click Verify connection.";
+                    if (status === "connected" && verifiedAt) {
+                      label = "Verified";
+                      dataState = "verified";
+                      title = `Last verified ${verifiedAt} UTC.`;
+                    } else if (status === "auth_failed") {
+                      label = "Auth failed";
+                      dataState = "failed";
+                      title = settings.wp_verified_message || "Authentication failed. Check username and application password.";
+                    } else if (status === "failed" || status === "error") {
+                      label = "Verification failed";
+                      dataState = "failed";
+                      title = settings.wp_verified_message || "Could not verify WordPress connection.";
+                    } else if (settings.wp_app_password_set && (settings.wp_site_url || settings.website_url)) {
+                      label = "Not verified yet";
+                      dataState = "warning";
+                      title = "Credentials are saved but no successful verify on record. Click Verify connection.";
+                    }
+
+                    // Independent plugin pill — only meaningful once a verify
+                    // has run (i.e. the credentials pill is no longer in the
+                    // "Not connected" state).
+                    const pluginStatus = (settings.wp_plugin_status || "").toLowerCase();
+                    const pluginMsg = (settings.wp_plugin_message || "").trim();
+                    let pluginLabel = "";
+                    let pluginState: "verified" | "warning" | "failed" | "pending" = "pending";
+                    let pluginTitle = pluginMsg;
+                    if (pluginStatus === "active") {
+                      pluginLabel = "Plugin active";
+                      pluginState = "verified";
+                      pluginTitle = pluginMsg || "Connector plugin responded to /ping with 200.";
+                    } else if (pluginStatus === "installed") {
+                      pluginLabel = "Plugin registered, /ping unreachable";
+                      pluginState = "warning";
+                      pluginTitle = pluginMsg || "Plugin REST namespace is registered but /ping was rejected.";
+                    } else if (pluginStatus === "capability") {
+                      pluginLabel = "Plugin: capability blocked";
+                      pluginState = "failed";
+                      pluginTitle = pluginMsg || "Plugin is installed but the WordPress user lacks edit_posts.";
+                    } else if (pluginStatus === "missing") {
+                      pluginLabel = "Plugin not active";
+                      pluginState = "failed";
+                      pluginTitle = pluginMsg || "Connector plugin not detected on the site.";
+                    } else if (pluginStatus === "unknown") {
+                      pluginLabel = "Plugin: unknown";
+                      pluginState = "warning";
+                      pluginTitle = pluginMsg || "Could not reach the WordPress REST index.";
+                    }
+
+                    return (
+                      <span className={styles.wpStatusPillStack}>
+                        <span className={styles.wpStatusPill} data-state={dataState} title={title}>
+                          {label}
+                          {dataState === "verified" && verifiedAt ? (
+                            <span className={styles.wpStatusPillTime}>· {verifiedAt} UTC</span>
+                          ) : null}
+                        </span>
+                        {pluginLabel ? (
+                          <span
+                            className={styles.wpStatusPill}
+                            data-state={pluginState}
+                            title={pluginTitle}
+                          >
+                            {pluginLabel}
+                          </span>
+                        ) : null}
+                      </span>
+                    );
+                  })()}
+                </div>
+
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                   <label className={styles.label}>
                     Project display name
@@ -6773,109 +7207,629 @@ export default function ProjectPage() {
                   </label>
                   <label className={styles.label}>
                     WordPress site URL
-                    <input className={styles.input} value={sUrl} onChange={(e) => setSUrl(e.target.value)} placeholder="https://example.com" />
+                    <input
+                      className={styles.input}
+                      value={sUrl}
+                      onChange={(e) => setSUrl(e.target.value)}
+                      placeholder="https://example.com"
+                      autoComplete="url"
+                      inputMode="url"
+                    />
                   </label>
                   <label className={styles.label}>
                     WordPress username
-                    <input className={styles.input} value={sWpUser} onChange={(e) => setSWpUser(e.target.value)} />
+                    <input
+                      className={styles.input}
+                      value={sWpUser}
+                      onChange={(e) => setSWpUser(e.target.value)}
+                      placeholder="e.g. admin"
+                      autoComplete="username"
+                    />
                   </label>
                   <label className={styles.label}>
                     Application password
-                    <input className={styles.input} value={sWpPass} onChange={(e) => setSWpPass(e.target.value)} placeholder={settings.wp_app_password_set ? "•••••••••• (set)" : "xxxx xxxx xxxx xxxx"} />
-                  </label>
-                </div>
-
-                <div style={{ marginTop: 14, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Brand identity & niche</div>
-                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>
-                    This flavors all AI research and generation for this project. Keep it specific: audience, tone, POV, do/don’t rules, and what makes you different.
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    <label className={styles.label}>
-                      Brand identity (voice, tone, rules)
-                      <textarea
-                        className={styles.input}
-                        value={brandIdentity}
-                        onChange={(e) => setBrandIdentity(e.target.value)}
-                        rows={8}
-                        placeholder="Example: We write as a senior consultant. Direct, evidence-driven, no hype. Use short paragraphs, practical checklists, and cite data when available. Avoid buzzwords and exaggerated claims."
-                        style={{ resize: "vertical" }}
-                      />
-                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                        {brandIdentity.trim().length}/20000
-                      </div>
-                    </label>
-                    <label className={styles.label}>
-                      Niche identifier (who/what/where)
-                      <textarea
-                        className={styles.input}
-                        value={nicheIdentifier}
-                        onChange={(e) => setNicheIdentifier(e.target.value)}
-                        rows={8}
-                        placeholder="Example: India-focused MSME dispute resolution. Audience: founders and finance heads. Topics: arbitration, mediation, commercial courts, debt recovery. Primary cities: Delhi, Mumbai, Bengaluru."
-                        style={{ resize: "vertical" }}
-                      />
-                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                        {nicheIdentifier.trim().length}/20000
-                      </div>
-                    </label>
-                  </div>
-                </div>
-
-                <div style={{ marginTop: 14, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 8 }}>WordPress defaults</div>
-                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>
-                    These defaults will be pre-selected when publishing articles. You can still change them per article.
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    <label className={styles.label}>
-                      Default post type
-                      <select className={styles.input} value={sWpDefaultPostType} onChange={(e) => setSWpDefaultPostType(e.target.value)}>
-                        <option value="posts">Posts</option>
-                        <option value="pages">Pages</option>
-                        {settingsPostTypes
-                          .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
-                          .map((t) => (
-                            <option key={t.rest_base} value={t.rest_base}>
-                              {t.name || t.rest_base}
-                            </option>
-                          ))}
-                      </select>
-                    </label>
-
-                    <label className={styles.label}>
-                      Default status
-                      <select className={styles.input} value={sWpDefaultStatus} onChange={(e) => setSWpDefaultStatus(e.target.value as "draft" | "publish")}>
-                        <option value="draft">Draft</option>
-                        <option value="publish">Publish</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <label className={styles.label} style={{ marginTop: 10 }}>
-                    Default category
-                    <select
+                    <input
                       className={styles.input}
-                      multiple
-                      value={sWpDefaultCategoryIds.map(String)}
-                      onChange={(e) => {
-                        const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
-                        setSWpDefaultCategoryIds(ids);
-                      }}
-                      style={{ minHeight: 120 }}
-                    >
-                      {settingsCategories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                      Hold Cmd/Ctrl to select multiple categories.
-                    </div>
+                      value={sWpPass}
+                      type="password"
+                      onChange={(e) => setSWpPass(e.target.value)}
+                      placeholder={settings.wp_app_password_set ? "•••••••••• (set)" : "xxxx xxxx xxxx xxxx"}
+                      autoComplete="new-password"
+                    />
                   </label>
                 </div>
+
+                <div className={styles.wpConnectionActions}>
+                  <a
+                    className={styles.btnSecondary}
+                    href={`${getApiBaseUrl()}${settings.plugin_download_url}`}
+                    download
+                  >
+                    Download plugin
+                  </a>
+                  <button
+                    className={styles.button}
+                    type="button"
+                    onClick={verifySettings}
+                    disabled={
+                      settingsVerifying ||
+                      !sUrl.trim() ||
+                      !sWpUser.trim() ||
+                      (!sWpPass.trim() && !settings.wp_app_password_set)
+                    }
+                    title={
+                      !sWpPass.trim() && !settings.wp_app_password_set
+                        ? "Enter the application password first."
+                        : "Save credentials and check the WordPress REST API responds."
+                    }
+                  >
+                    {settingsVerifying ? "Verifying…" : "Verify connection"}
+                  </button>
+                </div>
+
+                {settingsVerify ? (
+                  <div
+                    className={settingsVerify.ok ? styles.wpVerifyResultOk : styles.wpVerifyResultErr}
+                    style={{ whiteSpace: "pre-wrap" }}
+                  >
+                    {settingsVerify.message}
+                  </div>
+                ) : null}
+
+                {(() => {
+                  const wpVerifiedOk =
+                    (settings.wp_verified_status || "").toLowerCase() === "connected" &&
+                    !!(settings.wp_verified_at || "").trim();
+                  if (!wpVerifiedOk) {
+                    return (
+                      <div
+                        className={styles.clusterCardSubtitle}
+                        style={{
+                          marginTop: 16,
+                          paddingTop: 14,
+                          borderTop: "1px solid var(--button-secondary-border)",
+                          lineHeight: 1.55,
+                        }}
+                      >
+                        <strong>Brand identity</strong>, <strong>niche</strong>, and <strong>WordPress defaults</strong> unlock
+                        after WordPress returns a successful verify (green &quot;Verified&quot; pill above). Finish connecting your
+                        site, then click <strong>Verify connection</strong> again if credentials changed.
+                      </div>
+                    );
+                  }
+                  return (
+                    <>
+                      {/* ----------------------------------------------------------------
+                       * Brand identity — structured form
+                       * Replaces the old free-text textarea with three discrete inputs
+                       * (voice / tones / rules). The backend rebuilds the legacy
+                       * `brand_identity` plain-text string from these every time we
+                       * save, so downstream consumers (article generation, image
+                       * prompt builder) keep working without changes.
+                       * ---------------------------------------------------------------- */}
+                      <div className={styles.brandSection}>
+                        <h4 className={styles.brandSectionTitle}>Brand identity</h4>
+                        <p className={styles.brandSectionSub}>
+                          Sets <strong>how</strong> the AI writes for this project. Choose the
+                          posture (voice), the modes you want it to mix (tones), and any
+                          do/don&apos;t rules it should respect on every article.
+                        </p>
+                        <div className={styles.brandFieldGrid}>
+                          <label className={styles.brandFieldLabel}>
+                            Voice
+                            <select
+                              className={styles.input}
+                              value={brandVoice}
+                              onChange={(e) => setBrandVoice(e.target.value)}
+                            >
+                              <option value="">Pick a voice…</option>
+                              {BRAND_VOICES.map((v) => (
+                                <option key={v.id} value={v.label}>
+                                  {v.label}
+                                </option>
+                              ))}
+                            </select>
+                            <span className={styles.brandFieldHelp}>
+                              The overall posture every article should carry — pick one.
+                            </span>
+                          </label>
+                          <label className={styles.brandFieldLabel}>
+                            Tones <span style={{ opacity: 0.6, fontWeight: 500 }}>(pick up to 5)</span>
+                            <div className={styles.chipPickerBox}>
+                              {BRAND_TONES.map((t) => {
+                                const selected = brandTones.includes(t.label);
+                                const disabled = !selected && brandTones.length >= 5;
+                                return (
+                                  <button
+                                    key={t.id}
+                                    type="button"
+                                    className={styles.chipOption}
+                                    data-selected={selected}
+                                    data-disabled={disabled}
+                                    onClick={() => {
+                                      if (selected) {
+                                        setBrandTones((xs) => xs.filter((x) => x !== t.label));
+                                      } else if (!disabled) {
+                                        setBrandTones((xs) => [...xs, t.label]);
+                                      }
+                                    }}
+                                  >
+                                    {t.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <span className={styles.brandFieldHelp}>
+                              Selected: {brandTones.length}/5. The AI mixes these as it
+                              writes — e.g. &quot;Direct + Evidence-driven + No hype&quot;.
+                            </span>
+                          </label>
+                        </div>
+                        <label className={styles.brandFieldLabel}>
+                          Rules
+                          <textarea
+                            className={styles.input}
+                            value={brandRules}
+                            onChange={(e) => setBrandRules(e.target.value.slice(0, 4000))}
+                            rows={4}
+                            placeholder={
+                              "Examples — keep it short and concrete:\n" +
+                              "• Avoid buzzwords (synergy, leverage, game-changer).\n" +
+                              "• Always cite a source when quoting numbers.\n" +
+                              "• Use short paragraphs and bullet checklists.\n" +
+                              "• Never promise outcomes; describe likelihoods."
+                            }
+                            style={{ resize: "vertical" }}
+                          />
+                          <span className={styles.brandFieldHelp}>
+                            {brandRules.trim().length}/4000 chars · One bullet per line.
+                            These are appended to the AI&apos;s system prompt on every
+                            article.
+                          </span>
+                        </label>
+                      </div>
+
+                      {/* ----------------------------------------------------------------
+                       * Niche identifier — structured form
+                       * Topic + audience + countries + cities. The backend rebuilds the
+                       * legacy `niche_identifier` plain-text string from this every save.
+                       * ---------------------------------------------------------------- */}
+                      <div className={styles.brandSection}>
+                        <h4 className={styles.brandSectionTitle}>Niche identifier</h4>
+                        <p className={styles.brandSectionSub}>
+                          Sets <strong>what</strong> and <strong>who</strong> every article is
+                          about. Pin the topic universe, the audience, and the geographies
+                          you want examples and references to come from.
+                        </p>
+
+                        <label className={styles.brandFieldLabel}>
+                          Niche
+                          <input
+                            className={styles.input}
+                            value={nicheTopic}
+                            onChange={(e) => setNicheTopic(e.target.value.slice(0, 500))}
+                            placeholder="e.g. Mutual divorce advocacy in India · MSME dispute resolution · DTC home decor"
+                          />
+                          <span className={styles.brandFieldHelp}>
+                            One line. Industry + sub-topic + the differentiator that
+                            distinguishes you from generic content in the same space.
+                          </span>
+                        </label>
+
+                        <label className={styles.brandFieldLabel}>
+                          Audience <span style={{ opacity: 0.6, fontWeight: 500 }}>(multi-select)</span>
+                          <div className={styles.chipPickerBox}>
+                            {AUDIENCE_PRESETS.map((a) => {
+                              const selected = audienceList.includes(a.label);
+                              return (
+                                <button
+                                  key={a.id}
+                                  type="button"
+                                  className={styles.chipOption}
+                                  data-selected={selected}
+                                  onClick={() => {
+                                    if (selected) {
+                                      setAudienceList((xs) => xs.filter((x) => x !== a.label));
+                                    } else {
+                                      setAudienceList((xs) => [...xs, a.label]);
+                                    }
+                                  }}
+                                >
+                                  {a.label}
+                                </button>
+                              );
+                            })}
+                            {/* Custom audiences — render as removable chips alongside the presets. */}
+                            {audienceList
+                              .filter(
+                                (x) => !AUDIENCE_PRESETS.some((p) => p.label === x),
+                              )
+                              .map((custom) => (
+                                <button
+                                  key={`custom-${custom}`}
+                                  type="button"
+                                  className={styles.chipOption}
+                                  data-selected={true}
+                                  data-removable="true"
+                                  onClick={() =>
+                                    setAudienceList((xs) => xs.filter((x) => x !== custom))
+                                  }
+                                >
+                                  {custom}
+                                </button>
+                              ))}
+                          </div>
+                          <div className={styles.chipFreeRow}>
+                            <input
+                              className={styles.chipFreeInput}
+                              value={audienceCustomDraft}
+                              onChange={(e) =>
+                                setAudienceCustomDraft(e.target.value.slice(0, 120))
+                              }
+                              placeholder="Add a custom audience and press Enter…"
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  const v = audienceCustomDraft.trim();
+                                  if (v && !audienceList.includes(v)) {
+                                    setAudienceList((xs) => [...xs, v]);
+                                  }
+                                  setAudienceCustomDraft("");
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              className={styles.chipFreeAddBtn}
+                              disabled={
+                                !audienceCustomDraft.trim() ||
+                                audienceList.includes(audienceCustomDraft.trim())
+                              }
+                              onClick={() => {
+                                const v = audienceCustomDraft.trim();
+                                if (v && !audienceList.includes(v)) {
+                                  setAudienceList((xs) => [...xs, v]);
+                                }
+                                setAudienceCustomDraft("");
+                              }}
+                            >
+                              Add
+                            </button>
+                          </div>
+                        </label>
+
+                        <label className={styles.brandFieldLabel}>
+                          Target countries
+                          <div className={styles.brandToggleRow}>
+                            <input
+                              type="checkbox"
+                              checked={!!targetCountriesAll}
+                              onChange={(e) => {
+                                const next = e.target.checked;
+                                setTargetCountriesAll(next);
+                                if (next) {
+                                  // Single sentinel — don't enumerate 250+ codes.
+                                  // Drop the country list AND any cities tied to
+                                  // specific countries (we keep custom-typed cities
+                                  // because the user explicitly added those).
+                                  setTargetCountries([]);
+                                  setTargetCities([]);
+                                  setTargetCitiesAll(false);
+                                }
+                              }}
+                            />
+                            Select all countries (global targeting)
+                          </div>
+                          {!targetCountriesAll ? (
+                            <>
+                              <input
+                                className={styles.chipFreeInput}
+                                value={countryFilter}
+                                onChange={(e) => setCountryFilter(e.target.value)}
+                                placeholder="Filter countries…"
+                                style={{ marginTop: 6 }}
+                              />
+                              <div
+                                className={styles.chipPickerBox}
+                                style={{ maxHeight: 220, overflowY: "auto" }}
+                              >
+                                {(() => {
+                                  const q = countryFilter.trim().toLowerCase();
+                                  const items = q
+                                    ? COUNTRIES.filter(
+                                        (c) =>
+                                          c.name.toLowerCase().includes(q) ||
+                                          c.code.toLowerCase().includes(q),
+                                      )
+                                    : COUNTRIES;
+                                  if (items.length === 0) {
+                                    return (
+                                      <span className={styles.chipPickerEmpty}>
+                                        No matches
+                                      </span>
+                                    );
+                                  }
+                                  return items.map((c) => {
+                                    const selected = targetCountries.includes(c.code);
+                                    return (
+                                      <button
+                                        key={c.code}
+                                        type="button"
+                                        className={styles.chipOption}
+                                        data-selected={selected}
+                                        onClick={() => {
+                                          if (selected) {
+                                            setTargetCountries((xs) =>
+                                              xs.filter((x) => x !== c.code),
+                                            );
+                                            // Drop any cities tied to this country.
+                                            const cities = citiesForCountry(c.code);
+                                            if (cities.length > 0) {
+                                              setTargetCities((xs) =>
+                                                xs.filter((x) => !cities.includes(x)),
+                                              );
+                                            }
+                                          } else {
+                                            setTargetCountries((xs) => [...xs, c.code]);
+                                          }
+                                        }}
+                                      >
+                                        {c.name}
+                                      </button>
+                                    );
+                                  });
+                                })()}
+                              </div>
+                              <span className={styles.brandFieldHelp}>
+                                {targetCountries.length === 0
+                                  ? "No countries selected — articles won't be pinned to any geography."
+                                  : `${targetCountries.length} selected.`}
+                              </span>
+                            </>
+                          ) : (
+                            <span className={styles.brandFieldHelp}>
+                              Articles will be written for a global audience. The country
+                              list and country-scoped city pickers are disabled while
+                              this is on.
+                            </span>
+                          )}
+                        </label>
+
+                        {/* City targeting only makes sense when at least one country
+                         * is in scope. Globally-targeted projects skip this section
+                         * entirely so we never show a meaningless "pick a country
+                         * first" hint right under "Select all countries". */}
+                        {!targetCountriesAll && (
+                        <label className={styles.brandFieldLabel}>
+                          Target cities
+                          <div className={styles.brandToggleRow}>
+                            <input
+                              type="checkbox"
+                              checked={targetCitiesAll}
+                              onChange={(e) => {
+                                setTargetCitiesAll(e.target.checked);
+                                if (e.target.checked) setTargetCities([]);
+                              }}
+                            />
+                            Use all major cities of the selected countries
+                          </div>
+                          {!targetCitiesAll && (
+                            <>
+                              {targetCountries.length === 0 ? (
+                                <div className={styles.chipPickerBox}>
+                                  <span className={styles.chipPickerEmpty}>
+                                    Pick one or more target countries first.
+                                  </span>
+                                </div>
+                              ) : (
+                                <>
+                                  <div
+                                    className={styles.chipPickerBox}
+                                    style={{ maxHeight: 220, overflowY: "auto" }}
+                                  >
+                                    {(() => {
+                                      const cityGroups: { country: string; cities: string[] }[] =
+                                        targetCountries
+                                          .map((code) => ({
+                                            country: code,
+                                            cities: citiesForCountry(code),
+                                          }))
+                                          .filter((g) => g.cities.length > 0);
+                                      const customCities = targetCities.filter(
+                                        (c) =>
+                                          !cityGroups.some((g) => g.cities.includes(c)),
+                                      );
+                                      if (cityGroups.length === 0 && customCities.length === 0) {
+                                        return (
+                                          <span className={styles.chipPickerEmpty}>
+                                            No curated city list for the selected
+                                            countries — type cities below to add them.
+                                          </span>
+                                        );
+                                      }
+                                      return (
+                                        <>
+                                          {cityGroups.map((g) => (
+                                            <div
+                                              key={g.country}
+                                              style={{
+                                                display: "flex",
+                                                flexDirection: "column",
+                                                gap: 4,
+                                                width: "100%",
+                                              }}
+                                            >
+                                              <div
+                                                className={styles.chipPickerEmpty}
+                                                style={{
+                                                  fontWeight: 700,
+                                                  textTransform: "uppercase",
+                                                  letterSpacing: "0.04em",
+                                                  fontSize: 11,
+                                                }}
+                                              >
+                                                {(COUNTRIES.find((c) => c.code === g.country)?.name) ||
+                                                  g.country}
+                                              </div>
+                                              <div
+                                                style={{
+                                                  display: "flex",
+                                                  flexWrap: "wrap",
+                                                  gap: 6,
+                                                }}
+                                              >
+                                                {g.cities.map((city) => {
+                                                  const selected = targetCities.includes(city);
+                                                  return (
+                                                    <button
+                                                      key={`${g.country}-${city}`}
+                                                      type="button"
+                                                      className={styles.chipOption}
+                                                      data-selected={selected}
+                                                      onClick={() => {
+                                                        if (selected) {
+                                                          setTargetCities((xs) =>
+                                                            xs.filter((x) => x !== city),
+                                                          );
+                                                        } else {
+                                                          setTargetCities((xs) => [...xs, city]);
+                                                        }
+                                                      }}
+                                                    >
+                                                      {city}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+                                          ))}
+                                          {customCities.map((city) => (
+                                            <button
+                                              key={`custom-city-${city}`}
+                                              type="button"
+                                              className={styles.chipOption}
+                                              data-selected={true}
+                                              data-removable="true"
+                                              onClick={() =>
+                                                setTargetCities((xs) =>
+                                                  xs.filter((x) => x !== city),
+                                                )
+                                              }
+                                            >
+                                              {city}
+                                            </button>
+                                          ))}
+                                        </>
+                                      );
+                                    })()}
+                                  </div>
+                                  <div className={styles.chipFreeRow}>
+                                    <input
+                                      className={styles.chipFreeInput}
+                                      value={cityCustomDraft}
+                                      onChange={(e) =>
+                                        setCityCustomDraft(e.target.value.slice(0, 120))
+                                      }
+                                      placeholder="Add a city not in the list…"
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") {
+                                          e.preventDefault();
+                                          const v = cityCustomDraft.trim();
+                                          if (v && !targetCities.includes(v)) {
+                                            setTargetCities((xs) => [...xs, v]);
+                                          }
+                                          setCityCustomDraft("");
+                                        }
+                                      }}
+                                    />
+                                    <button
+                                      type="button"
+                                      className={styles.chipFreeAddBtn}
+                                      disabled={
+                                        !cityCustomDraft.trim() ||
+                                        targetCities.includes(cityCustomDraft.trim())
+                                      }
+                                      onClick={() => {
+                                        const v = cityCustomDraft.trim();
+                                        if (v && !targetCities.includes(v)) {
+                                          setTargetCities((xs) => [...xs, v]);
+                                        }
+                                        setCityCustomDraft("");
+                                      }}
+                                    >
+                                      Add
+                                    </button>
+                                  </div>
+                                </>
+                              )}
+                              <span className={styles.brandFieldHelp}>
+                                {targetCities.length === 0
+                                  ? "No specific cities selected."
+                                  : `${targetCities.length} cities selected.`}
+                              </span>
+                            </>
+                          )}
+                        </label>
+                        )}
+                      </div>
+
+                      <div style={{ marginTop: 14, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
+                        <div style={{ fontWeight: 900, marginBottom: 8 }}>WordPress defaults</div>
+                        <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>
+                          These defaults will be pre-selected when publishing articles. You can still change them per article.
+                        </div>
+
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                          <label className={styles.label}>
+                            Default post type
+                            <select className={styles.input} value={sWpDefaultPostType} onChange={(e) => setSWpDefaultPostType(e.target.value)}>
+                              <option value="posts">Posts</option>
+                              <option value="pages">Pages</option>
+                              {settingsPostTypes
+                                .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
+                                .map((t) => (
+                                  <option key={t.rest_base} value={t.rest_base}>
+                                    {t.name || t.rest_base}
+                                  </option>
+                                ))}
+                            </select>
+                          </label>
+
+                          <label className={styles.label}>
+                            Default status
+                            <select className={styles.input} value={sWpDefaultStatus} onChange={(e) => setSWpDefaultStatus(e.target.value as "draft" | "publish")}>
+                              <option value="draft">Draft</option>
+                              <option value="publish">Publish</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        <label className={styles.label} style={{ marginTop: 10 }}>
+                          Default category
+                          <select
+                            className={styles.input}
+                            multiple
+                            value={sWpDefaultCategoryIds.map(String)}
+                            onChange={(e) => {
+                              const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
+                              setSWpDefaultCategoryIds(ids);
+                            }}
+                            style={{ minHeight: 120 }}
+                          >
+                            {settingsCategories.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {c.name}
+                              </option>
+                            ))}
+                          </select>
+                          <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                            Hold Cmd/Ctrl to select multiple categories.
+                          </div>
+                        </label>
+                      </div>
+                    </>
+                  );
+                })()}
 
                 <div style={{ marginTop: 14, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
                   <div style={{ fontWeight: 900, marginBottom: 8 }}>Google Search Console</div>
@@ -6892,21 +7846,6 @@ export default function ProjectPage() {
                     . Each project now connects to its own Google account and chooses its property there.
                   </div>
                 </div>
-
-                <div className={styles.row} style={{ justifyContent: "space-between", marginTop: 10 }}>
-                  <a className={styles.btnSecondary} href={`${getApiBaseUrl()}${settings.plugin_download_url}`} download>
-                    Download plugin
-                  </a>
-                  <button className={styles.button} type="button" onClick={verifySettings} disabled={settingsVerifying || !sUrl.trim() || !sWpUser.trim()}>
-                    {settingsVerifying ? "Verifying…" : "Verify connection"}
-                  </button>
-                </div>
-
-                {settingsVerify ? (
-                  <div className={settingsVerify.ok ? styles.muted : styles.error} style={{ fontSize: 13, marginTop: 8, whiteSpace: "pre-wrap" }}>
-                    {settingsVerify.message}
-                  </div>
-                ) : null}
 
                 <div style={{ marginTop: 16, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
                   <div style={{ fontWeight: 900, marginBottom: 8 }}>Danger zone</div>

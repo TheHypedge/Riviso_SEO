@@ -106,8 +106,27 @@ export type ProjectPublic = {
   owner_user_id: string;
   name: string;
   website_url?: string | null;
+  /**
+   * Legacy plain-text representations. Always populated by the backend —
+   * if the structured fields below are set the backend rebuilds these from
+   * them so downstream LLM consumers keep working unchanged.
+   */
   brand_identity?: string | null;
   niche_identifier?: string | null;
+  /** Structured Brand identity inputs (Project Settings). */
+  brand_voice?: string | null;
+  brand_tones?: string[] | null;
+  brand_rules?: string | null;
+  /** Structured Niche identifier inputs (Project Settings). */
+  niche_topic?: string | null;
+  audience?: string[] | null;
+  /** ISO-3166-1 alpha-2 codes (uppercase). */
+  target_countries?: string[] | null;
+  /** ``true`` means "every country" (global targeting). When set, ``target_countries`` is ignored. */
+  target_countries_all?: boolean | null;
+  target_cities?: string[] | null;
+  /** ``true`` means "every city in the listed countries"; ignores the cities list. */
+  target_cities_all?: boolean | null;
 };
 
 export type ProjectSettings = {
@@ -117,6 +136,20 @@ export type ProjectSettings = {
   wp_site_url?: string | null;
   wp_username?: string | null;
   wp_app_password_set: boolean;
+  /** Last-known WordPress verification snapshot (server-recorded). */
+  wp_verified_at?: string | null;
+  wp_verified_status?: string | null;
+  wp_verified_message?: string | null;
+  /**
+   * Connector plugin verification snapshot (server-recorded). One of:
+   *  - "active"     plugin responded to /ping with 200
+   *  - "installed"  REST namespace registered, /ping unreachable
+   *  - "capability" plugin installed but WP user lacks edit_posts
+   *  - "missing"    no Riviso REST namespace found on the site
+   *  - "unknown"    /wp-json/ couldn't be reached
+   */
+  wp_plugin_status?: string | null;
+  wp_plugin_message?: string | null;
   plugin_download_url: string;
   default_wp_rest_base?: string | null;
   default_wp_status?: string | null;
@@ -546,6 +579,53 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Convert a Pydantic 422 validation `detail` array into a short, human
+ * summary suitable for showing to end users.
+ *
+ * The raw shape FastAPI returns is:
+ * ```
+ * [{ type: "too_long", loc: ["body","target_countries"],
+ *    msg: "List should have at most 50 items …", input: [...] }, ...]
+ * ```
+ * We pull out a friendly field name (the last useful entry in `loc`),
+ * keep only the human-meaningful `msg`, and join the first few items so
+ * the message stays readable when several fields fail together.
+ *
+ * Returns an empty string if the detail isn't recognisably a 422 array,
+ * letting the caller fall back to whatever message it already has.
+ */
+function formatPydantic422(detail: unknown): string {
+  if (!Array.isArray(detail) || detail.length === 0) return "";
+  const lines: string[] = [];
+  for (const item of detail) {
+    if (!item || typeof item !== "object") continue;
+    const rec = item as { loc?: unknown; msg?: unknown };
+    const msg = typeof rec.msg === "string" ? rec.msg.trim() : "";
+    if (!msg) continue;
+    let field = "";
+    if (Array.isArray(rec.loc)) {
+      // Drop a leading "body" / "query" / "path" segment because that's
+      // useless context for humans, then take the last string segment as
+      // the human-readable field name.
+      const segments = rec.loc
+        .filter((x): x is string | number => typeof x === "string" || typeof x === "number")
+        .map((x) => String(x))
+        .filter((x) => x !== "body" && x !== "query" && x !== "path");
+      if (segments.length > 0) {
+        field = segments.join(" → ");
+      }
+    }
+    lines.push(field ? `${field}: ${msg}` : msg);
+    if (lines.length >= 4) break;
+  }
+  if (lines.length === 0) return "";
+  if (detail.length > lines.length) {
+    lines.push(`… and ${detail.length - lines.length} more.`);
+  }
+  return lines.join("\n");
+}
+
 /** Default budget for typical REST calls (lists, CRUD, login). */
 export const DEFAULT_API_TIMEOUT_MS = 120_000;
 /** OpenAI text+image generation, WordPress publish with upload, schedule-with-generation, large bulk import. */
@@ -708,6 +788,13 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
           } else if (detail && typeof detail === "object" && detail !== null && "message" in detail) {
             const m = (detail as { message?: unknown }).message;
             if (typeof m === "string" && m.trim()) msg = m;
+          } else if (Array.isArray(detail)) {
+            // FastAPI / Pydantic 422 validation errors come back as a list
+            // of `{type, loc, msg, input}` items. Dumping that JSON directly
+            // to the user (as we used to) is hostile — translate it into a
+            // short, action-oriented summary instead.
+            const friendly = formatPydantic422(detail);
+            if (friendly) msg = friendly;
           }
         }
       } catch {
@@ -799,7 +886,21 @@ export const api = {
   },
   async updateProject(
     projectId: string,
-    patch: Partial<{ name: string; website_url: string | null; brand_identity: string | null; niche_identifier: string | null }>,
+    patch: Partial<{
+      name: string;
+      website_url: string | null;
+      brand_identity: string | null;
+      niche_identifier: string | null;
+      brand_voice: string | null;
+      brand_tones: string[];
+      brand_rules: string | null;
+      niche_topic: string | null;
+      audience: string[];
+      target_countries: string[];
+      target_countries_all: boolean;
+      target_cities: string[];
+      target_cities_all: boolean;
+    }>,
   ) {
     return apiFetch<ProjectPublic>(`/api/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(patch) });
   },

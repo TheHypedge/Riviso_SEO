@@ -1691,6 +1691,99 @@
   border-color: transparent;
 }
 
+/* ---------------------------------------------------------------------
+ * Sidebar project switcher (just below "Back to dashboard"). Renders a
+ * styled native <select> so the picker stays accessible and works with
+ * iOS / Android system UIs out of the box. ``--projectSwitcherChevron``
+ * is the absolutely-positioned glyph; the select itself is transparent
+ * so the background of ``.projectSwitcherField`` shows through.
+ *
+ * The wrapper sits in its OWN labelled block (``.projectSwitcherBlock``)
+ * with vertical breathing room and a hairline divider underneath, so it
+ * never reads as "another button stacked under Back-to-dashboard".
+ * --------------------------------------------------------------------- */
+.projectSwitcherBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  margin-top: 6px;
+  margin-bottom: 14px;
+}
+
+.sidebarDivider {
+  height: 1px;
+  width: 100%;
+  background: color-mix(in oklab, var(--aa-hairline), transparent 30%);
+  margin: 4px 0 14px;
+  border: 0;
+}
+
+.projectSwitcherCaption {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--aa-muted);
+  padding: 0 2px;
+}
+
+.projectSwitcherField {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 0%);
+  border-radius: var(--aa-r-lg);
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+.projectSwitcherField:hover {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 55%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 92%);
+}
+.projectSwitcherField:focus-within {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 35%);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--aa-primary), transparent 80%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 92%);
+}
+
+.projectSwitcher {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  width: 100%;
+  min-width: 0;
+  padding: 11px 36px 11px 14px;
+  border: 0;
+  background: transparent;
+  color: var(--aa-body-strong);
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1.25;
+  border-radius: inherit;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.projectSwitcher:focus {
+  outline: none;
+}
+.projectSwitcher option {
+  color: var(--aa-body-strong);
+  background: var(--aa-surface-card);
+}
+
+.projectSwitcherChevron {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--aa-muted);
+  font-size: 12px;
+}
+
 .contentCol {
   width: 100%;
   display: flex;
@@ -2604,6 +2697,24 @@
   gap: 12px;
 }
 
+/* Confirmed-duplicate row: the validation engine matched this topic to
+ * an existing article in this project or on the live WordPress site.
+ * We dim the row, mute the title, and (in the JSX) withhold both the
+ * checkbox and any per-row action so users cannot import it again. The
+ * "Exists in project" / "Exists on site" pill in the footer keeps the
+ * accent colour so the *reason* for the muted state stays legible. */
+.clusterTopicHead[data-duplicate="true"] {
+  opacity: 0.55;
+}
+.clusterTopicHead[data-duplicate="true"] .clusterTopicTitle {
+  color: var(--aa-muted);
+  font-weight: 600;
+}
+.clusterTopicHead[data-duplicate="true"] .clusterTopicIntent {
+  color: var(--aa-muted);
+  font-style: italic;
+}
+
 .clusterTopicHeadBody {
   min-width: 0;
   flex: 1 1 auto;
@@ -2651,6 +2762,266 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Project Settings → WordPress connection block.
+ * The header pairs a clear section title with a coloured status pill so
+ * a user who skipped the "Connect WordPress" popup at project creation
+ * can verify (and re-verify) their site directly from Project Settings.
+ * --------------------------------------------------------------------------- */
+
+.wpConnectionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 14px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--aa-hairline);
+}
+
+.wpStatusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.wpStatusPill[data-state="verified"] {
+  color: #d6ffe6;
+  background: color-mix(in oklab, #18a957, transparent 75%);
+  border-color: color-mix(in oklab, #18a957, transparent 55%);
+}
+.wpStatusPill[data-state="warning"] {
+  color: #ffe6c2;
+  background: color-mix(in oklab, #c0822a, transparent 70%);
+  border-color: color-mix(in oklab, #c0822a, transparent 50%);
+}
+.wpStatusPill[data-state="failed"] {
+  color: #ffd7d2;
+  background: color-mix(in oklab, #b53d29, transparent 65%);
+  border-color: color-mix(in oklab, #b53d29, transparent 45%);
+}
+.wpStatusPill[data-state="pending"] {
+  color: var(--aa-body-strong, var(--aa-ink));
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 35%);
+  border-color: var(--aa-hairline);
+}
+.wpStatusPillTime {
+  font-weight: 600;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stacks the credentials pill and the plugin pill in the header so they
+ * read top-to-bottom on the right side of the WordPress connection card.
+ * Falls into a single column on narrow screens (below tablet width). */
+.wpStatusPillStack {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.wpConnectionActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.wpVerifyResultOk {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in oklab, #18a957, transparent 55%);
+  background: color-mix(in oklab, #18a957, transparent 82%);
+  color: var(--aa-body-strong, var(--aa-ink));
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.wpVerifyResultErr {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in oklab, #b53d29, transparent 50%);
+  background: color-mix(in oklab, #b53d29, transparent 78%);
+  color: #ffe1dc;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* ---------------------------------------------------------------------------
+ * Structured Brand identity & Niche editor (Project Settings).
+ *
+ * Used to render the chip-style multi-selects that replaced the two free-text
+ * brand/niche textareas. Every field has a clear label, generous padding, and
+ * states that match the rest of the Project Settings card (light hairline
+ * borders, off-white labels, soft surface fill).
+ * --------------------------------------------------------------------------- */
+
+.brandSection {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 14px;
+  border-top: 1px solid var(--button-secondary-border);
+  padding-top: 14px;
+}
+
+.brandSectionTitle {
+  color: var(--aa-ink);
+  font-size: 14px;
+  font-weight: 900;
+  margin: 0;
+}
+
+.brandSectionSub {
+  color: var(--aa-muted);
+  font-size: 12.5px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.brandFieldGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .brandFieldGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.brandFieldLabel {
+  color: var(--aa-body-strong, var(--aa-ink));
+  font-size: 12.5px;
+  font-weight: 700;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.brandFieldHelp {
+  color: var(--aa-muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.chipPickerBox {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--aa-hairline);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 35%);
+  min-height: 44px;
+}
+
+.chipPickerEmpty {
+  color: var(--aa-muted);
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.chipOption {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--aa-hairline);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 20%);
+  color: var(--aa-body-strong, var(--aa-ink));
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.chipOption:hover {
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 0%);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 60%);
+}
+.chipOption[data-selected="true"] {
+  color: #fff;
+  background: color-mix(in oklab, var(--aa-primary), transparent 35%);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 30%);
+}
+.chipOption[data-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.chipOption[data-removable="true"]::after {
+  content: "×";
+  font-weight: 800;
+  font-size: 13px;
+  margin-left: 2px;
+  opacity: 0.85;
+}
+
+.chipFreeRow {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chipFreeInput {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface);
+  color: var(--aa-ink);
+  font-size: 13px;
+}
+.chipFreeInput:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
+}
+
+.chipFreeAddBtn {
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 60%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 65%);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.chipFreeAddBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.brandToggleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--aa-body-strong, var(--aa-ink));
+  font-weight: 600;
+}
+.brandToggleRow input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--aa-primary);
 }
 
 /* Modal detail block (used by the cluster error popup to show per-topic causes

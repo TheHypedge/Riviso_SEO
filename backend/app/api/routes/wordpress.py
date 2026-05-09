@@ -4,6 +4,7 @@ import base64
 import io
 import os
 import zipfile
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -83,6 +84,127 @@ def _normalize_url(raw: str | None) -> str:
     if not (s.startswith("http://") or s.startswith("https://")):
         s = "https://" + s
     return s[:2048].rstrip("/")
+
+
+# Connector plugin REST namespaces we know about. ``riviso/v1`` is the
+# namespace shipped by the current "Riviso – Content Operations" plugin
+# (the one served from /api/wordpress/plugin/download). ``auto-articles/v1``
+# is the namespace from the older "Auto Articles Connector" build that we
+# still keep around for back-compat with sites that haven't upgraded yet.
+_RIVISO_PLUGIN_NAMESPACES: tuple[str, ...] = ("riviso/v1", "auto-articles/v1")
+
+
+async def _probe_riviso_plugin(
+    *, wp_site_url: str, headers: dict[str, str]
+) -> tuple[str, str]:
+    """Determine whether the Riviso connector plugin is active on the site.
+
+    Returns ``(status, human_message)`` where ``status`` is one of:
+
+    - ``active``     – plugin responded to ``/ping`` with 200 (fully working).
+    - ``capability`` – plugin namespace is registered, but the connecting WP
+                       user lacks ``edit_posts`` (ping returns 401/403).
+    - ``installed``  – plugin namespace is registered, but ``/ping`` was
+                       unreachable for some other reason (rare; probably a
+                       caching or security-plugin block).
+    - ``missing``    – no Riviso namespace is registered on the site.
+    - ``unknown``    – we couldn't reach ``wp-json/`` at all to make a call.
+
+    The message is short and user-actionable so it can be shown in the
+    Project Settings WordPress card without further formatting.
+    """
+    last_auth_block = False
+    last_status_per_ns: dict[str, int | None] = {ns: None for ns in _RIVISO_PLUGIN_NAMESPACES}
+
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        # 1) Authenticated ping under each known namespace. First 200 wins.
+        for ns in _RIVISO_PLUGIN_NAMESPACES:
+            try:
+                pres = await client.get(
+                    f"{wp_site_url}/wp-json/{ns}/ping", headers=headers
+                )
+            except Exception:
+                continue
+            last_status_per_ns[ns] = pres.status_code
+            if pres.status_code == 200:
+                pdata: dict[str, Any] = {}
+                try:
+                    if pres.content:
+                        raw = pres.json()
+                        if isinstance(raw, dict):
+                            pdata = raw
+                except Exception:
+                    pdata = {}
+                plugin = (str(pdata.get("plugin") or "Riviso").strip()) or "Riviso"
+                version = str(pdata.get("version") or "").strip()
+                connector_id = str(pdata.get("connector_id") or "").strip()
+                yoast = bool(pdata.get("yoast_active"))
+                head = plugin + (f" v{version}" if version else "")
+                tail = ""
+                if connector_id:
+                    tail = f", connector {connector_id[:8]}…"
+                msg = (
+                    f"Plugin: active ({head}, Yoast: {'yes' if yoast else 'no'}{tail})"
+                )
+                return "active", msg
+            if pres.status_code in (401, 403):
+                last_auth_block = True
+
+        # 2) Anonymous discovery (no auth) — the /wp-json/ index lists every
+        # registered REST namespace and works without credentials, so it is
+        # our most reliable way to know whether the plugin is installed when
+        # the authenticated /ping path was rejected.
+        discovered: list[str] = []
+        try:
+            droot = await client.get(f"{wp_site_url}/wp-json/")
+            if droot.status_code == 200 and droot.content:
+                try:
+                    data = droot.json()
+                except Exception:
+                    data = None
+                if isinstance(data, dict):
+                    raw_ns = data.get("namespaces")
+                    if isinstance(raw_ns, list):
+                        discovered = [str(x) for x in raw_ns if isinstance(x, str)]
+        except Exception:
+            discovered = []
+
+    matched_ns = next(
+        (n for n in _RIVISO_PLUGIN_NAMESPACES if n in discovered), None
+    )
+    if matched_ns:
+        if last_auth_block:
+            return (
+                "capability",
+                "Plugin: installed but the connecting WordPress user is not authorized "
+                "for the plugin's REST route (HTTP 401/403). Use a user with "
+                "Editor/Author/Admin role (or any role that has the `edit_posts` "
+                "capability), regenerate the Application Password for that user, "
+                "then verify again.",
+            )
+        return (
+            "installed",
+            f"Plugin: installed (REST namespace `{matched_ns}` registered) but the "
+            "/ping route did not respond. Disable any caching/firewall rules in "
+            "front of the WordPress REST API, then verify again.",
+        )
+
+    # No namespace found in discovery. If we couldn't even reach /wp-json/
+    # we shouldn't claim the plugin is missing — flag as ``unknown``.
+    if not discovered:
+        return (
+            "unknown",
+            "Plugin: could not be checked (the WordPress REST index at "
+            "/wp-json/ was unreachable). Verify the site URL and that REST "
+            "API access is not blocked, then verify again.",
+        )
+
+    return (
+        "missing",
+        "Plugin: not active. Install or activate the Riviso – Content "
+        "Operations plugin (use Project Settings → Download plugin), then "
+        "verify again.",
+    )
 
 
 def _require_project_access(*, st, user: dict, project_id: str) -> dict:
@@ -188,6 +310,17 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
         wp_site_url=wp_site_url or None,
         wp_username=wp_user,
         wp_app_password_set=bool(app_pw),
+        # Verification state — set by ``POST /wordpress/verify`` and cleared
+        # by ``PATCH /settings`` when the user changes site URL / username /
+        # app password (the snapshot would no longer reflect the current creds).
+        wp_verified_at=(proj.get("wp_verified_at") or "").strip() or None,
+        wp_verified_status=(proj.get("wp_verified_status") or "").strip() or None,
+        wp_verified_message=(proj.get("wp_verified_message") or "").strip() or None,
+        # Connector plugin state — populated by the verify route alongside
+        # the credentials check so the UI can render an independent pill
+        # ("Plugin active" / "Plugin missing" / "Capability blocked").
+        wp_plugin_status=(proj.get("wp_plugin_status") or "").strip() or None,
+        wp_plugin_message=(proj.get("wp_plugin_message") or "").strip() or None,
         plugin_download_url="/api/wordpress/plugin/download",
         default_wp_rest_base=def_rest,
         default_wp_status=def_status,
@@ -208,6 +341,10 @@ async def update_project_settings(
     pid = (proj.get("id") or "").strip()
 
     updates: dict = {}
+    # If any of the WordPress credential fields are touched we have to
+    # invalidate the cached verification snapshot — what was verified
+    # 10 seconds ago may no longer be reachable with the new values.
+    creds_changed = False
     if payload.name is not None:
         updates["name"] = payload.name.strip()[:200]
     if payload.website_url is not None:
@@ -215,12 +352,21 @@ async def update_project_settings(
         updates["website_url"] = url
         updates.setdefault("wp_site_url", url)
     if payload.wp_site_url is not None:
-        updates["wp_site_url"] = _normalize_url(payload.wp_site_url)
+        new_url = _normalize_url(payload.wp_site_url)
+        if new_url != _normalize_url(proj.get("wp_site_url") or proj.get("website_url") or ""):
+            creds_changed = True
+        updates["wp_site_url"] = new_url
     if payload.wp_username is not None:
-        updates["wp_username"] = payload.wp_username.strip()[:200]
+        new_user = payload.wp_username.strip()[:200]
+        if new_user != (proj.get("wp_username") or "").strip():
+            creds_changed = True
+        updates["wp_username"] = new_user
     if payload.wp_app_password is not None:
         # Application passwords are often typed with spaces; normalize.
-        updates["wp_app_password"] = (payload.wp_app_password or "").replace(" ", "").strip()[:500]
+        normalized = (payload.wp_app_password or "").replace(" ", "").strip()[:500]
+        if normalized and normalized != (proj.get("wp_app_password") or "").strip():
+            creds_changed = True
+        updates["wp_app_password"] = normalized
     if payload.default_wp_rest_base is not None:
         updates["default_wp_rest_base"] = (payload.default_wp_rest_base or "").strip()[:200]
     if payload.default_wp_status is not None:
@@ -260,6 +406,17 @@ async def update_project_settings(
                 pass
             updates["gsc_property_url"] = prop
 
+    if creds_changed:
+        # Drop the stale "verified" snapshot — the next /verify call will
+        # repopulate it. UI will fall back to "Not verified yet".
+        updates["wp_verified_at"] = ""
+        updates["wp_verified_status"] = ""
+        updates["wp_verified_message"] = ""
+        # Plugin state is meaningless once credentials change — clear so we
+        # don't show a stale "active" badge against a freshly-edited URL.
+        updates["wp_plugin_status"] = ""
+        updates["wp_plugin_message"] = ""
+
     if updates:
         st.update_project_fields(pid, updates)
 
@@ -291,35 +448,91 @@ async def verify_wordpress_connection(
     basic = base64.b64encode(f"{wp_username}:{wp_app_password}".encode("utf-8")).decode("ascii")
     headers = {"authorization": f"Basic {basic}"}
 
+    def _persist(
+        status: str,
+        message: str,
+        *,
+        ok: bool,
+        plugin_status: str | None = None,
+        plugin_message: str | None = None,
+    ) -> None:
+        """Snapshot the verification outcome onto the project so the Settings
+        tab can render a "Verified · 2 minutes ago" pill on next load. We
+        always persist (success or failure) so the UI stays honest after a
+        credential change that breaks the connection."""
+        try:
+            now_iso = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            patch: dict[str, Any] = {
+                "wp_verified_status": status,
+                "wp_verified_message": message[:1000],
+            }
+            if ok:
+                patch["wp_verified_at"] = now_iso
+            if plugin_status is not None:
+                patch["wp_plugin_status"] = plugin_status[:32]
+            if plugin_message is not None:
+                patch["wp_plugin_message"] = plugin_message[:1000]
+            st.update_project_fields(project_id, patch)
+        except Exception:
+            # Persistence is best-effort: even if it fails we still return
+            # the verify result so the user sees the immediate outcome.
+            pass
+
     try:
         async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
             res = await client.get(url, headers=headers)
     except Exception as e:
-        return WordpressVerifyResponse(ok=False, status="error", message=f"Could not reach WordPress site: {e}")
+        msg = f"Could not reach WordPress site: {e}"
+        _persist("error", msg, ok=False)
+        return WordpressVerifyResponse(ok=False, status="error", message=msg)
 
     if res.status_code == 200:
-        # Best-effort: verify that our connector plugin is installed (Yoast REST meta + ping endpoint).
-        plugin_msg = ""
+        # Best-effort: detect whether our connector plugin is active. The
+        # probe tries both REST namespaces we ship and falls back to
+        # anonymous /wp-json/ namespace discovery so we don't mislabel a
+        # capability/firewall block as "plugin missing".
         try:
-            ping_url = f"{wp_site_url}/wp-json/auto-articles/v1/ping"
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                pres = await client.get(ping_url, headers=headers)
-            if pres.status_code == 200:
-                pdata = pres.json() if pres.content else {}
-                cid = (pdata.get("connector_id") or "").strip() if isinstance(pdata, dict) else ""
-                yoast = None
-                if isinstance(pdata, dict):
-                    yoast = pdata.get("yoast_active")
-                plugin_msg = f"\nPlugin: installed (connector_id={cid or '—'}, yoast_active={yoast})"
-            else:
-                plugin_msg = "\nPlugin: not detected (install Auto Articles Connector plugin, then verify again)."
+            plugin_status, plugin_msg = await _probe_riviso_plugin(
+                wp_site_url=wp_site_url, headers=headers
+            )
         except Exception:
-            plugin_msg = "\nPlugin: not detected (install Auto Articles Connector plugin, then verify again)."
+            plugin_status, plugin_msg = (
+                "unknown",
+                "Plugin: could not be checked (unexpected error while contacting "
+                "the WordPress REST API).",
+            )
 
-        return WordpressVerifyResponse(ok=True, status="connected", message="Verified WordPress connection successfully." + plugin_msg)
+        full_msg = "Verified WordPress connection successfully.\n" + plugin_msg
+        _persist(
+            "connected",
+            full_msg,
+            ok=True,
+            plugin_status=plugin_status,
+            plugin_message=plugin_msg,
+        )
+        return WordpressVerifyResponse(ok=True, status="connected", message=full_msg)
     if res.status_code in {401, 403}:
-        return WordpressVerifyResponse(ok=False, status="auth_failed", message="WordPress authentication failed. Check username/app password and site URL.")
-    return WordpressVerifyResponse(ok=False, status="failed", message=f"WordPress verification failed ({res.status_code}).")
+        msg = "WordPress authentication failed. Check username/app password and site URL."
+        # On auth failure we don't know the plugin state — clear the
+        # snapshot so the UI doesn't show a stale "active" pill against
+        # a now-broken connection.
+        _persist(
+            "auth_failed",
+            msg,
+            ok=False,
+            plugin_status="",
+            plugin_message="",
+        )
+        return WordpressVerifyResponse(ok=False, status="auth_failed", message=msg)
+    msg = f"WordPress verification failed ({res.status_code})."
+    _persist(
+        "failed",
+        msg,
+        ok=False,
+        plugin_status="",
+        plugin_message="",
+    )
+    return WordpressVerifyResponse(ok=False, status="failed", message=msg)
 
 
 @router.get("/projects/{project_id}/wordpress/post-types", response_model=list[WordpressPostType])

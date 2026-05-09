@@ -10,6 +10,22 @@ class ProjectSettingsPublic(BaseModel):
     wp_site_url: str | None = None
     wp_username: str | None = None
     wp_app_password_set: bool = False
+    # Last-known verification snapshot. ``wp_verified_at`` is the UTC ISO
+    # timestamp of the last successful ``POST /wordpress/verify`` for this
+    # project; cleared whenever the credentials change. ``wp_verified_status``
+    # mirrors the latest verify-route status string (``connected``,
+    # ``auth_failed``, ``failed``, ``error``) so the UI can colour the pill
+    # appropriately without re-running the verify call on every page load.
+    wp_verified_at: str | None = None
+    wp_verified_status: str | None = None
+    wp_verified_message: str | None = None
+    # Connector plugin verification snapshot. ``wp_plugin_status`` is one of
+    # ``active``, ``installed``, ``capability``, ``missing``, ``unknown``;
+    # ``wp_plugin_message`` is the short user-facing line for the status
+    # pill. Both are populated by ``POST /wordpress/verify`` and cleared
+    # whenever credentials change.
+    wp_plugin_status: str | None = None
+    wp_plugin_message: str | None = None
     plugin_download_url: str
     default_wp_rest_base: str | None = None
     default_wp_status: str | None = None

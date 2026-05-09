@@ -181,9 +181,32 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         "owner_user_id": _coerce_user_id_str(d.get("owner_user_id")),
         "name": (d.get("name") or "")[:500],
         "website_url": (d.get("website_url") or "")[:2048],
-        # Project intelligence / brand flavor (stored as plain text for now; can evolve into versioned objects later).
+        # Project intelligence / brand flavor.
+        # ``brand_identity`` and ``niche_identifier`` remain as flat strings
+        # because the LLM prompt builder consumes them directly. They are
+        # auto-derived from the structured fields below whenever those are
+        # written, but we still persist them so legacy projects (no
+        # structured input) keep working unchanged.
         "brand_identity": (d.get("brand_identity") or "")[:20000],
         "niche_identifier": (d.get("niche_identifier") or "")[:20000],
+        # Structured Brand identity inputs (Project Settings → "Brand
+        # identity & niche"): one voice, multiple tones, plus a short
+        # rules block. Stored as plain text/list so the legacy JSON
+        # storage backend handles it without schema migration.
+        "brand_voice": (d.get("brand_voice") or "")[:64],
+        "brand_tones": [str(x)[:64] for x in (d.get("brand_tones") or []) if str(x).strip()][:10],
+        "brand_rules": (d.get("brand_rules") or "")[:4000],
+        # Structured Niche identifier inputs.
+        "niche_topic": (d.get("niche_topic") or "")[:500],
+        "audience": [str(x)[:120] for x in (d.get("audience") or []) if str(x).strip()][:30],
+        "target_countries": [
+            str(x).strip().upper()[:8]
+            for x in (d.get("target_countries") or [])
+            if str(x).strip()
+        ][:270],
+        "target_countries_all": bool(d.get("target_countries_all", False)),
+        "target_cities": [str(x)[:120] for x in (d.get("target_cities") or []) if str(x).strip()][:500],
+        "target_cities_all": bool(d.get("target_cities_all", False)),
         "wp_site_url": (d.get("wp_site_url") or "")[:2048] or "",
         "wp_username": (d.get("wp_username") or "")[:500],
         "wp_app_password": (d.get("wp_app_password") or "")[:500],
@@ -206,6 +229,15 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         "gsc_connected_at": (d.get("gsc_connected_at") or "").strip()[:64],
         "default_wp_rest_base": (d.get("default_wp_rest_base") or "")[:200],
         "default_wp_status": (d.get("default_wp_status") or "")[:32],
+        # WordPress verification snapshot. Populated by the verify route on
+        # success, cleared by /settings PATCH when credentials change.
+        "wp_verified_at": (d.get("wp_verified_at") or "")[:32],
+        "wp_verified_status": (d.get("wp_verified_status") or "")[:32],
+        "wp_verified_message": (d.get("wp_verified_message") or "")[:1000],
+        # Connector plugin status snapshot (one of: active, installed,
+        # capability, missing, unknown). Cleared on credential changes.
+        "wp_plugin_status": (d.get("wp_plugin_status") or "")[:32],
+        "wp_plugin_message": (d.get("wp_plugin_message") or "")[:1000],
         "created_at": (d.get("created_at") or "")[:64],
     }
 
@@ -1151,12 +1183,25 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
             p["image_prompts"] = v
         elif k == "context_links":
             p["context_links"] = v
+        elif k in ("brand_tones", "audience", "target_countries", "target_cities"):
+            # List-valued structured brand/niche fields. Coerce here so
+            # callers can pass either a list or a JSON-encoded string from
+            # legacy import paths.
+            if isinstance(v, list):
+                p[k] = v
+            else:
+                p[k] = list(v) if v else []
+        elif k in ("target_cities_all", "target_countries_all"):
+            p[k] = bool(v)
         elif k in p or k in (
             "id",
             "name",
             "website_url",
             "brand_identity",
             "niche_identifier",
+            "brand_voice",
+            "brand_rules",
+            "niche_topic",
             "wp_site_url",
             "wp_username",
             "wp_app_password",
@@ -1176,6 +1221,11 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
             "default_wp_rest_base",
             "default_wp_status",
             "created_at",
+            "wp_verified_at",
+            "wp_verified_status",
+            "wp_verified_message",
+            "wp_plugin_status",
+            "wp_plugin_message",
         ):
             p[k] = v
 
@@ -1243,6 +1293,17 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "website_url": d.get("website_url") or "",
         "brand_identity": d.get("brand_identity") or "",
         "niche_identifier": d.get("niche_identifier") or "",
+        # Structured Brand identity & Niche fields (see _normalize_project_dict
+        # for the canonical shape and length caps).
+        "brand_voice": d.get("brand_voice") or "",
+        "brand_tones": list(d.get("brand_tones") or []),
+        "brand_rules": d.get("brand_rules") or "",
+        "niche_topic": d.get("niche_topic") or "",
+        "audience": list(d.get("audience") or []),
+        "target_countries": list(d.get("target_countries") or []),
+        "target_countries_all": bool(d.get("target_countries_all", False)),
+        "target_cities": list(d.get("target_cities") or []),
+        "target_cities_all": bool(d.get("target_cities_all", False)),
         "wp_site_url": d.get("wp_site_url") or "",
         "wp_username": d.get("wp_username") or "",
         "wp_app_password": d.get("wp_app_password") or "",
@@ -1264,6 +1325,11 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "gsc_connected_at": d.get("gsc_connected_at") or "",
         "default_wp_rest_base": d.get("default_wp_rest_base") or "",
         "default_wp_status": d.get("default_wp_status") or "",
+        "wp_verified_at": d.get("wp_verified_at") or "",
+        "wp_verified_status": d.get("wp_verified_status") or "",
+        "wp_verified_message": d.get("wp_verified_message") or "",
+        "wp_plugin_status": d.get("wp_plugin_status") or "",
+        "wp_plugin_message": d.get("wp_plugin_message") or "",
         "created_at": d.get("created_at") or "",
     }
 

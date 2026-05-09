@@ -10,6 +10,140 @@ from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.projects import ProjectCreate, ProjectPublic, ProjectUpdate
 
+
+# ISO-3166 alpha-2 → display name. Tiny lookup so the auto-derived
+# ``niche_identifier`` text is human-readable ("United States" instead of
+# "US"). The frontend ships the canonical list; we only need the codes
+# people actually save, so we keep this short and fall back to the raw
+# code when a country isn't in the map.
+_COUNTRY_NAMES: dict[str, str] = {
+    "AE": "United Arab Emirates",
+    "AR": "Argentina",
+    "AT": "Austria",
+    "AU": "Australia",
+    "BD": "Bangladesh",
+    "BE": "Belgium",
+    "BR": "Brazil",
+    "CA": "Canada",
+    "CH": "Switzerland",
+    "CN": "China",
+    "DE": "Germany",
+    "DK": "Denmark",
+    "EG": "Egypt",
+    "ES": "Spain",
+    "FR": "France",
+    "GB": "United Kingdom",
+    "GR": "Greece",
+    "HK": "Hong Kong",
+    "ID": "Indonesia",
+    "IE": "Ireland",
+    "IL": "Israel",
+    "IN": "India",
+    "IT": "Italy",
+    "JP": "Japan",
+    "KE": "Kenya",
+    "KR": "South Korea",
+    "LK": "Sri Lanka",
+    "MX": "Mexico",
+    "MY": "Malaysia",
+    "NG": "Nigeria",
+    "NL": "Netherlands",
+    "NO": "Norway",
+    "NP": "Nepal",
+    "NZ": "New Zealand",
+    "PH": "Philippines",
+    "PK": "Pakistan",
+    "PL": "Poland",
+    "PT": "Portugal",
+    "RU": "Russia",
+    "SA": "Saudi Arabia",
+    "SE": "Sweden",
+    "SG": "Singapore",
+    "TH": "Thailand",
+    "TR": "Türkiye",
+    "TW": "Taiwan",
+    "UA": "Ukraine",
+    "US": "United States",
+    "VN": "Vietnam",
+    "ZA": "South Africa",
+}
+
+
+def _country_display(code: str) -> str:
+    c = (code or "").strip().upper()
+    return _COUNTRY_NAMES.get(c, c)
+
+
+def _derive_brand_identity_text(
+    *, voice: str, tones: list[str], rules: str
+) -> str:
+    """Render the structured Brand identity inputs into the plain-text form
+    consumed by the article generation prompt builder.
+
+    The output mirrors how a human would describe themselves to a writer:
+
+        Voice: Professional. Tones: direct, evidence-driven, no hype.
+        Rules: We avoid buzzwords. ...
+
+    Empty pieces are simply skipped so partial input is still useful.
+    """
+    parts: list[str] = []
+    v = (voice or "").strip()
+    if v:
+        parts.append(f"Voice: {v[:80]}.")
+    cleaned_tones = [str(t).strip() for t in (tones or []) if str(t).strip()][:10]
+    if cleaned_tones:
+        parts.append("Tones: " + ", ".join(cleaned_tones) + ".")
+    r = (rules or "").strip()
+    if r:
+        parts.append("Rules: " + r[:4000])
+    return " ".join(parts).strip()
+
+
+def _derive_niche_text(
+    *,
+    topic: str,
+    audience: list[str],
+    countries: list[str],
+    countries_all: bool,
+    cities: list[str],
+    cities_all: bool,
+) -> str:
+    """Render the structured Niche inputs into the plain-text form consumed
+    by the article generation prompt builder. Same shape as the legacy
+    free-text field so downstream consumers don't need to change.
+
+    ``countries_all=True`` is the canonical "global targeting" sentinel —
+    we render a single line ("all countries") instead of enumerating ~250
+    ISO codes, which both keeps the project document small and reads more
+    naturally to the LLM.
+    """
+    parts: list[str] = []
+    t = (topic or "").strip()
+    if t:
+        parts.append(f"Niche: {t[:500]}.")
+    aud = [str(a).strip() for a in (audience or []) if str(a).strip()][:30]
+    if aud:
+        parts.append("Audience: " + ", ".join(aud) + ".")
+    if countries_all:
+        parts.append("Target countries: all countries (global targeting).")
+    else:
+        country_codes = [
+            str(c).strip().upper()
+            for c in (countries or [])
+            if str(c).strip()
+        ][:270]
+        if country_codes:
+            names = [_country_display(c) for c in country_codes]
+            parts.append("Target countries: " + ", ".join(names) + ".")
+    if cities_all:
+        parts.append("Target cities: all major cities in the listed countries.")
+    else:
+        clean_cities = [str(c).strip() for c in (cities or []) if str(c).strip()][:500]
+        if clean_cities:
+            parts.append("Target cities: " + ", ".join(clean_cities) + ".")
+    return " ".join(parts).strip()
+
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 _DEFAULT_WRITING_PROMPT_NAME = "Default writing prompt"
@@ -49,6 +183,19 @@ def _to_public(p: dict) -> ProjectPublic:
         website_url=(p.get("website_url") or "").strip() or None,
         brand_identity=(p.get("brand_identity") or "").strip() or None,
         niche_identifier=(p.get("niche_identifier") or "").strip() or None,
+        brand_voice=(p.get("brand_voice") or "").strip() or None,
+        brand_tones=[str(x) for x in (p.get("brand_tones") or []) if str(x).strip()],
+        brand_rules=(p.get("brand_rules") or "").strip() or None,
+        niche_topic=(p.get("niche_topic") or "").strip() or None,
+        audience=[str(x) for x in (p.get("audience") or []) if str(x).strip()],
+        target_countries=[
+            str(x).strip().upper()
+            for x in (p.get("target_countries") or [])
+            if str(x).strip()
+        ],
+        target_countries_all=bool(p.get("target_countries_all", False)),
+        target_cities=[str(x) for x in (p.get("target_cities") or []) if str(x).strip()],
+        target_cities_all=bool(p.get("target_cities_all", False)),
     )
 
 
@@ -170,10 +317,104 @@ async def update_project(project_id: str, payload: ProjectUpdate, user: dict = D
         url = _normalize_url(payload.website_url)
         updates["website_url"] = url
         updates.setdefault("wp_site_url", url)
+
+    # Legacy text fields. Accepted for back-compat, but if structured
+    # fields are also present below we will overwrite these with the
+    # derived form so the project document stays internally consistent.
     if payload.brand_identity is not None:
         updates["brand_identity"] = (payload.brand_identity or "").strip()[:20000]
     if payload.niche_identifier is not None:
         updates["niche_identifier"] = (payload.niche_identifier or "").strip()[:20000]
+
+    # Structured Brand identity fields.
+    brand_struct_touched = False
+    if payload.brand_voice is not None:
+        updates["brand_voice"] = (payload.brand_voice or "").strip()[:64]
+        brand_struct_touched = True
+    if payload.brand_tones is not None:
+        updates["brand_tones"] = [
+            str(x).strip()[:64] for x in payload.brand_tones if str(x).strip()
+        ][:10]
+        brand_struct_touched = True
+    if payload.brand_rules is not None:
+        updates["brand_rules"] = (payload.brand_rules or "").strip()[:4000]
+        brand_struct_touched = True
+
+    # Structured Niche fields.
+    niche_struct_touched = False
+    if payload.niche_topic is not None:
+        updates["niche_topic"] = (payload.niche_topic or "").strip()[:500]
+        niche_struct_touched = True
+    if payload.audience is not None:
+        updates["audience"] = [
+            str(x).strip()[:120] for x in payload.audience if str(x).strip()
+        ][:30]
+        niche_struct_touched = True
+    if payload.target_countries is not None:
+        updates["target_countries"] = [
+            str(x).strip().upper()[:8]
+            for x in payload.target_countries
+            if str(x).strip()
+        ][:270]
+        niche_struct_touched = True
+    if payload.target_countries_all is not None:
+        updates["target_countries_all"] = bool(payload.target_countries_all)
+        # When "all countries" is set we drop any enumerated codes so the
+        # project document stays internally consistent (the flag is the
+        # single source of truth for global targeting).
+        if updates["target_countries_all"]:
+            updates["target_countries"] = []
+        niche_struct_touched = True
+    if payload.target_cities is not None:
+        updates["target_cities"] = [
+            str(x).strip()[:120] for x in payload.target_cities if str(x).strip()
+        ][:500]
+        niche_struct_touched = True
+    if payload.target_cities_all is not None:
+        updates["target_cities_all"] = bool(payload.target_cities_all)
+        niche_struct_touched = True
+
+    # Whenever the structured inputs change we rebuild the legacy plain-text
+    # representation from the *full* (post-update) value of each structured
+    # field, so the article generation pipeline picks up the change without
+    # needing to read both the structured and the free-text columns.
+    if brand_struct_touched:
+        merged_voice = updates.get("brand_voice", proj.get("brand_voice") or "")
+        merged_tones = updates.get("brand_tones", list(proj.get("brand_tones") or []))
+        merged_rules = updates.get("brand_rules", proj.get("brand_rules") or "")
+        derived = _derive_brand_identity_text(
+            voice=merged_voice or "",
+            tones=merged_tones or [],
+            rules=merged_rules or "",
+        )
+        updates["brand_identity"] = derived[:20000]
+
+    if niche_struct_touched:
+        merged_topic = updates.get("niche_topic", proj.get("niche_topic") or "")
+        merged_aud = updates.get("audience", list(proj.get("audience") or []))
+        merged_countries = updates.get(
+            "target_countries", list(proj.get("target_countries") or [])
+        )
+        merged_countries_all = bool(
+            updates.get(
+                "target_countries_all", proj.get("target_countries_all", False)
+            )
+        )
+        merged_cities = updates.get(
+            "target_cities", list(proj.get("target_cities") or [])
+        )
+        merged_cities_all = bool(
+            updates.get("target_cities_all", proj.get("target_cities_all", False))
+        )
+        derived_n = _derive_niche_text(
+            topic=merged_topic or "",
+            audience=merged_aud or [],
+            countries=merged_countries or [],
+            countries_all=merged_countries_all,
+            cities=merged_cities or [],
+            cities_all=merged_cities_all,
+        )
+        updates["niche_identifier"] = derived_n[:20000]
 
     if updates:
         st.update_project_fields(pid, updates)
