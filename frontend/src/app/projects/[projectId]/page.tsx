@@ -538,6 +538,7 @@ export default function ProjectPage() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settings, setSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
   const [projectMeta, setProjectMeta] = useState<import("@/lib/api").ProjectPublic | null>(null);
+  const [featureLimits, setFeatureLimits] = useState<import("@/lib/api").ProjectFeatureLimits | null>(null);
   // List of every project the user owns. Powers the in-sidebar project
   // switcher so users can hop between projects without bouncing through
   // the dashboard. Loaded once per mount; refreshed silently when a
@@ -549,6 +550,16 @@ export default function ProjectPage() {
   const [settingsVerifying, setSettingsVerifying] = useState(false);
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
+
+  async function refreshFeatureLimits() {
+    try {
+      const limits = await api.projectFeatureLimits(projectId);
+      setFeatureLimits(limits);
+      return limits;
+    } catch {
+      return null;
+    }
+  }
 
   const [sName, setSName] = useState("");
   const [sUrl, setSUrl] = useState("");
@@ -974,8 +985,14 @@ export default function ProjectPage() {
       setError(null);
       setLoading(true);
       try {
-        const [list, ps, prof] = await Promise.all([api.listArticles(projectId), api.getProjectSettings(projectId), api.profileMe()]);
+        const [list, ps, prof, limits] = await Promise.all([
+          api.listArticles(projectId),
+          api.getProjectSettings(projectId),
+          api.profileMe(),
+          api.projectFeatureLimits(projectId).catch(() => null),
+        ]);
         setArticles(list);
+        setFeatureLimits(limits);
         setProfileTz((prof?.timezone || "").trim());
         setWpDefaults({
           post_type: (ps.default_wp_rest_base || "posts") as string,
@@ -2502,6 +2519,14 @@ export default function ProjectPage() {
   }
 
   function startAddLink() {
+    const cap = featureLimits?.context_links;
+    const activeDraftCount = linkDrafts.length;
+    if (cap && !cap.unlimited && activeDraftCount >= (cap.limit ?? 0)) {
+      setError(
+        `Context link limit reached for your ${featureLimits?.plan_key || "current"} plan (max ${cap.limit}).`
+      );
+      return;
+    }
     const tmpId = `new_link_${Date.now()}`;
     setLinkDrafts((p) => [{ id: tmpId, label: "", url: "", isNew: true }, ...p]);
     openLinkModal(tmpId);
@@ -2534,6 +2559,7 @@ export default function ProjectPage() {
       setLinkDrafts(items.map((x) => ({ id: x.id, label: x.label, url: x.url })));
       setLinkDeleted(new Set());
       setLinkPage(1);
+      void refreshFeatureLimits();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save context links");
     } finally {
@@ -2648,6 +2674,13 @@ export default function ProjectPage() {
       setClusterPlanMsg("Enter a seed intent (at least 3 characters).");
       return;
     }
+    const clusterQuota = featureLimits?.cluster_plans;
+    if (clusterQuota && !clusterQuota.unlimited && (clusterQuota.month_remaining ?? 0) <= 0) {
+      setClusterPlanMsg(
+        `Monthly Cluster Planner limit reached for your ${featureLimits?.plan_key || "current"} plan.`
+      );
+      return;
+    }
     setClusterPlanBusy(true);
     setClusterPlanMsg(null);
     try {
@@ -2658,6 +2691,7 @@ export default function ProjectPage() {
         language: researchLanguage,
       });
       setTopicClusters((prev) => [row, ...prev.filter((c) => c.id !== row.id)]);
+      void refreshFeatureLimits();
       setClusterPlanMsg("Cluster map saved. Review below, then run Generate all for drafts + content.");
     } catch (e) {
       setClusterPlanMsg(e instanceof Error ? e.message : "Planning failed");
@@ -3047,6 +3081,13 @@ export default function ProjectPage() {
       setResearchMsg("Add at least one seed keyword/topic.");
       return;
     }
+    const researchQuota = featureLimits?.custom_research;
+    if (researchQuota && !researchQuota.unlimited && (researchQuota.month_remaining ?? 0) <= 0) {
+      setResearchMsg(
+        `Monthly Custom Curations limit reached for your ${featureLimits?.plan_key || "current"} plan.`
+      );
+      return;
+    }
 
     if (opts.mode === "append") setResearchGeneratingMore(true);
     else setResearchBusy(true);
@@ -3128,6 +3169,7 @@ export default function ProjectPage() {
       setResearchLatestRunId(runId);
       setResearchFilter("latest");
       setResearchSelected(new Set());
+      void refreshFeatureLimits();
 
       if (!incoming.length) setResearchMsg("No results returned. Try different seeds.");
 
@@ -3325,6 +3367,22 @@ export default function ProjectPage() {
     });
     return rows;
   }, [articles, scheduledJobs, scheduledOrder, scheduledSearch]);
+
+  const clusterPlanLimitReached = Boolean(
+    featureLimits?.cluster_plans &&
+      !featureLimits.cluster_plans.unlimited &&
+      (featureLimits.cluster_plans.month_remaining ?? 0) <= 0,
+  );
+  const customResearchLimitReached = Boolean(
+    featureLimits?.custom_research &&
+      !featureLimits.custom_research.unlimited &&
+      (featureLimits.custom_research.month_remaining ?? 0) <= 0,
+  );
+  const contextLinkLimitReached = Boolean(
+    featureLimits?.context_links &&
+      !featureLimits.context_links.unlimited &&
+      linkDrafts.length >= (featureLimits.context_links.limit ?? 0),
+  );
 
   return (
     <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
@@ -4731,8 +4789,14 @@ export default function ProjectPage() {
                     type="button"
                     disabled={
                       clusterPlanBusy ||
+                      clusterPlanLimitReached ||
                       !clusterSeedIntent.trim() ||
                       clusterSeedIntent.trim().length < 3
+                    }
+                    title={
+                      clusterPlanLimitReached
+                        ? "Monthly Cluster Planner limit reached for your plan."
+                        : undefined
                     }
                     onClick={() => planTopicClusterFromResearch()}
                   >
@@ -4765,6 +4829,15 @@ export default function ProjectPage() {
                 <strong> Schedule</strong> imports + auto-publishes them to WordPress. Tick rows
                 individually, or leave selection empty to act on every pending topic.
               </p>
+              {featureLimits?.cluster_plans ? (
+                <div className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
+                  Cluster Planner usage:{" "}
+                  {featureLimits.cluster_plans.unlimited
+                    ? "Unlimited for this plan"
+                    : `${featureLimits.cluster_plans.month_used}/${featureLimits.cluster_plans.month_limit} used this month`}
+                  .
+                </div>
+              ) : null}
 
               {topicClusters.length === 0 && !topicClustersLoading ? (
                 <div className={styles.clusterEmptyHint}>
@@ -5129,7 +5202,14 @@ export default function ProjectPage() {
                 <button
                   className={styles.button}
                   type="button"
-                  disabled={researchBusy || researchGeneratingMore || researchSeeds.length === 0}
+                  disabled={researchBusy || researchGeneratingMore || researchSeeds.length === 0 || customResearchLimitReached}
+                  title={
+                    customResearchLimitReached
+                      ? "Monthly Custom Curations limit reached for your plan."
+                      : researchSeeds.length === 0
+                        ? "Add seed keywords first"
+                        : undefined
+                  }
                   onClick={() =>
                     runResearch({
                       mode: "replace",
@@ -5277,6 +5357,15 @@ export default function ProjectPage() {
                   {researchMsg}
                 </div>
               ) : null}
+              {featureLimits?.custom_research ? (
+                <div className={styles.muted} style={{ marginTop: 10, fontSize: 12 }}>
+                  Custom Curations usage:{" "}
+                  {featureLimits.custom_research.unlimited
+                    ? "Unlimited for this plan"
+                    : `${featureLimits.custom_research.month_used}/${featureLimits.custom_research.month_limit} used this month`}
+                  .
+                </div>
+              ) : null}
 
               {researchKeywordAnalysis ? (
                 <div style={{ marginTop: 14, borderTop: "1px solid var(--aa-hairline)", paddingTop: 14 }}>
@@ -5341,7 +5430,7 @@ export default function ProjectPage() {
                   <button
                     type="button"
                     className={styles.btnSecondary}
-                    disabled={researchBusy || researchGeneratingMore || researchSeeds.length === 0}
+                    disabled={researchBusy || researchGeneratingMore || researchSeeds.length === 0 || customResearchLimitReached}
                     onClick={() =>
                       runResearch({
                         mode: "append",
@@ -5353,7 +5442,13 @@ export default function ProjectPage() {
                         language: researchLanguage,
                       })
                     }
-                    title={researchSeeds.length === 0 ? "Add seed keywords first" : "Generate more ideas using current seeds"}
+                    title={
+                      customResearchLimitReached
+                        ? "Monthly Custom Curations limit reached for your plan."
+                        : researchSeeds.length === 0
+                          ? "Add seed keywords first"
+                          : "Generate more ideas using current seeds"
+                    }
                   >
                     {researchGeneratingMore ? "Generating…" : "Generate more"}
                   </button>
@@ -6072,7 +6167,17 @@ export default function ProjectPage() {
                   </p>
                 </div>
                 <div className={styles.row} style={{ justifyContent: "flex-end" }}>
-                  <button className={styles.btnSecondary} type="button" onClick={startAddLink} disabled={linksLoading || linksSaving}>
+                  <button
+                    className={styles.btnSecondary}
+                    type="button"
+                    onClick={startAddLink}
+                    disabled={linksLoading || linksSaving || contextLinkLimitReached}
+                    title={
+                      contextLinkLimitReached
+                        ? "Context link limit reached for your plan."
+                        : undefined
+                    }
+                  >
                     + Add link
                   </button>
                   <button className={styles.button} type="button" onClick={saveContextLinks} disabled={linksLoading || linksSaving}>
@@ -6081,6 +6186,15 @@ export default function ProjectPage() {
                 </div>
               </div>
               {linksLoading ? <div className={styles.muted}>Loading links…</div> : null}
+              {featureLimits?.context_links ? (
+                <div className={styles.muted} style={{ marginTop: 10, fontSize: 12 }}>
+                  Context links:{" "}
+                  {featureLimits.context_links.unlimited
+                    ? `${linkDrafts.length} added (unlimited for this plan)`
+                    : `${linkDrafts.length}/${featureLimits.context_links.limit} used`}
+                  .
+                </div>
+              ) : null}
               {error ? <p className={styles.error}>{error}</p> : null}
             </div>
 

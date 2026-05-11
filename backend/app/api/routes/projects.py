@@ -496,6 +496,99 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
     }
 
 
+@router.get("/{project_id}/feature-limits")
+async def get_project_feature_limits(project_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """
+    Plan-aware feature limits for UI pre-flight and messaging.
+
+    Monthly generation features use user-level counters. Context links are a
+    project-level hard cap: the current count cannot exceed the plan's
+    ``max_context_links`` while that plan is active.
+    """
+    st = get_legacy_storage_module()
+    pid = (project_id or "").strip()
+    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    if not proj:
+        raise HTTPException(status_code=404, detail="Not found")
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+        if not isinstance(plan, dict):
+            plan = {}
+    except Exception:
+        plan = {}
+
+    def _limit(name: str, *, beta_default: int | None = None) -> int | None:
+        raw = plan.get(name)
+        if raw is None and plan_key == "beta" and beta_default is not None:
+            raw = beta_default
+        try:
+            val = int(raw or 0)
+        except Exception:
+            val = 0
+        return val if val > 0 else None
+
+    def _monthly(feature: str, month_field: str, count_field: str, limit_name: str) -> dict:
+        limit = _limit(limit_name)
+        if role == "admin":
+            return {
+                "feature": feature,
+                "unlimited": True,
+                "month_used": 0,
+                "month_limit": None,
+                "month_remaining": None,
+            }
+        if hasattr(st, "peek_monthly_counter"):
+            snap = st.peek_monthly_counter(
+                uid,
+                month_field=month_field,
+                count_field=count_field,
+                month_limit=limit,
+            )
+            return {"feature": feature, **snap}
+        return {
+            "feature": feature,
+            "unlimited": True,
+            "month_used": 0,
+            "month_limit": limit,
+            "month_remaining": None,
+        }
+
+    context_limit = None if role == "admin" else _limit("max_context_links", beta_default=10)
+    context_used = len(proj.get("context_links") or []) if isinstance(proj.get("context_links"), list) else 0
+    context_remaining = None if context_limit is None else max(0, context_limit - context_used)
+
+    return {
+        "plan_key": plan_key,
+        "is_admin": role == "admin",
+        "cluster_plans": _monthly(
+            "cluster_plans",
+            "usage_monthly_cluster_plans_month",
+            "usage_monthly_cluster_plans_count",
+            "max_cluster_plans_per_month",
+        ),
+        "custom_research": _monthly(
+            "custom_research",
+            "usage_monthly_custom_research_month",
+            "usage_monthly_custom_research_count",
+            "max_custom_research_per_month",
+        ),
+        "context_links": {
+            "feature": "context_links",
+            "unlimited": context_limit is None,
+            "used": context_used,
+            "limit": context_limit,
+            "remaining": context_remaining,
+        },
+    }
+
+
 @router.delete("/{project_id}")
 async def delete_project(project_id: str, user: dict = Depends(get_current_user)) -> Response:
     st = get_legacy_storage_module()

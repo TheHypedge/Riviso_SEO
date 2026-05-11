@@ -89,6 +89,9 @@ class PlanPublic(BaseModel):
     allow_export: bool | None = None
     max_export_per_month: int | None = None
     allow_bulk_upload: bool | None = None
+    max_cluster_plans_per_month: int | None = None
+    max_custom_research_per_month: int | None = None
+    max_context_links: int | None = None
     extra: dict[str, Any] | None = None
 
 
@@ -109,5 +112,8 @@ class PlanUpsert(BaseModel):
     allow_export: bool | None = None
     max_export_per_month: int | None = None
     allow_bulk_upload: bool | None = None
+    max_cluster_plans_per_month: int | None = None
+    max_custom_research_per_month: int | None = None
+    max_context_links: int | None = None
     extra: dict[str, Any] | None = None
 

@@ -36,6 +36,41 @@ def _require_project(*, st, user: dict, project_id: str) -> dict:
     return proj
 
 
+def _plan_for_user(*, st, user: dict) -> tuple[str, dict]:
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+        if not isinstance(plan, dict):
+            plan = {}
+    except Exception:
+        plan = {}
+    return plan_key, plan
+
+
+def _enforce_cluster_plan_quota(*, st, user: dict) -> None:
+    if (user.get("role") or "").strip().lower() == "admin":
+        return
+    plan_key, plan = _plan_for_user(st=st, user=user)
+    if not hasattr(st, "consume_cluster_plan_usage"):
+        return
+    ok, msg = st.consume_cluster_plan_usage(
+        (user.get("id") or "").strip(),
+        month_limit=plan.get("max_cluster_plans_per_month"),
+        amount=1,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "quota_exceeded",
+                "feature": "cluster_planner",
+                "plan_key": plan_key,
+                "message": msg or "Monthly Cluster Planner limit reached for your plan.",
+            },
+        )
+
+
 @router.get("")
 async def list_clusters(project_id: str, user: dict = Depends(get_current_user)) -> dict:
     st = get_legacy_storage_module()
@@ -64,6 +99,7 @@ async def plan_cluster(
         raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
     st = get_legacy_storage_module()
     proj = _require_project(st=st, user=user, project_id=project_id)
+    _enforce_cluster_plan_quota(st=st, user=user)
     svc = TopicClusterService(project=proj, owner_user_id=(user.get("id") or "").strip())
     try:
         return await svc.plan_and_persist(

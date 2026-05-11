@@ -250,6 +250,9 @@ def _plan_to_public(key: str, d: dict) -> PlanPublic:
         "allow_export": base.get("allow_export"),
         "max_export_per_month": base.get("max_export_per_month"),
         "allow_bulk_upload": base.get("allow_bulk_upload"),
+        "max_cluster_plans_per_month": base.get("max_cluster_plans_per_month"),
+        "max_custom_research_per_month": base.get("max_custom_research_per_month"),
+        "max_context_links": base.get("max_context_links"),
     }
     extra = {k: v for k, v in base.items() if k not in known}
     return PlanPublic(**known, extra=extra or None)

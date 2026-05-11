@@ -38,6 +38,30 @@ def _require_project_access(*, st, user: dict, project_id: str) -> dict:
     return proj
 
 
+def _plan_for_user(*, st, user: dict) -> tuple[str, dict]:
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+        if not isinstance(plan, dict):
+            plan = {}
+    except Exception:
+        plan = {}
+    return plan_key, plan
+
+
+def _context_link_limit_for_plan(plan_key: str, plan: dict) -> int | None:
+    raw = plan.get("max_context_links")
+    if raw is None and plan_key == "beta":
+        raw = 10
+    try:
+        val = int(raw or 0)
+    except Exception:
+        val = 0
+    # Match the rest of plan semantics: 0/negative means unlimited.
+    return val if val > 0 else None
+
+
 def _coerce_links(raw) -> list[dict]:
     out: list[dict] = []
     for x in raw or []:
@@ -71,6 +95,22 @@ async def create_context_link(project_id: str, payload: ContextLinkCreate, user:
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     links = _coerce_links(proj.get("context_links") or [])
+    if (user.get("role") or "").strip().lower() != "admin":
+        plan_key, plan = _plan_for_user(st=st, user=user)
+        max_links = _context_link_limit_for_plan(plan_key, plan)
+        if max_links is not None and len(links) >= max_links:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "quota_exceeded",
+                    "feature": "context_links",
+                    "plan_key": plan_key,
+                    "message": f"Context link limit reached for your plan (max {max_links}).",
+                    "limit": max_links,
+                    "used": len(links),
+                    "remaining": 0,
+                },
+            )
     # id: simple deterministic-ish for now (safe)
     new_id = f"cl_{len(links)+1}_{abs(hash(payload.url))%10_000_000}"
     row = {"id": new_id, "label": payload.label.strip()[:200], "url": payload.url.strip()[:2048]}

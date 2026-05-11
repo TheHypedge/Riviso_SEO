@@ -44,6 +44,41 @@ def _require_project_access(*, st, user: dict, project_id: str) -> dict:
     return proj
 
 
+def _plan_for_user(*, st, user: dict) -> tuple[str, dict[str, Any]]:
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+        if not isinstance(plan, dict):
+            plan = {}
+    except Exception:
+        plan = {}
+    return plan_key, plan
+
+
+def _enforce_custom_research_quota(*, st, user: dict) -> None:
+    if (user.get("role") or "").strip().lower() == "admin":
+        return
+    plan_key, plan = _plan_for_user(st=st, user=user)
+    if not hasattr(st, "consume_custom_research_usage"):
+        return
+    ok, msg = st.consume_custom_research_usage(
+        (user.get("id") or "").strip(),
+        month_limit=plan.get("max_custom_research_per_month"),
+        amount=1,
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "quota_exceeded",
+                "feature": "custom_research",
+                "plan_key": plan_key,
+                "message": msg or "Monthly Custom Curations limit reached for your plan.",
+            },
+        )
+
+
 def _existing_title_and_keyphrase_sets(*, st, project_id: str) -> tuple[set[str], set[str]]:
     """
     Return normalized sets for de-duping research output against existing content.
@@ -144,6 +179,10 @@ async def research_ideas(
                 scraped_queries=cached.get("scraped_queries") if isinstance(cached.get("scraped_queries"), list) else [],
                 used_history_count=int(cached.get("used_history_count") or 0),
             )
+
+    # Count only real generation/cache-miss requests. Cached repeats stay free,
+    # but every new LLM-backed Custom Curation run is capped monthly by plan.
+    _enforce_custom_research_quota(st=st, user=user)
 
     # Scrape SERPs concurrently (best-effort). If some fail, continue with what we have.
     sem = asyncio.Semaphore(3)

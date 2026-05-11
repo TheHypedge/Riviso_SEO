@@ -89,6 +89,34 @@ export type PlanPublic = {
   allow_export?: boolean | null;
   max_export_per_month?: number | null;
   allow_bulk_upload?: boolean | null;
+  max_cluster_plans_per_month?: number | null;
+  max_custom_research_per_month?: number | null;
+  max_context_links?: number | null;
+};
+
+export type MonthlyFeatureLimit = {
+  feature: string;
+  unlimited: boolean;
+  month_used: number;
+  month_limit: number | null;
+  month_remaining: number | null;
+  month_key?: string;
+};
+
+export type CountFeatureLimit = {
+  feature: string;
+  unlimited: boolean;
+  used: number;
+  limit: number | null;
+  remaining: number | null;
+};
+
+export type ProjectFeatureLimits = {
+  plan_key: string;
+  is_admin: boolean;
+  cluster_plans: MonthlyFeatureLimit;
+  custom_research: MonthlyFeatureLimit;
+  context_links: CountFeatureLimit;
 };
 
 export type ProfilePublic = {
@@ -1448,6 +1476,9 @@ export const api = {
 
   async articleQuota(projectId: string) {
     return apiFetch<ArticleQuota>(`/api/projects/${projectId}/article-quota`);
+  },
+  async projectFeatureLimits(projectId: string) {
+    return apiFetch<ProjectFeatureLimits>(`/api/projects/${projectId}/feature-limits`);
   },
 
   // Feature 4 — Smart Refresh (foundations)

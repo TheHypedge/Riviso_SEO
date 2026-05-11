@@ -92,6 +92,9 @@ export default function DashboardPage() {
   const [newPlanMaxExportPerMonth, setNewPlanMaxExportPerMonth] = useState<number>(0);
   const [newPlanAllowScheduling, setNewPlanAllowScheduling] = useState<boolean>(true);
   const [newPlanMaxScheduledPerMonth, setNewPlanMaxScheduledPerMonth] = useState<number>(0);
+  const [newPlanMaxClusterPlansPerMonth, setNewPlanMaxClusterPlansPerMonth] = useState<number>(0);
+  const [newPlanMaxCustomResearchPerMonth, setNewPlanMaxCustomResearchPerMonth] = useState<number>(0);
+  const [newPlanMaxContextLinks, setNewPlanMaxContextLinks] = useState<number>(10);
   const [newPlanCostMonthly, setNewPlanCostMonthly] = useState<number>(0);
   const [newPlanIsDefault, setNewPlanIsDefault] = useState<boolean>(false);
 
@@ -332,6 +335,9 @@ export default function DashboardPage() {
       max_export_per_month: newPlanAllowExport ? newPlanMaxExportPerMonth : 0,
       allow_scheduling: newPlanAllowScheduling,
       max_scheduled_per_month: newPlanAllowScheduling ? newPlanMaxScheduledPerMonth : 0,
+      max_cluster_plans_per_month: newPlanMaxClusterPlansPerMonth,
+      max_custom_research_per_month: newPlanMaxCustomResearchPerMonth,
+      max_context_links: newPlanMaxContextLinks,
     });
     setNewPlanKey("");
     setNewPlanName("");
@@ -342,6 +348,9 @@ export default function DashboardPage() {
     setNewPlanMaxExportPerMonth(0);
     setNewPlanAllowScheduling(true);
     setNewPlanMaxScheduledPerMonth(0);
+    setNewPlanMaxClusterPlansPerMonth(0);
+    setNewPlanMaxCustomResearchPerMonth(0);
+    setNewPlanMaxContextLinks(10);
     setNewPlanCostMonthly(0);
     setNewPlanIsDefault(false);
   }
@@ -583,7 +592,6 @@ export default function DashboardPage() {
               <>
                 <div className={styles.intro}>
                   <h1>System limitations</h1>
-                  
                 </div>
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
@@ -672,6 +680,36 @@ export default function DashboardPage() {
                           disabled={!newPlanAllowScheduling}
                         />
                       </div>
+                    </label>
+                    <label className={styles.label}>
+                      Cluster Planner / month
+                      <input
+                        className={styles.input}
+                        type="number"
+                        min={0}
+                        value={newPlanMaxClusterPlansPerMonth}
+                        onChange={(e) => setNewPlanMaxClusterPlansPerMonth(Number(e.target.value || 0))}
+                      />
+                    </label>
+                    <label className={styles.label}>
+                      Custom Curations / month
+                      <input
+                        className={styles.input}
+                        type="number"
+                        min={0}
+                        value={newPlanMaxCustomResearchPerMonth}
+                        onChange={(e) => setNewPlanMaxCustomResearchPerMonth(Number(e.target.value || 0))}
+                      />
+                    </label>
+                    <label className={styles.label}>
+                      Max Context links
+                      <input
+                        className={styles.input}
+                        type="number"
+                        min={0}
+                        value={newPlanMaxContextLinks}
+                        onChange={(e) => setNewPlanMaxContextLinks(Number(e.target.value || 0))}
+                      />
                     </label>
                   </div>
                 </div>
@@ -798,6 +836,36 @@ export default function DashboardPage() {
                                   disabled={!p.allow_scheduling}
                                 />
                               </div>
+                            </label>
+                            <label className={styles.label}>
+                              Cluster Planner / month
+                              <input
+                                className={styles.input}
+                                type="number"
+                                min={0}
+                                value={p.max_cluster_plans_per_month ?? 0}
+                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_cluster_plans_per_month: Number(e.target.value || 0) } : x)))}
+                              />
+                            </label>
+                            <label className={styles.label}>
+                              Custom Curations / month
+                              <input
+                                className={styles.input}
+                                type="number"
+                                min={0}
+                                value={p.max_custom_research_per_month ?? 0}
+                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_custom_research_per_month: Number(e.target.value || 0) } : x)))}
+                              />
+                            </label>
+                            <label className={styles.label}>
+                              Max Context links
+                              <input
+                                className={styles.input}
+                                type="number"
+                                min={0}
+                                value={p.max_context_links ?? 0}
+                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_context_links: Number(e.target.value || 0) } : x)))}
+                              />
                             </label>
                           </div>
                         </div>

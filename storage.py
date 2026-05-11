@@ -268,6 +268,10 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "usage_monthly_export_count": int(d.get("usage_monthly_export_count") or 0),
         "usage_monthly_scheduled_month": (d.get("usage_monthly_scheduled_month") or "").strip()[:16],
         "usage_monthly_scheduled_count": int(d.get("usage_monthly_scheduled_count") or 0),
+        "usage_monthly_cluster_plans_month": (d.get("usage_monthly_cluster_plans_month") or "").strip()[:16],
+        "usage_monthly_cluster_plans_count": int(d.get("usage_monthly_cluster_plans_count") or 0),
+        "usage_monthly_custom_research_month": (d.get("usage_monthly_custom_research_month") or "").strip()[:16],
+        "usage_monthly_custom_research_count": int(d.get("usage_monthly_custom_research_count") or 0),
         "usage_monthly_llm_tokens_month": (d.get("usage_monthly_llm_tokens_month") or "").strip()[:16],
         "usage_monthly_llm_tokens_used": int(d.get("usage_monthly_llm_tokens_used") or 0),
         "created_at": (d.get("created_at") or "")[:64],
@@ -693,6 +697,136 @@ def consume_scheduled_usage(user_id: str, *, month_limit: int | None, amount: in
         return True, ""
 
 
+def _consume_monthly_counter(
+    user_id: str,
+    *,
+    month_field: str,
+    count_field: str,
+    month_limit: int | None,
+    amount: int = 1,
+    limit_message: str,
+) -> tuple[bool, str]:
+    uid = (user_id or "").strip()
+    if not uid:
+        return False, "Missing user id"
+    month_key = _utc_month_key_now()
+
+    def _apply(d: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+        cur_month = (d.get(month_field) or "").strip()
+        count = int(d.get(count_field) or 0)
+        if cur_month != month_key:
+            cur_month = month_key
+            count = 0
+        if not _limit_allows(count, month_limit, amount):
+            return False, limit_message, d
+        d2 = dict(d)
+        d2[month_field] = cur_month
+        d2[count_field] = count + amount
+        return True, "", d2
+
+    if _storage_mode == "json":
+        with _db_write_lock:
+            users = _load_json_users()
+            for i, u in enumerate(users):
+                if (u.get("id") or "").strip() != uid:
+                    continue
+                ok, msg, upd = _apply(dict(u))
+                if not ok:
+                    return False, msg
+                users[i] = _normalize_user_dict(upd)
+                _save_json_users(users)
+                return True, ""
+        return False, "User not found"
+
+    if _storage_mode != "mongo":
+        return True, ""
+
+    with _db_write_lock:
+        db = get_db()
+        doc = db.users.find_one({"id": uid})
+        if not doc:
+            return False, "User not found"
+        d = dict(doc)
+        d.pop("_id", None)
+        ok, msg, upd = _apply(d)
+        if not ok:
+            return False, msg
+        norm = _normalize_user_dict(upd)
+        new_doc = {**norm, "_id": norm["id"]}
+        res = db.users.replace_one({"id": uid}, new_doc)
+        if not (res.acknowledged and res.matched_count == 1):
+            return False, "Failed to update usage"
+        return True, ""
+
+
+def peek_monthly_counter(user_id: str, *, month_field: str, count_field: str, month_limit: int | None) -> dict[str, Any]:
+    uid = (user_id or "").strip()
+    month_key = _utc_month_key_now()
+    out: dict[str, Any] = {
+        "month_used": 0,
+        "month_limit": month_limit,
+        "month_remaining": None,
+        "unlimited": True,
+        "month_key": month_key,
+    }
+
+    def _remaining(used: int, limit: int | None) -> int | None:
+        if limit is None:
+            return None
+        try:
+            lim = int(limit)
+        except Exception:
+            return None
+        if lim <= 0:
+            return None
+        return max(0, lim - used)
+
+    if not uid:
+        return out
+    if _storage_mode == "json":
+        users = _load_json_users()
+        user = next((u for u in users if (u.get("id") or "").strip() == uid), None)
+    elif _storage_mode == "mongo":
+        doc = get_db().users.find_one({"id": uid})
+        user = dict(doc) if doc else None
+    else:
+        user = None
+    if not isinstance(user, dict):
+        return out
+
+    cur_month = (user.get(month_field) or "").strip()
+    used = int(user.get(count_field) or 0)
+    if cur_month != month_key:
+        used = 0
+    remaining = _remaining(used, month_limit)
+    out["month_used"] = used
+    out["month_remaining"] = remaining
+    out["unlimited"] = remaining is None
+    return out
+
+
+def consume_cluster_plan_usage(user_id: str, *, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
+    return _consume_monthly_counter(
+        user_id,
+        month_field="usage_monthly_cluster_plans_month",
+        count_field="usage_monthly_cluster_plans_count",
+        month_limit=month_limit,
+        amount=amount,
+        limit_message="Monthly Cluster Planner limit reached for your plan.",
+    )
+
+
+def consume_custom_research_usage(user_id: str, *, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
+    return _consume_monthly_counter(
+        user_id,
+        month_field="usage_monthly_custom_research_month",
+        count_field="usage_monthly_custom_research_count",
+        month_limit=month_limit,
+        amount=amount,
+        limit_message="Monthly Custom Curations limit reached for your plan.",
+    )
+
+
 def check_llm_token_budget(user_id: str, estimated_tokens: int, month_limit: int | None) -> tuple[bool, str]:
     """
     Verify the user can afford ``estimated_tokens`` this month against ``month_limit``.
@@ -835,6 +969,9 @@ def _default_plans() -> dict[str, Any]:
             "allow_export": True,
             "max_export_per_month": 0,
             "allow_bulk_upload": True,
+            "max_cluster_plans_per_month": 0,
+            "max_custom_research_per_month": 0,
+            "max_context_links": 10,
         }
     }
 
@@ -847,7 +984,15 @@ def load_plans() -> dict[str, Any]:
             with open(path, encoding="utf-8") as f:
                 raw = json.load(f)
             if isinstance(raw, dict) and raw:
-                return raw
+                defaults = _default_plans()
+                merged: dict[str, Any] = {}
+                for k, v in raw.items():
+                    kk = (str(k or "").strip().lower()) or str(k)
+                    if isinstance(v, dict):
+                        merged[kk] = {**(defaults.get(kk) or {}), **v, "key": (v.get("key") or kk)}
+                    else:
+                        merged[kk] = v
+                return merged
         except FileNotFoundError:
             pass
         except Exception:
@@ -871,6 +1016,7 @@ def load_plans() -> dict[str, Any]:
         d.pop("_id", None)
         d.pop("id", None)
         d["key"] = key
+        d = {**((_default_plans().get(key) or {})), **d}
         out[key] = d
     if not out:
         # Seed defaults
