@@ -1581,6 +1581,8 @@
   background: #0a0a0e;
   width: 100%;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 /* Mobile off-canvas sidebar */
@@ -1689,6 +1691,70 @@
 .navItemActive {
   background: color-mix(in oklab, var(--aa-primary), transparent 86%);
   border-color: transparent;
+}
+
+.sidebarAccountCard {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%);
+  border-radius: var(--aa-r-lg);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--aa-primary), transparent 90%), transparent 72%),
+    color-mix(in oklab, var(--aa-surface-card), transparent 8%);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18);
+}
+
+.offcanvasPanel > .sidebarAccountCard {
+  margin: auto 12px 12px;
+}
+
+.sidebarAvatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 36px;
+  border: 1px solid color-mix(in oklab, var(--aa-primary), #fff 16%);
+  background:
+    radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.34), transparent 30%),
+    linear-gradient(135deg, var(--aa-primary), color-mix(in oklab, var(--aa-primary), #000 24%));
+  color: #fff;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+.sidebarAccountMeta {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sidebarAccountEmail {
+  color: var(--aa-body-strong);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebarAccountPlan {
+  margin-top: 3px;
+  color: var(--aa-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-transform: capitalize;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------------
@@ -1826,6 +1892,20 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  position: relative;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.projectCard:hover {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 48%);
+  background: color-mix(in oklab, var(--aa-surface-card), var(--aa-primary) 6%);
+  transform: translateY(-1px);
+}
+
+.projectCard:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 36%);
+  outline-offset: 3px;
 }
 
 .projectCardTop {
@@ -1841,6 +1921,69 @@
   color: #fff;
   line-height: 1.25;
   word-break: break-word;
+}
+
+.projectMenuWrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.projectMenuButton {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 15%);
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 4%);
+  color: var(--aa-body-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.projectMenuButton:hover,
+.projectMenuButton:focus-visible {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 38%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 86%);
+  color: #fff;
+  outline: none;
+}
+
+.projectMenu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 20;
+  min-width: 180px;
+  padding: 6px;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%);
+  border-radius: var(--aa-r-lg);
+  background: color-mix(in oklab, var(--aa-canvas), #111 10%);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.38);
+}
+
+.projectMenuItem {
+  width: 100%;
+  border: 0;
+  border-radius: var(--aa-r-md);
+  background: transparent;
+  color: var(--aa-body-strong);
+  text-align: left;
+  padding: 9px 10px;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.projectMenuItem:hover,
+.projectMenuItem:focus-visible {
+  background: color-mix(in oklab, var(--aa-primary), transparent 84%);
+  color: #fff;
+  outline: none;
 }
 
 /* Articles list (mobile responsive row layout + title truncation) */

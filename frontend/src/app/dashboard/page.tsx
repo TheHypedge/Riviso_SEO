@@ -54,12 +54,14 @@ export default function DashboardPage() {
   const router = useRouter();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [meEmail, setMeEmail] = useState<string>("");
+  const [mePlan, setMePlan] = useState<string>("");
   const [projects, setProjects] = useState<ProjectPublic[]>([]);
   const [name, setName] = useState("");
   const [website, setWebsite] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [projectMenuOpen, setProjectMenuOpen] = useState<string | null>(null);
   const [section, setSection] = useState<DashSection>("projects");
   const [showAddProject, setShowAddProject] = useState(false);
   const [showWpConnect, setShowWpConnect] = useState(false);
@@ -159,6 +161,7 @@ export default function DashboardPage() {
       try {
         const me = await api.me();
         setMeEmail(me.email);
+        setMePlan(me.subscription_type || "beta");
         const items = await api.listProjects();
         setProjects(items);
       } catch {
@@ -529,7 +532,19 @@ export default function DashboardPage() {
               </button>
             </div>
 
-            <div className={styles.muted}>Signed in as {meEmail || "…"}</div>
+            <div className={styles.sidebarAccountCard}>
+              <div className={styles.sidebarAvatar} aria-hidden="true">
+                {(meEmail || "U").trim().charAt(0).toUpperCase()}
+              </div>
+              <div className={styles.sidebarAccountMeta}>
+                <div className={styles.sidebarAccountEmail} title={meEmail || "Signed in"}>
+                  {meEmail || "Signed in"}
+                </div>
+                <div className={styles.sidebarAccountPlan}>
+                  Plan: {(mePlan || "beta").trim() || "beta"}
+                </div>
+              </div>
+            </div>
           </aside>
 
           <section className={styles.contentCol}>
@@ -564,12 +579,67 @@ export default function DashboardPage() {
 
                   <div className={styles.grid}>
                     {projects.map((p) => (
-                      <div key={p.id} className={styles.projectCard}>
+                      <div
+                        key={p.id}
+                        className={styles.projectCard}
+                        role="link"
+                        tabIndex={0}
+                        onClick={() => router.push(`/projects/${p.id}`)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            router.push(`/projects/${p.id}`);
+                          }
+                        }}
+                        aria-label={`Open project ${p.name}`}
+                      >
                         <div className={styles.projectCardTop}>
                           <div className={styles.projectTitle}>{p.name}</div>
-                          <Link className={styles.btnSecondary} href={`/projects/${p.id}`}>
-                            Open
-                          </Link>
+                          <div className={styles.projectMenuWrap}>
+                            <button
+                              type="button"
+                              className={styles.projectMenuButton}
+                              aria-label={`Project actions for ${p.name}`}
+                              aria-haspopup="menu"
+                              aria-expanded={projectMenuOpen === p.id ? "true" : "false"}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setProjectMenuOpen((cur) => (cur === p.id ? null : p.id));
+                              }}
+                            >
+                              ⋮
+                            </button>
+                            {projectMenuOpen === p.id ? (
+                              <div
+                                className={styles.projectMenu}
+                                role="menu"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  className={styles.projectMenuItem}
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setProjectMenuOpen(null);
+                                    router.push(`/projects/${p.id}`);
+                                  }}
+                                >
+                                  Open
+                                </button>
+                                <button
+                                  type="button"
+                                  className={styles.projectMenuItem}
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setProjectMenuOpen(null);
+                                    router.push(`/projects/${p.id}?tab=project_settings`);
+                                  }}
+                                >
+                                  Project settings
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
                         <div className={styles.muted}>{p.website_url || "—"}</div>
                       </div>

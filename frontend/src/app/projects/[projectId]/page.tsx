@@ -862,6 +862,7 @@ export default function ProjectPage() {
   const [dateOrder, setDateOrder] = useState<"desc" | "asc">("desc");
   const [page, setPage] = useState(1);
   const [profileTz, setProfileTz] = useState<string>("");
+  const [profile, setProfile] = useState<import("@/lib/api").ProfilePublic | null>(null);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
 
   // Bulk selection
@@ -993,6 +994,7 @@ export default function ProjectPage() {
         ]);
         setArticles(list);
         setFeatureLimits(limits);
+        setProfile(prof);
         setProfileTz((prof?.timezone || "").trim());
         setWpDefaults({
           post_type: (ps.default_wp_rest_base || "posts") as string,
@@ -3383,6 +3385,8 @@ export default function ProjectPage() {
       !featureLimits.context_links.unlimited &&
       linkDrafts.length >= (featureLimits.context_links.limit ?? 0),
   );
+  const sidebarEmail = (profile?.email || "").trim();
+  const sidebarPlan = (profile?.subscription_type || "beta").trim() || "beta";
 
   return (
     <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
@@ -3433,6 +3437,17 @@ export default function ProjectPage() {
                     {tabLabel[k]}
                   </button>
                 ))}
+              </div>
+              <div className={styles.sidebarAccountCard}>
+                <div className={styles.sidebarAvatar} aria-hidden="true">
+                  {(sidebarEmail || "U").charAt(0).toUpperCase()}
+                </div>
+                <div className={styles.sidebarAccountMeta}>
+                  <div className={styles.sidebarAccountEmail} title={sidebarEmail || "Signed in"}>
+                    {sidebarEmail || "Signed in"}
+                  </div>
+                  <div className={styles.sidebarAccountPlan}>Plan: {sidebarPlan}</div>
+                </div>
               </div>
             </div>
           </>
@@ -3514,6 +3529,17 @@ export default function ProjectPage() {
                   {tabLabel[k]}
                 </button>
               ))}
+            </div>
+            <div className={styles.sidebarAccountCard}>
+              <div className={styles.sidebarAvatar} aria-hidden="true">
+                {(sidebarEmail || "U").charAt(0).toUpperCase()}
+              </div>
+              <div className={styles.sidebarAccountMeta}>
+                <div className={styles.sidebarAccountEmail} title={sidebarEmail || "Signed in"}>
+                  {sidebarEmail || "Signed in"}
+                </div>
+                <div className={styles.sidebarAccountPlan}>Plan: {sidebarPlan}</div>
+              </div>
             </div>
           </aside>
 
