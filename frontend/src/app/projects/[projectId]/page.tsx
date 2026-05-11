@@ -6088,7 +6088,8 @@ export default function ProjectPage() {
                   </button>
                 </div>
                 <div className={styles.clusterCardSubtitle} style={{ fontSize: 12.5 }}>
-                  Default is used when generating featured images unless overridden.
+                  Custom image prompts are allowed. During generation, Riviso appends the article
+                  focus, brand identity, and niche context, then validates that the prompt is image-only.
                 </div>
 
                 <div className={styles.list}>
@@ -6143,6 +6144,13 @@ export default function ProjectPage() {
                       Actual prompt
                       <textarea className={styles.textarea} style={{ minHeight: 240 }} value={draftText} onChange={(e) => setDraftText(e.target.value)} />
                     </label>
+                    {showPromptModal.kind === "image" ? (
+                      <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
+                        Describe the visual style, composition, lighting, camera, or scene for the
+                        featured image only. Brand identity and niche context are appended automatically
+                        when the image prompt is processed.
+                      </div>
+                    ) : null}
                     <label className={styles.checkboxRow}>
                       <input
                         type="checkbox"

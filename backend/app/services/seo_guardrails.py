@@ -159,12 +159,20 @@ def build_programmatic_image_prompt(
     focus_keyphrase: str,
     brand_identity: str | None,
     niche_identifier: str | None,
+    image_prompt_text: str | None = None,
 ) -> str:
     """
-    Build the image-generation prompt only from article focus, niche, brand, and title.
-    No user-authored image prompt text is consulted.
+    Build the final image-generation prompt from the selected image prompt plus
+    server-owned article, brand, and niche context.
+
+    The user-authored image prompt is only style/visual direction. Brand/niche
+    context is appended here every time, so saved prompts cannot omit project
+    identity or drift into non-image tasks.
     """
     parts: list[str] = []
+    custom = (image_prompt_text or "").strip()
+    if custom:
+        parts.append(f"Image prompt instructions: {custom[:1200]}")
     fk = (focus_keyphrase or "").strip()
     if fk:
         parts.append(f"Subject: {fk}")

@@ -11,6 +11,7 @@ from app.services.content_sanitizer import (
     sanitize_meta_title,
 )
 from app.services.openai_client import OpenAIClient
+from app.services.prompt_validation import assert_image_prompt_allowed
 from app.services.seo_guardrails import (
     ANCHOR_SYSTEM_PREFIX,
     build_programmatic_image_prompt,
@@ -119,12 +120,14 @@ async def generate_article_bundle(
     brand_identity: str | None = None,
     niche_identifier: str | None = None,
     generate_image: bool,
+    image_prompt_text: str | None = None,
 ) -> dict:
     """
     Generate article markdown + meta + optional image.
 
-    Image prompts are never taken from user-authored template text; they are derived
-    server-side from focus keyphrase, niche, brand, title, and keywords.
+    If an image prompt is selected, it is validated as image-only visual/style
+    direction and then augmented server-side with focus keyphrase, niche, brand,
+    title, and keywords before being sent to the image model.
     """
     client = OpenAIClient()
 
@@ -149,12 +152,15 @@ async def generate_article_bundle(
 
     image_url: str | None = None
     if generate_image:
+        if image_prompt_text:
+            assert_image_prompt_allowed(image_prompt_text)
         image_prompt = build_programmatic_image_prompt(
             title=title,
             keywords=keywords,
             focus_keyphrase=focus_keyphrase,
             brand_identity=brand_identity,
             niche_identifier=niche_identifier,
+            image_prompt_text=image_prompt_text,
         )
         try:
             image_url = await asyncio.wait_for(

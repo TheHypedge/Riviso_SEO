@@ -769,6 +769,7 @@ async def generate_article_and_image(
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     wp_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
+    ip_id = (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
     return await execute_article_generation(
         st=st,
         user=user,
@@ -777,6 +778,7 @@ async def generate_article_and_image(
         article_id=(article_id or "").strip(),
         row=row,
         writing_prompt_id=wp_id,
+        image_prompt_id=ip_id,
         generate_image=bool(payload.generate_image),
         focus_keyphrase_override=payload.focus_keyphrase,
     )

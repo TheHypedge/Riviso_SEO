@@ -1,7 +1,8 @@
 """
 Validate user-authored writing prompts so they stay on topic.
 
-Image prompts are no longer user-authored for generation — see ``image_prompts`` routes.
+Image prompts are user-authored style/visual instructions, but they are still
+validated and server-augmented with brand/niche/article context before use.
 
 All public helpers raise :class:`fastapi.HTTPException` (HTTP 400) with a human-readable
 reason on failure, except ``assert_writing_prompt_allowed`` which raises ``ValueError``
@@ -20,6 +21,7 @@ __all__ = [
     "PromptValidationError",
     "validate_writing_prompt",
     "assert_writing_prompt_allowed",
+    "assert_image_prompt_allowed",
     "validate_image_prompt",
 ]
 
@@ -199,18 +201,23 @@ def validate_writing_prompt(text: str, *, user_id: str | None = None) -> None:
         raise _http_400(str(e)) from e
 
 
+def assert_image_prompt_allowed(text: str) -> None:
+    """Validate an image prompt for route handlers and background workers."""
+    s = (text or "").strip()
+    _check_common_valueerror(s)
+    for pat, msg in _IMAGE_OFFTOPIC_PATTERNS:
+        if pat.search(s):
+            raise ValueError(msg)
+    if not _has_any(_IMAGE_TOPIC_PATTERNS, s):
+        raise ValueError(
+            "Image prompts must describe a visual / image to generate. "
+            "Include words like 'image', 'photo', 'illustration', 'scene', 'composition', or 'style'."
+        )
+
+
 def validate_image_prompt(text: str) -> None:
-    """Legacy validator — custom image prompt text is not used for generation."""
+    """Validate a project *image* prompt. Raises HTTP 400 on failure."""
     try:
-        s = (text or "").strip()
-        _check_common_valueerror(s)
-        for pat, msg in _IMAGE_OFFTOPIC_PATTERNS:
-            if pat.search(s):
-                raise ValueError(msg)
-        if not _has_any(_IMAGE_TOPIC_PATTERNS, s):
-            raise ValueError(
-                "Image prompts must describe a visual / image to generate. "
-                "Include words like 'image', 'photo', 'illustration', 'scene', 'composition', or 'style'."
-            )
+        assert_image_prompt_allowed(text)
     except ValueError as e:
         raise _http_400(str(e)) from e

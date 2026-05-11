@@ -15,7 +15,7 @@ from fastapi import HTTPException
 
 from app.core.config import settings
 from app.services.article_generation import estimate_tokens_for_generation_bundle, generate_article_bundle
-from app.services.prompt_validation import assert_writing_prompt_allowed
+from app.services.prompt_validation import assert_image_prompt_allowed, assert_writing_prompt_allowed
 
 
 def _resolve_writing_prompt(*, proj: dict, writing_prompt_id: str | None) -> dict | None:
@@ -28,6 +28,16 @@ def _resolve_writing_prompt(*, proj: dict, writing_prompt_id: str | None) -> dic
     raise HTTPException(status_code=404, detail="Prompt not found")
 
 
+def _resolve_image_prompt(*, proj: dict, image_prompt_id: str | None) -> dict | None:
+    pid = (image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
+    if not pid:
+        return None
+    for p in proj.get("image_prompts") or []:
+        if isinstance(p, dict) and (p.get("id") or "").strip() == pid:
+            return {"id": pid, "name": (p.get("name") or "").strip(), "text": (p.get("text") or "").strip()}
+    raise HTTPException(status_code=404, detail="Image prompt not found")
+
+
 async def execute_article_generation(
     *,
     st: Any,
@@ -38,6 +48,7 @@ async def execute_article_generation(
     row: dict,
     writing_prompt_id: str | None,
     generate_image: bool,
+    image_prompt_id: str | None = None,
     focus_keyphrase_override: str | None = None,
 ) -> dict:
     """
@@ -50,6 +61,7 @@ async def execute_article_generation(
     role = (user.get("role") or "").strip().lower()
 
     resolved_writing = _resolve_writing_prompt(proj=proj, writing_prompt_id=writing_prompt_id)
+    resolved_image = _resolve_image_prompt(proj=proj, image_prompt_id=image_prompt_id) if generate_image else None
     if not (settings.openai_api_key or "").strip():
         raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
 
@@ -68,6 +80,11 @@ async def execute_article_generation(
         assert_writing_prompt_allowed(resolved_writing["text"], user_id=uid or None)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    if generate_image and resolved_image:
+        try:
+            assert_image_prompt_allowed(resolved_image["text"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
 
     token_estimate = estimate_tokens_for_generation_bundle(
         title=title,
@@ -112,6 +129,7 @@ async def execute_article_generation(
             brand_identity=(proj.get("brand_identity") or ""),
             niche_identifier=(proj.get("niche_identifier") or ""),
             generate_image=generate_image,
+            image_prompt_text=(resolved_image or {}).get("text") or None,
         )
     except HTTPException:
         if quota_consumed and hasattr(st, "refund_article_usage"):
@@ -151,8 +169,10 @@ async def execute_article_generation(
             "writing_prompt": {"id": resolved_writing["id"], "name": resolved_writing["name"]}
             if resolved_writing
             else None,
-            "image_prompt": None,
-            "image_prompt_source": "programmatic",
+            "image_prompt": {"id": resolved_image["id"], "name": resolved_image["name"]}
+            if resolved_image
+            else None,
+            "image_prompt_source": "custom_plus_brand_niche" if resolved_image else "programmatic",
             "focus_keyphrase": focus,
             "generate_image": generate_image,
             "models": gen.get("models"),
