@@ -1064,24 +1064,55 @@ export default function ProjectPage() {
     };
   }, [projectId, token]);
 
-  async function ensureScheduleMetaLoaded() {
-    if (wpTypesForSchedule.length || wpCatsForSchedule.length || scheduleWritingPrompts || scheduleImagePrompts) return;
-    try {
-      const [types, cats, wp, ip] = await Promise.all([
-        api.wordpressPostTypes(projectId, { timeoutMs: 8000 }),
-        api.wordpressCategories(projectId, { timeoutMs: 8000 }),
-        api.listWritingPrompts(projectId),
-        api.listImagePrompts(projectId),
-      ]);
-      setWpTypesForSchedule(types);
-      setWpCatsForSchedule(cats);
-      setScheduleWritingPrompts(wp);
-      setScheduleImagePrompts(ip);
-      setScheduleWritingPromptId(wp.default_id || "");
-      setScheduleImagePromptId(ip.default_id || "");
-    } catch {
-      // ignore
+  async function ensureScheduleMetaLoaded(): Promise<{
+    writingPrompts: PromptListResponse | null;
+    imagePrompts: PromptListResponse | null;
+  }> {
+    const needWpTypes = wpTypesForSchedule.length === 0;
+    const needWpCats = wpCatsForSchedule.length === 0;
+    const needWritingPrompts = !scheduleWritingPrompts;
+    const needImagePrompts = !scheduleImagePrompts;
+
+    if (!needWpTypes && !needWpCats && !needWritingPrompts && !needImagePrompts) {
+      return {
+        writingPrompts: scheduleWritingPrompts,
+        imagePrompts: scheduleImagePrompts,
+      };
     }
+
+    const promptLoad = Promise.allSettled([
+      needWritingPrompts ? api.listWritingPrompts(projectId) : Promise.resolve(scheduleWritingPrompts),
+      needImagePrompts ? api.listImagePrompts(projectId) : Promise.resolve(scheduleImagePrompts),
+    ]).then(([wpRes, ipRes]) => {
+      const wp = wpRes.status === "fulfilled" ? wpRes.value : scheduleWritingPrompts;
+      const ip = ipRes.status === "fulfilled" ? ipRes.value : scheduleImagePrompts;
+
+      if (wpRes.status === "fulfilled" && wp) {
+        setScheduleWritingPrompts(wp);
+        setScheduleWritingPromptId((prev) => prev || wp.default_id || "");
+      }
+      if (ipRes.status === "fulfilled" && ip) {
+        setScheduleImagePrompts(ip);
+        setScheduleImagePromptId((prev) => prev || ip.default_id || "");
+      }
+
+      return {
+        writingPrompts: wp || null,
+        imagePrompts: ip || null,
+      };
+    });
+
+    const wpMetaLoad = Promise.allSettled([
+      needWpTypes ? api.wordpressPostTypes(projectId, { timeoutMs: 8000 }) : Promise.resolve(wpTypesForSchedule),
+      needWpCats ? api.wordpressCategories(projectId, { timeoutMs: 8000 }) : Promise.resolve(wpCatsForSchedule),
+    ]).then(([typesRes, catsRes]) => {
+      if (typesRes.status === "fulfilled") setWpTypesForSchedule(typesRes.value);
+      if (catsRes.status === "fulfilled") setWpCatsForSchedule(catsRes.value);
+    });
+
+    const promptResult = await promptLoad;
+    void wpMetaLoad;
+    return promptResult;
   }
 
   function formatInProfileTz(utcLike: string | null | undefined) {
@@ -4068,6 +4099,7 @@ export default function ProjectPage() {
                               type="button"
                               className={styles.miniBtn}
                               onClick={() => {
+                                void ensureScheduleMetaLoaded();
                                 const min = new Date(Date.now() + 5 * 60 * 1000);
                                 const minStr = toDatetimeLocalFromDateInProfileTz(min);
                                 setScheduleMin(minStr);

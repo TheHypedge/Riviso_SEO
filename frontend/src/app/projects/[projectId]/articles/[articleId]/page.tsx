@@ -124,14 +124,25 @@ export default function ArticleEditPage() {
       setNotice(null);
       setLoading(true);
       try {
-        const a = await api.getArticle(params.projectId, params.articleId);
-        // Prompts are not required to *view/edit* the article; lazy-load them on demand.
-        const wp = null;
-        const ip = null;
+        const [articleRes, wpRes, ipRes] = await Promise.allSettled([
+          api.getArticle(params.projectId, params.articleId),
+          api.listWritingPrompts(params.projectId),
+          api.listImagePrompts(params.projectId),
+        ]);
+        if (articleRes.status !== "fulfilled") throw articleRes.reason;
+        const a = articleRes.value;
+        const wp = wpRes.status === "fulfilled" ? wpRes.value : null;
+        const ip = ipRes.status === "fulfilled" ? ipRes.value : null;
 
         setArticle(a);
-        if (wp) setWritingPrompts(wp);
-        if (ip) setImagePrompts(ip);
+        if (wp) {
+          setWritingPrompts(wp);
+          setWritingPromptId(wp.default_id || "");
+        }
+        if (ip) {
+          setImagePrompts(ip);
+          setImagePromptId(ip.default_id || "");
+        }
 
         setTitle(a.title || "");
         setKeywords(kwToString(a.keywords));
@@ -141,8 +152,8 @@ export default function ArticleEditPage() {
         setMetaDesc(a.meta_description || "");
         setGeneratedImageUrl(a.image_url || "");
 
-        setWritingPromptId("");
-        setImagePromptId("");
+        if (!wp) setWritingPromptId("");
+        if (!ip) setImagePromptId("");
 
         // WordPress metadata is only required when the user publishes. Load on demand.
       } catch (e) {
@@ -180,22 +191,24 @@ export default function ArticleEditPage() {
 
   async function ensurePromptsLoaded() {
     if (promptsLoading) return;
-    if (writingPrompts && imagePrompts) return;
+    const needWriting = !writingPrompts;
+    const needImage = !imagePrompts;
+    if (!needWriting && !needImage) return;
     setPromptsLoading(true);
     try {
       const [wpRes, ipRes] = await Promise.allSettled([
-        api.listWritingPrompts(params.projectId),
-        api.listImagePrompts(params.projectId),
+        needWriting ? api.listWritingPrompts(params.projectId) : Promise.resolve(writingPrompts),
+        needImage ? api.listImagePrompts(params.projectId) : Promise.resolve(imagePrompts),
       ]);
       const wp = wpRes.status === "fulfilled" ? wpRes.value : null;
       const ip = ipRes.status === "fulfilled" ? ipRes.value : null;
       if (wp) {
         setWritingPrompts(wp);
-        if (!writingPromptId) setWritingPromptId(wp.default_id || "");
+        setWritingPromptId((prev) => prev || wp.default_id || "");
       }
       if (ip) {
         setImagePrompts(ip);
-        if (!imagePromptId) setImagePromptId(ip.default_id || "");
+        setImagePromptId((prev) => prev || ip.default_id || "");
       }
     } catch {
       // ignore
