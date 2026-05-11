@@ -22,6 +22,34 @@ import {
 
 type DashSection = "projects" | "users" | "limits" | "profile";
 
+function planComparable(p: PlanPublic) {
+  return {
+    key: p.key,
+    name: p.name || "",
+    is_default: Boolean(p.is_default),
+    cost_monthly: Number(p.cost_monthly ?? 0),
+    max_projects: Number(p.max_projects ?? 0),
+    max_articles_per_day: Number(p.max_articles_per_day ?? 0),
+    max_articles_per_month: Number(p.max_articles_per_month ?? 0),
+    allow_export: Boolean(p.allow_export),
+    max_export_per_month: Number(p.max_export_per_month ?? 0),
+    allow_scheduling: Boolean(p.allow_scheduling),
+    max_scheduled_per_month: Number(p.max_scheduled_per_month ?? 0),
+    allow_bulk_upload: Boolean(p.allow_bulk_upload),
+    max_cluster_plans_per_month: Number(p.max_cluster_plans_per_month ?? 0),
+    max_custom_research_per_month: Number(p.max_custom_research_per_month ?? 0),
+    max_context_links: Number(p.max_context_links ?? 0),
+  };
+}
+
+function plansFingerprint(items: PlanPublic[]) {
+  return JSON.stringify(
+    items
+      .map(planComparable)
+      .sort((a, b) => a.key.localeCompare(b.key)),
+  );
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -50,7 +78,9 @@ export default function DashboardPage() {
   const [userWorkspace, setUserWorkspace] = useState<AdminWorkspaceResponse | null>(null);
   const [userWorkspaceLoading, setUserWorkspaceLoading] = useState(false);
   const [plans, setPlans] = useState<PlanPublic[]>([]);
+  const [savedPlans, setSavedPlans] = useState<PlanPublic[]>([]);
   const [plansLoading, setPlansLoading] = useState(false);
+  const [plansSaving, setPlansSaving] = useState(false);
   const [profile, setProfile] = useState<ProfilePublic | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileClockTick, setProfileClockTick] = useState(0);
@@ -81,6 +111,11 @@ export default function DashboardPage() {
     if (!uniq.includes("UTC")) uniq.push("UTC");
     return uniq;
   }, [browserTimeZone]);
+
+  const plansDirty = useMemo(
+    () => plansFingerprint(plans) !== plansFingerprint(savedPlans),
+    [plans, savedPlans],
+  );
 
   // Limits module (create new plan)
   const [newPlanKey, setNewPlanKey] = useState("");
@@ -167,6 +202,7 @@ export default function DashboardPage() {
           setPlansLoading(true);
           const items = await api.adminListPlans();
           setPlans(items);
+          setSavedPlans(items);
         } else if (section === "profile") {
           setProfileLoading(true);
           const me = await api.profileMe();
@@ -315,9 +351,48 @@ export default function DashboardPage() {
         const exists = prev.some((p) => p.key === saved.key);
         return exists ? prev.map((p) => (p.key === saved.key ? saved : p)) : [saved, ...prev];
       });
+      setSavedPlans((prev) => {
+        const exists = prev.some((p) => p.key === saved.key);
+        return exists ? prev.map((p) => (p.key === saved.key ? saved : p)) : [saved, ...prev];
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save plan");
     }
+  }
+
+  async function saveAllPlans() {
+    if (!plansDirty || plansSaving) return;
+    setError(null);
+    setPlansSaving(true);
+    try {
+      const saved: PlanPublic[] = [];
+      for (const p of plans) {
+        saved.push(await api.adminUpsertPlan(p.key, p));
+      }
+      saved.sort((a, b) => a.key.localeCompare(b.key));
+      setPlans(saved);
+      setSavedPlans(saved);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save plan changes");
+    } finally {
+      setPlansSaving(false);
+    }
+  }
+
+  function updatePlanDraft(key: string, patch: Partial<PlanPublic>) {
+    setPlans((prev) => prev.map((p) => (p.key === key ? { ...p, ...patch } : p)));
+  }
+
+  function updateDefaultPlanDraft(key: string, checked: boolean) {
+    setPlans((prev) =>
+      prev.map((p) =>
+        p.key === key
+          ? { ...p, is_default: checked }
+          : checked
+            ? { ...p, is_default: false }
+            : p,
+      ),
+    );
   }
 
   async function createPlan() {
@@ -591,7 +666,24 @@ export default function DashboardPage() {
             {section === "limits" ? (
               <>
                 <div className={styles.intro}>
-                  <h1>System limitations</h1>
+                  <div className={styles.sectionHead}>
+                    <div>
+                      <h1 style={{ margin: 0 }}>System limitations</h1>
+                      <p style={{ marginBottom: 0 }}>
+                        Edit plan limits below, then save all changes together.
+                      </p>
+                    </div>
+                    {plansDirty ? (
+                      <button
+                        className={styles.button}
+                        type="button"
+                        onClick={saveAllPlans}
+                        disabled={plansSaving || plansLoading}
+                      >
+                        {plansSaving ? "Saving…" : "Save changes"}
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
@@ -725,9 +817,11 @@ export default function DashboardPage() {
                               <div className={dashStyles.planTitle}>{p.name || p.key}</div>
                               <div className={styles.muted}>Key: {p.key}</div>
                             </div>
-                            <button className={`${styles.miniBtn} ${styles.miniPrimary}`} type="button" onClick={() => upsertPlan(p.key, p)}>
-                              Save plan
-                            </button>
+                            {plansFingerprint([p]) !== plansFingerprint(savedPlans.filter((x) => x.key === p.key)) ? (
+                              <span className={styles.muted} style={{ fontSize: 12, fontWeight: 800 }}>
+                                Unsaved changes
+                              </span>
+                            ) : null}
                           </div>
 
                           <div className={dashStyles.planEditGrid}>
@@ -736,7 +830,7 @@ export default function DashboardPage() {
                               <input
                                 className={styles.input}
                                 value={p.name || ""}
-                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, name: e.target.value } : x)))}
+                                onChange={(e) => updatePlanDraft(p.key, { name: e.target.value })}
                               />
                             </label>
                             <label className={styles.label}>
@@ -745,7 +839,7 @@ export default function DashboardPage() {
                                 <input
                                   type="checkbox"
                                   checked={Boolean(p.is_default)}
-                                  onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, is_default: e.target.checked } : x)))}
+                                  onChange={(e) => updateDefaultPlanDraft(p.key, e.target.checked)}
                                 />
                                 <span className={styles.muted} style={{ fontSize: 12 }}>
                                   One default at a time.
@@ -760,7 +854,7 @@ export default function DashboardPage() {
                                 min={0}
                                 step="0.01"
                                 value={Number(p.cost_monthly ?? 0)}
-                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, cost_monthly: Number(e.target.value || 0) } : x)))}
+                                onChange={(e) => updatePlanDraft(p.key, { cost_monthly: Number(e.target.value || 0) })}
                               />
                             </label>
                             <label className={styles.label}>
@@ -770,7 +864,7 @@ export default function DashboardPage() {
                                 type="number"
                                 min={0}
                                 value={p.max_projects ?? 0}
-                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_projects: Number(e.target.value || 0) } : x)))}
+                                onChange={(e) => updatePlanDraft(p.key, { max_projects: Number(e.target.value || 0) })}
                               />
                             </label>
                             <label className={styles.label}>
@@ -780,7 +874,7 @@ export default function DashboardPage() {
                                 type="number"
                                 min={0}
                                 value={p.max_articles_per_day ?? 0}
-                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_articles_per_day: Number(e.target.value || 0) } : x)))}
+                                onChange={(e) => updatePlanDraft(p.key, { max_articles_per_day: Number(e.target.value || 0) })}
                               />
                             </label>
                             <label className={styles.label}>
@@ -790,7 +884,7 @@ export default function DashboardPage() {
                                 type="number"
                                 min={0}
                                 value={p.max_articles_per_month ?? 0}
-                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_articles_per_month: Number(e.target.value || 0) } : x)))}
+                                onChange={(e) => updatePlanDraft(p.key, { max_articles_per_month: Number(e.target.value || 0) })}
                               />
                             </label>
                             <label className={styles.label}>
@@ -799,7 +893,7 @@ export default function DashboardPage() {
                                 <input
                                   type="checkbox"
                                   checked={Boolean(p.allow_export)}
-                                  onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, allow_export: e.target.checked } : x)))}
+                                  onChange={(e) => updatePlanDraft(p.key, { allow_export: e.target.checked })}
                                 />
                                 <span className={styles.muted} style={{ fontSize: 12 }}>
                                   Limit / month:
@@ -810,7 +904,7 @@ export default function DashboardPage() {
                                   type="number"
                                   min={0}
                                   value={p.max_export_per_month ?? 0}
-                                  onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_export_per_month: Number(e.target.value || 0) } : x)))}
+                                  onChange={(e) => updatePlanDraft(p.key, { max_export_per_month: Number(e.target.value || 0) })}
                                   disabled={!p.allow_export}
                                 />
                               </div>
@@ -821,7 +915,7 @@ export default function DashboardPage() {
                                 <input
                                   type="checkbox"
                                   checked={Boolean(p.allow_scheduling)}
-                                  onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, allow_scheduling: e.target.checked } : x)))}
+                                  onChange={(e) => updatePlanDraft(p.key, { allow_scheduling: e.target.checked })}
                                 />
                                 <span className={styles.muted} style={{ fontSize: 12 }}>
                                   Limit / month:
@@ -832,7 +926,7 @@ export default function DashboardPage() {
                                   type="number"
                                   min={0}
                                   value={p.max_scheduled_per_month ?? 0}
-                                  onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_scheduled_per_month: Number(e.target.value || 0) } : x)))}
+                                  onChange={(e) => updatePlanDraft(p.key, { max_scheduled_per_month: Number(e.target.value || 0) })}
                                   disabled={!p.allow_scheduling}
                                 />
                               </div>
@@ -844,7 +938,7 @@ export default function DashboardPage() {
                                 type="number"
                                 min={0}
                                 value={p.max_cluster_plans_per_month ?? 0}
-                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_cluster_plans_per_month: Number(e.target.value || 0) } : x)))}
+                                onChange={(e) => updatePlanDraft(p.key, { max_cluster_plans_per_month: Number(e.target.value || 0) })}
                               />
                             </label>
                             <label className={styles.label}>
@@ -854,7 +948,7 @@ export default function DashboardPage() {
                                 type="number"
                                 min={0}
                                 value={p.max_custom_research_per_month ?? 0}
-                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_custom_research_per_month: Number(e.target.value || 0) } : x)))}
+                                onChange={(e) => updatePlanDraft(p.key, { max_custom_research_per_month: Number(e.target.value || 0) })}
                               />
                             </label>
                             <label className={styles.label}>
@@ -864,7 +958,7 @@ export default function DashboardPage() {
                                 type="number"
                                 min={0}
                                 value={p.max_context_links ?? 0}
-                                onChange={(e) => setPlans((prev) => prev.map((x) => (x.key === p.key ? { ...x, max_context_links: Number(e.target.value || 0) } : x)))}
+                                onChange={(e) => updatePlanDraft(p.key, { max_context_links: Number(e.target.value || 0) })}
                               />
                             </label>
                           </div>
@@ -873,6 +967,26 @@ export default function DashboardPage() {
                     </div>
                   ) : null}
                 </div>
+                {plansDirty ? (
+                  <div className={`${styles.card} ${styles.cardWide}`}>
+                    <div
+                      className={styles.row}
+                      style={{ justifyContent: "space-between", alignItems: "center" }}
+                    >
+                      <span className={styles.muted} style={{ fontSize: 13 }}>
+                        You have unsaved changes in plan limits.
+                      </span>
+                      <button
+                        className={styles.button}
+                        type="button"
+                        onClick={saveAllPlans}
+                        disabled={plansSaving || plansLoading}
+                      >
+                        {plansSaving ? "Saving…" : "Save changes"}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </>
             ) : null}
 
