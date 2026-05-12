@@ -92,6 +92,7 @@ class PlanPublic(BaseModel):
     max_cluster_plans_per_month: int | None = None
     max_custom_research_per_month: int | None = None
     max_context_links: int | None = None
+    max_article_image_regenerations: int | None = None
     extra: dict[str, Any] | None = None
 
 
@@ -115,5 +116,6 @@ class PlanUpsert(BaseModel):
     max_cluster_plans_per_month: int | None = None
     max_custom_research_per_month: int | None = None
     max_context_links: int | None = None
+    max_article_image_regenerations: int | None = None
     extra: dict[str, Any] | None = None
 

@@ -1114,6 +1114,36 @@
   margin-top: 18px;
 }
 
+.limitStatusStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 18%);
+  border-radius: var(--aa-r-lg);
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 10%);
+  color: var(--aa-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.limitStatusStrip span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 10%);
+}
+
+.limitStatusExhausted {
+  color: color-mix(in oklab, var(--aa-warning), white 12%);
+  border: 1px solid color-mix(in oklab, var(--aa-warning), transparent 55%);
+  background: color-mix(in oklab, var(--aa-warning), transparent 88%) !important;
+}
+
 @media (max-width: 980px) {
   .filtersGrid {
     grid-template-columns: 1fr 1fr;

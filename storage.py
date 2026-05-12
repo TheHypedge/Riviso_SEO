@@ -972,6 +972,7 @@ def _default_plans() -> dict[str, Any]:
             "max_cluster_plans_per_month": 0,
             "max_custom_research_per_month": 0,
             "max_context_links": 10,
+            "max_article_image_regenerations": 3,
         }
     }
 
@@ -1267,6 +1268,7 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "featured_image_size": (d.get("featured_image_size") or "")[:32],
         "featured_image_optimizer_model": (d.get("featured_image_optimizer_model") or "")[:200],
         "featured_image_prompt_optimizer_error": d.get("featured_image_prompt_optimizer_error") or "",
+        "featured_image_regeneration_count": int(d.get("featured_image_regeneration_count") or 0),
         "wp_post_id": wp_id,
         "wp_link": (d.get("wp_link") or "")[:2048],
         "wp_rest_base": (d.get("wp_rest_base") or "")[:200],
@@ -1414,6 +1416,7 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "featured_image_size",
             "featured_image_optimizer_model",
             "featured_image_prompt_optimizer_error",
+            "featured_image_regeneration_count",
             "wp_link",
             "wp_rest_base",
             "wp_last_wp_status",

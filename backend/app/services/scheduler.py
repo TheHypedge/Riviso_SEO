@@ -62,6 +62,8 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
     aid = (art.get("id") or "").strip()
     if not aid:
         raise RuntimeError("Article not found")
+    if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
+        raise RuntimeError("Website is not connected for this project. Connect and verify WordPress before scheduled generation.")
 
     needs_content = not (str(art.get("article") or "").strip())
     needs_image = not (str(art.get("image_url") or "").strip())
@@ -164,6 +166,8 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
 
 
 async def publish_article_to_wordpress(*, proj: dict, article: dict, post_type: str, wp_status: str, category_ids: list[int]) -> dict:
+    if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
+        raise RuntimeError("Website is not connected for this project. Connect and verify WordPress before publishing.")
     wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
     wp_username = (proj.get("wp_username") or "").strip()
     wp_app_password = (proj.get("wp_app_password") or "").replace(" ", "").strip()

@@ -52,7 +52,11 @@ from app.services.scheduler import prepare_article_for_scheduled_job
 from app.services.to_thread import run_sync
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.prompt_validation import assert_writing_prompt_allowed
-from app.services.article_pipeline import execute_article_generation
+from app.services.article_pipeline import (
+    execute_article_generation,
+    execute_featured_image_regeneration,
+    image_regeneration_limit_snapshot,
+)
 from app.core.article_duplicates import normalize_article_title_key as _normalize_article_title_key
 from app.core.article_duplicates import sync_project_title_index as _sync_project_title_index
 from app.schemas.articles import (
@@ -64,6 +68,7 @@ from app.schemas.articles import (
     BulkUploadRequest,
     BulkUploadResponse,
     GenerateRequest,
+    RegenerateImageRequest,
     ScheduleRequest,
 )
 
@@ -279,6 +284,52 @@ def _require_project_access(*, st, user: dict, project_id: str) -> dict:
     if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
         raise HTTPException(status_code=404, detail="Project not found")
     return proj
+
+
+def _require_verified_website(proj: dict) -> None:
+    """Generation/scheduling depend on project WordPress context and must only run after verification."""
+    status = (proj.get("wp_verified_status") or "").strip().lower()
+    if status != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "website_not_connected",
+                "message": "Website is not connected for this project. Connect and verify WordPress in Project Settings to generate or schedule articles.",
+            },
+        )
+
+
+def _article_image_regeneration_usage(*, st, user: dict, article: dict) -> dict:
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    plan: dict = {}
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+        if not isinstance(plan, dict):
+            plan = {}
+    except Exception:
+        plan = {}
+    return image_regeneration_limit_snapshot(
+        used=int(article.get("featured_image_regeneration_count") or 0),
+        limit=plan.get("max_article_image_regenerations"),
+    )
+
+
+def _to_detail_response(*, st, user: dict, article: dict, view_article: dict | None = None) -> ArticleDetailResponse:
+    a_view = view_article or article
+    base = _to_public(a_view).model_dump()
+    regen = _article_image_regeneration_usage(st=st, user=user, article=article)
+    return ArticleDetailResponse(
+        **base,
+        article=(article.get("article") or ""),
+        meta_title=(article.get("meta_title") or "").strip() or None,
+        meta_description=(article.get("meta_description") or "").strip() or None,
+        image_url=(article.get("image_url") or "").strip() or None,
+        featured_image_regeneration_count=regen["used"],
+        featured_image_regeneration_limit=regen["limit"],
+        featured_image_regeneration_remaining=regen["remaining"],
+        featured_image_regeneration_unlimited=regen["unlimited"],
+    )
 
 
 def _get_article_or_404(*, st, project_id: str, article_id: str) -> dict:
@@ -680,14 +731,7 @@ async def get_article_detail(
     aid = (article_id or "").strip()
     job = await run_sync(_fetch_posted_job_overlay_for_article, st, project_id, aid)
     a_view = _merge_posted_job_into_article_row(a, job)
-    base = _to_public(a_view).model_dump()
-    return ArticleDetailResponse(
-        **base,
-        article=(a.get("article") or ""),
-        meta_title=(a.get("meta_title") or "").strip() or None,
-        meta_description=(a.get("meta_description") or "").strip() or None,
-        image_url=(a.get("image_url") or "").strip() or None,
-    )
+    return _to_detail_response(st=st, user=user, article=a, view_article=a_view)
 
 
 @router.patch("/{article_id}", response_model=ArticleDetailResponse)
@@ -738,14 +782,7 @@ async def update_article(
         await run_sync(st.update_article_fields, article_id, updates)
 
     a2 = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
-    base = _to_public(a2).model_dump()
-    return ArticleDetailResponse(
-        **base,
-        article=(a2.get("article") or ""),
-        meta_title=(a2.get("meta_title") or "").strip() or None,
-        meta_description=(a2.get("meta_description") or "").strip() or None,
-        image_url=(a2.get("image_url") or "").strip() or None,
-    )
+    return _to_detail_response(st=st, user=user, article=a2)
 
 
 # ---------------------------------------------------------------------------
@@ -767,6 +804,7 @@ async def generate_article_and_image(
     """
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
+    _require_verified_website(proj)
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     wp_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
     ip_id = (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
@@ -784,6 +822,29 @@ async def generate_article_and_image(
     )
 
 
+@router.post("/{article_id}/regenerate-image")
+async def regenerate_article_featured_image(
+    project_id: str,
+    article_id: str,
+    payload: RegenerateImageRequest,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Regenerate only the article featured image, capped per article by the user's plan."""
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    _require_verified_website(proj)
+    row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    ip_id = (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
+    return await execute_featured_image_regeneration(
+        st=st,
+        user=user,
+        proj=proj,
+        article_id=(article_id or "").strip(),
+        row=row,
+        image_prompt_id=ip_id,
+    )
+
+
 @router.post("/{article_id}/schedule", status_code=200)
 async def schedule_article(
     project_id: str,
@@ -793,27 +854,8 @@ async def schedule_article(
 ) -> dict:
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
+    _require_verified_website(proj)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
-
-    # Plan enforcement: scheduling must be enabled and consumes monthly schedule quota.
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and uid:
-        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
-        plan = {}
-        try:
-            plans = st.load_plans() or {}
-            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
-            if not isinstance(plan, dict):
-                plan = {}
-        except Exception:
-            plan = {}
-        if plan.get("allow_scheduling") is False:
-            raise HTTPException(status_code=403, detail="Scheduling is not enabled for your plan.")
-        if hasattr(st, "consume_scheduled_usage"):
-            ok, msg = st.consume_scheduled_usage(uid, month_limit=plan.get("max_scheduled_per_month"), amount=1)
-            if not ok:
-                raise HTTPException(status_code=403, detail=msg or "Schedule limit reached for your plan")
 
     raw = (payload.wp_scheduled_at or "").strip()
     if not raw:
@@ -838,6 +880,26 @@ async def schedule_article(
     wp_status = (payload.wp_status or "draft").strip().lower()
     if wp_status not in {"draft", "publish"}:
         raise HTTPException(status_code=400, detail="Invalid wp_status (draft|publish)")
+
+    # Plan enforcement: scheduling must be enabled and consumes monthly schedule quota.
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    if role != "admin" and uid:
+        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+        plan = {}
+        try:
+            plans = st.load_plans() or {}
+            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+            if not isinstance(plan, dict):
+                plan = {}
+        except Exception:
+            plan = {}
+        if plan.get("allow_scheduling") is False:
+            raise HTTPException(status_code=403, detail="Scheduling is not enabled for your plan.")
+        if hasattr(st, "consume_scheduled_usage"):
+            ok, msg = st.consume_scheduled_usage(uid, month_limit=plan.get("max_scheduled_per_month"), amount=1)
+            if not ok:
+                raise HTTPException(status_code=403, detail=msg or "Schedule limit reached for your plan")
 
     post_type = (payload.post_type or "").strip() or (proj.get("default_wp_rest_base") or "").strip() or "posts"
     # For scheduled jobs, categories default from project settings unless overridden later.
@@ -951,6 +1013,7 @@ async def publish_to_live_site(
     """
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
+    _require_verified_website(proj)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
     # Plan enforcement: publishing consumes per-day / per-month article quota.

@@ -38,6 +38,18 @@ def _now_iso_seconds() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _require_verified_website(project: dict[str, Any]) -> None:
+    status = (project.get("wp_verified_status") or "").strip().lower()
+    if status != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "website_not_connected",
+                "message": "Website is not connected for this project. Connect and verify WordPress in Project Settings to generate or schedule articles.",
+            },
+        )
+
+
 def _unique_article_title(*, st: Any, project_id: str, desired: str) -> str:
     """Ensure ``desired`` does not collide with existing project titles (case-insensitive)."""
     base = (desired or "").strip()[:480] or "Article"
@@ -321,6 +333,7 @@ class TopicClusterService:
         # the same minute (post_type rate limits, WP indexing pings, etc.).
         scheduled_dt_utc: datetime | None = None
         if schedule_at and schedule_at.strip():
+            _require_verified_website(proj)
             try:
                 user_tz = zoneinfo_for_user(user.get("timezone"))
                 scheduled_dt_utc = parse_schedule_input_to_utc(schedule_at.strip(), user_tz=user_tz)
@@ -346,6 +359,13 @@ class TopicClusterService:
                     plan = {}
                 if plan.get("allow_scheduling") is False:
                     raise HTTPException(status_code=403, detail="Scheduling is not enabled for your plan.")
+                ok, msg = st.consume_scheduled_usage(
+                    uid,
+                    month_limit=plan.get("max_scheduled_per_month"),
+                    amount=total,
+                )
+                if not ok:
+                    raise HTTPException(status_code=403, detail=msg or "Schedule limit reached for your plan.")
 
         wp_status_norm = (wp_status or "draft").strip().lower()
         if wp_status_norm not in {"draft", "publish"}:
@@ -492,6 +512,7 @@ class TopicClusterService:
         cluster_id: str,
         generate_image: bool,
         writing_prompt_id: str | None,
+        image_prompt_id: str | None,
         topic_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """
@@ -513,6 +534,7 @@ class TopicClusterService:
 
         proj = self.project
         pid = self.project_id
+        _require_verified_website(proj)
         uid = (user.get("id") or "").strip()
         role = (user.get("role") or "").strip().lower()
         errors: list[dict[str, str]] = []
@@ -593,6 +615,7 @@ class TopicClusterService:
                     article_id=aid,
                     row=fresh,
                     writing_prompt_id=writing_prompt_id,
+                    image_prompt_id=image_prompt_id,
                     generate_image=generate_image,
                     focus_keyphrase_override=None,
                 )

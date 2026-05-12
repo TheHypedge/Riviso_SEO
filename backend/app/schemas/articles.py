@@ -104,6 +104,10 @@ class ArticleDetailResponse(ArticlePublic):
     meta_title: str | None = None
     meta_description: str | None = None
     image_url: str | None = None
+    featured_image_regeneration_count: int = 0
+    featured_image_regeneration_limit: int | None = None
+    featured_image_regeneration_remaining: int | None = None
+    featured_image_regeneration_unlimited: bool = True
 
 
 class ArticleUpdateRequest(BaseModel):
@@ -124,6 +128,12 @@ class GenerateRequest(BaseModel):
     image_prompt_id: str | None = Field(default=None, max_length=100)
     focus_keyphrase: str | None = Field(default=None, max_length=500)
     generate_image: bool = True
+
+
+class RegenerateImageRequest(BaseModel):
+    """Options for regenerating only the article featured image."""
+
+    image_prompt_id: str | None = Field(default=None, max_length=100)
 
 
 class ScheduleRequest(BaseModel):

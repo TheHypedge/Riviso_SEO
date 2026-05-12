@@ -70,6 +70,7 @@ export default function ArticleEditPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const [article, setArticle] = useState<ArticleDetail | null>(null);
+  const [projectSettings, setProjectSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
   const [writingPrompts, setWritingPrompts] = useState<PromptListResponse | null>(
     null,
   );
@@ -108,6 +109,20 @@ export default function ArticleEditPage() {
 
   // Regenerate confirmation
   const [showRegenConfirm, setShowRegenConfirm] = useState(false);
+  const [websiteConnectionModal, setWebsiteConnectionModal] = useState(false);
+  const [imageRegenBusy, setImageRegenBusy] = useState(false);
+  const websiteConnected = (projectSettings?.wp_verified_status || "").trim().toLowerCase() === "connected";
+
+  function showWebsiteConnectionErrorIfNeeded(e: unknown) {
+    if (e instanceof ApiError && e.detail && typeof e.detail === "object" && !Array.isArray(e.detail)) {
+      const d = e.detail as Record<string, unknown>;
+      if (d.code === "website_not_connected") {
+        setWebsiteConnectionModal(true);
+        return true;
+      }
+    }
+    return false;
+  }
 
   useEffect(() => {
     if (!uploadedImagePreview) return;
@@ -124,15 +139,17 @@ export default function ArticleEditPage() {
       setNotice(null);
       setLoading(true);
       try {
-        const [articleRes, wpRes, ipRes] = await Promise.allSettled([
+        const [articleRes, wpRes, ipRes, settingsRes] = await Promise.allSettled([
           api.getArticle(params.projectId, params.articleId),
           api.listWritingPrompts(params.projectId),
           api.listImagePrompts(params.projectId),
+          api.getProjectSettings(params.projectId),
         ]);
         if (articleRes.status !== "fulfilled") throw articleRes.reason;
         const a = articleRes.value;
         const wp = wpRes.status === "fulfilled" ? wpRes.value : null;
         const ip = ipRes.status === "fulfilled" ? ipRes.value : null;
+        if (settingsRes.status === "fulfilled") setProjectSettings(settingsRes.value);
 
         setArticle(a);
         if (wp) {
@@ -265,6 +282,10 @@ export default function ArticleEditPage() {
 
   async function generate() {
     await ensurePromptsLoaded();
+    if (!websiteConnected) {
+      setWebsiteConnectionModal(true);
+      return;
+    }
     const alreadyGenerated =
       !!(body || "").trim() || !!(metaTitle || "").trim() || !!(metaDesc || "").trim() || !!generatedImageUrl;
     if (alreadyGenerated) {
@@ -275,6 +296,10 @@ export default function ArticleEditPage() {
   }
 
   async function doGenerate() {
+    if (!websiteConnected) {
+      setWebsiteConnectionModal(true);
+      return;
+    }
     setError(null);
     setNotice(null);
     try {
@@ -330,11 +355,57 @@ export default function ArticleEditPage() {
       window.setTimeout(() => setLoadingLines(null), 900);
       timers.forEach((t) => window.clearTimeout(t));
     } catch (e) {
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
       if (e instanceof ApiError && e.status === 408) {
         setError(e.message);
         return;
       }
       setError(e instanceof Error ? e.message : "Generate request failed");
+    }
+  }
+
+  async function regenerateFeaturedImage() {
+    await ensurePromptsLoaded();
+    if (!websiteConnected) {
+      setWebsiteConnectionModal(true);
+      return;
+    }
+    if (!generatedImageUrl) {
+      setError("Generate an article image first, then you can regenerate it.");
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    setImageRegenBusy(true);
+    const setLoadingLines = (lines: string[] | null) => {
+      if (typeof window === "undefined") return;
+      window.dispatchEvent(new CustomEvent("aa:loadingStatus", { detail: { lines } }));
+    };
+    try {
+      setLoadingLines(["Featured image regeneration is in progress."]);
+      const res = await api.regenerateArticleImage(params.projectId, params.articleId, {
+        image_prompt_id: imagePromptId || null,
+      });
+      if (res.image_url) setGeneratedImageUrl(res.image_url);
+      const refreshed = await api.getArticle(params.projectId, params.articleId);
+      setArticle(refreshed);
+      setGeneratedImageUrl(refreshed.image_url || res.image_url || "");
+      setNotice(`${res.status}: ${res.message}`);
+      setLoadingLines(["Featured image regenerated.", "All tasks are completed."]);
+      window.setTimeout(() => setLoadingLines(null), 900);
+    } catch (e) {
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
+      if (e instanceof ApiError && e.detail && typeof e.detail === "object" && !Array.isArray(e.detail)) {
+        const d = e.detail as Record<string, unknown>;
+        if (d.code === "image_regeneration_limit_reached") {
+          setError(typeof d.message === "string" ? d.message : "Featured image regeneration limit reached for this article.");
+          return;
+        }
+      }
+      setError(e instanceof Error ? e.message : "Featured image regeneration failed");
+    } finally {
+      window.setTimeout(() => setLoadingLines(null), 900);
+      setImageRegenBusy(false);
     }
   }
 
@@ -344,7 +415,17 @@ export default function ArticleEditPage() {
     !!body.trim() &&
     (generateImage ? true : !!uploadedImageFile);
 
+  const imageRegenUsed = article?.featured_image_regeneration_count ?? 0;
+  const imageRegenUnlimited = article?.featured_image_regeneration_unlimited ?? true;
+  const imageRegenLimit = article?.featured_image_regeneration_limit ?? 0;
+  const imageRegenRemaining = article?.featured_image_regeneration_remaining;
+  const imageRegenExhausted = !imageRegenUnlimited && (imageRegenRemaining ?? 0) <= 0;
+
   async function publishToLiveSite() {
+    if (!websiteConnected) {
+      setWebsiteConnectionModal(true);
+      return;
+    }
     setError(null);
     setNotice(null);
     try {
@@ -356,6 +437,7 @@ export default function ArticleEditPage() {
       });
       setNotice(`${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`);
     } catch (e) {
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
       if (e instanceof ApiError && e.status === 408) {
         setError(e.message);
         return;
@@ -419,6 +501,35 @@ export default function ArticleEditPage() {
                   }}
                 >
                   Yes, generate new
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {websiteConnectionModal ? (
+          <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Website not connected">
+            <div className={styles.modalPanel}>
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>Website not connected</h3>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label="Close"
+                  onClick={() => setWebsiteConnectionModal(false)}
+                >
+                  ×
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                Website is not connected for this project. Connect and verify WordPress in Project Settings to generate or publish articles.
+              </div>
+              <div className={styles.modalFooter}>
+                <button className={styles.btnSecondary} type="button" onClick={() => router.push("/dashboard")}>
+                  Cancel
+                </button>
+                <button className={styles.button} type="button" onClick={() => router.push(`/projects/${params.projectId}?tab=project_settings`)}>
+                  Connect Website
                 </button>
               </div>
             </div>
@@ -581,6 +692,37 @@ export default function ArticleEditPage() {
                   Upload image (used on publish)
                   <input className={styles.input} type="file" accept="image/*" disabled={isPublished} onChange={(e) => setUploadedImageFile(e.target.files?.[0] || null)} />
                 </label>
+              ) : null}
+              {generateImage ? (
+                <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+                  <div className={styles.muted} style={{ fontSize: 12 }}>
+                    Featured image regenerations: {imageRegenUsed}
+                    {imageRegenUnlimited ? " / unlimited" : ` / ${imageRegenLimit}`}
+                    {!imageRegenUnlimited ? ` (${Math.max(0, imageRegenRemaining ?? 0)} remaining)` : ""}
+                  </div>
+                  <button
+                    className={styles.btnSecondary}
+                    type="button"
+                    onClick={regenerateFeaturedImage}
+                    disabled={isPublished || imageRegenBusy || !generatedImageUrl || imageRegenExhausted}
+                    title={
+                      isPublished
+                        ? "Published articles cannot regenerate the local featured image."
+                        : !generatedImageUrl
+                          ? "Generate an article image first."
+                          : imageRegenExhausted
+                            ? "The max featured image regeneration limit is exhausted for this article."
+                            : "Regenerate only the featured image using the selected image prompt."
+                    }
+                  >
+                    {imageRegenBusy ? "Regenerating image…" : "Regenerate featured image"}
+                  </button>
+                  {imageRegenExhausted ? (
+                    <div className={styles.error} style={{ fontSize: 12 }}>
+                      The max featured image regeneration limit is exhausted for this article.
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
             </div>
 

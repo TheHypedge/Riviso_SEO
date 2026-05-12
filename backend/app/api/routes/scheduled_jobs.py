@@ -29,6 +29,17 @@ def _require_project_access(*, st, user: dict, project_id: str) -> dict:
     return proj
 
 
+def _require_verified_website(proj: dict) -> None:
+    if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "website_not_connected",
+                "message": "Website is not connected for this project. Connect and verify WordPress before editing scheduled articles.",
+            },
+        )
+
+
 def _to_public(row: dict) -> ScheduledJobPublic:
     cats: list[int] = []
     raw = (row.get("category_ids") or "").strip()
@@ -96,7 +107,8 @@ async def update_scheduled_job(
     user: dict = Depends(get_current_user),
 ) -> ScheduledJobPublic:
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    _require_verified_website(proj)
     jid = (job_id or "").strip()
     rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
     row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)

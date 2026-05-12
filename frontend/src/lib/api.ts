@@ -92,15 +92,18 @@ export type PlanPublic = {
   max_cluster_plans_per_month?: number | null;
   max_custom_research_per_month?: number | null;
   max_context_links?: number | null;
+  max_article_image_regenerations?: number | null;
 };
 
 export type MonthlyFeatureLimit = {
   feature: string;
   unlimited: boolean;
+  enabled?: boolean;
   month_used: number;
   month_limit: number | null;
   month_remaining: number | null;
   month_key?: string;
+  month_reset_at?: string | null;
 };
 
 export type CountFeatureLimit = {
@@ -109,6 +112,7 @@ export type CountFeatureLimit = {
   used: number;
   limit: number | null;
   remaining: number | null;
+  renews_at?: string | null;
 };
 
 export type ProjectFeatureLimits = {
@@ -116,6 +120,8 @@ export type ProjectFeatureLimits = {
   is_admin: boolean;
   cluster_plans: MonthlyFeatureLimit;
   custom_research: MonthlyFeatureLimit;
+  scheduled_articles?: MonthlyFeatureLimit;
+  export_articles?: MonthlyFeatureLimit;
   context_links: CountFeatureLimit;
 };
 
@@ -343,9 +349,11 @@ export type ArticleQuota = {
   day_used: number;
   day_limit: number | null;
   day_remaining: number | null;
+  day_reset_at?: string | null;
   month_used: number;
   month_limit: number | null;
   month_remaining: number | null;
+  month_reset_at?: string | null;
 };
 
 /* --- Cluster Validation: existence & intent ------------------------------ */
@@ -502,6 +510,10 @@ export type ArticleDetail = ArticlePublic & {
   meta_title?: string | null;
   meta_description?: string | null;
   image_url?: string | null;
+  featured_image_regeneration_count?: number;
+  featured_image_regeneration_limit?: number | null;
+  featured_image_regeneration_remaining?: number | null;
+  featured_image_regeneration_unlimited?: boolean;
 };
 
 export type PromptItem = {
@@ -1242,6 +1254,32 @@ export const api = {
     );
   },
 
+  async regenerateArticleImage(
+    projectId: string,
+    articleId: string,
+    payload: { image_prompt_id?: string | null },
+  ) {
+    return apiFetch<{
+      ok: boolean;
+      status: string;
+      message: string;
+      image_url?: string | null;
+      usage?: {
+        used: number;
+        limit: number | null;
+        remaining: number | null;
+        unlimited: boolean;
+      };
+    }>(
+      `/api/projects/${projectId}/articles/${articleId}/regenerate-image`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+      { timeoutMs: LONG_API_TIMEOUT_MS },
+    );
+  },
+
   async scheduleArticle(
     projectId: string,
     articleId: string,
@@ -1436,6 +1474,7 @@ export const api = {
     body?: {
       generate_image?: boolean;
       writing_prompt_id?: string | null;
+      image_prompt_id?: string | null;
       /** ``null``/omitted ⇒ generate every pending topic. */
       topic_ids?: string[] | null;
     },

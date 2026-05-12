@@ -96,6 +96,13 @@ function toDatetimeLocalValue(d: Date) {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 }
 
+function addMinutesToDatetimeLocal(value: string, minutes: number) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  d.setMinutes(d.getMinutes() + minutes);
+  return toDatetimeLocalValue(d);
+}
+
 /** Align with backend: NFKC + trim + lowercase (Python uses casefold server-side). */
 function normalizeArticleTitleKey(s: string): string {
   const t = (s || "").trim();
@@ -539,6 +546,11 @@ export default function ProjectPage() {
   const [settings, setSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
   const [projectMeta, setProjectMeta] = useState<import("@/lib/api").ProjectPublic | null>(null);
   const [featureLimits, setFeatureLimits] = useState<import("@/lib/api").ProjectFeatureLimits | null>(null);
+  const [articleQuota, setArticleQuota] = useState<import("@/lib/api").ArticleQuota | null>(null);
+  const [websiteConnectionModal, setWebsiteConnectionModal] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
   // List of every project the user owns. Powers the in-sidebar project
   // switcher so users can hop between projects without bouncing through
   // the dashboard. Loaded once per mount; refreshed silently when a
@@ -556,6 +568,16 @@ export default function ProjectPage() {
       const limits = await api.projectFeatureLimits(projectId);
       setFeatureLimits(limits);
       return limits;
+    } catch {
+      return null;
+    }
+  }
+
+  async function refreshArticleQuota() {
+    try {
+      const quota = await api.articleQuota(projectId);
+      setArticleQuota(quota);
+      return quota;
     } catch {
       return null;
     }
@@ -670,6 +692,25 @@ export default function ProjectPage() {
     topicIds: string[] | null; // null = all pending
     runAt: string; // datetime-local value
     wpStatus: "draft" | "publish";
+    writingPromptId: string;
+    imagePromptId: string;
+    busy: boolean;
+  } | null>(null);
+  const [clusterGeneratePromptModal, setClusterGeneratePromptModal] = useState<{
+    clusterId: string;
+    topicIds: string[] | null;
+    pendingCount: number;
+    writingPromptId: string;
+    imagePromptId: string;
+    busy: boolean;
+  } | null>(null);
+  const [curationPromptModal, setCurationPromptModal] = useState<{
+    action: "generate" | "schedule";
+    ideaIds: string[];
+    runAt: string;
+    wpStatus: "draft" | "publish";
+    writingPromptId: string;
+    imagePromptId: string;
     busy: boolean;
   } | null>(null);
 
@@ -986,15 +1027,17 @@ export default function ProjectPage() {
       setError(null);
       setLoading(true);
       try {
-        const [list, ps, prof, limits] = await Promise.all([
+        const [list, ps, prof, limits, quota] = await Promise.all([
           api.listArticles(projectId),
           api.getProjectSettings(projectId),
           api.profileMe(),
           api.projectFeatureLimits(projectId).catch(() => null),
+          api.articleQuota(projectId).catch(() => null),
         ]);
         setArticles(list);
         setSettings(ps);
         setFeatureLimits(limits);
+        setArticleQuota(quota);
         setProfile(prof);
         setProfileTz((prof?.timezone || "").trim());
         setWpDefaults({
@@ -2306,6 +2349,7 @@ export default function ProjectPage() {
 
   async function scheduleOne(articleId: string) {
     setError(null);
+    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
     try {
       await ensureScheduleMetaLoaded();
       const when = scheduleWhen.trim();
@@ -2340,6 +2384,7 @@ export default function ProjectPage() {
         .listScheduledJobs(projectId)
         .then((jobs) => setScheduledJobs(dedupeScheduledJobs(jobs)))
         .catch(() => {});
+      void refreshFeatureLimits();
       setScheduleId(null);
       setScheduleWhen("");
       setScheduleWpStatus("draft");
@@ -2347,6 +2392,7 @@ export default function ProjectPage() {
       setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
       setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
     } catch (e) {
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
       setError(e instanceof Error ? e.message : "Schedule failed");
     }
   }
@@ -2354,6 +2400,7 @@ export default function ProjectPage() {
   async function postNowFromScheduledJob() {
     const j = confirmPostNowJob;
     if (!j) return;
+    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before publishing scheduled articles.")) return;
     setError(null);
     setPostNowBusy(true);
     try {
@@ -2394,6 +2441,7 @@ export default function ProjectPage() {
 
   function bulkSchedule() {
     if (!selectedIds.length) return;
+    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
     void ensureScheduleMetaLoaded();
     const min = new Date(Date.now() + 5 * 60 * 1000);
     const minStr = toDatetimeLocalFromDateInProfileTz(min);
@@ -2414,6 +2462,7 @@ export default function ProjectPage() {
 
   async function bulkScheduleSubmit() {
     if (!bulkScheduleRows.length) return;
+    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
     setError(null);
     setBulkScheduling(true);
     try {
@@ -2437,10 +2486,12 @@ export default function ProjectPage() {
         // ignore
       }
       setSelected({});
+      void refreshFeatureLimits();
       setShowBulkPopup(false);
       setBulkMode("root");
       setBulkScheduleRows([]);
     } catch (e) {
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
       setError(e instanceof Error ? e.message : "Bulk schedule failed");
     } finally {
       setBulkScheduling(false);
@@ -2876,6 +2927,14 @@ export default function ProjectPage() {
         const d = e.detail as Record<string, unknown>;
         const code = typeof d.code === "string" ? d.code : "";
         const msg = typeof d.message === "string" ? d.message : "";
+        if (code === "website_not_connected") {
+          return {
+            title: "Website not connected",
+            message:
+              msg ||
+              "Website is not connected for this project. Connect and verify WordPress in Project Settings to generate or schedule articles.",
+          };
+        }
         if (code === "quota_exceeded") {
           const needed = typeof d.needed === "number" ? d.needed : null;
           const allowed = typeof d.allowed === "number" ? d.allowed : null;
@@ -2911,8 +2970,14 @@ export default function ProjectPage() {
    * batched generate endpoint. Errors land in the same modal — never inline-
    * truncated like before.
    */
-  async function generateForCluster(clusterId: string) {
-    const { topicIds, pendingCount } = effectiveSelectionForCluster(clusterId);
+  async function generateForCluster(
+    clusterId: string,
+    opts?: { topicIds?: string[] | null; writingPromptId?: string | null; imagePromptId?: string | null },
+  ) {
+    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before generating articles.")) return;
+    const effective = effectiveSelectionForCluster(clusterId);
+    const topicIds = opts?.topicIds === undefined ? effective.topicIds : opts.topicIds;
+    const pendingCount = topicIds ? topicIds.length : effective.pendingCount;
     if (pendingCount === 0) {
       setClusterErrorModal({
         title: "Nothing to generate",
@@ -2952,11 +3017,13 @@ export default function ProjectPage() {
       }
 
       const res = await api.topicClusterGenerateAll(projectId, clusterId, {
-        generate_image: false,
-        writing_prompt_id: null,
+        generate_image: true,
+        writing_prompt_id: opts?.writingPromptId || null,
+        image_prompt_id: opts?.imagePromptId || null,
         topic_ids: topicIds,
       });
       setTopicClusters((prev) => prev.map((c) => (c.id === res.cluster.id ? res.cluster : c)));
+      void refreshArticleQuota();
       clearClusterSelection(clusterId);
       if (res.errors?.length) {
         setClusterErrorModal({
@@ -2965,13 +3032,34 @@ export default function ProjectPage() {
           detail: res.errors.map((e) => `• ${e.topic_id}: ${e.message}`).join("\n"),
         });
       } else {
-        setClusterPlanMsg("All selected articles generated. Open them from the links below.");
+        setClusterPlanMsg("All selected articles and featured images generated. Open them from the links below.");
       }
     } catch (e) {
       setClusterErrorModal(buildErrorModalFromApiError(e, "Generation failed"));
     } finally {
       setClusterBulkBusy(null);
     }
+  }
+
+  async function openGenerateForCluster(clusterId: string) {
+    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before generating articles.")) return;
+    const { topicIds, pendingCount } = effectiveSelectionForCluster(clusterId);
+    if (pendingCount === 0) {
+      setClusterErrorModal({
+        title: "Nothing to generate",
+        message: "Every topic in this cluster has already been generated.",
+      });
+      return;
+    }
+    const prompts = await ensureScheduleMetaLoaded();
+    setClusterGeneratePromptModal({
+      clusterId,
+      topicIds,
+      pendingCount,
+      writingPromptId: prompts.writingPrompts?.default_id || "",
+      imagePromptId: prompts.imagePrompts?.default_id || "",
+      busy: false,
+    });
   }
 
   /**
@@ -3015,7 +3103,8 @@ export default function ProjectPage() {
   }
 
   /** Open the schedule picker modal for a cluster (selected slots or all pending). */
-  function openScheduleForCluster(clusterId: string) {
+  async function openScheduleForCluster(clusterId: string) {
+    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
     const { topicIds, pendingCount } = effectiveSelectionForCluster(clusterId);
     if (pendingCount === 0) {
       setClusterErrorModal({
@@ -3028,11 +3117,14 @@ export default function ProjectPage() {
     const dt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     dt.setSeconds(0, 0);
     dt.setMinutes(dt.getMinutes() + (5 - (dt.getMinutes() % 5 || 5)));
+    const prompts = await ensureScheduleMetaLoaded();
     setClusterScheduleModal({
       clusterId,
       topicIds,
       runAt: toDatetimeLocalValue(dt),
       wpStatus: "draft",
+      writingPromptId: prompts.writingPrompts?.default_id || "",
+      imagePromptId: prompts.imagePrompts?.default_id || "",
       busy: false,
     });
   }
@@ -3047,8 +3139,12 @@ export default function ProjectPage() {
         topic_ids: m.topicIds,
         schedule_at: m.runAt,
         wp_status: m.wpStatus,
+        writing_prompt_id: m.writingPromptId || null,
+        image_prompt_id: m.imagePromptId || null,
+        generate_image: true,
       });
       setTopicClusters((prev) => prev.map((c) => (c.id === res.cluster.id ? res.cluster : c)));
+      void refreshFeatureLimits();
       clearClusterSelection(m.clusterId);
       setClusterScheduleModal(null);
       if (res.errors?.length) {
@@ -3239,14 +3335,16 @@ export default function ProjectPage() {
     }
   }
 
-  async function importSelectedIdeas(opts: { skipDuplicates: boolean }) {
+  async function importResearchIdeaRows(
+    selected: ResearchIdeaRow[],
+    opts: { skipDuplicates: boolean; successVerb: string },
+  ): Promise<{ articleIds: string[]; refreshedArticles: ArticlePublic[]; created: number; skipped: number } | null> {
     setError(null);
     setResearchMsg(null);
     setResearchImportMsg(null);
-    if (researchImporting) return;
+    if (researchImporting) return null;
 
-    const selected = researchResults.filter((r) => researchSelected.has(r.id) && !r.imported);
-    if (!selected.length) return;
+    if (!selected.length) return null;
     const rows: BulkUploadRow[] = selected.map((r) => ({
       title: r.title,
       focus_keyphrase: r.focus_keyphrase,
@@ -3282,9 +3380,17 @@ export default function ProjectPage() {
       setResearchSelected(new Set());
       const skipped = res.project_skipped_as_duplicates || 0;
       setResearchImportMsg(
-        `Imported ${res.created} article${res.created === 1 ? "" : "s"}${skipped ? ` (${skipped} skipped as duplicates)` : ""}.`
+        `${opts.successVerb} ${res.created} article${res.created === 1 ? "" : "s"}${skipped ? ` (${skipped} skipped as duplicates)` : ""}.`
       );
       setResearchFilter("imported");
+      return {
+        articleIds: selected
+          .map((r) => titleToId.get((r.title || "").trim().toLowerCase()))
+          .filter((id): id is string => !!id),
+        refreshedArticles,
+        created: res.created,
+        skipped,
+      };
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && e.detail && typeof e.detail === "object" && e.detail !== null) {
         const d = e.detail as Record<string, unknown>;
@@ -3309,12 +3415,108 @@ export default function ProjectPage() {
             inFileDuplicateTitles,
             wouldCreateCount: typeof wc === "number" ? wc : 0,
           });
-          return;
+          return null;
         }
       }
       setResearchImportMsg(e instanceof Error ? e.message : "Import failed");
+      return null;
     } finally {
       setResearchImporting(false);
+    }
+  }
+
+  async function importSelectedIdeas(opts: { skipDuplicates: boolean }) {
+    const selected = researchResults.filter((r) => researchSelected.has(r.id) && !r.imported);
+    await importResearchIdeaRows(selected, { skipDuplicates: opts.skipDuplicates, successVerb: "Imported" });
+  }
+
+  async function openCurationPromptModal(action: "generate" | "schedule") {
+    if (!requireWebsiteConnectedForAction(
+      action === "generate"
+        ? "Website is not connected for this project. Connect and verify WordPress before generating articles."
+        : "Website is not connected for this project. Connect and verify WordPress before scheduling articles.",
+    )) {
+      return;
+    }
+    const selected = researchResults.filter((r) => researchSelected.has(r.id) && !r.imported);
+    if (!selected.length) {
+      setResearchImportMsg("Select at least one not-imported idea first.");
+      return;
+    }
+    const prompts = await ensureScheduleMetaLoaded();
+    const dt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    dt.setSeconds(0, 0);
+    dt.setMinutes(dt.getMinutes() + (5 - (dt.getMinutes() % 5 || 5)));
+    setCurationPromptModal({
+      action,
+      ideaIds: selected.map((r) => r.id),
+      runAt: toDatetimeLocalValue(dt),
+      wpStatus: "draft",
+      writingPromptId: prompts.writingPrompts?.default_id || "",
+      imagePromptId: prompts.imagePrompts?.default_id || "",
+      busy: false,
+    });
+  }
+
+  async function confirmCurationPromptAction() {
+    const m = curationPromptModal;
+    if (!m || m.busy) return;
+    setCurationPromptModal({ ...m, busy: true });
+    const selected = researchResults.filter((r) => m.ideaIds.includes(r.id) && !r.imported);
+    try {
+      if (m.action === "generate") {
+        const q = await api.articleQuota(projectId).catch(() => null);
+        if (q && !q.unlimited && (q.max_can_consume_now ?? 0) < selected.length) {
+          setResearchImportMsg(
+            `Article generation limit reached. Your plan allows ${q.max_can_consume_now ?? 0} more generation${(q.max_can_consume_now ?? 0) === 1 ? "" : "s"} right now, but ${selected.length} selected idea${selected.length === 1 ? "" : "s"} need generation.`,
+          );
+          return;
+        }
+      }
+
+      const imported = await importResearchIdeaRows(selected, {
+        skipDuplicates: false,
+        successVerb: m.action === "generate" ? "Imported for generation" : "Imported for scheduling",
+      });
+      if (!imported?.articleIds.length) return;
+
+      if (m.action === "generate") {
+        let generated = 0;
+        for (const articleId of imported.articleIds) {
+          await api.generateArticle(projectId, articleId, {
+            writing_prompt_id: m.writingPromptId || null,
+            image_prompt_id: m.imagePromptId || null,
+            generate_image: true,
+          });
+          generated += 1;
+        }
+        setResearchImportMsg(`Generated ${generated} article${generated === 1 ? "" : "s"} with featured images.`);
+        void refreshArticleQuota();
+      } else {
+        let scheduled = 0;
+        for (const [idx, articleId] of imported.articleIds.entries()) {
+          await api.scheduleArticle(projectId, articleId, {
+            wp_scheduled_at: addMinutesToDatetimeLocal(m.runAt, idx * 5),
+            wp_status: m.wpStatus,
+            post_type: "post",
+            writing_prompt_id: m.writingPromptId || null,
+            image_prompt_id: m.imagePromptId || null,
+            generate_image: true,
+          });
+          scheduled += 1;
+        }
+        setResearchImportMsg(`Scheduled ${scheduled} article${scheduled === 1 ? "" : "s"} with featured image generation enabled.`);
+        void refreshFeatureLimits();
+      }
+      const refreshedArticles = await api.listArticles(projectId);
+      setArticles(refreshedArticles);
+      setCurationPromptModal(null);
+      setResearchFilter("imported");
+    } catch (e) {
+      const modal = buildErrorModalFromApiError(e, m.action === "generate" ? "Generation failed" : "Scheduling failed");
+      setResearchImportMsg([modal.message, modal.detail].filter(Boolean).join("\n"));
+    } finally {
+      setCurationPromptModal((current) => (current ? { ...current, busy: false } : current));
     }
   }
 
@@ -3421,6 +3623,111 @@ export default function ProjectPage() {
   const sidebarPlan = (profile?.subscription_type || "beta").trim() || "beta";
   const websiteConnected = (settings?.wp_verified_status || "").trim().toLowerCase() === "connected";
   const showWebsiteRequiredOverlay = tab === "articles" && !loading && !websiteConnected;
+
+  function formatRenewalDate(raw?: string | null) {
+    const v = (raw || "").trim();
+    if (!v) return "the next plan renewal";
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return v;
+    const tz = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        timeZone: tz,
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(d);
+    } catch {
+      return d.toLocaleString();
+    }
+  }
+
+  function openWebsiteConnectionPopup(message?: string) {
+    setWebsiteConnectionModal({
+      title: "Website not connected",
+      message:
+        message ||
+        "Website is not connected for this project. Connect and verify WordPress in Project Settings to generate, schedule, or publish articles.",
+    });
+  }
+
+  function requireWebsiteConnectedForAction(message?: string) {
+    if (websiteConnected) return true;
+    openWebsiteConnectionPopup(message);
+    return false;
+  }
+
+  function showWebsiteConnectionErrorIfNeeded(e: unknown) {
+    if (e instanceof ApiError && e.detail && typeof e.detail === "object" && !Array.isArray(e.detail)) {
+      const d = e.detail as Record<string, unknown>;
+      if (d.code === "website_not_connected") {
+        openWebsiteConnectionPopup(typeof d.message === "string" ? d.message : undefined);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function monthlyLimitStatus(label: string, limit?: import("@/lib/api").MonthlyFeatureLimit | null) {
+    if (!limit) return null;
+    if (limit.enabled === false) {
+      return `${label}: not enabled for your ${featureLimits?.plan_key || "current"} plan.`;
+    }
+    if (limit.unlimited) return `${label}: unlimited for this plan.`;
+    const used = Number(limit.month_used || 0);
+    const max = Number(limit.month_limit || 0);
+    const remaining = typeof limit.month_remaining === "number" ? limit.month_remaining : Math.max(0, max - used);
+    if (remaining <= 0) {
+      return `the max limit of ${label} is exhausted and will be renewed on ${formatRenewalDate(limit.month_reset_at)}.`;
+    }
+    return `${label}: ${used}/${max} used this month (${remaining} remaining).`;
+  }
+
+  function articleGenerationLimitStatus() {
+    if (!articleQuota) return null;
+    if (articleQuota.unlimited) return "Article generation: unlimited for this plan.";
+    const pieces: string[] = [];
+    if (typeof articleQuota.day_limit === "number") {
+      pieces.push(`${articleQuota.day_used}/${articleQuota.day_limit} daily`);
+    }
+    if (typeof articleQuota.month_limit === "number") {
+      pieces.push(`${articleQuota.month_used}/${articleQuota.month_limit} monthly`);
+    }
+    if ((articleQuota.max_can_consume_now ?? 0) <= 0) {
+      const resetAt =
+        articleQuota.day_remaining === 0
+          ? articleQuota.day_reset_at
+          : articleQuota.month_reset_at || articleQuota.day_reset_at;
+      return `the max limit of Article generation is exhausted and will be renewed on ${formatRenewalDate(resetAt)}.`;
+    }
+    return `Article generation: ${pieces.join(", ")} (${articleQuota.max_can_consume_now ?? 0} available now).`;
+  }
+
+  function contextLinksLimitStatus() {
+    const cap = featureLimits?.context_links;
+    if (!cap) return null;
+    if (cap.unlimited) return "Context links: unlimited for this plan.";
+    if ((cap.remaining ?? 0) <= 0) {
+      return `the max limit of Context links is exhausted and will be renewed on ${formatRenewalDate(cap.renews_at)}.`;
+    }
+    return `Context links: ${cap.used}/${cap.limit} used (${cap.remaining} remaining).`;
+  }
+
+  function renderLimitStrip(items: Array<string | null | undefined>) {
+    const lines = items.filter(Boolean) as string[];
+    if (!lines.length) return null;
+    return (
+      <div className={styles.limitStatusStrip}>
+        {lines.map((line) => (
+          <span key={line} className={line.startsWith("the max limit") ? styles.limitStatusExhausted : undefined}>
+            {line}
+          </span>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
@@ -3696,6 +4003,17 @@ export default function ProjectPage() {
                 </>
               )}
             </div>
+
+            {tab === "articles"
+              ? renderLimitStrip([
+                  articleGenerationLimitStatus(),
+                  monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles),
+                  monthlyLimitStatus("Article export", featureLimits?.export_articles),
+                ])
+              : null}
+            {tab === "scheduled_articles"
+              ? renderLimitStrip([monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles)])
+              : null}
 
             {showMobileFilters ? (
               <>
@@ -4925,15 +5243,11 @@ export default function ProjectPage() {
                 <strong> Schedule</strong> imports + auto-publishes them to WordPress. Tick rows
                 individually, or leave selection empty to act on every pending topic.
               </p>
-              {featureLimits?.cluster_plans ? (
-                <div className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
-                  Cluster Planner usage:{" "}
-                  {featureLimits.cluster_plans.unlimited
-                    ? "Unlimited for this plan"
-                    : `${featureLimits.cluster_plans.month_used}/${featureLimits.cluster_plans.month_limit} used this month`}
-                  .
-                </div>
-              ) : null}
+              {renderLimitStrip([
+                monthlyLimitStatus("Cluster Planner", featureLimits?.cluster_plans),
+                articleGenerationLimitStatus(),
+                monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles),
+              ])}
 
               {topicClusters.length === 0 && !topicClustersLoading ? (
                 <div className={styles.clusterEmptyHint}>
@@ -5034,7 +5348,7 @@ export default function ProjectPage() {
                                 type="button"
                                 className={styles.button}
                                 disabled={generateDisabled}
-                                onClick={() => generateForCluster(cl.id)}
+                                onClick={() => void openGenerateForCluster(cl.id)}
                                 title={
                                   allDuplicates
                                     ? "Every remaining topic already exists on your site or in this project."
@@ -5070,7 +5384,7 @@ export default function ProjectPage() {
                                 type="button"
                                 className={styles.btnSecondary}
                                 disabled={anyBusy || noPending || noActionable}
-                                onClick={() => openScheduleForCluster(cl.id)}
+                                onClick={() => void openScheduleForCluster(cl.id)}
                                 title={
                                   noPending
                                     ? "Every topic is already imported."
@@ -5453,15 +5767,7 @@ export default function ProjectPage() {
                   {researchMsg}
                 </div>
               ) : null}
-              {featureLimits?.custom_research ? (
-                <div className={styles.muted} style={{ marginTop: 10, fontSize: 12 }}>
-                  Custom Curations usage:{" "}
-                  {featureLimits.custom_research.unlimited
-                    ? "Unlimited for this plan"
-                    : `${featureLimits.custom_research.month_used}/${featureLimits.custom_research.month_limit} used this month`}
-                  .
-                </div>
-              ) : null}
+              {renderLimitStrip([monthlyLimitStatus("Custom Curations", featureLimits?.custom_research)])}
 
               {researchKeywordAnalysis ? (
                 <div style={{ marginTop: 14, borderTop: "1px solid var(--aa-hairline)", paddingTop: 14 }}>
@@ -5555,6 +5861,22 @@ export default function ProjectPage() {
                     onClick={() => importSelectedIdeas({ skipDuplicates: false })}
                   >
                     {researchImporting ? "Importing…" : `Import selected${researchSelected.size ? ` (${researchSelected.size})` : ""}`}
+                  </button>
+                  <button
+                    className={styles.button}
+                    type="button"
+                    disabled={!researchSelected.size || researchImporting}
+                    onClick={() => void openCurationPromptModal("generate")}
+                  >
+                    Generate selected
+                  </button>
+                  <button
+                    className={styles.btnSecondary}
+                    type="button"
+                    disabled={!researchSelected.size || researchImporting}
+                    onClick={() => void openCurationPromptModal("schedule")}
+                  >
+                    Schedule selected
                   </button>
                 </div>
               </div>
@@ -5981,6 +6303,7 @@ export default function ProjectPage() {
                       onClick={async () => {
                         try {
                           setError(null);
+                          if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before editing scheduled articles.")) return;
                           if (!editJobWhen.trim()) throw new Error("Invalid schedule time");
                           await api.updateScheduledJob(projectId, editJob.id, {
                             // Backend interprets this as local time in the user's profile timezone and stores UTC.
@@ -5992,6 +6315,7 @@ export default function ProjectPage() {
                           setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
                           setEditJob(null);
                         } catch (e) {
+                          if (showWebsiteConnectionErrorIfNeeded(e)) return;
                           setError(e instanceof Error ? e.message : "Failed to update schedule");
                         }
                       }}
@@ -6290,15 +6614,7 @@ export default function ProjectPage() {
                 </div>
               </div>
               {linksLoading ? <div className={styles.muted}>Loading links…</div> : null}
-              {featureLimits?.context_links ? (
-                <div className={styles.muted} style={{ marginTop: 10, fontSize: 12 }}>
-                  Context links:{" "}
-                  {featureLimits.context_links.unlimited
-                    ? `${linkDrafts.length} added (unlimited for this plan)`
-                    : `${linkDrafts.length}/${featureLimits.context_links.limit} used`}
-                  .
-                </div>
-              ) : null}
+              {renderLimitStrip([contextLinksLimitStatus()])}
               {error ? <p className={styles.error}>{error}</p> : null}
             </div>
 
@@ -8156,6 +8472,260 @@ export default function ProjectPage() {
           </div>
         ) : null}
 
+        {websiteConnectionModal ? (
+          <div
+            className={styles.modalBackdrop}
+            role="dialog"
+            aria-modal="true"
+            aria-label={websiteConnectionModal.title}
+          >
+            <div className={styles.modalPanel}>
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>{websiteConnectionModal.title}</h3>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label="Close"
+                  onClick={() => setWebsiteConnectionModal(null)}
+                >
+                  <Icon.X className={styles.icon20} />
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                <p style={{ margin: 0, lineHeight: 1.55 }}>{websiteConnectionModal.message}</p>
+              </div>
+              <div className={styles.modalFooter}>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => {
+                    setWebsiteConnectionModal(null);
+                    router.push("/dashboard");
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={() => {
+                    setWebsiteConnectionModal(null);
+                    router.push(`/projects/${projectId}?tab=project_settings`);
+                  }}
+                >
+                  Connect Website
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {curationPromptModal ? (
+          <div
+            className={styles.modalBackdrop}
+            role="dialog"
+            aria-modal="true"
+            aria-label={curationPromptModal.action === "generate" ? "Generate curation articles" : "Schedule curation articles"}
+          >
+            <div className={styles.modalPanel}>
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>
+                  {curationPromptModal.action === "generate" ? "Generate" : "Schedule"} {curationPromptModal.ideaIds.length} selected idea{curationPromptModal.ideaIds.length === 1 ? "" : "s"}
+                </h3>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label="Close"
+                  onClick={() => setCurationPromptModal(null)}
+                  disabled={curationPromptModal.busy}
+                >
+                  <Icon.X className={styles.icon20} />
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
+                  {curationPromptModal.action === "generate"
+                    ? "Selected ideas will be imported, then generated with article content and featured images."
+                    : "Selected ideas will be imported and queued for generation, featured images, and WordPress scheduling."}
+                </p>
+                {curationPromptModal.action === "schedule" ? (
+                  <>
+                    <label className={styles.label}>
+                      Start time
+                      <input
+                        type="datetime-local"
+                        className={styles.input}
+                        value={curationPromptModal.runAt}
+                        step={300}
+                        onChange={(e) =>
+                          setCurationPromptModal((m) => (m ? { ...m, runAt: e.target.value } : m))
+                        }
+                      />
+                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                        Each selected idea is staggered 5 minutes after the previous one.
+                      </div>
+                    </label>
+                    <label className={styles.label}>
+                      WordPress status on publish
+                      <select
+                        className={styles.input}
+                        value={curationPromptModal.wpStatus}
+                        onChange={(e) =>
+                          setCurationPromptModal((m) =>
+                            m ? { ...m, wpStatus: e.target.value as "draft" | "publish" } : m,
+                          )
+                        }
+                      >
+                        <option value="draft">Draft (review on WordPress before going live)</option>
+                        <option value="publish">Publish immediately at the scheduled time</option>
+                      </select>
+                    </label>
+                  </>
+                ) : null}
+                <label className={styles.label}>
+                  Writing prompt
+                  <select
+                    className={styles.input}
+                    value={curationPromptModal.writingPromptId}
+                    onChange={(e) =>
+                      setCurationPromptModal((m) => (m ? { ...m, writingPromptId: e.target.value } : m))
+                    }
+                  >
+                    <option value="">Project default</option>
+                    {(scheduleWritingPrompts?.items || []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className={styles.label}>
+                  Image prompt
+                  <select
+                    className={styles.input}
+                    value={curationPromptModal.imagePromptId}
+                    onChange={(e) =>
+                      setCurationPromptModal((m) => (m ? { ...m, imagePromptId: e.target.value } : m))
+                    }
+                  >
+                    <option value="">Project default</option>
+                    {(scheduleImagePrompts?.items || []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className={styles.modalFooter}>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => setCurationPromptModal(null)}
+                  disabled={curationPromptModal.busy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  disabled={curationPromptModal.busy || (curationPromptModal.action === "schedule" && !curationPromptModal.runAt)}
+                  onClick={() => void confirmCurationPromptAction()}
+                >
+                  {curationPromptModal.busy
+                    ? curationPromptModal.action === "generate" ? "Generating…" : "Scheduling…"
+                    : curationPromptModal.action === "generate" ? "Generate articles + images" : "Schedule articles + images"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {clusterGeneratePromptModal ? (
+          <div
+            className={styles.modalBackdrop}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Generate cluster articles"
+          >
+            <div className={styles.modalPanel}>
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>
+                  Generate {clusterGeneratePromptModal.pendingCount} article{clusterGeneratePromptModal.pendingCount === 1 ? "" : "s"} + images
+                </h3>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label="Close"
+                  onClick={() => setClusterGeneratePromptModal(null)}
+                  disabled={clusterGeneratePromptModal.busy}
+                >
+                  <Icon.X className={styles.icon20} />
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
+                  Choose the writing and image prompts to use. Riviso will generate article content and a featured image for every selected topic.
+                </p>
+                <label className={styles.label}>
+                  Writing prompt
+                  <select
+                    className={styles.input}
+                    value={clusterGeneratePromptModal.writingPromptId}
+                    onChange={(e) =>
+                      setClusterGeneratePromptModal((m) => (m ? { ...m, writingPromptId: e.target.value } : m))
+                    }
+                  >
+                    <option value="">Project default</option>
+                    {(scheduleWritingPrompts?.items || []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className={styles.label}>
+                  Image prompt
+                  <select
+                    className={styles.input}
+                    value={clusterGeneratePromptModal.imagePromptId}
+                    onChange={(e) =>
+                      setClusterGeneratePromptModal((m) => (m ? { ...m, imagePromptId: e.target.value } : m))
+                    }
+                  >
+                    <option value="">Project default</option>
+                    {(scheduleImagePrompts?.items || []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className={styles.modalFooter}>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => setClusterGeneratePromptModal(null)}
+                  disabled={clusterGeneratePromptModal.busy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  disabled={clusterGeneratePromptModal.busy}
+                  onClick={async () => {
+                    const m = clusterGeneratePromptModal;
+                    if (!m) return;
+                    setClusterGeneratePromptModal({ ...m, busy: true });
+                    await generateForCluster(m.clusterId, {
+                      topicIds: m.topicIds,
+                      writingPromptId: m.writingPromptId || null,
+                      imagePromptId: m.imagePromptId || null,
+                    });
+                    setClusterGeneratePromptModal(null);
+                  }}
+                >
+                  {clusterGeneratePromptModal.busy ? "Generating…" : "Generate articles + images"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {clusterScheduleModal ? (
           <div
             className={styles.modalBackdrop}
@@ -8212,6 +8782,36 @@ export default function ProjectPage() {
                   >
                     <option value="draft">Draft (review on WordPress before going live)</option>
                     <option value="publish">Publish immediately at the scheduled time</option>
+                  </select>
+                </label>
+                <label className={styles.label}>
+                  Writing prompt
+                  <select
+                    className={styles.input}
+                    value={clusterScheduleModal.writingPromptId}
+                    onChange={(e) =>
+                      setClusterScheduleModal((m) => (m ? { ...m, writingPromptId: e.target.value } : m))
+                    }
+                  >
+                    <option value="">Project default</option>
+                    {(scheduleWritingPrompts?.items || []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className={styles.label}>
+                  Image prompt
+                  <select
+                    className={styles.input}
+                    value={clusterScheduleModal.imagePromptId}
+                    onChange={(e) =>
+                      setClusterScheduleModal((m) => (m ? { ...m, imagePromptId: e.target.value } : m))
+                    }
+                  >
+                    <option value="">Project default</option>
+                    {(scheduleImagePrompts?.items || []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                    ))}
                   </select>
                 </label>
               </div>

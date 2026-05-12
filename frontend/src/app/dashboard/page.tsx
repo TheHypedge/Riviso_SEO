@@ -41,6 +41,7 @@ function planComparable(p: PlanPublic) {
     max_cluster_plans_per_month: Number(p.max_cluster_plans_per_month ?? 0),
     max_custom_research_per_month: Number(p.max_custom_research_per_month ?? 0),
     max_context_links: Number(p.max_context_links ?? 0),
+    max_article_image_regenerations: Number(p.max_article_image_regenerations ?? 0),
   };
 }
 
@@ -140,6 +141,7 @@ export default function DashboardPage() {
   const [newPlanMaxClusterPlansPerMonth, setNewPlanMaxClusterPlansPerMonth] = useState<number>(0);
   const [newPlanMaxCustomResearchPerMonth, setNewPlanMaxCustomResearchPerMonth] = useState<number>(0);
   const [newPlanMaxContextLinks, setNewPlanMaxContextLinks] = useState<number>(10);
+  const [newPlanMaxArticleImageRegenerations, setNewPlanMaxArticleImageRegenerations] = useState<number>(3);
   const [newPlanCostMonthly, setNewPlanCostMonthly] = useState<number>(0);
   const [newPlanIsDefault, setNewPlanIsDefault] = useState<boolean>(false);
 
@@ -447,6 +449,7 @@ export default function DashboardPage() {
       max_cluster_plans_per_month: newPlanMaxClusterPlansPerMonth,
       max_custom_research_per_month: newPlanMaxCustomResearchPerMonth,
       max_context_links: newPlanMaxContextLinks,
+      max_article_image_regenerations: newPlanMaxArticleImageRegenerations,
     });
     setNewPlanKey("");
     setNewPlanName("");
@@ -460,6 +463,7 @@ export default function DashboardPage() {
     setNewPlanMaxClusterPlansPerMonth(0);
     setNewPlanMaxCustomResearchPerMonth(0);
     setNewPlanMaxContextLinks(10);
+    setNewPlanMaxArticleImageRegenerations(3);
     setNewPlanCostMonthly(0);
     setNewPlanIsDefault(false);
   }
@@ -903,6 +907,19 @@ export default function DashboardPage() {
                         onChange={(e) => setNewPlanMaxContextLinks(Number(e.target.value || 0))}
                       />
                     </label>
+                    <label className={styles.label}>
+                      Featured image regenerations / article
+                      <input
+                        className={styles.input}
+                        type="number"
+                        min={0}
+                        value={newPlanMaxArticleImageRegenerations}
+                        onChange={(e) => setNewPlanMaxArticleImageRegenerations(Number(e.target.value || 0))}
+                      />
+                      <span className={styles.muted} style={{ fontSize: 12 }}>
+                        0 means unlimited.
+                      </span>
+                    </label>
                   </div>
                 </div>
 
@@ -1060,6 +1077,19 @@ export default function DashboardPage() {
                                 value={p.max_context_links ?? 0}
                                 onChange={(e) => updatePlanDraft(p.key, { max_context_links: Number(e.target.value || 0) })}
                               />
+                            </label>
+                            <label className={styles.label}>
+                              Featured image regenerations / article
+                              <input
+                                className={styles.input}
+                                type="number"
+                                min={0}
+                                value={p.max_article_image_regenerations ?? 0}
+                                onChange={(e) => updatePlanDraft(p.key, { max_article_image_regenerations: Number(e.target.value || 0) })}
+                              />
+                              <span className={styles.muted} style={{ fontSize: 12 }}>
+                                0 means unlimited.
+                              </span>
                             </label>
                           </div>
                         </div>

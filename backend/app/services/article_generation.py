@@ -179,3 +179,38 @@ async def generate_article_bundle(
         "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         "models": {"text": settings.openai_text_model, "image": settings.openai_image_model},
     }
+
+
+async def generate_featured_image_only(
+    *,
+    title: str,
+    keywords: list[str],
+    focus_keyphrase: str,
+    brand_identity: str | None = None,
+    niche_identifier: str | None = None,
+    image_prompt_text: str | None = None,
+) -> dict:
+    """Generate only the featured image for an existing article."""
+    if image_prompt_text:
+        assert_image_prompt_allowed(image_prompt_text)
+    image_prompt = build_programmatic_image_prompt(
+        title=title,
+        keywords=keywords,
+        focus_keyphrase=focus_keyphrase,
+        brand_identity=brand_identity,
+        niche_identifier=niche_identifier,
+        image_prompt_text=image_prompt_text,
+    )
+    client = OpenAIClient()
+    image_url = await asyncio.wait_for(
+        client.generate_image_url(model=settings.openai_image_model, prompt=image_prompt),
+        timeout=300.0,
+    )
+    if not image_url:
+        raise RuntimeError("Image generation did not return an image.")
+    return {
+        "image_url": image_url,
+        "image_prompt": image_prompt,
+        "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        "model": settings.openai_image_model,
+    }

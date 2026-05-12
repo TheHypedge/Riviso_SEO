@@ -133,6 +133,7 @@ class TopicClusterGenerateAllPayload(BaseModel):
         description="Whether to generate a featured image per article (slower).",
     )
     writing_prompt_id: str | None = Field(default=None, max_length=64)
+    image_prompt_id: str | None = Field(default=None, max_length=64)
     # ``None`` (omitted) means "every pending topic in the cluster". When
     # provided, only the pillar (slot id = pillar id) and cluster topic ids
     # listed here are generated; the rest stay pending.
@@ -159,6 +160,7 @@ async def generate_all(
             cluster_id=(cluster_id or "").strip(),
             generate_image=bool(body.generate_image),
             writing_prompt_id=(body.writing_prompt_id or "").strip() or None,
+            image_prompt_id=(body.image_prompt_id or "").strip() or None,
             topic_ids=body.topic_ids,
         )
     except HTTPException:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
@@ -163,6 +163,21 @@ _DEFAULT_IMAGE_PROMPT_TEXT = (
     "Create a realistic, professional featured image that matches the article topic.\n"
     "No text, no watermarks, clean composition, editorial lighting, sharp focus.\n"
 )
+
+
+def _utc_day_reset_at() -> str:
+    now = datetime.now(timezone.utc)
+    tomorrow = (now + timedelta(days=1)).date()
+    return datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _utc_month_reset_at() -> str:
+    now = datetime.now(timezone.utc)
+    if now.month == 12:
+        next_month = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        next_month = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+    return next_month.isoformat().replace("+00:00", "Z")
 
 
 def _normalize_url(raw: str | None) -> str:
@@ -464,9 +479,11 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
             "day_used": 0,
             "day_limit": None,
             "day_remaining": None,
+            "day_reset_at": _utc_day_reset_at(),
             "month_used": 0,
             "month_limit": None,
             "month_remaining": None,
+            "month_reset_at": _utc_month_reset_at(),
         }
 
     if not hasattr(st, "peek_article_usage_remaining"):
@@ -478,9 +495,11 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
             "day_used": 0,
             "day_limit": None,
             "day_remaining": None,
+            "day_reset_at": _utc_day_reset_at(),
             "month_used": 0,
             "month_limit": None,
             "month_remaining": None,
+            "month_reset_at": _utc_month_reset_at(),
         }
 
     snap = st.peek_article_usage_remaining(
@@ -492,6 +511,8 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
         "plan_key": plan_key,
         "is_admin": False,
         "unlimited": snap.get("max_can_consume_now") is None,
+        "day_reset_at": _utc_day_reset_at(),
+        "month_reset_at": _utc_month_reset_at(),
         **snap,
     }
 
@@ -543,6 +564,7 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
                 "month_used": 0,
                 "month_limit": None,
                 "month_remaining": None,
+                "month_reset_at": _utc_month_reset_at(),
             }
         if hasattr(st, "peek_monthly_counter"):
             snap = st.peek_monthly_counter(
@@ -551,13 +573,14 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
                 count_field=count_field,
                 month_limit=limit,
             )
-            return {"feature": feature, **snap}
+            return {"feature": feature, "month_reset_at": _utc_month_reset_at(), **snap}
         return {
             "feature": feature,
             "unlimited": True,
             "month_used": 0,
             "month_limit": limit,
             "month_remaining": None,
+            "month_reset_at": _utc_month_reset_at(),
         }
 
     context_limit = None if role == "admin" else _limit("max_context_links", beta_default=10)
@@ -579,12 +602,31 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
             "usage_monthly_custom_research_count",
             "max_custom_research_per_month",
         ),
+        "scheduled_articles": {
+            **_monthly(
+                "scheduled_articles",
+                "usage_monthly_scheduled_month",
+                "usage_monthly_scheduled_count",
+                "max_scheduled_per_month",
+            ),
+            "enabled": True if role == "admin" else plan.get("allow_scheduling") is not False,
+        },
+        "export_articles": {
+            **_monthly(
+                "export_articles",
+                "usage_monthly_export_month",
+                "usage_monthly_export_count",
+                "max_export_per_month",
+            ),
+            "enabled": True if role == "admin" else plan.get("allow_export") is not False,
+        },
         "context_links": {
             "feature": "context_links",
             "unlimited": context_limit is None,
             "used": context_used,
             "limit": context_limit,
             "remaining": context_remaining,
+            "renews_at": _utc_month_reset_at(),
         },
     }
 

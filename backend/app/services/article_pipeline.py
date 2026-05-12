@@ -14,7 +14,11 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.core.config import settings
-from app.services.article_generation import estimate_tokens_for_generation_bundle, generate_article_bundle
+from app.services.article_generation import (
+    estimate_tokens_for_generation_bundle,
+    generate_article_bundle,
+    generate_featured_image_only,
+)
 from app.services.prompt_validation import assert_image_prompt_allowed, assert_writing_prompt_allowed
 
 
@@ -183,4 +187,115 @@ async def execute_article_generation(
             "meta_description": gen["meta_description"],
             "image_url": gen.get("image_url"),
         },
+    }
+
+
+def image_regeneration_limit_snapshot(*, used: int, limit: int | None) -> dict[str, Any]:
+    try:
+        lim = int(limit) if limit is not None else 0
+    except Exception:
+        lim = 0
+    used_norm = max(0, int(used or 0))
+    if lim <= 0:
+        return {
+            "used": used_norm,
+            "limit": 0,
+            "remaining": None,
+            "unlimited": True,
+        }
+    return {
+        "used": used_norm,
+        "limit": lim,
+        "remaining": max(0, lim - used_norm),
+        "unlimited": False,
+    }
+
+
+async def execute_featured_image_regeneration(
+    *,
+    st: Any,
+    user: dict,
+    proj: dict,
+    article_id: str,
+    row: dict,
+    image_prompt_id: str | None = None,
+) -> dict:
+    """Regenerate only the stored featured image and enforce the per-article plan cap."""
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    plan: dict = {}
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+        if not isinstance(plan, dict):
+            plan = {}
+    except Exception:
+        plan = {}
+
+    used_before = int(row.get("featured_image_regeneration_count") or 0)
+    limit = plan.get("max_article_image_regenerations")
+    before = image_regeneration_limit_snapshot(used=used_before, limit=limit)
+    if role != "admin" and not before["unlimited"] and before["remaining"] <= 0:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "image_regeneration_limit_reached",
+                "message": (
+                    "The max featured image regeneration limit for this article is exhausted."
+                ),
+                "used": before["used"],
+                "limit": before["limit"],
+                "remaining": 0,
+                "plan_key": plan_key,
+            },
+        )
+
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
+
+    title = (row.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Article title is required for image regeneration")
+
+    keywords = [str(x).strip() for x in (row.get("keywords") or []) if str(x).strip()]
+    focus = (row.get("focus_keyphrase") or title).strip()
+    resolved_image = _resolve_image_prompt(proj=proj, image_prompt_id=image_prompt_id)
+    try:
+        gen = await generate_featured_image_only(
+            title=title,
+            keywords=keywords,
+            focus_keyphrase=focus,
+            brand_identity=(proj.get("brand_identity") or ""),
+            niche_identifier=(proj.get("niche_identifier") or ""),
+            image_prompt_text=(resolved_image or {}).get("text") or None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    used_after = used_before + 1
+    updates = {
+        "image_url": gen["image_url"],
+        "featured_image_generated_at": gen["generated_at"],
+        "featured_image_regeneration_count": used_after,
+        "featured_image_prompt_id": (resolved_image or {}).get("id") or "",
+        "featured_image_source": "regenerated",
+        "featured_image_prompt_final": gen.get("image_prompt") or "",
+        "featured_image_model": gen.get("model") or "",
+    }
+    await asyncio.to_thread(st.update_article_fields, article_id, updates)
+    after = image_regeneration_limit_snapshot(used=used_after, limit=limit)
+    return {
+        "ok": True,
+        "status": "image_regenerated",
+        "message": "Featured image regenerated successfully.",
+        "image_url": gen["image_url"],
+        "resolved": {
+            "image_prompt": {"id": resolved_image["id"], "name": resolved_image["name"]}
+            if resolved_image
+            else None,
+            "image_prompt_source": "custom_plus_brand_niche" if resolved_image else "programmatic",
+            "models": {"image": gen.get("model")},
+        },
+        "usage": after,
     }
