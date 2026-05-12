@@ -1040,7 +1040,15 @@ export const api = {
   async updateScheduledJob(
     projectId: string,
     jobId: string,
-    patch: Partial<{ run_at: string; post_type: string; wp_status: string; category_ids: number[] }>,
+    patch: Partial<{
+      run_at: string;
+      post_type: string;
+      wp_status: string;
+      category_ids: number[];
+      writing_prompt_id: string | null;
+      image_prompt_id: string | null;
+      generate_image: boolean;
+    }>,
   ) {
     return apiFetch<ScheduledJobPublic>(`/api/projects/${projectId}/scheduled-jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(patch) });
   },

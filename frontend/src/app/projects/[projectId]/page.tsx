@@ -935,6 +935,9 @@ export default function ProjectPage() {
   const [editJobPostType, setEditJobPostType] = useState("posts");
   const [editJobStatus, setEditJobStatus] = useState<"draft" | "publish">("draft");
   const [editJobCats, setEditJobCats] = useState<number[]>([]);
+  const [editJobWritingPromptId, setEditJobWritingPromptId] = useState("");
+  const [editJobImagePromptId, setEditJobImagePromptId] = useState("");
+  const [editJobGenerateImage, setEditJobGenerateImage] = useState(true);
   const [confirmCancelJob, setConfirmCancelJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
   const [confirmPostNowJob, setConfirmPostNowJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
   const [postNowBusy, setPostNowBusy] = useState(false);
@@ -1111,6 +1114,8 @@ export default function ProjectPage() {
   async function ensureScheduleMetaLoaded(): Promise<{
     writingPrompts: PromptListResponse | null;
     imagePrompts: PromptListResponse | null;
+    wpTypes: import("@/lib/api").WordpressPostType[];
+    wpCats: import("@/lib/api").WordpressCategory[];
   }> {
     const needWpTypes = wpTypesForSchedule.length === 0;
     const needWpCats = wpCatsForSchedule.length === 0;
@@ -1121,6 +1126,8 @@ export default function ProjectPage() {
       return {
         writingPrompts: scheduleWritingPrompts,
         imagePrompts: scheduleImagePrompts,
+        wpTypes: wpTypesForSchedule,
+        wpCats: wpCatsForSchedule,
       };
     }
 
@@ -1150,13 +1157,15 @@ export default function ProjectPage() {
       needWpTypes ? api.wordpressPostTypes(projectId, { timeoutMs: 8000 }) : Promise.resolve(wpTypesForSchedule),
       needWpCats ? api.wordpressCategories(projectId, { timeoutMs: 8000 }) : Promise.resolve(wpCatsForSchedule),
     ]).then(([typesRes, catsRes]) => {
-      if (typesRes.status === "fulfilled") setWpTypesForSchedule(typesRes.value);
-      if (catsRes.status === "fulfilled") setWpCatsForSchedule(catsRes.value);
+      const types = typesRes.status === "fulfilled" ? typesRes.value : wpTypesForSchedule;
+      const cats = catsRes.status === "fulfilled" ? catsRes.value : wpCatsForSchedule;
+      if (typesRes.status === "fulfilled") setWpTypesForSchedule(types);
+      if (catsRes.status === "fulfilled") setWpCatsForSchedule(cats);
+      return { wpTypes: types || [], wpCats: cats || [] };
     });
 
-    const promptResult = await promptLoad;
-    void wpMetaLoad;
-    return promptResult;
+    const [promptResult, wpMetaResult] = await Promise.all([promptLoad, wpMetaLoad]);
+    return { ...promptResult, ...wpMetaResult };
   }
 
   function formatInProfileTz(utcLike: string | null | undefined) {
@@ -2417,6 +2426,31 @@ export default function ProjectPage() {
     } finally {
       setPostNowBusy(false);
     }
+  }
+
+  async function openEditScheduledJob(j: import("@/lib/api").ScheduledJobPublic) {
+    setError(null);
+    const min = new Date(Date.now() + 5 * 60 * 1000);
+    setEditJobMin(toDatetimeLocalFromDateInProfileTz(min));
+
+    const meta = await ensureScheduleMetaLoaded();
+    const defaultPostType = (wpDefaults?.post_type || "posts").trim() || "posts";
+    const defaultStatus = (wpDefaults?.wp_status || "draft") === "publish" ? "publish" : "draft";
+    const nextPostType = (j.post_type || defaultPostType).trim() || defaultPostType;
+    const nextStatus = (
+      String(j.wp_status || defaultStatus).toLowerCase() === "publish" ? "publish" : "draft"
+    ) as "draft" | "publish";
+    const jobCats = Array.isArray(j.category_ids) ? j.category_ids : [];
+    const defaultCats = ((settings?.default_wp_category_ids || []) as number[]).filter((id) => Number.isFinite(id));
+
+    setEditJob(j);
+    setEditJobWhen(toDatetimeLocalInProfileTz(j.run_at || ""));
+    setEditJobPostType(nextPostType);
+    setEditJobStatus(nextStatus);
+    setEditJobCats(jobCats.length ? jobCats : defaultCats);
+    setEditJobWritingPromptId((j.writing_prompt_id || meta.writingPrompts?.default_id || "").trim());
+    setEditJobImagePromptId((j.image_prompt_id || meta.imagePrompts?.default_id || "").trim());
+    setEditJobGenerateImage(Boolean(j.generate_image ?? true));
   }
 
   async function bulkChangeStatus(newStatus: "pending" | "draft" | "published") {
@@ -6172,16 +6206,7 @@ export default function ProjectPage() {
                       <button
                         type="button"
                         className={styles.miniBtn}
-                        onClick={() => {
-                          const min = new Date(Date.now() + 5 * 60 * 1000);
-                          setEditJobMin(toDatetimeLocalFromDateInProfileTz(min));
-                          setEditJob(j);
-                          // Show schedule time in the user's profile timezone
-                          setEditJobWhen(toDatetimeLocalInProfileTz(j.run_at || ""));
-                          setEditJobPostType(j.post_type || "posts");
-                          setEditJobStatus(((j.wp_status || "draft") as "draft" | "publish"));
-                          setEditJobCats(j.category_ids || []);
-                        }}
+                        onClick={() => void openEditScheduledJob(j)}
                         disabled={["posted", "cancelled"].includes((j.state || "").toLowerCase())}
                       >
                         Re-Schedule
@@ -6253,6 +6278,11 @@ export default function ProjectPage() {
                       <select className={styles.input} value={editJobPostType} onChange={(e) => setEditJobPostType(e.target.value)}>
                         <option value="posts">Posts</option>
                         <option value="pages">Pages</option>
+                        {editJobPostType &&
+                        !["posts", "pages"].includes(editJobPostType) &&
+                        !wpTypesForSchedule.some((t) => t.rest_base === editJobPostType) ? (
+                          <option value={editJobPostType}>{editJobPostType}</option>
+                        ) : null}
                         {wpTypesForSchedule
                           .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
                           .map((t) => (
@@ -6267,6 +6297,56 @@ export default function ProjectPage() {
                       <select className={styles.input} value={editJobStatus} onChange={(e) => setEditJobStatus(e.target.value as "draft" | "publish")}>
                         <option value="draft">Draft</option>
                         <option value="publish">Publish</option>
+                      </select>
+                    </label>
+                    <label className={styles.label}>
+                      Writing prompt
+                      <select
+                        className={styles.input}
+                        value={editJobWritingPromptId}
+                        onChange={(e) => setEditJobWritingPromptId(e.target.value)}
+                      >
+                        <option value="">Project default</option>
+                        {editJobWritingPromptId &&
+                        !scheduleWritingPrompts?.items.some((p) => p.id === editJobWritingPromptId) ? (
+                          <option value={editJobWritingPromptId}>{editJobWritingPromptId}</option>
+                        ) : null}
+                        {(scheduleWritingPrompts?.items || []).map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name || p.id}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.label}>
+                      Generate image
+                      <select
+                        className={styles.input}
+                        value={editJobGenerateImage ? "yes" : "no"}
+                        onChange={(e) => setEditJobGenerateImage(e.target.value === "yes")}
+                      >
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                      </select>
+                    </label>
+                    <label className={styles.label}>
+                      Image prompt
+                      <select
+                        className={styles.input}
+                        value={editJobImagePromptId}
+                        onChange={(e) => setEditJobImagePromptId(e.target.value)}
+                        disabled={!editJobGenerateImage}
+                      >
+                        <option value="">Project default</option>
+                        {editJobImagePromptId &&
+                        !scheduleImagePrompts?.items.some((p) => p.id === editJobImagePromptId) ? (
+                          <option value={editJobImagePromptId}>{editJobImagePromptId}</option>
+                        ) : null}
+                        {(scheduleImagePrompts?.items || []).map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name || p.id}
+                          </option>
+                        ))}
                       </select>
                     </label>
                     <label className={styles.label}>
@@ -6311,6 +6391,9 @@ export default function ProjectPage() {
                             post_type: editJobPostType,
                             wp_status: editJobStatus,
                             category_ids: editJobCats,
+                            writing_prompt_id: editJobWritingPromptId || null,
+                            image_prompt_id: editJobImagePromptId || null,
+                            generate_image: editJobGenerateImage,
                           });
                           setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
                           setEditJob(null);
