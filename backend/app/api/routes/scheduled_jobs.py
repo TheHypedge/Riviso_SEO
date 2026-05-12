@@ -9,7 +9,7 @@ from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobUpdate
-from app.services.scheduler import prepare_article_for_scheduled_job
+from app.services.scheduler import prepare_article_for_scheduled_job, scheduler_error_message
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.to_thread import run_sync
 
@@ -213,12 +213,13 @@ async def update_scheduled_job(
                             },
                         )
                     except Exception as e:
+                        err = scheduler_error_message(e)
                         await run_sync(
                             st.update_scheduled_job_fields,
                             jid,
                             {
                                 "state": "failed",
-                                "last_error": str(e),
+                                "last_error": err,
                                 "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                             },
                         )

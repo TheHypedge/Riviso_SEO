@@ -14,6 +14,15 @@ class AdminUserPublic(BaseModel):
     phone: str | None = None
     timezone: str | None = None
     address: str | None = None
+    account_status: str | None = None
+    is_deleted: bool = False
+    is_deactivated: bool = False
+    deleted_at: str | None = None
+    deactivated_at: str | None = None
+    deletion_requested_at: str | None = None
+    reactivated_at: str | None = None
+    retention_reason: str | None = None
+    retargeting_retained: bool = False
     created_at: str | None = None
     last_activity_at: str | None = None
     total_projects: int = 0
@@ -26,6 +35,9 @@ class AdminUserUpdate(BaseModel):
     phone: str | None = None
     timezone: str | None = None
     address: str | None = None
+    account_status: str | None = None
+    is_deleted: bool | None = None
+    is_deactivated: bool | None = None
 
 
 class AdminUserStats(BaseModel):

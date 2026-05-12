@@ -48,7 +48,7 @@ from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient
 from app.services.gsc_actions import inspect_url_status, maybe_request_url_inspection, request_url_inspection_now
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
-from app.services.scheduler import prepare_article_for_scheduled_job
+from app.services.scheduler import prepare_article_for_scheduled_job, scheduler_error_message
 from app.services.to_thread import run_sync
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.prompt_validation import assert_writing_prompt_allowed
@@ -975,12 +975,13 @@ async def schedule_article(
                         {"state": "ready_to_post", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")},
                     )
                 except Exception as e:
+                    err = scheduler_error_message(e)
                     await run_sync(
                         st.update_scheduled_job_fields,
                         job_id,
                         {
                             "state": "failed",
-                            "last_error": str(e),
+                            "last_error": err,
                             "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                         },
                     )

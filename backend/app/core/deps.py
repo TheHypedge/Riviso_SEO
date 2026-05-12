@@ -16,6 +16,11 @@ from app.legacy.storage import get_legacy_storage_module
 _bearer = HTTPBearer(auto_error=False)
 
 
+def account_is_inactive(user: dict) -> bool:
+    status = (user.get("account_status") or "active").strip().lower()
+    return status in {"deleted", "deactivated"} or bool(user.get("is_deleted")) or bool(user.get("is_deactivated"))
+
+
 async def get_current_user(
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     aa_access: str | None = Cookie(default=None),
@@ -40,6 +45,8 @@ async def get_current_user(
     user = st.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if account_is_inactive(user):
+        raise HTTPException(status_code=401, detail="Account is deactivated or deleted")
     return user
 
 

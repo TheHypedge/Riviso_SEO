@@ -5,9 +5,20 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 
 import styles from "../page.module.css";
-import { api, setAccessToken, setRefreshToken } from "@/lib/api";
+import { ApiError, api, setAccessToken, setRefreshToken } from "@/lib/api";
 
 type AuthTab = "login" | "register";
+
+function isReactivationRequired(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false;
+  const detail = err.detail;
+  return (
+    !!detail &&
+    typeof detail === "object" &&
+    "code" in detail &&
+    (detail as { code?: unknown }).code === "account_reactivation_required"
+  );
+}
 
 function useTypewriter(lines: string[]) {
   const [lineIdx, setLineIdx] = useState(0);
@@ -63,7 +74,9 @@ export default function LoginPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reactivationAvailable, setReactivationAvailable] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [reactivating, setReactivating] = useState(false);
 
   const typed = useTypewriter([
     "Draft SEO-ready articles in minutes.",
@@ -75,6 +88,7 @@ export default function LoginPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setReactivationAvailable(false);
     setLoading(true);
     try {
       if (tab === "register") {
@@ -86,9 +100,25 @@ export default function LoginPage() {
       setRefreshToken(tokens.refresh_token);
       router.push("/dashboard");
     } catch (err) {
+      setReactivationAvailable(isReactivationRequired(err));
       setError(err instanceof Error ? err.message : tab === "login" ? "Login failed" : "Register failed");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function onReactivate() {
+    setError(null);
+    setReactivating(true);
+    try {
+      const tokens = await api.reactivateAccount(email, password);
+      setAccessToken(tokens.access_token);
+      setRefreshToken(tokens.refresh_token);
+      router.push("/dashboard");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to reactivate account");
+    } finally {
+      setReactivating(false);
     }
   }
 
@@ -156,6 +186,7 @@ export default function LoginPage() {
                 className={`${styles.authTab} ${tab === "login" ? styles.authTabActive : ""}`}
                 onClick={() => {
                   setError(null);
+                  setReactivationAvailable(false);
                   setTab("login");
                   setConfirmPassword("");
                 }}
@@ -167,6 +198,7 @@ export default function LoginPage() {
                 className={`${styles.authTab} ${tab === "register" ? styles.authTabActive : ""}`}
                 onClick={() => {
                   setError(null);
+                  setReactivationAvailable(false);
                   setTab("register");
                 }}
               >
@@ -263,11 +295,27 @@ export default function LoginPage() {
               ) : null}
 
               {error ? <p className={`${styles.error} ${styles.authError}`}>{error}</p> : null}
+              {reactivationAvailable ? (
+                <div className={styles.authChecklist}>
+                  <div className={styles.authCheckRow}>
+                    Your saved projects, articles, and settings are still retained. Reactivate this account to continue with the same data.
+                  </div>
+                  <button
+                    type="button"
+                    className={`${styles.button} ${styles.authButton}`}
+                    onClick={onReactivate}
+                    disabled={loading || reactivating || !email.trim() || !password}
+                  >
+                    {reactivating ? "Reactivating…" : "Reactivate account"}
+                  </button>
+                </div>
+              ) : null}
               <button
                 className={`${styles.button} ${styles.authButton}`}
                 type="submit"
                 disabled={
                   loading ||
+                  reactivating ||
                   (tab === "register" ? !isStrongPassword || password !== confirmPassword : false)
                 }
               >

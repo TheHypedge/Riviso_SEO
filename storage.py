@@ -68,6 +68,15 @@ def _user_row_to_public(u: dict[str, Any]) -> dict[str, Any]:
         "address": (u.get("address") or "").strip(),
         "subscription_type": (u.get("subscription_type") or "beta").strip().lower(),
         "last_activity_at": (u.get("last_activity_at") or "").strip(),
+        "account_status": (u.get("account_status") or "active").strip().lower(),
+        "is_deleted": bool(u.get("is_deleted", False)),
+        "is_deactivated": bool(u.get("is_deactivated", False)),
+        "deleted_at": (u.get("deleted_at") or "").strip(),
+        "deactivated_at": (u.get("deactivated_at") or "").strip(),
+        "deletion_requested_at": (u.get("deletion_requested_at") or "").strip(),
+        "reactivated_at": (u.get("reactivated_at") or "").strip(),
+        "retention_reason": (u.get("retention_reason") or "").strip(),
+        "retargeting_retained": bool(u.get("retargeting_retained", False)),
         "usage_daily_articles_date": (u.get("usage_daily_articles_date") or "").strip(),
         "usage_daily_articles_count": int(u.get("usage_daily_articles_count") or 0),
         "usage_monthly_articles_month": (u.get("usage_monthly_articles_month") or "").strip(),
@@ -249,6 +258,9 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
     email = (d.get("email") or "").strip().lower()
     if not email:
         raise ValueError("user email is required")
+    account_status = ((d.get("account_status") or "active").strip().lower()[:32]) or "active"
+    is_deleted = bool(d.get("is_deleted", False)) or account_status == "deleted"
+    is_deactivated = bool(d.get("is_deactivated", False)) or account_status in {"deleted", "deactivated"}
     return {
         "id": uid,
         "email": email[:500],
@@ -260,6 +272,15 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "address": (d.get("address") or "").strip()[:500],
         "subscription_type": ((d.get("subscription_type") or "beta").strip().lower()[:64]) or "beta",
         "last_activity_at": (d.get("last_activity_at") or "").strip()[:64],
+        "account_status": account_status,
+        "is_deleted": is_deleted,
+        "is_deactivated": is_deactivated,
+        "deleted_at": (d.get("deleted_at") or "").strip()[:64],
+        "deactivated_at": (d.get("deactivated_at") or "").strip()[:64],
+        "deletion_requested_at": (d.get("deletion_requested_at") or "").strip()[:64],
+        "reactivated_at": (d.get("reactivated_at") or "").strip()[:64],
+        "retention_reason": (d.get("retention_reason") or "").strip()[:500],
+        "retargeting_retained": bool(d.get("retargeting_retained", False)),
         "usage_daily_articles_date": (d.get("usage_daily_articles_date") or "").strip()[:16],
         "usage_daily_articles_count": int(d.get("usage_daily_articles_count") or 0),
         "usage_monthly_articles_month": (d.get("usage_monthly_articles_month") or "").strip()[:16],
@@ -307,6 +328,15 @@ def list_users() -> list[dict[str, Any]]:
                 "address": (doc.get("address") or "").strip(),
                 "subscription_type": (doc.get("subscription_type") or "beta").strip().lower(),
                 "last_activity_at": (doc.get("last_activity_at") or "").strip(),
+                "account_status": (doc.get("account_status") or "active").strip().lower(),
+                "is_deleted": bool(doc.get("is_deleted", False)),
+                "is_deactivated": bool(doc.get("is_deactivated", False)),
+                "deleted_at": (doc.get("deleted_at") or "").strip(),
+                "deactivated_at": (doc.get("deactivated_at") or "").strip(),
+                "deletion_requested_at": (doc.get("deletion_requested_at") or "").strip(),
+                "reactivated_at": (doc.get("reactivated_at") or "").strip(),
+                "retention_reason": (doc.get("retention_reason") or "").strip(),
+                "retargeting_retained": bool(doc.get("retargeting_retained", False)),
                 "created_at": (doc.get("created_at") or "").strip(),
             }
         )
@@ -1124,6 +1154,15 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
         "address": (doc.get("address") or "").strip(),
         "subscription_type": (doc.get("subscription_type") or "beta").strip().lower(),
         "last_activity_at": (doc.get("last_activity_at") or "").strip(),
+        "account_status": (doc.get("account_status") or "active").strip().lower(),
+        "is_deleted": bool(doc.get("is_deleted", False)),
+        "is_deactivated": bool(doc.get("is_deactivated", False)),
+        "deleted_at": (doc.get("deleted_at") or "").strip(),
+        "deactivated_at": (doc.get("deactivated_at") or "").strip(),
+        "deletion_requested_at": (doc.get("deletion_requested_at") or "").strip(),
+        "reactivated_at": (doc.get("reactivated_at") or "").strip(),
+        "retention_reason": (doc.get("retention_reason") or "").strip(),
+        "retargeting_retained": bool(doc.get("retargeting_retained", False)),
         "usage_daily_articles_date": (doc.get("usage_daily_articles_date") or "").strip(),
         "usage_daily_articles_count": int(doc.get("usage_daily_articles_count") or 0),
         "usage_monthly_articles_month": (doc.get("usage_monthly_articles_month") or "").strip(),
@@ -1167,6 +1206,15 @@ def get_user_by_email(email: str) -> dict[str, Any] | None:
         "address": (doc.get("address") or "").strip(),
         "subscription_type": (doc.get("subscription_type") or "beta").strip().lower(),
         "last_activity_at": (doc.get("last_activity_at") or "").strip(),
+        "account_status": (doc.get("account_status") or "active").strip().lower(),
+        "is_deleted": bool(doc.get("is_deleted", False)),
+        "is_deactivated": bool(doc.get("is_deactivated", False)),
+        "deleted_at": (doc.get("deleted_at") or "").strip(),
+        "deactivated_at": (doc.get("deactivated_at") or "").strip(),
+        "deletion_requested_at": (doc.get("deletion_requested_at") or "").strip(),
+        "reactivated_at": (doc.get("reactivated_at") or "").strip(),
+        "retention_reason": (doc.get("retention_reason") or "").strip(),
+        "retargeting_retained": bool(doc.get("retargeting_retained", False)),
         "usage_daily_articles_date": (doc.get("usage_daily_articles_date") or "").strip(),
         "usage_daily_articles_count": int(doc.get("usage_daily_articles_count") or 0),
         "usage_monthly_articles_month": (doc.get("usage_monthly_articles_month") or "").strip(),
@@ -1198,7 +1246,72 @@ def insert_user(user: dict[str, Any]) -> None:
 
 
 def delete_user(user_id: str) -> bool:
-    """Remove a user row only. Caller must delete owned projects and articles first."""
+    """
+    Soft-delete a user account while preserving all owned projects/articles.
+
+    The retained user row keeps email and account metadata available for
+    lifecycle/retargeting workflows, while auth guards block future access.
+    """
+    uid = (user_id or "").strip()
+    if not uid:
+        return False
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    updates = {
+        "account_status": "deleted",
+        "is_deleted": True,
+        "is_deactivated": True,
+        "deleted_at": now,
+        "deactivated_at": now,
+        "deletion_requested_at": now,
+        "retention_reason": "account_deleted_data_retained_for_retargeting",
+        "retargeting_retained": True,
+        "last_activity_at": now,
+    }
+    return update_user_fields(uid, updates)
+
+
+def deactivate_user(user_id: str, *, reason: str = "account_deactivated") -> bool:
+    """Deactivate a user account without deleting or anonymizing retained data."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return False
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    return update_user_fields(
+        uid,
+        {
+            "account_status": "deactivated",
+            "is_deleted": False,
+            "is_deactivated": True,
+            "deactivated_at": now,
+            "retention_reason": (reason or "account_deactivated")[:500],
+            "retargeting_retained": True,
+            "last_activity_at": now,
+        },
+    )
+
+
+def reactivate_user(user_id: str) -> bool:
+    """Restore a retained/deactivated account to active status without changing its user_id."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return False
+    now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    return update_user_fields(
+        uid,
+        {
+            "account_status": "active",
+            "is_deleted": False,
+            "is_deactivated": False,
+            "reactivated_at": now,
+            "retention_reason": "",
+            "retargeting_retained": False,
+            "last_activity_at": now,
+        },
+    )
+
+
+def hard_delete_user(user_id: str) -> bool:
+    """Physically remove only the user row. Prefer delete_user() for normal app flows."""
     uid = (user_id or "").strip()
     if not uid:
         return False

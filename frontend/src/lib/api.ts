@@ -20,6 +20,15 @@ export type AdminUserPublic = {
   phone?: string | null;
   timezone?: string | null;
   address?: string | null;
+  account_status?: string | null;
+  is_deleted?: boolean;
+  is_deactivated?: boolean;
+  deleted_at?: string | null;
+  deactivated_at?: string | null;
+  deletion_requested_at?: string | null;
+  reactivated_at?: string | null;
+  retention_reason?: string | null;
+  retargeting_retained?: boolean;
   created_at?: string | null;
   last_activity_at?: string | null;
   /** Number of projects owned by this user (admin list/reporting). */
@@ -132,6 +141,7 @@ export type ProfilePublic = {
   phone?: string | null;
   timezone?: string | null;
   subscription_type?: string | null;
+  account_status?: string | null;
   created_at?: string | null;
 };
 
@@ -775,7 +785,13 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
       throw e;
     }
 
-    if (res.status === 401 && path !== "/api/auth/login" && path !== "/api/auth/register" && path !== "/api/auth/refresh") {
+    if (
+      res.status === 401 &&
+      path !== "/api/auth/login" &&
+      path !== "/api/auth/register" &&
+      path !== "/api/auth/reactivate" &&
+      path !== "/api/auth/refresh"
+    ) {
       const rt = getRefreshToken();
       if (rt) {
         try {
@@ -890,6 +906,12 @@ export const api = {
   },
   async register(email: string, password: string) {
     return apiFetch<TokenPair>("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+  },
+  async reactivateAccount(email: string, password: string) {
+    return apiFetch<TokenPair>("/api/auth/reactivate", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     });
@@ -1547,7 +1569,19 @@ export const api = {
   async adminListUsers() {
     return apiFetch<AdminUserPublic[]>("/api/admin/users");
   },
-  async adminUpdateUser(userId: string, patch: Partial<{ role: string; subscription_type: string; full_name: string; phone: string; timezone: string }>) {
+  async adminUpdateUser(
+    userId: string,
+    patch: Partial<{
+      role: string;
+      subscription_type: string;
+      full_name: string;
+      phone: string;
+      timezone: string;
+      account_status: string;
+      is_deleted: boolean;
+      is_deactivated: boolean;
+    }>,
+  ) {
     return apiFetch<AdminUserPublic>(`/api/admin/users/${userId}`, { method: "PATCH", body: JSON.stringify(patch) });
   },
   async adminGetUserDetails(userId: string) {

@@ -61,6 +61,87 @@ def _friendly_scheduler_error(exc: Exception) -> str:
     return raw[:1000]
 
 
+def scheduler_error_message(exc: Exception) -> str:
+    return _friendly_scheduler_error(exc)
+
+
+def _is_image_prompt_text_mismatch(exc: Exception) -> bool:
+    raw = str(exc) or ""
+    return "unexpected keyword argument" in raw and "image_prompt_text" in raw
+
+
+def _is_retryable_generation_mismatch(job: dict) -> bool:
+    raw = (job.get("last_error") or "").strip()
+    if not raw:
+        return False
+    if "unexpected keyword argument" in raw and "image_prompt_text" in raw:
+        return int(job.get("attempts") or 0) < 3
+    if "backend generation configuration mismatch" in raw.lower():
+        return int(job.get("attempts") or 0) < 3
+    return False
+
+
+def _estimate_tokens_for_scheduled_generation(
+    *,
+    title: str,
+    keywords: list[str],
+    focus_keyphrase: str,
+    writing_prompt_text: str,
+    brand_identity: str | None,
+    niche_identifier: str | None,
+    generate_image: bool,
+    image_prompt_text: str | None,
+) -> int:
+    base_kwargs = {
+        "title": title,
+        "keywords": keywords,
+        "focus_keyphrase": focus_keyphrase,
+        "writing_prompt_text": writing_prompt_text,
+        "brand_identity": brand_identity,
+        "niche_identifier": niche_identifier,
+        "generate_image": generate_image,
+    }
+    try:
+        return estimate_tokens_for_generation_bundle(**base_kwargs, image_prompt_text=image_prompt_text)
+    except TypeError as e:
+        if not _is_image_prompt_text_mismatch(e):
+            raise
+        # Compatibility for live deployments where the scheduler was updated
+        # before the estimator signature. The image itself is still generated;
+        # this only omits the custom image prompt text from token estimation.
+        return estimate_tokens_for_generation_bundle(**base_kwargs)
+
+
+async def _generate_article_bundle_for_scheduled_job(
+    *,
+    title: str,
+    keywords: list[str],
+    focus_keyphrase: str,
+    writing_prompt_text: str,
+    brand_identity: str | None,
+    niche_identifier: str | None,
+    generate_image: bool,
+    image_prompt_text: str | None,
+) -> dict:
+    base_kwargs = {
+        "title": title,
+        "keywords": keywords,
+        "focus_keyphrase": focus_keyphrase,
+        "writing_prompt_text": writing_prompt_text,
+        "brand_identity": brand_identity,
+        "niche_identifier": niche_identifier,
+        "generate_image": generate_image,
+    }
+    try:
+        return await generate_article_bundle(**base_kwargs, image_prompt_text=image_prompt_text)
+    except TypeError as e:
+        if not _is_image_prompt_text_mismatch(e):
+            raise
+        # Same compatibility guard as token estimation. If an older generator
+        # is loaded, keep the scheduled job moving instead of failing outright.
+        return await generate_article_bundle(**base_kwargs)
+
+
 async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: dict, job: dict) -> dict:
     """
     Ensure article has generated content/meta and (optionally) image, saving results to storage.
@@ -116,7 +197,7 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
     keywords = [str(x).strip() for x in (art.get("keywords") or []) if str(x).strip()]
     focus = (art.get("focus_keyphrase") or "").strip()
 
-    token_estimate = estimate_tokens_for_generation_bundle(
+    token_estimate = _estimate_tokens_for_scheduled_generation(
         title=title,
         keywords=keywords,
         focus_keyphrase=focus,
@@ -144,7 +225,7 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
             st.update_scheduled_job_fields(jid, {"state": "failed", "last_error": msg_t or "Token budget exceeded"})
             raise RuntimeError(msg_t or "Token budget exceeded")
 
-    gen = await generate_article_bundle(
+    gen = await _generate_article_bundle_for_scheduled_job(
         title=title,
         keywords=keywords,
         focus_keyphrase=focus,
@@ -306,8 +387,11 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                 if not isinstance(j, dict):
                     continue
                 # A job can be "ready_to_post" if background preparation finished early.
-                # Both states should be eligible once run_at is due.
-                if (j.get("state") or "scheduled") not in {"scheduled", "ready_to_post"}:
+                # Known generation-mismatch failures are retryable after deploy so old
+                # failed live jobs do not stay permanently stuck.
+                state = (j.get("state") or "scheduled").strip().lower()
+                retry_failed = state == "failed" and _is_retryable_generation_mismatch(j)
+                if state not in {"scheduled", "ready_to_post"} and not retry_failed:
                     continue
                 run_at = _parse_run_at_utc(j.get("run_at") or "")
                 if not run_at or run_at > now:

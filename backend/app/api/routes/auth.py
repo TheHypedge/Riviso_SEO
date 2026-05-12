@@ -8,7 +8,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from app.core.deps import get_current_user
+from app.core.deps import account_is_inactive, get_current_user
 from app.core.security import create_access_token, create_refresh_token, decode_token
 from app.core.config import settings
 from app.core.ratelimit import limiter
@@ -17,6 +17,14 @@ from app.services.to_thread import run_sync
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenPair, UserPublic
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _retained_account_detail(message: str) -> dict:
+    return {
+        "code": "account_reactivation_required",
+        "message": message,
+        "can_reactivate": True,
+    }
 
 
 def _to_user_public(u: dict) -> UserPublic:
@@ -28,25 +36,7 @@ def _to_user_public(u: dict) -> UserPublic:
     )
 
 
-@limiter.limit("10/minute")
-@router.post("/login", response_model=TokenPair)
-async def login(payload: LoginRequest, request: Request, response: Response) -> TokenPair:
-    st = get_legacy_storage_module()
-    try:
-        user = await run_sync(st.get_user_by_email, str(payload.email).strip().lower())
-    except Exception:
-        # Most common cause in local dev: MongoDB/Atlas not reachable.
-        raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
-    if not user or not (user.get("password_hash") or ""):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    if not check_password_hash(user["password_hash"], payload.password):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "user").strip().lower()
-    access = create_access_token(subject=uid, extra_claims={"role": role})
-    refresh = create_refresh_token(subject=uid, extra_claims={"role": role})
-    # Set httpOnly cookies (in addition to returning tokens) for safer clients.
+def _set_auth_cookies(response: Response, access: str, refresh: str) -> None:
     response.set_cookie(
         "aa_access",
         access,
@@ -65,7 +55,39 @@ async def login(payload: LoginRequest, request: Request, response: Response) -> 
         domain=settings.cookie_domain,
         path="/",
     )
+
+
+def _issue_tokens(user: dict, response: Response) -> TokenPair:
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "user").strip().lower()
+    access = create_access_token(subject=uid, extra_claims={"role": role})
+    refresh = create_refresh_token(subject=uid, extra_claims={"role": role})
+    _set_auth_cookies(response, access, refresh)
     return TokenPair(access_token=access, refresh_token=refresh)
+
+
+@limiter.limit("10/minute")
+@router.post("/login", response_model=TokenPair)
+async def login(payload: LoginRequest, request: Request, response: Response) -> TokenPair:
+    st = get_legacy_storage_module()
+    try:
+        user = await run_sync(st.get_user_by_email, str(payload.email).strip().lower())
+    except Exception:
+        # Most common cause in local dev: MongoDB/Atlas not reachable.
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
+    if not user or not (user.get("password_hash") or ""):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not check_password_hash(user["password_hash"], payload.password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if account_is_inactive(user):
+        raise HTTPException(
+            status_code=403,
+            detail=_retained_account_detail(
+                "This account is retained but inactive. Reactivate it to restore your projects and articles."
+            ),
+        )
+
+    return _issue_tokens(user, response)
 
 
 @limiter.limit("5/minute")
@@ -78,6 +100,13 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     except Exception:
         raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
     if existing:
+        if account_is_inactive(existing):
+            raise HTTPException(
+                status_code=409,
+                detail=_retained_account_detail(
+                    "This email belongs to a retained account. Reactivate it to restore the saved workspace."
+                ),
+            )
         raise HTTPException(status_code=409, detail="Email already registered")
     # Basic server-side password hygiene (UI already checks; backend enforces too).
     pw = payload.password or ""
@@ -108,27 +137,37 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
         )
     except Exception:
         raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
-    access = create_access_token(subject=uid, extra_claims={"role": "user"})
-    refresh = create_refresh_token(subject=uid, extra_claims={"role": "user"})
-    response.set_cookie(
-        "aa_access",
-        access,
-        httponly=True,
-        secure=bool(settings.cookie_secure),
-        samesite=settings.cookie_samesite,
-        domain=settings.cookie_domain,
-        path="/",
-    )
-    response.set_cookie(
-        "aa_refresh",
-        refresh,
-        httponly=True,
-        secure=bool(settings.cookie_secure),
-        samesite=settings.cookie_samesite,
-        domain=settings.cookie_domain,
-        path="/",
-    )
-    return TokenPair(access_token=access, refresh_token=refresh)
+    return _issue_tokens({"id": uid, "role": "user"}, response)
+
+
+@limiter.limit("5/minute")
+@router.post("/reactivate", response_model=TokenPair)
+async def reactivate(payload: LoginRequest, request: Request, response: Response) -> TokenPair:
+    st = get_legacy_storage_module()
+    email = str(payload.email).strip().lower()
+    try:
+        user = await run_sync(st.get_user_by_email, email)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
+    if not user or not (user.get("password_hash") or ""):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not check_password_hash(user["password_hash"], payload.password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not account_is_inactive(user):
+        return _issue_tokens(user, response)
+
+    uid = (user.get("id") or "").strip()
+    try:
+        ok = await run_sync(st.reactivate_user, uid) if hasattr(st, "reactivate_user") else False
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
+    if not ok:
+        raise HTTPException(status_code=503, detail="Unable to reactivate account. Please try again.")
+
+    restored = await run_sync(st.get_user_by_id, uid)
+    if not restored:
+        raise HTTPException(status_code=503, detail="Unable to load reactivated account. Please try again.")
+    return _issue_tokens(restored, response)
 
 
 @router.get("/me", response_model=UserPublic)
@@ -169,6 +208,8 @@ async def refresh_token(request: Request, response: Response) -> TokenPair:
         raise HTTPException(status_code=503, detail="Database temporarily unavailable. Please try again.")
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if account_is_inactive(user):
+        raise HTTPException(status_code=403, detail="This account is deactivated or deleted")
     role = (user.get("role") or "user").strip().lower()
 
     access = create_access_token(subject=uid, extra_claims={"role": role})

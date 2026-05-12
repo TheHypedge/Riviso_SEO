@@ -369,7 +369,7 @@ export default function DashboardPage() {
   }
 
   async function deleteUser(userId: string) {
-    if (!confirm("Delete this user? This only deletes the user row (projects/articles are not removed).")) return;
+    if (!confirm("Deactivate and mark this user as deleted? Their projects/articles stay retained for account history and retargeting.")) return;
     setError(null);
     try {
       await api.adminDeleteUser(userId);
@@ -700,6 +700,7 @@ export default function DashboardPage() {
                           <th className={styles.th}>Email</th>
                           <th className={styles.th}>Role</th>
                           <th className={styles.th}>Subscription</th>
+                          <th className={styles.th}>Status</th>
                           <th className={styles.th}>Projects</th>
                           <th className={styles.th}>Details</th>
                           <th className={styles.th}>Actions</th>
@@ -736,6 +737,9 @@ export default function DashboardPage() {
                               />
                             </td>
                             <td className={styles.td}>
+                              <span className={styles.pill}>{u.account_status || "active"}</span>
+                            </td>
+                            <td className={styles.td}>
                               <div className={dashStyles.workspaceCell}>
                                 <span className={styles.muted}>{u.total_projects ?? 0}</span>
                                 <button className={styles.miniBtn} type="button" onClick={() => openUserWorkspace(u.id)}>
@@ -754,7 +758,7 @@ export default function DashboardPage() {
                                   Save
                                 </button>
                                 <button className={`${styles.miniBtn} ${styles.miniDanger}`} type="button" onClick={() => deleteUser(u.id)}>
-                                  Delete
+                                  Deactivate
                                 </button>
                               </div>
                             </td>

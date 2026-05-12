@@ -56,6 +56,15 @@ def _user_to_public(u: dict, *, total_projects: int = 0) -> AdminUserPublic:
         phone=((u.get("phone") or "").strip() or None),
         timezone=(tz_norm or None),
         address=((u.get("address") or "").strip() or None),
+        account_status=((u.get("account_status") or "active").strip().lower() or "active"),
+        is_deleted=bool(u.get("is_deleted", False)),
+        is_deactivated=bool(u.get("is_deactivated", False)),
+        deleted_at=((u.get("deleted_at") or "").strip() or None),
+        deactivated_at=((u.get("deactivated_at") or "").strip() or None),
+        deletion_requested_at=((u.get("deletion_requested_at") or "").strip() or None),
+        reactivated_at=((u.get("reactivated_at") or "").strip() or None),
+        retention_reason=((u.get("retention_reason") or "").strip() or None),
+        retargeting_retained=bool(u.get("retargeting_retained", False)),
         created_at=((u.get("created_at") or "").strip() or None),
         last_activity_at=((u.get("last_activity_at") or "").strip() or None),
         total_projects=int(total_projects or 0),
@@ -91,6 +100,14 @@ async def update_user(user_id: str, payload: AdminUserUpdate, _: dict = Depends(
     updates = payload.model_dump(exclude_unset=True)
     if "timezone" in updates and isinstance(updates.get("timezone"), str):
         updates["timezone"] = normalize_user_timezone(updates["timezone"])
+    if "account_status" in updates and isinstance(updates.get("account_status"), str):
+        status = updates["account_status"].strip().lower()
+        if status not in {"active", "deactivated", "deleted"}:
+            raise HTTPException(status_code=400, detail="Invalid account_status")
+        updates["account_status"] = status
+        if status == "active":
+            updates.setdefault("is_deleted", False)
+            updates.setdefault("is_deactivated", False)
     ok = st.update_user_fields(uid, updates)
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")
@@ -107,11 +124,13 @@ async def update_user(user_id: str, payload: AdminUserUpdate, _: dict = Depends(
 
 
 @router.delete("/users/{user_id}", status_code=204)
-async def delete_user(user_id: str, _: dict = Depends(require_admin)) -> Response:
+async def delete_user(user_id: str, admin: dict = Depends(require_admin)) -> Response:
     st = get_legacy_storage_module()
     uid = (user_id or "").strip()
     if not uid:
         raise HTTPException(status_code=400, detail="user_id is required")
+    if uid == (admin.get("id") or "").strip():
+        raise HTTPException(status_code=400, detail="Admins cannot delete their own account from the admin panel")
     ok = st.delete_user(uid)
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")

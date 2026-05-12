@@ -10,6 +10,7 @@ class ProfilePublic(BaseModel):
     phone: str | None = None
     timezone: str | None = None
     subscription_type: str | None = None
+    account_status: str | None = None
     created_at: str | None = None
 
 
