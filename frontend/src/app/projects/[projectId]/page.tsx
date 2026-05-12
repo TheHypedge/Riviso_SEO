@@ -993,6 +993,7 @@ export default function ProjectPage() {
           api.projectFeatureLimits(projectId).catch(() => null),
         ]);
         setArticles(list);
+        setSettings(ps);
         setFeatureLimits(limits);
         setProfile(prof);
         setProfileTz((prof?.timezone || "").trim());
@@ -3418,6 +3419,8 @@ export default function ProjectPage() {
   );
   const sidebarEmail = (profile?.email || "").trim();
   const sidebarPlan = (profile?.subscription_type || "beta").trim() || "beta";
+  const websiteConnected = (settings?.wp_verified_status || "").trim().toLowerCase() === "connected";
+  const showWebsiteRequiredOverlay = tab === "articles" && !loading && !websiteConnected;
 
   return (
     <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
@@ -3469,7 +3472,11 @@ export default function ProjectPage() {
                   </button>
                 ))}
               </div>
-              <div className={styles.sidebarAccountCard}>
+              <Link
+                href="/dashboard?section=profile"
+                className={`${styles.sidebarAccountCard} ${styles.sidebarAccountLink}`}
+                onClick={() => setMobileNavOpen(false)}
+              >
                 <div className={styles.sidebarAvatar} aria-hidden="true">
                   {(sidebarEmail || "U").charAt(0).toUpperCase()}
                 </div>
@@ -3479,7 +3486,7 @@ export default function ProjectPage() {
                   </div>
                   <div className={styles.sidebarAccountPlan}>Plan: {sidebarPlan}</div>
                 </div>
-              </div>
+              </Link>
             </div>
           </>
         ) : null}
@@ -3561,7 +3568,10 @@ export default function ProjectPage() {
                 </button>
               ))}
             </div>
-            <div className={styles.sidebarAccountCard}>
+            <Link
+              href="/dashboard?section=profile"
+              className={`${styles.sidebarAccountCard} ${styles.sidebarAccountLink}`}
+            >
               <div className={styles.sidebarAvatar} aria-hidden="true">
                 {(sidebarEmail || "U").charAt(0).toUpperCase()}
               </div>
@@ -3571,7 +3581,7 @@ export default function ProjectPage() {
                 </div>
                 <div className={styles.sidebarAccountPlan}>Plan: {sidebarPlan}</div>
               </div>
-            </div>
+            </Link>
           </aside>
 
           <section className={styles.contentCol}>
@@ -4000,7 +4010,7 @@ export default function ProjectPage() {
                 </div>
               </div>
 
-              <div className={`${styles.card} ${styles.cardWide}`} style={{ padding: 0 }}>
+              <div className={`${styles.card} ${styles.cardWide} ${styles.articleListCard}`} style={{ padding: 0 }}>
                 <div className={styles.articlesListHead}>
                   <input type="checkbox" checked={allOnPageSelected} onChange={toggleAllOnPage} />
                   <div className={styles.smallMuted}>Title</div>
@@ -4156,6 +4166,34 @@ export default function ProjectPage() {
                       </div>
                     ))
                   : null}
+                {showWebsiteRequiredOverlay ? (
+                  <div className={styles.articleConnectionOverlay} role="dialog" aria-modal="true" aria-label="Website connection required">
+                    <div className={styles.articleConnectionPopup}>
+                      <div className={styles.articleConnectionKicker}>Website not connected</div>
+                      <h3>Connect your WordPress website to continue</h3>
+                      <p>
+                        Article operations are locked until this project has a verified website connection.
+                        Connect the website to generate, schedule, publish, and manage articles safely.
+                      </p>
+                      <div className={styles.articleConnectionActions}>
+                        <button
+                          type="button"
+                          className={styles.button}
+                          onClick={() => router.push(`/projects/${projectId}?tab=project_settings`)}
+                        >
+                          Connect Website
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.btnSecondary}
+                          onClick={() => router.push("/dashboard")}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

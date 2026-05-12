@@ -22,6 +22,8 @@ import {
 
 type DashSection = "projects" | "users" | "limits" | "profile";
 
+const DASH_SECTIONS = new Set<DashSection>(["projects", "users", "limits", "profile"]);
+
 function planComparable(p: PlanPublic) {
   return {
     key: p.key,
@@ -55,6 +57,7 @@ export default function DashboardPage() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [meEmail, setMeEmail] = useState<string>("");
   const [mePlan, setMePlan] = useState<string>("");
+  const [meRole, setMeRole] = useState<string>("");
   const [projects, setProjects] = useState<ProjectPublic[]>([]);
   const [name, setName] = useState("");
   const [website, setWebsite] = useState("");
@@ -62,7 +65,12 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState<string | null>(null);
-  const [section, setSection] = useState<DashSection>("projects");
+  const [section, setSection] = useState<DashSection>(() => {
+    if (typeof window === "undefined") return "projects";
+    const params = new URLSearchParams(window.location.search);
+    const raw = (params.get("section") || "projects") as DashSection;
+    return DASH_SECTIONS.has(raw) ? raw : "projects";
+  });
   const [showAddProject, setShowAddProject] = useState(false);
   const [showWpConnect, setShowWpConnect] = useState(false);
   const [wpProject, setWpProject] = useState<ProjectPublic | null>(null);
@@ -136,6 +144,19 @@ export default function DashboardPage() {
   const [newPlanIsDefault, setNewPlanIsDefault] = useState<boolean>(false);
 
   const token = useMemo(() => getAccessToken(), []);
+  const isAdmin = (meRole || "").trim().toLowerCase() === "admin";
+
+  function canAccessSection(next: DashSection) {
+    if (next === "users" || next === "limits") return isAdmin;
+    return true;
+  }
+
+  function goSection(next: DashSection) {
+    const target = canAccessSection(next) ? next : "projects";
+    setSection(target);
+    setMobileNavOpen(false);
+    router.push(target === "projects" ? "/dashboard" : `/dashboard?section=${target}`);
+  }
 
   const Icon = {
     Menu: (props: { className?: string }) => (
@@ -162,6 +183,16 @@ export default function DashboardPage() {
         const me = await api.me();
         setMeEmail(me.email);
         setMePlan(me.subscription_type || "beta");
+        const role = me.role || "user";
+        setMeRole(role);
+        if (role.trim().toLowerCase() !== "admin") {
+          const params = new URLSearchParams(window.location.search);
+          const requestedSection = (params.get("section") || "projects") as DashSection;
+          if (requestedSection === "users" || requestedSection === "limits") {
+            setSection("projects");
+            router.replace("/dashboard");
+          }
+        }
         const items = await api.listProjects();
         setProjects(items);
       } catch {
@@ -197,11 +228,11 @@ export default function DashboardPage() {
     (async () => {
       setError(null);
       try {
-        if (section === "users") {
+        if (section === "users" && isAdmin) {
           setUsersLoading(true);
           const items = await api.adminListUsers();
           setUsers(items);
-        } else if (section === "limits") {
+        } else if (section === "limits" && isAdmin) {
           setPlansLoading(true);
           const items = await api.adminListPlans();
           setPlans(items);
@@ -222,7 +253,7 @@ export default function DashboardPage() {
         setProfileLoading(false);
       }
     })();
-  }, [browserTimeZone, section, token]);
+  }, [browserTimeZone, isAdmin, section, token]);
 
   useEffect(() => {
     if (section !== "profile") return;
@@ -467,47 +498,39 @@ export default function DashboardPage() {
                 <Icon.X className={styles.icon20} />
               </button>
             </div>
-            <div className={styles.sidebarTitle}>ADMIN</div>
+            <div className={styles.sidebarTitle}>{isAdmin ? "ADMIN" : "WORKSPACE"}</div>
             <div className={styles.navGroup}>
               <button
                 type="button"
                 className={`${styles.navItem} ${section === "projects" ? styles.navItemActive : ""}`}
-                onClick={() => {
-                  setSection("projects");
-                  setMobileNavOpen(false);
-                }}
+                onClick={() => goSection("projects")}
               >
                 Project management
               </button>
-              <button
-                type="button"
-                className={`${styles.navItem} ${section === "users" ? styles.navItemActive : ""}`}
-                onClick={() => {
-                  setSection("users");
-                  setMobileNavOpen(false);
-                }}
-              >
-                Manage users
-              </button>
-              <button
-                type="button"
-                className={`${styles.navItem} ${section === "limits" ? styles.navItemActive : ""}`}
-                onClick={() => {
-                  setSection("limits");
-                  setMobileNavOpen(false);
-                }}
-              >
-                System limitations
-              </button>
+              {isAdmin ? (
+                <>
+                  <button
+                    type="button"
+                    className={`${styles.navItem} ${section === "users" ? styles.navItemActive : ""}`}
+                    onClick={() => goSection("users")}
+                  >
+                    Manage users
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.navItem} ${section === "limits" ? styles.navItemActive : ""}`}
+                    onClick={() => goSection("limits")}
+                  >
+                    System limitations
+                  </button>
+                </>
+              ) : null}
               <button
                 type="button"
                 className={`${styles.navItem} ${section === "profile" ? styles.navItemActive : ""}`}
-                onClick={() => {
-                  setSection("profile");
-                  setMobileNavOpen(false);
-                }}
+                onClick={() => goSection("profile")}
               >
-                Settings / Profile
+                User profile
               </button>
             </div>
 
@@ -532,7 +555,14 @@ export default function DashboardPage() {
               </button>
             </div>
 
-            <div className={styles.sidebarAccountCard}>
+            <Link
+              href="/dashboard?section=profile"
+              className={`${styles.sidebarAccountCard} ${styles.sidebarAccountLink}`}
+              onClick={() => {
+                setSection("profile");
+                setMobileNavOpen(false);
+              }}
+            >
               <div className={styles.sidebarAvatar} aria-hidden="true">
                 {(meEmail || "U").trim().charAt(0).toUpperCase()}
               </div>
@@ -544,7 +574,7 @@ export default function DashboardPage() {
                   Plan: {(mePlan || "beta").trim() || "beta"}
                 </div>
               </div>
-            </div>
+            </Link>
           </aside>
 
           <section className={styles.contentCol}>
@@ -649,7 +679,7 @@ export default function DashboardPage() {
               </>
             ) : null}
 
-            {section === "users" ? (
+            {section === "users" && isAdmin ? (
               <>
                 <div className={styles.intro}>
                   <h1>Manage users</h1>
@@ -733,7 +763,7 @@ export default function DashboardPage() {
               </>
             ) : null}
 
-            {section === "limits" ? (
+            {section === "limits" && isAdmin ? (
               <>
                 <div className={styles.intro}>
                   <div className={styles.sectionHead}>
@@ -1063,7 +1093,7 @@ export default function DashboardPage() {
             {section === "profile" ? (
               <>
                 <div className={styles.intro}>
-                  <h1>Settings / Profile</h1>
+                  <h1>User profile</h1>
                   <p>Update your personal details (email is read-only).</p>
                 </div>
 

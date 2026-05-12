@@ -1051,6 +1051,69 @@
   background: var(--aa-surface-soft);
 }
 
+.articleListCard {
+  position: relative;
+  overflow: hidden;
+  min-height: 260px;
+}
+
+.articleConnectionOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(217, 119, 87, 0.16), transparent 38%),
+    rgba(3, 3, 6, 0.78);
+  backdrop-filter: blur(3px);
+}
+
+.articleConnectionPopup {
+  width: min(440px, 100%);
+  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 42%);
+  border-radius: var(--aa-r-xl);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--aa-primary), transparent 88%), transparent 70%),
+    #101014;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.46);
+  padding: 22px;
+  color: var(--aa-body-strong);
+  text-align: center;
+}
+
+.articleConnectionPopup h3 {
+  margin: 6px 0 10px;
+  color: var(--aa-ink);
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.articleConnectionPopup p {
+  margin: 0;
+  color: var(--aa-muted);
+  line-height: 1.55;
+  font-size: 13px;
+}
+
+.articleConnectionKicker {
+  color: color-mix(in oklab, var(--aa-primary), white 18%);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.articleConnectionActions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
 @media (max-width: 980px) {
   .filtersGrid {
     grid-template-columns: 1fr 1fr;
@@ -1713,6 +1776,29 @@
     linear-gradient(135deg, color-mix(in oklab, var(--aa-primary), transparent 90%), transparent 72%),
     color-mix(in oklab, var(--aa-surface-card), transparent 8%);
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18);
+}
+
+.sidebarAccountLink {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    transform 160ms ease;
+}
+
+.sidebarAccountLink:hover {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 35%);
+  background:
+    linear-gradient(135deg, color-mix(in oklab, var(--aa-primary), transparent 84%), transparent 72%),
+    color-mix(in oklab, var(--aa-surface-card), transparent 4%);
+  transform: translateY(-1px);
+}
+
+.sidebarAccountLink:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--aa-primary), white 18%);
+  outline-offset: 3px;
 }
 
 .offcanvasPanel > .sidebarAccountCard {
