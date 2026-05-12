@@ -93,6 +93,7 @@ def estimate_tokens_for_generation_bundle(
     brand_identity: str | None = None,
     niche_identifier: str | None = None,
     generate_image: bool,
+    image_prompt_text: str | None = None,
     max_completion_tokens: int = 6_000,
 ) -> int:
     sys, user = build_generation_messages(
@@ -103,12 +104,20 @@ def estimate_tokens_for_generation_bundle(
         brand_identity=brand_identity,
         niche_identifier=niche_identifier,
     )
-    return estimate_generation_token_budget(
+    estimate = estimate_generation_token_budget(
         system_prompt=sys,
         user_message=user,
         max_completion_tokens=max_completion_tokens,
         include_image=generate_image,
     )
+    if generate_image and image_prompt_text:
+        estimate += estimate_generation_token_budget(
+            system_prompt="",
+            user_message=image_prompt_text[:1200],
+            max_completion_tokens=0,
+            include_image=False,
+        )
+    return estimate
 
 
 async def generate_article_bundle(

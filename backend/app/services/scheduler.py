@@ -52,6 +52,15 @@ def _fallback_first_prompt_text(prompts: list) -> str | None:
     return None
 
 
+def _friendly_scheduler_error(exc: Exception) -> str:
+    raw = str(exc) or exc.__class__.__name__
+    if "unexpected keyword argument" in raw:
+        return "Scheduled generation failed due to a backend generation configuration mismatch. Please retry after the latest deployment."
+    if "OPENAI_API_KEY" in raw:
+        return "OpenAI is not configured on the backend. Add OPENAI_API_KEY and retry this scheduled article."
+    return raw[:1000]
+
+
 async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: dict, job: dict) -> dict:
     """
     Ensure article has generated content/meta and (optionally) image, saving results to storage.
@@ -143,6 +152,7 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
         brand_identity=(proj.get("brand_identity") or ""),
         niche_identifier=(proj.get("niche_identifier") or ""),
         generate_image=generate_image,
+        image_prompt_text=image_text,
     )
 
     if owner_uid and owner_role != "admin":
@@ -427,12 +437,13 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                         pass
                 except Exception as e:
                     log.exception("Scheduled job failed jid=%s", jid)
+                    err = _friendly_scheduler_error(e)
                     await run_sync(
                         st.update_scheduled_job_fields,
                         jid,
                         {
                             "state": "failed",
-                            "last_error": str(e),
+                            "last_error": err,
                             "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                         },
                     )
