@@ -2243,6 +2243,78 @@ def update_scheduled_job_fields(job_id: str, updates: dict[str, Any]) -> bool:
         return bool(res.acknowledged and res.matched_count == 1)
 
 
+def claim_scheduled_job_for_posting(
+    job_id: str,
+    allowed_states: list[str],
+    *,
+    now_str: str | None = None,
+    target_state: str = "posting",
+) -> bool:
+    """
+    Atomically transition a scheduled job from any state in ``allowed_states`` to
+    ``target_state``.
+
+    Returns True only if this caller won the race (i.e., the row was matched
+    AND modified). Returns False otherwise (already claimed by another worker
+    or row not found / wrong state).
+
+    Why this exists: when multiple uvicorn workers or background loops run in
+    parallel, the read-modify-write performed by ``update_scheduled_job_fields``
+    is not safe. Two callers can both observe ``state == "scheduled"`` and both
+    proceed to publish the same article to WordPress, producing duplicate posts.
+
+    Mongo path uses ``find_one_and_update`` with a state filter so only one
+    caller succeeds. JSON path leans on the global ``_db_write_lock``.
+    """
+    jid = (job_id or "").strip()
+    if not jid:
+        return False
+    allowed = [str(s).strip().lower() for s in (allowed_states or []) if str(s).strip()]
+    if not allowed:
+        return False
+    target = (target_state or "posting").strip() or "posting"
+    stamp = (now_str or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))[:64]
+
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list("scheduled_jobs.json")
+            for i, r in enumerate(rows):
+                if not isinstance(r, dict):
+                    continue
+                if (r.get("id") or "").strip() != jid:
+                    continue
+                current = (r.get("state") or "").strip().lower()
+                if current not in allowed:
+                    return False
+                merged = {
+                    **r,
+                    "state": target,
+                    "updated_at": stamp,
+                    "last_attempt_at": stamp,
+                    "attempts": int(r.get("attempts") or 0) + 1,
+                    "last_error": "",
+                }
+                rows[i] = _normalize_scheduled_job_dict(merged)
+                _save_json_scheduled_jobs([_normalize_scheduled_job_dict(x) for x in rows if isinstance(x, dict)])
+                return True
+            return False
+
+    with _db_write_lock:
+        res = get_db().scheduled_jobs.find_one_and_update(
+            {"_id": jid, "state": {"$in": allowed}},
+            {
+                "$set": {
+                    "state": target,
+                    "updated_at": stamp,
+                    "last_attempt_at": stamp,
+                    "last_error": "",
+                },
+                "$inc": {"attempts": 1},
+            },
+        )
+        return res is not None
+
+
 def delete_scheduled_job(job_id: str) -> bool:
     jid = (job_id or "").strip()
     if not jid:

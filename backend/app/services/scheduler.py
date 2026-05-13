@@ -403,18 +403,38 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                 if not jid or not pid or not aid:
                     continue
 
-                # Mark posting
-                await run_sync(
-                    st.update_scheduled_job_fields,
-                    jid,
-                    {
-                        "state": "posting",
-                        "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                        "attempts": int(j.get("attempts") or 0) + 1,
-                        "last_attempt_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                        "last_error": "",
-                    },
-                )
+                # Atomically claim the job for this worker. If another worker
+                # (or the manual "Post Now" path) has already claimed it, we
+                # skip and let the winner finish. This is what prevents
+                # duplicate WordPress posts when multiple processes poll.
+                allowed_claim_states = ["scheduled", "ready_to_post"]
+                if retry_failed:
+                    allowed_claim_states.append("failed")
+                now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                if hasattr(st, "claim_scheduled_job_for_posting"):
+                    claimed = await run_sync(
+                        st.claim_scheduled_job_for_posting,
+                        jid,
+                        allowed_claim_states,
+                        now_str=now_str,
+                        target_state="posting",
+                    )
+                else:
+                    # Backward-compat fallback: best-effort non-atomic claim.
+                    await run_sync(
+                        st.update_scheduled_job_fields,
+                        jid,
+                        {
+                            "state": "posting",
+                            "updated_at": now_str,
+                            "attempts": int(j.get("attempts") or 0) + 1,
+                            "last_attempt_at": now_str,
+                            "last_error": "",
+                        },
+                    )
+                    claimed = True
+                if not claimed:
+                    continue
 
                 try:
                     # Lookup project + article rows
@@ -434,10 +454,68 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                     if not art:
                         raise RuntimeError("Article not found")
 
+                    # Defensive double-post guard: if this article was already
+                    # published to WordPress (e.g., manual "Post Now" raced with
+                    # the scheduler, or a previous attempt succeeded but the
+                    # state write failed), do NOT create a second WP post.
+                    existing_wp_post_id = str(art.get("wp_post_id") or "").strip()
+                    existing_wp_link = str(art.get("wp_link") or "").strip()
+                    if existing_wp_post_id:
+                        log.info(
+                            "Scheduled job=%s skipped re-posting because article id=%s already has wp_post_id=%s.",
+                            jid,
+                            aid,
+                            existing_wp_post_id,
+                        )
+                        await run_sync(
+                            st.update_scheduled_job_fields,
+                            jid,
+                            {
+                                "state": "posted",
+                                "wp_post_id": existing_wp_post_id,
+                                "wp_link": existing_wp_link,
+                                "last_error": "",
+                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                            },
+                        )
+                        continue
+
                     # If article isn't generated yet, generate it now using scheduled prompts/defaults.
                     art = await prepare_article_for_scheduled_job(st=st, jid=jid, proj=proj, art=art, job=j)
 
-                    await run_sync(st.update_scheduled_job_fields, jid, {"state": "ready_to_post"})
+                    # Double-check after prep — another worker / manual publish
+                    # might have completed in the meantime.
+                    post_prep_wp_post_id = str(art.get("wp_post_id") or "").strip()
+                    if post_prep_wp_post_id:
+                        log.info(
+                            "Scheduled job=%s skipped re-posting because article id=%s gained wp_post_id=%s during prep.",
+                            jid,
+                            aid,
+                            post_prep_wp_post_id,
+                        )
+                        await run_sync(
+                            st.update_scheduled_job_fields,
+                            jid,
+                            {
+                                "state": "posted",
+                                "wp_post_id": post_prep_wp_post_id,
+                                "wp_link": str(art.get("wp_link") or "")[:2000],
+                                "last_error": "",
+                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                            },
+                        )
+                        continue
+
+                    # Stay in "posting" (NOT "ready_to_post") so a second
+                    # worker can't reclaim the job during this short window.
+                    await run_sync(
+                        st.update_scheduled_job_fields,
+                        jid,
+                        {
+                            "state": "posting",
+                            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        },
+                    )
 
                     # categories
                     cats: list[int] = []

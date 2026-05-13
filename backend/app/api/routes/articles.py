@@ -873,9 +873,11 @@ async def schedule_article(
 
     norm_utc = dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
-    # Enforce minimum gap of 5 minutes from current time (UTC).
-    if dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=5)):
-        raise HTTPException(status_code=400, detail="Scheduled time must be at least 5 minutes from now")
+    # Enforce minimum gap of 10 minutes from current time (UTC). The scheduler
+    # needs ~6-8 minutes to fully prepare an article (content + image + WP
+    # upload) before it can publish, so 10 minutes is the safe minimum.
+    if dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=10)):
+        raise HTTPException(status_code=400, detail="Scheduled time must be at least 10 minutes from now")
 
     wp_status = (payload.wp_status or "draft").strip().lower()
     if wp_status not in {"draft", "publish"}:
@@ -1017,6 +1019,66 @@ async def publish_to_live_site(
     _require_verified_website(proj)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
+    # Double-post guard: if this article already has a live WordPress post,
+    # block silent re-publishing so we never create a second WP entry for the
+    # same article from the same UI action.
+    existing_wp_post_id = str((a or {}).get("wp_post_id") or "").strip()
+    if existing_wp_post_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This article is already published to WordPress (post id "
+                f"{existing_wp_post_id}). Edit it in WordPress directly or "
+                "duplicate the article to publish a new copy."
+            ),
+        )
+
+    # If a scheduled job exists for this article, atomically claim it for the
+    # manual publish path. This prevents the scheduler loop from publishing the
+    # same article at the same instant (the main double-posting trigger).
+    claimed_job_id: str | None = None
+    if hasattr(st, "load_scheduled_jobs") and hasattr(st, "claim_scheduled_job_for_posting"):
+        try:
+            rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) or []
+            active = [
+                r
+                for r in rows
+                if isinstance(r, dict)
+                and (r.get("article_id") or "").strip() == article_id
+                and (r.get("state") or "").strip().lower()
+                in {"scheduled", "ready_to_post", "failed", "content_generating", "image_generating"}
+            ]
+            if active:
+                def _stamp(x: dict) -> str:
+                    return (x.get("updated_at") or x.get("created_at") or "").strip()
+                active.sort(key=_stamp, reverse=True)
+                target_jid = (active[0].get("id") or "").strip()
+                if target_jid:
+                    claimed = await run_sync(
+                        st.claim_scheduled_job_for_posting,
+                        target_jid,
+                        ["scheduled", "ready_to_post", "failed", "content_generating", "image_generating"],
+                        target_state="posting",
+                    )
+                    if not claimed:
+                        # Could not claim — most likely the scheduler is already
+                        # publishing this article. Refuse instead of double-posting.
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                "This article is currently being published by the scheduler. "
+                                "Please wait a moment and refresh — duplicate publishing was prevented."
+                            ),
+                        )
+                    claimed_job_id = target_jid
+        except HTTPException:
+            raise
+        except Exception:
+            # If the lookup fails (e.g., storage hiccup), continue — atomicity
+            # gain is best-effort, not a hard correctness requirement on a
+            # path that already had no guard before.
+            claimed_job_id = None
+
     # Plan enforcement: publishing consumes per-day / per-month article quota.
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
@@ -1129,6 +1191,25 @@ async def publish_to_live_site(
         except Exception:
             pass
 
+    def _release_manual_claim(err_msg: str | None) -> None:
+        """If we atomically claimed a scheduled job for this manual publish but
+        the WordPress call failed, mark the job as 'failed' so the user sees
+        the error in Scheduled Articles and the scheduler doesn't silently
+        reclaim it on the next poll."""
+        if not claimed_job_id:
+            return
+        try:
+            st.update_scheduled_job_fields(
+                claimed_job_id,
+                {
+                    "state": "failed",
+                    "last_error": (err_msg or "Manual publish failed")[:1000],
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+        except Exception:
+            pass
+
     try:
         created = await wp.post_json(f"/wp-json/wp/v2/{rest_base}", payload, timeout=90.0)
     except Exception as e:
@@ -1138,8 +1219,10 @@ async def publish_to_live_site(
                 payload.pop("tags", None)
                 created = await wp.post_json(f"/wp-json/wp/v2/{rest_base}", payload, timeout=90.0)
             except Exception:
+                _release_manual_claim(f"WordPress publish failed: {e}")
                 raise HTTPException(status_code=502, detail=f"WordPress publish failed: {e}") from e
         else:
+            _release_manual_claim(f"WordPress publish failed: {e}")
             raise HTTPException(status_code=502, detail=f"WordPress publish failed: {e}") from e
 
     wp_post_id = created.get("id") if isinstance(created, dict) else None

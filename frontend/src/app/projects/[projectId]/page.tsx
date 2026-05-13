@@ -2430,7 +2430,7 @@ export default function ProjectPage() {
 
   async function openEditScheduledJob(j: import("@/lib/api").ScheduledJobPublic) {
     setError(null);
-    const min = new Date(Date.now() + 5 * 60 * 1000);
+    const min = new Date(Date.now() + 10 * 60 * 1000);
     setEditJobMin(toDatetimeLocalFromDateInProfileTz(min));
 
     const meta = await ensureScheduleMetaLoaded();
@@ -2477,7 +2477,7 @@ export default function ProjectPage() {
     if (!selectedIds.length) return;
     if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
     void ensureScheduleMetaLoaded();
-    const min = new Date(Date.now() + 5 * 60 * 1000);
+    const min = new Date(Date.now() + 10 * 60 * 1000);
     const minStr = toDatetimeLocalFromDateInProfileTz(min);
     setBulkScheduleMin(minStr);
     setBulkScheduleWpStatus(wpDefaults?.wp_status || "draft");
@@ -4472,7 +4472,7 @@ export default function ProjectPage() {
                               className={styles.miniBtn}
                               onClick={() => {
                                 void ensureScheduleMetaLoaded();
-                                const min = new Date(Date.now() + 5 * 60 * 1000);
+                                const min = new Date(Date.now() + 10 * 60 * 1000);
                                 const minStr = toDatetimeLocalFromDateInProfileTz(min);
                                 setScheduleMin(minStr);
                                 setScheduleId(a.id);
@@ -4616,7 +4616,7 @@ export default function ProjectPage() {
                         onChange={(e) => setScheduleWhen(e.target.value)}
                       />
                       <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                        Times are interpreted in your profile timezone ({profileTz || "browser default"}). Minimum 5 minutes from now (enforced on save).
+                        Times are interpreted in your profile timezone ({profileTz || "browser default"}). Minimum 10 minutes from now (enforced on save) — the article needs ~6-8 minutes to fully prepare before posting.
                       </div>
                     </label>
 
@@ -8971,7 +8971,7 @@ export default function ProjectPage() {
                     }
                   />
                   <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                    Times are interpreted in your profile timezone. Minimum 5 minutes from now.
+                    Times are interpreted in your profile timezone. Minimum 10 minutes from now — the article needs ~6-8 minutes to fully prepare before posting.
                   </div>
                 </label>
                 <label className={styles.label}>

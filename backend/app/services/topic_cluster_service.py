@@ -341,10 +341,10 @@ class TopicClusterService:
                 raise HTTPException(status_code=400, detail=str(e) or "Invalid schedule time format") from None
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
-            if scheduled_dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=5)):
+            if scheduled_dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=10)):
                 raise HTTPException(
                     status_code=400,
-                    detail="Scheduled time must be at least 5 minutes from now.",
+                    detail="Scheduled time must be at least 10 minutes from now.",
                 )
             # Pre-check schedule quota for the whole batch.
             if role != "admin" and uid and hasattr(st, "consume_scheduled_usage"):

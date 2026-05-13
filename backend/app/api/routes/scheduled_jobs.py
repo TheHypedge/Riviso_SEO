@@ -132,8 +132,8 @@ async def update_scheduled_job(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
 
-        if dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=5)):
-            raise HTTPException(status_code=400, detail="Scheduled time must be at least 5 minutes from now")
+        if dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=10)):
+            raise HTTPException(status_code=400, detail="Scheduled time must be at least 10 minutes from now")
 
         norm_utc = dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
         updates["run_at"] = norm_utc
