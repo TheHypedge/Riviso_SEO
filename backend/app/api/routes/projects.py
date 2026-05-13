@@ -587,6 +587,21 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
     context_used = len(proj.get("context_links") or []) if isinstance(proj.get("context_links"), list) else 0
     context_remaining = None if context_limit is None else max(0, context_limit - context_used)
 
+    def _prompt_block(feature: str, list_field: str, max_field: str, char_field: str) -> dict:
+        count_limit = None if role == "admin" else _limit(max_field)
+        char_limit = None if role == "admin" else _limit(char_field)
+        items = proj.get(list_field)
+        used = len(items) if isinstance(items, list) else 0
+        remaining = None if count_limit is None else max(0, count_limit - used)
+        return {
+            "feature": feature,
+            "unlimited": count_limit is None,
+            "used": used,
+            "limit": count_limit,
+            "remaining": remaining,
+            "char_limit": char_limit,
+        }
+
     return {
         "plan_key": plan_key,
         "is_admin": role == "admin",
@@ -628,6 +643,18 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
             "remaining": context_remaining,
             "renews_at": _utc_month_reset_at(),
         },
+        "writing_prompts": _prompt_block(
+            "writing_prompts",
+            "prompts",
+            "max_writing_prompts",
+            "writing_prompt_char_limit",
+        ),
+        "image_prompts": _prompt_block(
+            "image_prompts",
+            "image_prompts",
+            "max_image_prompts",
+            "image_prompt_char_limit",
+        ),
     }
 
 

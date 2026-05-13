@@ -124,6 +124,20 @@ export type CountFeatureLimit = {
   renews_at?: string | null;
 };
 
+/**
+ * Prompt-style feature limit. Combines a per-project count cap and a
+ * per-prompt character cap so the UI can show "X / Y prompts used" plus a
+ * live character counter inside the editor.
+ */
+export type PromptFeatureLimit = {
+  feature: string;
+  unlimited: boolean;
+  used: number;
+  limit: number | null;
+  remaining: number | null;
+  char_limit: number | null;
+};
+
 export type ProjectFeatureLimits = {
   plan_key: string;
   is_admin: boolean;
@@ -132,6 +146,8 @@ export type ProjectFeatureLimits = {
   scheduled_articles?: MonthlyFeatureLimit;
   export_articles?: MonthlyFeatureLimit;
   context_links: CountFeatureLimit;
+  writing_prompts?: PromptFeatureLimit;
+  image_prompts?: PromptFeatureLimit;
 };
 
 export type ProfilePublic = {
@@ -1164,28 +1180,35 @@ export const api = {
   },
 
   async setDefaultWritingPrompt(projectId: string, id: string) {
-    return apiFetch<{ ok: true; default_id: string }>(`/api/projects/${projectId}/prompts/default`, {
+    const out = await apiFetch<{ ok: true; default_id: string }>(`/api/projects/${projectId}/prompts/default`, {
       method: "POST",
       body: JSON.stringify({ id }),
     });
+    _cacheWritingPrompts.delete(projectId);
+    return out;
   },
 
   async createWritingPrompt(projectId: string, payload: { name: string; text: string }) {
-    return apiFetch<PromptItem>(`/api/projects/${projectId}/prompts`, {
+    const out = await apiFetch<PromptItem>(`/api/projects/${projectId}/prompts`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    _cacheWritingPrompts.delete(projectId);
+    return out;
   },
 
   async updateWritingPrompt(projectId: string, promptId: string, payload: Partial<{ name: string; text: string }>) {
-    return apiFetch<PromptItem>(`/api/projects/${projectId}/prompts/${promptId}`, {
+    const out = await apiFetch<PromptItem>(`/api/projects/${projectId}/prompts/${promptId}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
+    _cacheWritingPrompts.delete(projectId);
+    return out;
   },
 
   async deleteWritingPrompt(projectId: string, promptId: string) {
     await apiFetch<unknown>(`/api/projects/${projectId}/prompts/${promptId}`, { method: "DELETE" });
+    _cacheWritingPrompts.delete(projectId);
     return { ok: true as const };
   },
 
@@ -1206,28 +1229,35 @@ export const api = {
   },
 
   async setDefaultImagePrompt(projectId: string, id: string) {
-    return apiFetch<{ ok: true; default_id: string }>(`/api/projects/${projectId}/image-prompts/default`, {
+    const out = await apiFetch<{ ok: true; default_id: string }>(`/api/projects/${projectId}/image-prompts/default`, {
       method: "POST",
       body: JSON.stringify({ id }),
     });
+    _cacheImagePrompts.delete(projectId);
+    return out;
   },
 
   async createImagePrompt(projectId: string, payload: { name: string; text: string }) {
-    return apiFetch<PromptItem>(`/api/projects/${projectId}/image-prompts`, {
+    const out = await apiFetch<PromptItem>(`/api/projects/${projectId}/image-prompts`, {
       method: "POST",
       body: JSON.stringify(payload),
     });
+    _cacheImagePrompts.delete(projectId);
+    return out;
   },
 
   async updateImagePrompt(projectId: string, promptId: string, payload: Partial<{ name: string; text: string }>) {
-    return apiFetch<PromptItem>(`/api/projects/${projectId}/image-prompts/${promptId}`, {
+    const out = await apiFetch<PromptItem>(`/api/projects/${projectId}/image-prompts/${promptId}`, {
       method: "PATCH",
       body: JSON.stringify(payload),
     });
+    _cacheImagePrompts.delete(projectId);
+    return out;
   },
 
   async deleteImagePrompt(projectId: string, promptId: string) {
     await apiFetch<unknown>(`/api/projects/${projectId}/image-prompts/${promptId}`, { method: "DELETE" });
+    _cacheImagePrompts.delete(projectId);
     return { ok: true as const };
   },
 

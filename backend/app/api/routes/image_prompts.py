@@ -12,6 +12,53 @@ from app.services.prompt_validation import validate_image_prompt
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["image-prompts"])
 
+
+def _plan_limit(plan: dict, field: str) -> int | None:
+    try:
+        raw = int(plan.get(field) or 0)
+    except (TypeError, ValueError):
+        raw = 0
+    return raw if raw > 0 else None
+
+
+def _plan_for(user: dict, st) -> tuple[dict, str, str]:
+    role = (user.get("role") or "").strip().lower()
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+        if not isinstance(plan, dict):
+            plan = {}
+    except Exception:
+        plan = {}
+    return plan, plan_key, role
+
+
+def _enforce_image_prompt_limits(*, plan: dict, plan_key: str, role: str, proj: dict, text: str, is_create: bool) -> None:
+    if role == "admin":
+        return
+    char_limit = _plan_limit(plan, "image_prompt_char_limit")
+    if char_limit is not None and len(text) > char_limit:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Image prompt is too long for your {plan_key} plan. "
+                f"Maximum allowed is {char_limit} characters (currently {len(text)})."
+            ),
+        )
+    if is_create:
+        count_limit = _plan_limit(plan, "max_image_prompts")
+        if count_limit is not None:
+            current = len([p for p in (proj.get("image_prompts") or []) if isinstance(p, dict)])
+            if current >= count_limit:
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        f"Image prompt limit reached for your {plan_key} plan "
+                        f"({count_limit}). Delete an existing prompt or upgrade your plan to add more."
+                    ),
+                )
+
 _DEFAULT_IMAGE_PROMPT_NAME = "Default image prompt"
 _DEFAULT_IMAGE_PROMPT_TEXT = (
     "Create a realistic, professional featured image that matches the article topic.\n"
@@ -80,7 +127,9 @@ async def list_image_prompts(project_id: str, user: dict = Depends(get_current_u
 async def create_image_prompt(project_id: str, payload: PromptCreate, user: dict = Depends(get_current_user)) -> PromptItem:
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
+    plan, plan_key, role = _plan_for(user, st)
     text = payload.text.strip()[:100_000]
+    _enforce_image_prompt_limits(plan=plan, plan_key=plan_key, role=role, proj=proj, text=text, is_create=True)
     validate_image_prompt(text)
     prompts = [p for p in (proj.get("image_prompts") or []) if isinstance(p, dict)]
     pid = str(uuid.uuid4())
@@ -102,17 +151,20 @@ async def update_image_prompt(
 ) -> PromptItem:
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
+    plan, plan_key, role = _plan_for(user, st)
     pid = (prompt_id or "").strip()
     prompts = [p for p in (proj.get("image_prompts") or []) if isinstance(p, dict)]
     if payload.text is not None:
-        validate_image_prompt(payload.text.strip()[:100_000])
+        text = payload.text.strip()[:100_000]
+        _enforce_image_prompt_limits(plan=plan, plan_key=plan_key, role=role, proj=proj, text=text, is_create=False)
+        validate_image_prompt(text)
     found = None
     for p in prompts:
         if (p.get("id") or "").strip() == pid:
             if payload.name is not None:
                 p["name"] = payload.name.strip()[:200]
             if payload.text is not None:
-                p["text"] = payload.text.strip()[:100_000]
+                p["text"] = text
             found = p
             break
     if not found:

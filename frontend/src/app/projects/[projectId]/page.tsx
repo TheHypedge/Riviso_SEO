@@ -2543,6 +2543,16 @@ export default function ProjectPage() {
   }
 
   function startAddPrompt(kind: "writing" | "image") {
+    const cap = kind === "writing" ? featureLimits?.writing_prompts : featureLimits?.image_prompts;
+    if (cap && !cap.unlimited && typeof cap.limit === "number") {
+      const count = (kind === "writing" ? wpDrafts : ipDrafts).length;
+      if (count >= cap.limit) {
+        setError(
+          `${kind === "writing" ? "Writing" : "Image"} prompt limit reached for your ${featureLimits?.plan_key || "current"} plan (max ${cap.limit}). Delete an existing prompt to add another.`
+        );
+        return;
+      }
+    }
     const tmpId = `new_${kind}_${Date.now()}`;
     if (kind === "writing") setWpDrafts((p) => [{ id: tmpId, name: "", text: "", isNew: true }, ...p]);
     else setIpDrafts((p) => [{ id: tmpId, name: "", text: "", isNew: true }, ...p]);
@@ -6518,10 +6528,38 @@ export default function ProjectPage() {
             <div className={styles.twoCol}>
               <div className={`${styles.card} ${styles.cardWide}`}>
                 <div className={styles.projectCardTop}>
-                  <h3 className={styles.clusterTreeLabel}>Article writing prompts</h3>
-                  <button className={styles.btnSecondary} type="button" onClick={() => startAddPrompt("writing")}>
-                    + Add new
-                  </button>
+                  <div>
+                    <h3 className={styles.clusterTreeLabel}>Article writing prompts</h3>
+                    {(() => {
+                      const cap = featureLimits?.writing_prompts;
+                      if (!cap) return null;
+                      const used = wpDrafts.length;
+                      if (cap.unlimited || cap.limit == null) {
+                        return <div className={styles.muted} style={{ fontSize: 11.5, marginTop: 2 }}>{used} prompt{used === 1 ? "" : "s"} · unlimited on your {featureLimits?.plan_key} plan</div>;
+                      }
+                      const limit = cap.limit;
+                      return (
+                        <div className={styles.muted} style={{ fontSize: 11.5, marginTop: 2 }}>
+                          {used} / {limit} prompts used · {Math.max(0, limit - used)} left on your {featureLimits?.plan_key} plan
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  {(() => {
+                    const cap = featureLimits?.writing_prompts;
+                    const atLimit = !!(cap && !cap.unlimited && typeof cap.limit === "number" && wpDrafts.length >= cap.limit);
+                    return (
+                      <button
+                        className={styles.btnSecondary}
+                        type="button"
+                        onClick={() => startAddPrompt("writing")}
+                        disabled={atLimit}
+                        title={atLimit ? `Writing prompt limit reached for your ${featureLimits?.plan_key || "current"} plan.` : undefined}
+                      >
+                        + Add new
+                      </button>
+                    );
+                  })()}
                 </div>
                 <div className={styles.clusterCardSubtitle} style={{ fontSize: 12.5 }}>
                   Default is used when you generate or schedule unless you override on the article.
@@ -6559,10 +6597,38 @@ export default function ProjectPage() {
 
               <div className={`${styles.card} ${styles.cardWide}`}>
                 <div className={styles.projectCardTop}>
-                  <h3 className={styles.clusterTreeLabel}>Image prompts</h3>
-                  <button className={styles.btnSecondary} type="button" onClick={() => startAddPrompt("image")}>
-                    + Add new
-                  </button>
+                  <div>
+                    <h3 className={styles.clusterTreeLabel}>Image prompts</h3>
+                    {(() => {
+                      const cap = featureLimits?.image_prompts;
+                      if (!cap) return null;
+                      const used = ipDrafts.length;
+                      if (cap.unlimited || cap.limit == null) {
+                        return <div className={styles.muted} style={{ fontSize: 11.5, marginTop: 2 }}>{used} prompt{used === 1 ? "" : "s"} · unlimited on your {featureLimits?.plan_key} plan</div>;
+                      }
+                      const limit = cap.limit;
+                      return (
+                        <div className={styles.muted} style={{ fontSize: 11.5, marginTop: 2 }}>
+                          {used} / {limit} prompts used · {Math.max(0, limit - used)} left on your {featureLimits?.plan_key} plan
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  {(() => {
+                    const cap = featureLimits?.image_prompts;
+                    const atLimit = !!(cap && !cap.unlimited && typeof cap.limit === "number" && ipDrafts.length >= cap.limit);
+                    return (
+                      <button
+                        className={styles.btnSecondary}
+                        type="button"
+                        onClick={() => startAddPrompt("image")}
+                        disabled={atLimit}
+                        title={atLimit ? `Image prompt limit reached for your ${featureLimits?.plan_key || "current"} plan.` : undefined}
+                      >
+                        + Add new
+                      </button>
+                    );
+                  })()}
                 </div>
                 <div className={styles.clusterCardSubtitle} style={{ fontSize: 12.5 }}>
                   Custom image prompts are allowed. During generation, Riviso appends the article
@@ -6600,7 +6666,18 @@ export default function ProjectPage() {
               </div>
             </div>
 
-            {showPromptModal ? (
+            {showPromptModal ? (() => {
+              const promptKindCap = showPromptModal.kind === "writing"
+                ? featureLimits?.writing_prompts
+                : featureLimits?.image_prompts;
+              const promptCharLimit = promptKindCap && !promptKindCap.unlimited && typeof promptKindCap.char_limit === "number" && promptKindCap.char_limit > 0
+                ? promptKindCap.char_limit
+                : null;
+              const draftLen = draftText.length;
+              const overLimit = promptCharLimit !== null && draftLen > promptCharLimit;
+              const nearLimit = promptCharLimit !== null && !overLimit && draftLen >= Math.max(1, promptCharLimit - Math.max(50, Math.round(promptCharLimit * 0.05)));
+              const counterColor = overLimit ? "#ff6b6b" : nearLimit ? "#f59e0b" : undefined;
+              return (
               <>
                 <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setShowPromptModal(null)} />
                 <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Edit prompt">
@@ -6615,12 +6692,54 @@ export default function ProjectPage() {
                   <div className={styles.modalBody}>
                     <label className={styles.label}>
                       Prompt name
-                      <input className={styles.input} value={draftName} onChange={(e) => setDraftName(e.target.value)} />
+                      <input className={styles.input} value={draftName} onChange={(e) => setDraftName(e.target.value)} maxLength={200} />
                     </label>
                     <label className={styles.label}>
                       Actual prompt
-                      <textarea className={styles.textarea} style={{ minHeight: 240 }} value={draftText} onChange={(e) => setDraftText(e.target.value)} />
+                      <textarea
+                        className={styles.textarea}
+                        style={{ minHeight: 240, borderColor: overLimit ? "#ff6b6b" : undefined }}
+                        value={draftText}
+                        maxLength={promptCharLimit ?? undefined}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          if (promptCharLimit !== null && next.length > promptCharLimit) {
+                            setDraftText(next.slice(0, promptCharLimit));
+                          } else {
+                            setDraftText(next);
+                          }
+                        }}
+                      />
                     </label>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        fontSize: 11.5,
+                        color: counterColor,
+                        marginTop: -4,
+                      }}
+                      className={counterColor ? undefined : styles.muted}
+                    >
+                      <span>
+                        {promptCharLimit !== null
+                          ? `${draftLen.toLocaleString()} / ${promptCharLimit.toLocaleString()} characters`
+                          : `${draftLen.toLocaleString()} characters`}
+                      </span>
+                      {promptCharLimit !== null ? (
+                        <span>
+                          {overLimit
+                            ? "Exceeds plan limit"
+                            : `${Math.max(0, promptCharLimit - draftLen).toLocaleString()} left`}
+                        </span>
+                      ) : null}
+                    </div>
+                    {promptCharLimit !== null ? (
+                      <div className={styles.muted} style={{ fontSize: 11, lineHeight: 1.45 }}>
+                        Your {featureLimits?.plan_key || "current"} plan allows up to {promptCharLimit.toLocaleString()} characters per {showPromptModal.kind === "writing" ? "writing" : "image"} prompt.
+                      </div>
+                    ) : null}
                     {showPromptModal.kind === "image" ? (
                       <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
                         Describe the visual style, composition, lighting, camera, or scene for the
@@ -6646,23 +6765,26 @@ export default function ProjectPage() {
                       type="button"
                       onClick={() => {
                         const { kind, id } = showPromptModal;
+                        const text = promptCharLimit !== null ? draftText.slice(0, promptCharLimit) : draftText;
                         if (kind === "writing") {
-                          setWpDrafts((prev) => prev.map((x) => (x.id === id ? { ...x, name: draftName, text: draftText } : x)));
+                          setWpDrafts((prev) => prev.map((x) => (x.id === id ? { ...x, name: draftName, text } : x)));
                           if (draftSetDefault) setWpDefault(id);
                         } else {
-                          setIpDrafts((prev) => prev.map((x) => (x.id === id ? { ...x, name: draftName, text: draftText } : x)));
+                          setIpDrafts((prev) => prev.map((x) => (x.id === id ? { ...x, name: draftName, text } : x)));
                           if (draftSetDefault) setIpDefault(id);
                         }
                         setShowPromptModal(null);
                       }}
-                      disabled={!draftName.trim() || !draftText.trim()}
+                      disabled={!draftName.trim() || !draftText.trim() || overLimit}
+                      title={overLimit ? `Prompt exceeds the ${promptCharLimit?.toLocaleString()} character limit for your plan.` : undefined}
                     >
                       Save prompt
                     </button>
                   </div>
                 </div>
               </>
-            ) : null}
+              );
+            })() : null}
           </>
         ) : null}
 
