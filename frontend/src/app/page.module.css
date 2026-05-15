@@ -2389,77 +2389,185 @@
   }
 }
 
-/* Scheduled Articles list (mobile responsive) */
+/* Scheduled Articles list */
+.scheduledListCard {
+  padding: 0;
+  overflow: hidden;
+}
+
+.scheduledEmpty {
+  padding: 16px 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.scheduledListHeader,
 .scheduledRow {
-  display: flex;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(168px, 220px) minmax(108px, 140px);
+  gap: 16px;
+  align-items: start;
   padding: 12px 14px;
   border-bottom: 1px solid var(--button-secondary-border);
-  align-items: flex-start;
+}
+
+.scheduledListHeader {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  background: color-mix(in oklab, var(--text-primary), transparent 96%);
+}
+
+.scheduledListHeader span:nth-child(2),
+.scheduledListHeader span:nth-child(3) {
+  text-align: right;
+}
+
+.scheduledMain {
+  min-width: 0;
 }
 
 .scheduledActions {
-  margin-top: 6px;
+  margin-top: 8px;
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
 
-.scheduledMeta {
-  min-width: 260px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
+.scheduledError {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--aa-error, #ff4d4f);
+  word-break: break-word;
 }
 
-.scheduledMetaGrid {
-  display: grid;
-  grid-template-columns: 1fr;
+.scheduledWhen {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.scheduledWhenPrimary {
+  display: block;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.scheduledWhenSecondary {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.scheduledWhenTz {
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+.scheduledWhenMeta {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-}
-
-.scheduledMetaItem {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
   justify-content: flex-end;
 }
 
-.scheduledMetaLabel {
-  font-size: 12px;
-  color: #666;
+.scheduledChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: color-mix(in oklab, var(--text-primary), transparent 92%);
+  border: 1px solid var(--button-secondary-border);
+  text-transform: capitalize;
 }
 
-.scheduledMetaValue {
-  font-size: 12px;
-  color: #111;
-  font-weight: 800;
+.scheduledStatusCol {
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  flex-shrink: 0;
 }
 
-@media (max-width: 640px) {
+.scheduledStatePill {
+  display: inline-block;
+  max-width: 100%;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0.02em;
+  text-align: center;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.scheduledStateReady {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.14);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.scheduledStatePosted {
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.scheduledStateFailed {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.scheduledStateActive {
+  color: #fde68a;
+  background: rgba(234, 179, 8, 0.14);
+  border-color: rgba(234, 179, 8, 0.35);
+}
+
+.scheduledStateScheduled {
+  color: color-mix(in oklab, var(--aa-primary), #fff 20%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 82%);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 55%);
+}
+
+.scheduledStateNeutral {
+  color: var(--text-secondary);
+  background: color-mix(in oklab, var(--text-primary), transparent 92%);
+  border-color: var(--button-secondary-border);
+}
+
+@media (max-width: 900px) {
+  .scheduledListHeader {
+    display: none;
+  }
+
   .scheduledRow {
-    flex-direction: column;
-    gap: 10px;
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
-  .scheduledMeta {
-    width: 100%;
-    min-width: 0;
-    align-items: flex-start;
-  }
-  .scheduledMetaGrid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    width: 100%;
-    gap: 10px;
-  }
-  .scheduledMetaItem {
-    flex-direction: column;
-    align-items: flex-start;
+
+  .scheduledWhen,
+  .scheduledStatusCol {
+    text-align: left;
     justify-content: flex-start;
-    gap: 2px;
   }
-  .scheduledMetaValue {
-    word-break: break-word;
+
+  .scheduledWhenMeta {
+    justify-content: flex-start;
   }
 }
 

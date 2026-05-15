@@ -92,6 +92,16 @@ class Settings(BaseSettings):
     # to detect "intent overlap" between proposed topics and existing content.
     openai_embedding_model: str = "text-embedding-3-small"
 
+    # Comma-separated phrases forbidden in generated article bodies/headings (merged with built-in defaults).
+    generation_banned_phrases: str = Field(
+        default="",
+        validation_alias="GENERATION_BANNED_PHRASES",
+        description=(
+            "Extra banned labels for AI generation (e.g. 'AEO-Optimized,For GEO'). "
+            "Built-in defaults always apply; this env extends the list."
+        ),
+    )
+
     @field_validator(
         "secret_key",
         "google_oauth_client_id",

@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import re
 
+from app.services.generation_blocklist import sanitize_line_banned_phrases, strip_banned_phrases_from_text
+
 __all__ = [
     "sanitize_article_body",
     "sanitize_meta_title",
@@ -70,6 +72,7 @@ _BANNED_SECTION_HEADINGS: tuple[re.Pattern[str], ...] = tuple(
         r"^\s*#{1,6}\s*(?:meta\s*title|meta\s*description|seo\s*meta(?:data)?|seo\s*information|seo\s*details)\s*$",
         r"^\s*#{1,6}\s*(?:keywords?|tags?|categor(?:y|ies)|focus\s*keyphrase|focus\s*keyword)\s*$",
         r"^\s*#{1,6}\s*(?:ai[\s\-]*(?:suggested|recommended)\s*keywords?|suggested\s*keywords?|recommended\s*keywords?)\s*$",
+        r"^\s*#{1,6}\s*.+\(\s*(?:aeo|geo|llm)[\s\-]*optimiz(?:ed|ing)?",
     )
 )
 
@@ -152,7 +155,7 @@ def sanitize_article_body(text: str | None) -> str:
         if _line_is_banned(line):
             continue
 
-        cleaned.append(line)
+        cleaned.append(sanitize_line_banned_phrases(line))
 
     # Trim leading and trailing blank lines and collapse 3+ blank lines to 2.
     out: list[str] = []
@@ -176,7 +179,7 @@ def sanitize_article_body(text: str | None) -> str:
 def _strip_meta_string(text: str | None) -> str:
     if not text:
         return ""
-    s = str(text).strip()
+    s = strip_banned_phrases_from_text(str(text).strip())
     # Drop wrapping code fences (rare).
     if s.startswith("```") and s.endswith("```"):
         s = s[3:-3].strip()

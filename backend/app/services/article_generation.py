@@ -14,6 +14,7 @@ from app.services.content_sanitizer import (
     sanitize_meta_title,
 )
 from app.services.openai_client import OpenAIClient
+from app.services.generation_blocklist import format_banned_phrases_for_prompt
 from app.services.prompt_validation import assert_image_prompt_allowed
 from app.services.seo_guardrails import (
     ANCHOR_SYSTEM_PREFIX,
@@ -158,6 +159,7 @@ def build_generation_messages(
         "- Do NOT wrap article_markdown in code fences. Output it as plain markdown.\n"
         "- meta_title and meta_description must be plain text only — no quotes, no 'Meta Title:' prefix, no markdown.\n"
         "- Do NOT output code, poetry, scripts, or conversational text outside the JSON object."
+        f"{format_banned_phrases_for_prompt()}"
         f"{flavor}"
     )
 

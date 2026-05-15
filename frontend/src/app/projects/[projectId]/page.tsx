@@ -1192,6 +1192,36 @@ export default function ProjectPage() {
     }
   }
 
+  function formatScheduledRunAt(utcLike: string | null | undefined): { date: string; time: string; tz: string } {
+    const v = (utcLike || "").trim();
+    if (!v) return { date: "—", time: "", tz: "" };
+    const iso = v.includes("T") ? v : v.replace(" ", "T") + "Z";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return { date: v, time: "", tz: "" };
+    const tz = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    try {
+      const date = new Intl.DateTimeFormat(undefined, {
+        timeZone: tz,
+        weekday: "short",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }).format(d);
+      const time = new Intl.DateTimeFormat(undefined, {
+        timeZone: tz,
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(d);
+      const tzName =
+        new Intl.DateTimeFormat(undefined, { timeZone: tz, timeZoneName: "short" })
+          .formatToParts(d)
+          .find((p) => p.type === "timeZoneName")?.value || tz;
+      return { date, time, tz: tzName };
+    } catch {
+      return { date: d.toLocaleString(), time: "", tz: "" };
+    }
+  }
+
   async function requestIndexingOne(articleId: string) {
     setRequestIndexingBusy(true);
     setRequestIndexingMsg("Pinging Google’s discovery endpoints…");
@@ -2792,14 +2822,27 @@ export default function ProjectPage() {
   function jobStateLabel(s: string) {
     const v = (s || "").toLowerCase();
     if (v === "scheduled") return "Scheduled";
-    if (v === "content_generating") return "Generating content…";
-    if (v === "image_generating") return "Generating image…";
-    if (v === "ready_to_post") return "Article is ready to post";
-    if (v === "posting") return "Posting in progress";
+    if (v === "content_generating") return "Generating content";
+    if (v === "image_generating") return "Generating image";
+    if (v === "ready_to_post") return "Ready to post";
+    if (v === "posting") return "Posting…";
     if (v === "posted") return "Posted";
     if (v === "failed") return "Failed";
     if (v === "cancelled") return "Cancelled";
-    return v || "unknown";
+    return v || "Unknown";
+  }
+
+  function jobStateClass(s: string) {
+    const v = (s || "").toLowerCase();
+    const base = styles.scheduledStatePill;
+    if (v === "ready_to_post") return `${base} ${styles.scheduledStateReady}`;
+    if (v === "posted") return `${base} ${styles.scheduledStatePosted}`;
+    if (v === "failed") return `${base} ${styles.scheduledStateFailed}`;
+    if (v === "posting" || v === "content_generating" || v === "image_generating") {
+      return `${base} ${styles.scheduledStateActive}`;
+    }
+    if (v === "scheduled") return `${base} ${styles.scheduledStateScheduled}`;
+    return `${base} ${styles.scheduledStateNeutral}`;
   }
 
   const tabLabel: Record<TabKey, string> = {
@@ -6298,100 +6341,108 @@ export default function ProjectPage() {
               {error ? <p className={styles.error}>{error}</p> : null}
             </div>
 
-            <div className={`${styles.card} ${styles.cardWide}`} style={{ padding: 0 }}>
-              <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px 14px", borderBottom: "1px solid var(--button-secondary-border)" }}>
-                <div style={{ fontSize: 12, color: "#666" }}>Article</div>
-                <div style={{ marginLeft: "auto", fontSize: 12, color: "#666" }}>Schedule</div>
-              </div>
-
+            <div className={`${styles.card} ${styles.cardWide} ${styles.scheduledListCard}`}>
               {scheduledVisible.length === 0 && !scheduledLoading ? (
-                <div style={{ padding: 14, color: "#666" }}>No scheduled articles yet.</div>
-              ) : null}
-
-              {scheduledVisible.map((j) => {
-                const jobState = (j.state || "").toLowerCase();
-                const canPostNow = !["posted", "cancelled", "posting"].includes(jobState);
-                const isFailed = jobState === "failed";
-                return (
-                <div key={j.id} className={styles.scheduledRow}>
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <Link
-                      href={`/projects/${projectId}/articles/${j.article_id}`}
-                      className={styles.articleTitleLink}
-                    >
-                      {articles.find((a) => a.id === j.article_id)?.title || "(Untitled article)"}
-                    </Link>
-                    <div className={styles.scheduledActions}>
-                      <button
-                        type="button"
-                        className={styles.miniBtn}
-                        onClick={() => {
-                          setError(null);
-                          setConfirmPostNowJob(j);
-                        }}
-                        disabled={!canPostNow}
-                        title={canPostNow ? "Publish to WordPress now" : "Not available while posting or after posted/cancelled"}
-                      >
-                        Post Now
-                      </button>
-                      {isFailed ? (
-                        <button
-                          type="button"
-                          className={styles.miniBtn}
-                          onClick={() => void retryScheduledPreparation(j.id)}
-                          disabled={retryPrepBusyId === j.id}
-                          title="Re-run article and image generation for this scheduled post"
-                        >
-                          {retryPrepBusyId === j.id ? "Retrying…" : "Retry preparation"}
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className={styles.miniBtn}
-                        onClick={() => void openEditScheduledJob(j)}
-                        disabled={["posted", "cancelled"].includes(jobState)}
-                      >
-                        Re-Schedule
-                      </button>
-                      <button
-                        type="button"
-                        className={`${styles.miniBtn} ${styles.miniDanger}`}
-                        onClick={async () => {
-                          setConfirmCancelJob(j);
-                        }}
-                        disabled={["posted", "cancelled"].includes(jobState)}
-                      >
-                        Cancel
-                      </button>
-                      {j.wp_link ? (
-                        <a className={styles.miniBtn} href={j.wp_link} target="_blank" rel="noreferrer">
-                          View on WordPress
-                        </a>
-                      ) : null}
-                    </div>
-                    {j.last_error ? <div style={{ marginTop: 6, fontSize: 12, color: "#ff4d4f" }}>{j.last_error}</div> : null}
+                <div className={styles.scheduledEmpty}>No scheduled articles yet.</div>
+              ) : (
+                <>
+                  <div className={styles.scheduledListHeader} aria-hidden="true">
+                    <span>Article</span>
+                    <span>Publish at</span>
+                    <span>Status</span>
                   </div>
+                  {scheduledVisible.map((j) => {
+                    const jobState = (j.state || "").toLowerCase();
+                    const canPostNow = !["posted", "cancelled", "posting"].includes(jobState);
+                    const isFailed = jobState === "failed";
+                    const when = formatScheduledRunAt(j.run_at);
+                    const wpStatus = (j.wp_status || "draft").toLowerCase() === "publish" ? "Publish" : "Draft";
+                    return (
+                      <div key={j.id} className={styles.scheduledRow}>
+                        <div className={styles.scheduledMain}>
+                          <Link
+                            href={`/projects/${projectId}/articles/${j.article_id}`}
+                            className={styles.articleTitleLink}
+                          >
+                            {articles.find((a) => a.id === j.article_id)?.title || "(Untitled article)"}
+                          </Link>
+                          <div className={styles.scheduledActions}>
+                            <button
+                              type="button"
+                              className={styles.miniBtn}
+                              onClick={() => {
+                                setError(null);
+                                setConfirmPostNowJob(j);
+                              }}
+                              disabled={!canPostNow}
+                              title={
+                                canPostNow
+                                  ? "Publish to WordPress now"
+                                  : "Not available while posting or after posted/cancelled"
+                              }
+                            >
+                              Post Now
+                            </button>
+                            {isFailed ? (
+                              <button
+                                type="button"
+                                className={styles.miniBtn}
+                                onClick={() => void retryScheduledPreparation(j.id)}
+                                disabled={retryPrepBusyId === j.id}
+                                title="Re-run article and image generation for this scheduled post"
+                              >
+                                {retryPrepBusyId === j.id ? "Retrying…" : "Retry preparation"}
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              className={styles.miniBtn}
+                              onClick={() => void openEditScheduledJob(j)}
+                              disabled={["posted", "cancelled"].includes(jobState)}
+                            >
+                              Re-Schedule
+                            </button>
+                            <button
+                              type="button"
+                              className={`${styles.miniBtn} ${styles.miniDanger}`}
+                              onClick={() => setConfirmCancelJob(j)}
+                              disabled={["posted", "cancelled"].includes(jobState)}
+                            >
+                              Cancel
+                            </button>
+                            {j.wp_link ? (
+                              <a className={styles.miniBtn} href={j.wp_link} target="_blank" rel="noreferrer">
+                                View on WordPress
+                              </a>
+                            ) : null}
+                          </div>
+                          {j.last_error ? <div className={styles.scheduledError}>{j.last_error}</div> : null}
+                        </div>
 
-                  <div className={styles.scheduledMeta}>
-                    <div className={styles.scheduledMetaGrid}>
-                      <div className={styles.scheduledMetaItem}>
-                        <span className={styles.scheduledMetaLabel}>Time</span>
-                        <span className={styles.scheduledMetaValue}>{formatInProfileTz(j.run_at)}</span>
+                        <div className={styles.scheduledWhen}>
+                          <time className={styles.scheduledWhenPrimary} dateTime={j.run_at || undefined}>
+                            {when.date}
+                          </time>
+                          {when.time ? (
+                            <span className={styles.scheduledWhenSecondary}>
+                              {when.time}
+                              {when.tz ? <span className={styles.scheduledWhenTz}> · {when.tz}</span> : null}
+                            </span>
+                          ) : null}
+                          <div className={styles.scheduledWhenMeta}>
+                            <span className={styles.scheduledChip}>{j.post_type || "posts"}</span>
+                            <span className={styles.scheduledChip}>{wpStatus}</span>
+                          </div>
+                        </div>
+
+                        <div className={styles.scheduledStatusCol}>
+                          <span className={jobStateClass(j.state)}>{jobStateLabel(j.state)}</span>
+                        </div>
                       </div>
-                      <div className={styles.scheduledMetaItem}>
-                        <span className={styles.scheduledMetaLabel}>Type</span>
-                        <span className={styles.scheduledMetaValue}>{j.post_type || "posts"}</span>
-                      </div>
-                      <div className={styles.scheduledMetaItem}>
-                        <span className={styles.scheduledMetaLabel}>WP</span>
-                        <span className={styles.scheduledMetaValue}>{j.wp_status || "draft"}</span>
-                      </div>
-                    </div>
-                    <span className={styles.statusPill}>{jobStateLabel(j.state)}</span>
-                  </div>
-                </div>
-                );
-              })}
+                    );
+                  })}
+                </>
+              )}
             </div>
 
             {editJob ? (
