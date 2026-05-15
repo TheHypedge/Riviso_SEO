@@ -30,6 +30,6 @@ class HealthResponse(BaseModel):
         default="",
         description=(
             "Code revision for article generation/token estimation. After deploying scheduled-job "
-            "fixes, production should show ``2026-05-15-extra-kwargs`` (not an older value or empty)."
+            "fixes, production should show ``2026-05-15-image-prompt-param`` (not an older value or empty)."
         ),
     )

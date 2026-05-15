@@ -15,7 +15,7 @@ from fastapi import HTTPException
 
 from app.core.config import settings
 from app.services.article_generation import (
-    estimate_tokens_for_generation_bundle_safe,
+    estimate_bundle_tokens,
     generate_article_bundle_safe,
     generate_featured_image_only,
 )
@@ -90,7 +90,7 @@ async def execute_article_generation(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-    token_estimate = estimate_tokens_for_generation_bundle_safe(
+    token_estimate = estimate_bundle_tokens(
         title=title,
         keywords=keywords,
         focus_keyphrase=focus,

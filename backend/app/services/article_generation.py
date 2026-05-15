@@ -25,7 +25,7 @@ from app.services.seo_guardrails import (
 log = logging.getLogger(__name__)
 
 # Bump when generation/token-estimate signatures change; surfaced on /api/health for deploy checks.
-GENERATION_REVISION = "2026-05-15-extra-kwargs"
+GENERATION_REVISION = "2026-05-15-image-prompt-param"
 
 @lru_cache(maxsize=16)
 def _callable_param_names(fn: Callable[..., Any]) -> frozenset[str]:
@@ -48,28 +48,71 @@ def filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: dict[str, Any]) -
     return {k: v for k, v in kwargs.items() if k in allowed}
 
 
+def estimate_bundle_tokens(
+    *,
+    title: str,
+    keywords: list[str],
+    focus_keyphrase: str,
+    writing_prompt_text: str,
+    brand_identity: str | None = None,
+    niche_identifier: str | None = None,
+    generate_image: bool,
+    image_prompt_text: str | None = None,
+    max_completion_tokens: int = 6_000,
+) -> int:
+    """
+    Canonical token budget for article + optional custom image prompt.
+
+    Does not depend on ``estimate_tokens_for_generation_bundle``'s parameter list,
+    so scheduled jobs and the editor never fail when only callers were updated.
+    """
+    sys, user = build_generation_messages(
+        title=title,
+        keywords=keywords,
+        focus_keyphrase=focus_keyphrase,
+        writing_prompt_text=writing_prompt_text,
+        brand_identity=brand_identity,
+        niche_identifier=niche_identifier,
+    )
+    estimate = estimate_generation_token_budget(
+        system_prompt=sys,
+        user_message=user,
+        max_completion_tokens=max_completion_tokens,
+        include_image=generate_image,
+    )
+    img = (str(image_prompt_text).strip() if image_prompt_text is not None else "") or None
+    if generate_image and img:
+        estimate += estimate_generation_token_budget(
+            system_prompt="",
+            user_message=img[:1200],
+            max_completion_tokens=0,
+            include_image=False,
+        )
+    return estimate
+
+
 def estimate_tokens_for_generation_bundle_safe(**kwargs: Any) -> int:
-    """Version-tolerant wrapper — always safe to pass ``image_prompt_text``."""
+    """Always accepts ``image_prompt_text``; falls back to :func:`estimate_bundle_tokens`."""
+    img = kwargs.pop("image_prompt_text", None)
     filtered = filter_kwargs_for_callable(estimate_tokens_for_generation_bundle, kwargs)
     try:
-        return estimate_tokens_for_generation_bundle(**filtered)
+        return estimate_tokens_for_generation_bundle(**filtered, image_prompt_text=img)
     except TypeError as e:
         if "image_prompt_text" not in str(e) or "unexpected keyword argument" not in str(e):
             raise
-        fallback = {k: v for k, v in filtered.items() if k != "image_prompt_text"}
-        return estimate_tokens_for_generation_bundle(**fallback)
+        return estimate_bundle_tokens(**filtered, image_prompt_text=img)
 
 
 async def generate_article_bundle_safe(**kwargs: Any) -> dict:
-    """Version-tolerant wrapper — always safe to pass ``image_prompt_text``."""
+    """Always accepts ``image_prompt_text``; strips it if the target signature cannot."""
+    img = kwargs.pop("image_prompt_text", None)
     filtered = filter_kwargs_for_callable(generate_article_bundle, kwargs)
     try:
-        return await generate_article_bundle(**filtered)
+        return await generate_article_bundle(**filtered, image_prompt_text=img)
     except TypeError as e:
         if "image_prompt_text" not in str(e) or "unexpected keyword argument" not in str(e):
             raise
-        fallback = {k: v for k, v in filtered.items() if k != "image_prompt_text"}
-        return await generate_article_bundle(**fallback)
+        return await generate_article_bundle(**filtered)
 
 
 def _apply_placeholders(prompt: str, *, title: str, keywords: list[str], focus_keyphrase: str) -> str:
@@ -143,42 +186,33 @@ def estimate_tokens_for_generation_bundle(
     brand_identity: str | None = None,
     niche_identifier: str | None = None,
     generate_image: bool,
+    image_prompt_text: str | None = None,
     max_completion_tokens: int = 6_000,
     **extra_kwargs: Any,
 ) -> int:
     """
     Token budget estimate for a full article + optional image.
 
-    ``**extra_kwargs`` absorbs ``image_prompt_text`` (and any future keys) so
-    callers from older/newer scheduler builds never raise
-    ``unexpected keyword argument 'image_prompt_text'`` during deploys.
+    ``image_prompt_text`` is a first-class parameter (scheduled jobs and the editor
+    pass it). ``**extra_kwargs`` absorbs any other forward-compatible keys.
     """
-    raw_img = extra_kwargs.pop("image_prompt_text", None)
-    image_prompt_text = (str(raw_img).strip() if raw_img is not None else "") or None
+    if image_prompt_text is None and "image_prompt_text" in extra_kwargs:
+        image_prompt_text = extra_kwargs.pop("image_prompt_text")
+    else:
+        extra_kwargs.pop("image_prompt_text", None)
     if extra_kwargs:
         log.debug("estimate_tokens_for_generation_bundle ignored keys: %s", sorted(extra_kwargs.keys()))
-    sys, user = build_generation_messages(
+    return estimate_bundle_tokens(
         title=title,
         keywords=keywords,
         focus_keyphrase=focus_keyphrase,
         writing_prompt_text=writing_prompt_text,
         brand_identity=brand_identity,
         niche_identifier=niche_identifier,
-    )
-    estimate = estimate_generation_token_budget(
-        system_prompt=sys,
-        user_message=user,
+        generate_image=generate_image,
+        image_prompt_text=image_prompt_text,
         max_completion_tokens=max_completion_tokens,
-        include_image=generate_image,
     )
-    if generate_image and image_prompt_text:
-        estimate += estimate_generation_token_budget(
-            system_prompt="",
-            user_message=image_prompt_text[:1200],
-            max_completion_tokens=0,
-            include_image=False,
-        )
-    return estimate
 
 
 async def generate_article_bundle(
@@ -190,6 +224,7 @@ async def generate_article_bundle(
     brand_identity: str | None = None,
     niche_identifier: str | None = None,
     generate_image: bool,
+    image_prompt_text: str | None = None,
     **extra_kwargs: Any,
 ) -> dict:
     """
@@ -198,12 +233,12 @@ async def generate_article_bundle(
     If an image prompt is selected, it is validated as image-only visual/style
     direction and then augmented server-side with focus keyphrase, niche, brand,
     title, and keywords before being sent to the image model.
-
-    ``**extra_kwargs`` absorbs ``image_prompt_text`` for the same deploy-safety
-    reason as :func:`estimate_tokens_for_generation_bundle`.
     """
-    raw_img = extra_kwargs.pop("image_prompt_text", None)
-    image_prompt_text = (str(raw_img).strip() if raw_img is not None else "") or None
+    if image_prompt_text is None and "image_prompt_text" in extra_kwargs:
+        image_prompt_text = extra_kwargs.pop("image_prompt_text")
+    else:
+        extra_kwargs.pop("image_prompt_text", None)
+    image_prompt_text = (str(image_prompt_text).strip() if image_prompt_text is not None else "") or None
     if extra_kwargs:
         log.debug("generate_article_bundle ignored keys: %s", sorted(extra_kwargs.keys()))
     client = OpenAIClient()
