@@ -1096,6 +1096,12 @@ export const api = {
       { method: "POST" },
     );
   },
+  async retryAllFailedScheduledPreparations(projectId: string) {
+    return apiFetch<{ ok: boolean; retried: number; message: string }>(
+      `/api/projects/${projectId}/scheduled-jobs/retry-failed-preparations`,
+      { method: "POST" },
+    );
+  },
   async listArticles(projectId: string) {
     return apiFetch<ArticlePublic[]>(`/api/projects/${projectId}/articles`);
   },

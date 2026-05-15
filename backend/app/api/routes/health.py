@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app.core.config import settings
 from app.schemas.health import HealthResponse
+from app.services.article_generation import GENERATION_REVISION
 
 router = APIRouter()
 
@@ -27,5 +28,6 @@ async def health() -> HealthResponse:
         openai_configured=bool((settings.openai_api_key or "").strip()),
         gsc_oauth_configured=settings.google_oauth_configured,
         gsc_oauth_client_id_fingerprint=settings.google_oauth_client_id_fingerprint,
+        generation_revision=GENERATION_REVISION,
     )
 

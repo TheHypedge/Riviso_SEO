@@ -799,6 +799,7 @@ export default function ProjectPage() {
   const [scheduledJobs, setScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [scheduledLoading, setScheduledLoading] = useState(false);
   const [retryPrepBusyId, setRetryPrepBusyId] = useState<string | null>(null);
+  const [retryAllFailedBusy, setRetryAllFailedBusy] = useState(false);
   const [scheduledSearch, setScheduledSearch] = useState("");
   const [scheduledOrder, setScheduledOrder] = useState<"desc" | "asc">("desc");
   const [title, setTitle] = useState("");
@@ -1276,6 +1277,7 @@ export default function ProjectPage() {
   }
 
   function dedupeScheduledJobs(rows: import("@/lib/api").ScheduledJobPublic[]) {
+    const active = (rows || []).filter((j) => (j.state || "").toLowerCase() !== "cancelled");
     const bestByArticle = new Map<string, import("@/lib/api").ScheduledJobPublic>();
     type JobWithTimestamps = import("@/lib/api").ScheduledJobPublic & { updated_at?: string; created_at?: string };
     const score = (j: import("@/lib/api").ScheduledJobPublic) => {
@@ -1283,7 +1285,7 @@ export default function ProjectPage() {
       const s = jj.updated_at || jj.created_at || j.run_at || "";
       return typeof s === "string" ? s : "";
     };
-    for (const j of rows || []) {
+    for (const j of active) {
       const aid = (j.article_id || "").trim();
       if (!aid) continue;
       const cur = bestByArticle.get(aid);
@@ -2434,6 +2436,25 @@ export default function ProjectPage() {
     setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
   }
 
+  async function pollScheduledJobsUntilSettled(jobIds: string[]) {
+    const targets = new Set(jobIds);
+    for (const delayMs of [2500, 5000, 10000, 20000, 45000]) {
+      await new Promise((r) => setTimeout(r, delayMs));
+      const rows = dedupeScheduledJobs(await api.listScheduledJobs(projectId));
+      setScheduledJobs(rows);
+      const tracked = rows.filter((j) => targets.has(j.id));
+      if (
+        tracked.length === 0 ||
+        tracked.every((j) => {
+          const st = (j.state || "").toLowerCase();
+          return st === "ready_to_post" || st === "posted" || st === "failed" || st === "cancelled";
+        })
+      ) {
+        break;
+      }
+    }
+  }
+
   async function retryScheduledPreparation(jobId: string) {
     setError(null);
     setRetryPrepBusyId(jobId);
@@ -2446,15 +2467,7 @@ export default function ProjectPage() {
             : j,
         ),
       );
-      // Poll while background generation runs (content + image can take several minutes).
-      for (const delayMs of [2500, 5000, 10000, 20000, 45000]) {
-        await new Promise((r) => setTimeout(r, delayMs));
-        const rows = dedupeScheduledJobs(await api.listScheduledJobs(projectId));
-        setScheduledJobs(rows);
-        const row = rows.find((j) => j.id === jobId);
-        const st = (row?.state || "").toLowerCase();
-        if (!row || st === "ready_to_post" || st === "posted" || st === "failed") break;
-      }
+      await pollScheduledJobsUntilSettled([jobId]);
     } catch (e) {
       if (showWebsiteConnectionErrorIfNeeded(e)) return;
       const msg =
@@ -2466,6 +2479,33 @@ export default function ProjectPage() {
       setError(msg);
     } finally {
       setRetryPrepBusyId(null);
+    }
+  }
+
+  async function retryAllFailedScheduledPreparations() {
+    setError(null);
+    setRetryAllFailedBusy(true);
+    try {
+      const res = await api.retryAllFailedScheduledPreparations(projectId);
+      await refreshScheduledJobsList();
+      if (res.retried > 0) {
+        const rows = dedupeScheduledJobs(await api.listScheduledJobs(projectId));
+        const ids = rows
+          .filter((j) => ["content_generating", "image_generating"].includes((j.state || "").toLowerCase()))
+          .map((j) => j.id);
+        if (ids.length) await pollScheduledJobsUntilSettled(ids);
+      }
+    } catch (e) {
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
+      const msg =
+        e instanceof ApiError && e.status === 404
+          ? "Bulk retry is not available on the server yet. Deploy the latest backend, then use Retry preparation on each failed job."
+          : e instanceof Error
+            ? e.message
+            : "Bulk retry failed";
+      setError(msg);
+    } finally {
+      setRetryAllFailedBusy(false);
     }
   }
 
@@ -6225,6 +6265,17 @@ export default function ProjectPage() {
                   </label>
                 </div>
                 <div className={styles.scheduledHeadActions}>
+                  {scheduledJobs.some((j) => (j.state || "").toLowerCase() === "failed") ? (
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      disabled={retryAllFailedBusy || !!retryPrepBusyId}
+                      onClick={() => void retryAllFailedScheduledPreparations()}
+                      title="Re-run generation for every failed scheduled job (use after deploying the backend fix)"
+                    >
+                      {retryAllFailedBusy ? "Retrying all…" : "Retry all failed"}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className={styles.iconButton}
@@ -6560,7 +6611,7 @@ export default function ProjectPage() {
                   </div>
                   <div className={styles.modalBody}>
                     <p style={{ marginTop: 0 }}>
-                      Are you sure you want to cancel this scheduled post?
+                      This removes the article from Scheduled Articles and returns it to your Articles list as pending.
                     </p>
                     <div className={styles.muted} style={{ fontSize: 12 }}>
                       {articles.find((a) => a.id === confirmCancelJob.article_id)?.title || "(Untitled article)"}
@@ -6576,9 +6627,17 @@ export default function ProjectPage() {
                       onClick={async () => {
                         try {
                           setError(null);
-                          await api.cancelScheduledJob(projectId, confirmCancelJob.id);
-                          setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
+                          const cancelled = confirmCancelJob;
+                          await api.cancelScheduledJob(projectId, cancelled.id);
+                          setScheduledJobs((prev) =>
+                            prev.filter(
+                              (j) =>
+                                j.id !== cancelled.id && j.article_id !== cancelled.article_id,
+                            ),
+                          );
+                          setArticles(await api.listArticles(projectId));
                           setConfirmCancelJob(null);
+                          setTab("articles");
                         } catch (e) {
                           setError(e instanceof Error ? e.message : "Failed to cancel scheduled job");
                         }

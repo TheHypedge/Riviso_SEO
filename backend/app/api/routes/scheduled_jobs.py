@@ -73,6 +73,24 @@ def _to_public(row: dict) -> ScheduledJobPublic:
         wp_link=(row.get("wp_link") or "").strip() or None,
     )
 
+def _cleared_article_schedule_fields() -> dict:
+    """Clear WordPress schedule markers and return article to the normal (pending) queue."""
+    return {
+        "status": "pending",
+        "wp_scheduled_at": "",
+        "wp_scheduled_at_utc": "",
+        "wp_schedule_wp_status": "",
+        "wp_schedule_error": "",
+        "wp_schedule_batch_id": "",
+        "wp_schedule_batch_index": "",
+        "wp_schedule_batch_total": "",
+        "wp_schedule_state": "",
+        "wp_schedule_state_updated_at": "",
+        "wp_schedule_next_retry_at": "",
+        "wp_schedule_tz_offset_min": "",
+    }
+
+
 def _find_article_for_job(*, st, project_id: str, article_id: str) -> dict | None:
     pid = (project_id or "").strip()
     aid = (article_id or "").strip()
@@ -92,7 +110,11 @@ async def list_scheduled(project_id: str, user: dict = Depends(get_current_user)
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
-    out = [_to_public(r) for r in (rows or []) if isinstance(r, dict)]
+    out = [
+        _to_public(r)
+        for r in (rows or [])
+        if isinstance(r, dict) and (r.get("state") or "").strip().lower() != "cancelled"
+    ]
     # Latest scheduled first
     out.sort(key=lambda x: x.run_at, reverse=True)
     return out
@@ -224,6 +246,58 @@ async def update_scheduled_job(
     return _to_public(row2)
 
 
+@router.post("/retry-failed-preparations", status_code=200)
+async def retry_all_failed_preparations(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Re-queue every failed scheduled job in this project (e.g. after deploying the generation fix)."""
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    _require_verified_website(proj)
+    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    failed = [
+        r
+        for r in (rows or [])
+        if isinstance(r, dict) and (r.get("state") or "").strip().lower() == "failed"
+    ]
+    if not failed:
+        return {"ok": True, "retried": 0, "message": "No failed scheduled jobs to retry."}
+
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    retried = 0
+    for row in failed:
+        jid = (row.get("id") or "").strip()
+        aid = (row.get("article_id") or "").strip()
+        if not jid or not aid:
+            continue
+        await run_sync(
+            st.update_scheduled_job_fields,
+            jid,
+            {
+                "state": "content_generating",
+                "last_error": "",
+                "attempts": 0,
+                "last_attempt_at": "",
+                "updated_at": now_str,
+            },
+        )
+        art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
+        if not art:
+            continue
+        rows_after = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+        job_after = next((r for r in (rows_after or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
+        if isinstance(job_after, dict):
+            start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj, art=art, job=job_after)
+            retried += 1
+
+    return {
+        "ok": True,
+        "retried": retried,
+        "message": f"Restarted preparation for {retried} failed job(s).",
+    }
+
+
 @router.post("/{job_id}/retry-preparation", status_code=200)
 async def retry_scheduled_job_preparation(
     project_id: str,
@@ -283,28 +357,54 @@ async def retry_scheduled_job_preparation(
 
 @router.delete("/{job_id}", status_code=200)
 async def cancel_scheduled_job(project_id: str, job_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """
+    Remove a scheduled job and return the article to the Articles list as pending.
+    """
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     jid = (job_id or "").strip()
     rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
     row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
-    ok = await run_sync(
-        st.update_scheduled_job_fields, jid, {"state": "cancelled", "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
-    )
-    if not ok:
+    if not row:
         raise HTTPException(status_code=404, detail="Scheduled job not found")
+    state = (row.get("state") or "").strip().lower()
+    if state == "posted":
+        raise HTTPException(status_code=400, detail="Cannot cancel a job that has already been posted")
+    if state == "cancelled":
+        return {"ok": True, "article_id": (row.get("article_id") or "").strip()}
 
-    # Best-effort: clear the article's scheduled marker so Articles list matches.
-    try:
-        aid = ((row or {}).get("article_id") or "").strip()
-        if aid and hasattr(st, "update_article_fields"):
-            art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
-            if art:
-                await run_sync(st.update_article_fields, aid, {"wp_scheduled_at": "", "wp_schedule_error": ""})
-    except Exception:
-        pass
+    aid = (row.get("article_id") or "").strip()
+    deleted = 0
+    if hasattr(st, "delete_scheduled_job"):
+        for r in rows or []:
+            if not isinstance(r, dict):
+                continue
+            if (r.get("article_id") or "").strip() != aid:
+                continue
+            if (r.get("state") or "").strip().lower() == "posted":
+                continue
+            rid = (r.get("id") or "").strip()
+            if rid and await run_sync(st.delete_scheduled_job, rid):
+                deleted += 1
+    if deleted == 0:
+        ok = await run_sync(
+            st.update_scheduled_job_fields,
+            jid,
+            {
+                "state": "cancelled",
+                "last_error": "",
+                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Scheduled job not found")
 
-    return {"ok": True}
+    if aid and hasattr(st, "update_article_fields"):
+        art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
+        if art and not (str(art.get("wp_post_id") or "").strip()):
+            await run_sync(st.update_article_fields, aid, _cleared_article_schedule_fields())
+
+    return {"ok": True, "article_id": aid}
 
 
 @router.delete("", status_code=200)

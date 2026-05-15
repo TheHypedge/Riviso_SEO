@@ -26,3 +26,10 @@ class HealthResponse(BaseModel):
             "Non-secret hint of the loaded client id (first 12 chars + length). Empty when not configured."
         ),
     )
+    generation_revision: str = Field(
+        default="",
+        description=(
+            "Code revision for article generation/token estimation. After deploying scheduled-job "
+            "fixes, production should show ``2026-05-15-extra-kwargs`` (not an older value or empty)."
+        ),
+    )

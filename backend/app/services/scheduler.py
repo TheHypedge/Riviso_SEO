@@ -9,9 +9,10 @@ from app.legacy.storage import get_legacy_storage_module
 from app.services.wordpress_client import WordpressClient
 from app.services.context_links import apply_context_links_html
 from app.services.article_generation import (
-    estimate_tokens_for_generation_bundle_safe,
+    build_generation_messages,
     generate_article_bundle_safe,
 )
+from app.services.seo_guardrails import estimate_generation_token_budget
 from app.services.prompt_validation import assert_image_prompt_allowed, assert_writing_prompt_allowed
 from app.services.gsc_actions import maybe_request_url_inspection
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
@@ -181,7 +182,29 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
         generate_image=generate_image,
         image_prompt_text=image_text,
     )
-    token_estimate = estimate_tokens_for_generation_bundle_safe(**gen_kwargs)
+    # Estimate tokens without calling estimate_tokens_for_generation_bundle — avoids
+    # ``image_prompt_text`` signature mismatches on older API workers.
+    sys, user = build_generation_messages(
+        title=title,
+        keywords=keywords,
+        focus_keyphrase=focus,
+        writing_prompt_text=writing_text,
+        brand_identity=(proj.get("brand_identity") or ""),
+        niche_identifier=(proj.get("niche_identifier") or ""),
+    )
+    token_estimate = estimate_generation_token_budget(
+        system_prompt=sys,
+        user_message=user,
+        max_completion_tokens=6_000,
+        include_image=generate_image,
+    )
+    if generate_image and image_text:
+        token_estimate += estimate_generation_token_budget(
+            system_prompt="",
+            user_message=image_text[:1200],
+            max_completion_tokens=0,
+            include_image=False,
+        )
 
     owner_row = st.get_user_by_id(owner_uid) if owner_uid and hasattr(st, "get_user_by_id") else None
     owner_role = ((owner_row or {}).get("role") or "").strip().lower()
