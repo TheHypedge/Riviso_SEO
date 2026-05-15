@@ -45,7 +45,7 @@ from app.services.content_sanitizer import (
     sanitize_meta_title,
 )
 from app.services.context_links import apply_context_links_html
-from app.services.wordpress_client import WordpressClient
+from app.services.wordpress_client import WordpressClient, resolve_featured_media_id
 from app.services.gsc_actions import inspect_url_status, maybe_request_url_inspection, request_url_inspection_now
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.scheduler import start_scheduled_job_preparation_task
@@ -1123,27 +1123,18 @@ async def publish_to_live_site(
 
     wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
 
-    # Upload featured image if we have one.
+    # Featured image is best-effort — a media 403 must not block publishing the article body.
     featured_media_id: int | None = None
     if image_file is not None:
         data = await image_file.read()
         if data:
-            up = await wp.upload_media(filename=image_file.filename or "upload.png", content_type=image_file.content_type or "image/png", data=data)
-            if isinstance(up, dict) and isinstance(up.get("id"), int):
-                featured_media_id = int(up["id"])
+            featured_media_id = await wp.upload_media_optional(
+                filename=image_file.filename or "upload.png",
+                content_type=image_file.content_type or "image/png",
+                data=data,
+            )
     else:
-        # If generated image exists (data URL), upload it.
-        img_url = (a.get("image_url") or "").strip()
-        if img_url.startswith("data:image/") and ";base64," in img_url:
-            try:
-                b64 = img_url.split(";base64,", 1)[1]
-                data = base64.b64decode(b64, validate=False)
-            except (IndexError, binascii.Error, ValueError):
-                data = b""
-            if data:
-                up = await wp.upload_media(filename="generated.png", content_type="image/png", data=data)
-                if isinstance(up, dict) and isinstance(up.get("id"), int):
-                    featured_media_id = int(up["id"])
+        featured_media_id = await resolve_featured_media_id(wp, a, timeout=90.0)
 
     payload: dict = {
         "title": title[:500],

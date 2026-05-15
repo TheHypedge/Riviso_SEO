@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timezone
 
 from app.legacy.storage import get_legacy_storage_module
-from app.services.wordpress_client import WordpressClient
+from app.services.wordpress_client import WordpressClient, resolve_featured_media_id
 from app.services.context_links import apply_context_links_html
 from app.services.article_generation import (
     estimate_bundle_tokens,
@@ -77,6 +77,12 @@ def _friendly_scheduler_error(exc: Exception) -> str:
         return "Scheduled generation failed due to a backend configuration mismatch. Please retry preparation."
     if "OPENAI_API_KEY" in raw:
         return "OpenAI is not configured on the backend. Add OPENAI_API_KEY and retry this scheduled article."
+    low = raw.lower()
+    if "403" in low and "wp/v2/media" in low:
+        return (
+            "WordPress blocked the featured image upload (403). "
+            "Give the connected user upload_files permission or allow REST media in your security plugin."
+        )
     return raw[:1000]
 
 
@@ -314,22 +320,8 @@ async def publish_article_to_wordpress(*, proj: dict, article: dict, post_type: 
 
     wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
 
-    # Featured image from stored data URL (if present)
-    featured_media_id: int | None = None
-    img_url = (article.get("image_url") or "").strip()
-    if img_url.startswith("data:image/") and ";base64," in img_url:
-        import base64
-        import binascii
-
-        try:
-            b64 = img_url.split(";base64,", 1)[1]
-            data = base64.b64decode(b64, validate=False)
-        except (IndexError, binascii.Error, ValueError):
-            data = b""
-        if data:
-            up = await wp.upload_media(filename="scheduled-generated.png", content_type="image/png", data=data, timeout=90.0)
-            if isinstance(up, dict) and isinstance(up.get("id"), int):
-                featured_media_id = int(up["id"])
+    # Featured image is best-effort — media 403 must not block publishing the article.
+    featured_media_id = await resolve_featured_media_id(wp, article, timeout=90.0)
 
     payload: dict = {
         "title": title[:500],
@@ -405,6 +397,50 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                 await asyncio.sleep(delay)
                 continue
             now = datetime.now(timezone.utc)
+
+            # Heal failed rows when the article is already on WordPress (e.g. legacy media 403).
+            for j in jobs or []:
+                if not isinstance(j, dict) or (j.get("state") or "").strip().lower() != "failed":
+                    continue
+                jid_heal = (j.get("id") or "").strip()
+                pid_heal = (j.get("project_id") or "").strip()
+                aid_heal = (j.get("article_id") or "").strip()
+                if not jid_heal or not pid_heal or not aid_heal:
+                    continue
+                wp_id_heal = str(j.get("wp_post_id") or "").strip()
+                if not wp_id_heal:
+                    try:
+                        arows_heal = (
+                            await run_sync(st.load_articles_listing_for_project, pid_heal, limit=5000)
+                            if hasattr(st, "load_articles_listing_for_project")
+                            else await run_sync(st.load_articles)
+                        )
+                        art_heal = next(
+                            (
+                                a
+                                for a in (arows_heal or [])
+                                if isinstance(a, dict) and (a.get("id") or "").strip() == aid_heal
+                            ),
+                            None,
+                        )
+                        wp_id_heal = str((art_heal or {}).get("wp_post_id") or "").strip()
+                        wp_link_heal = str((art_heal or {}).get("wp_link") or j.get("wp_link") or "")[:2000]
+                    except Exception:
+                        wp_link_heal = str(j.get("wp_link") or "")[:2000]
+                else:
+                    wp_link_heal = str(j.get("wp_link") or "")[:2000]
+                if wp_id_heal:
+                    await run_sync(
+                        st.update_scheduled_job_fields,
+                        jid_heal,
+                        {
+                            "state": "posted",
+                            "wp_post_id": wp_id_heal,
+                            "wp_link": wp_link_heal,
+                            "last_error": "",
+                            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        },
+                    )
 
             for j in jobs or []:
                 if not isinstance(j, dict):
@@ -573,6 +609,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                             "state": "posted",
                             "wp_post_id": wp_post_id,
                             "wp_link": wp_link,
+                            "last_error": "",
                             "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
                         },
                     )
@@ -622,16 +659,49 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                         pass
                 except Exception as e:
                     log.exception("Scheduled job failed jid=%s", jid)
-                    err = _friendly_scheduler_error(e)
-                    await run_sync(
-                        st.update_scheduled_job_fields,
-                        jid,
-                        {
-                            "state": "failed",
-                            "last_error": err,
-                            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                        },
-                    )
+                    # If the post already exists on WordPress, do not leave the job as failed.
+                    reconciled = False
+                    try:
+                        arows = await run_sync(st.load_articles_listing_for_project, pid, limit=5000) if hasattr(
+                            st, "load_articles_listing_for_project"
+                        ) else await run_sync(st.load_articles)
+                        art_now = next(
+                            (
+                                a
+                                for a in (arows or [])
+                                if isinstance(a, dict)
+                                and (a.get("id") or "").strip() == aid
+                                and (a.get("project_id") or "").strip() == pid
+                            ),
+                            None,
+                        )
+                        wp_id = str((art_now or {}).get("wp_post_id") or j.get("wp_post_id") or "").strip()
+                        if art_now and wp_id:
+                            await run_sync(
+                                st.update_scheduled_job_fields,
+                                jid,
+                                {
+                                    "state": "posted",
+                                    "wp_post_id": wp_id,
+                                    "wp_link": str(art_now.get("wp_link") or j.get("wp_link") or "")[:2000],
+                                    "last_error": "",
+                                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                                },
+                            )
+                            reconciled = True
+                    except Exception:
+                        pass
+                    if not reconciled:
+                        err = _friendly_scheduler_error(e)
+                        await run_sync(
+                            st.update_scheduled_job_fields,
+                            jid,
+                            {
+                                "state": "failed",
+                                "last_error": err,
+                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                            },
+                        )
         except Exception:
             log.exception("Scheduler loop top-level error")
 
