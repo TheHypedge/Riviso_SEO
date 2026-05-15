@@ -45,12 +45,26 @@ def filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: dict[str, Any]) -
 
 def estimate_tokens_for_generation_bundle_safe(**kwargs: Any) -> int:
     """Version-tolerant wrapper — always safe to pass ``image_prompt_text``."""
-    return estimate_tokens_for_generation_bundle(**filter_kwargs_for_callable(estimate_tokens_for_generation_bundle, kwargs))
+    filtered = filter_kwargs_for_callable(estimate_tokens_for_generation_bundle, kwargs)
+    try:
+        return estimate_tokens_for_generation_bundle(**filtered)
+    except TypeError as e:
+        if "image_prompt_text" not in str(e) or "unexpected keyword argument" not in str(e):
+            raise
+        fallback = {k: v for k, v in filtered.items() if k != "image_prompt_text"}
+        return estimate_tokens_for_generation_bundle(**fallback)
 
 
 async def generate_article_bundle_safe(**kwargs: Any) -> dict:
     """Version-tolerant wrapper — always safe to pass ``image_prompt_text``."""
-    return await generate_article_bundle(**filter_kwargs_for_callable(generate_article_bundle, kwargs))
+    filtered = filter_kwargs_for_callable(generate_article_bundle, kwargs)
+    try:
+        return await generate_article_bundle(**filtered)
+    except TypeError as e:
+        if "image_prompt_text" not in str(e) or "unexpected keyword argument" not in str(e):
+            raise
+        fallback = {k: v for k, v in filtered.items() if k != "image_prompt_text"}
+        return await generate_article_bundle(**fallback)
 
 
 def _apply_placeholders(prompt: str, *, title: str, keywords: list[str], focus_keyphrase: str) -> str:

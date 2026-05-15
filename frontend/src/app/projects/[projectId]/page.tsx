@@ -2430,14 +2430,40 @@ export default function ProjectPage() {
     }
   }
 
+  async function refreshScheduledJobsList() {
+    setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
+  }
+
   async function retryScheduledPreparation(jobId: string) {
     setError(null);
     setRetryPrepBusyId(jobId);
     try {
       const res = await api.retryScheduledJobPreparation(projectId, jobId);
-      setScheduledJobs((prev) => prev.map((j) => (j.id === jobId ? res.job : j)));
+      setScheduledJobs((prev) =>
+        prev.map((j) =>
+          j.id === jobId
+            ? { ...j, ...res.job, state: res.job.state || "content_generating", last_error: null }
+            : j,
+        ),
+      );
+      // Poll while background generation runs (content + image can take several minutes).
+      for (const delayMs of [2500, 5000, 10000, 20000, 45000]) {
+        await new Promise((r) => setTimeout(r, delayMs));
+        const rows = dedupeScheduledJobs(await api.listScheduledJobs(projectId));
+        setScheduledJobs(rows);
+        const row = rows.find((j) => j.id === jobId);
+        const st = (row?.state || "").toLowerCase();
+        if (!row || st === "ready_to_post" || st === "posted" || st === "failed") break;
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Retry preparation failed");
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
+      const msg =
+        e instanceof ApiError && e.status === 404
+          ? "Retry preparation is not available on the server yet. Deploy the latest backend, or use Re-Schedule after setting a new time at least 10 minutes from now."
+          : e instanceof Error
+            ? e.message
+            : "Retry preparation failed";
+      setError(msg);
     } finally {
       setRetryPrepBusyId(null);
     }
@@ -2459,7 +2485,11 @@ export default function ProjectPage() {
     const defaultCats = ((settings?.default_wp_category_ids || []) as number[]).filter((id) => Number.isFinite(id));
 
     setEditJob(j);
-    setEditJobWhen(toDatetimeLocalInProfileTz(j.run_at || ""));
+    const failed = (j.state || "").toLowerCase() === "failed";
+    const minWhen = toDatetimeLocalFromDateInProfileTz(new Date(Date.now() + 10 * 60 * 1000));
+    const fromJob = toDatetimeLocalInProfileTz(j.run_at || "");
+    // Failed jobs often still show a past run_at — default to the earliest valid slot.
+    setEditJobWhen(failed ? minWhen : fromJob || minWhen);
     setEditJobPostType(nextPostType);
     setEditJobStatus(nextStatus);
     setEditJobCats(jobCats.length ? jobCats : defaultCats);
@@ -6333,6 +6363,15 @@ export default function ProjectPage() {
                         step={60}
                         onChange={(e) => setEditJobWhen(e.target.value)}
                       />
+                      {(editJob.state || "").toLowerCase() === "failed" ? (
+                        <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                          Failed posts are re-queued with a new time at least 10 minutes from now. Content and image generation will run again after you save.
+                        </div>
+                      ) : (
+                        <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                          Minimum 10 minutes from now. The article needs a few minutes to prepare before posting.
+                        </div>
+                      )}
                     </label>
                     <label className={styles.label}>
                       WordPress post type
@@ -6446,7 +6485,8 @@ export default function ProjectPage() {
                           setError(null);
                           if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before editing scheduled articles.")) return;
                           if (!editJobWhen.trim()) throw new Error("Invalid schedule time");
-                          await api.updateScheduledJob(projectId, editJob.id, {
+                          const savedJobId = editJob.id;
+                          await api.updateScheduledJob(projectId, savedJobId, {
                             // Backend interprets this as local time in the user's profile timezone and stores UTC.
                             run_at: editJobWhen,
                             post_type: editJobPostType,
@@ -6456,8 +6496,16 @@ export default function ProjectPage() {
                             image_prompt_id: editJobImagePromptId || null,
                             generate_image: editJobGenerateImage,
                           });
-                          setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
                           setEditJob(null);
+                          await refreshScheduledJobsList();
+                          for (const delayMs of [2500, 5000, 10000, 20000]) {
+                            await new Promise((r) => setTimeout(r, delayMs));
+                            const rows = dedupeScheduledJobs(await api.listScheduledJobs(projectId));
+                            setScheduledJobs(rows);
+                            const row = rows.find((x) => x.id === savedJobId);
+                            const st = (row?.state || "").toLowerCase();
+                            if (!row || st === "ready_to_post" || st === "posted" || st === "failed") break;
+                          }
                         } catch (e) {
                           if (showWebsiteConnectionErrorIfNeeded(e)) return;
                           setError(e instanceof Error ? e.message : "Failed to update schedule");

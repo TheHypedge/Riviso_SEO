@@ -116,6 +116,7 @@ async def update_scheduled_job(
     if (row.get("state") or "") in {"posted", "cancelled"}:
         raise HTTPException(status_code=400, detail="Cannot edit a completed/cancelled job")
 
+    prev_state = (row.get("state") or "").strip().lower()
     updates: dict = {"updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
     updated_run_at_utc: str | None = None
     if payload.run_at is not None:
@@ -131,8 +132,14 @@ async def update_scheduled_job(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
 
-        if dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=10)):
-            raise HTTPException(status_code=400, detail="Scheduled time must be at least 10 minutes from now")
+        min_utc = datetime.now(timezone.utc) + timedelta(minutes=10)
+        if dt_utc < min_utc:
+            # Failed jobs often keep an old run_at in the past; bump forward so
+            # Re-Schedule works instead of returning 400 and leaving them stuck.
+            if prev_state == "failed":
+                dt_utc = min_utc
+            else:
+                raise HTTPException(status_code=400, detail="Scheduled time must be at least 10 minutes from now")
 
         norm_utc = dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
         updates["run_at"] = norm_utc
@@ -164,7 +171,6 @@ async def update_scheduled_job(
     if payload.generate_image is not None:
         updates["generate_image"] = bool(payload.generate_image)
 
-    prev_state = (row.get("state") or "").strip().lower()
     # Failed jobs must return to the scheduled queue so preparation can run again.
     if prev_state == "failed":
         updates["state"] = "scheduled"
@@ -194,23 +200,22 @@ async def update_scheduled_job(
         # Best-effort sync; scheduled job update succeeded already.
         pass
 
-    # Best-effort: on reschedule or prompt changes, start background preparation again.
-    # This ensures jobs don't show "ready_to_post" unless generation truly finished.
-    try:
-        # Reload job row to get the latest fields
-        rows_after = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
-        job_after = next((r for r in (rows_after or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
-        aid = (job_after.get("article_id") or "").strip() if isinstance(job_after, dict) else ""
-        if isinstance(job_after, dict) and aid and (job_after.get("state") or "").strip().lower() == "scheduled":
-            prows = await run_sync(st.load_projects)
-            proj = next((p for p in (prows or []) if isinstance(p, dict) and (p.get("id") or "") == (project_id or "").strip()), None)
-            art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
-            if proj and art:
-
-                start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj, art=art, job=job_after)
-    except Exception:
-        # Don't fail the update if background prep can't start.
-        pass
+    # Re-run preparation after reschedule or when recovering a failed job.
+    reprep = prev_state == "failed" or payload.run_at is not None or payload.writing_prompt_id is not None or payload.image_prompt_id is not None
+    if reprep:
+        try:
+            rows_after = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+            job_after = next((r for r in (rows_after or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
+            aid = (job_after.get("article_id") or "").strip() if isinstance(job_after, dict) else ""
+            st_after = (job_after.get("state") or "").strip().lower() if isinstance(job_after, dict) else ""
+            if isinstance(job_after, dict) and aid and st_after in {"scheduled", "failed"}:
+                prows = await run_sync(st.load_projects)
+                proj2 = next((p for p in (prows or []) if isinstance(p, dict) and (p.get("id") or "") == (project_id or "").strip()), None)
+                art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
+                if proj2 and art:
+                    start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj2, art=art, job=job_after)
+        except Exception:
+            pass
 
     rows2 = await run_sync(st.load_scheduled_jobs, project_id=project_id)
     row2 = next((r for r in (rows2 or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
@@ -244,11 +249,12 @@ async def retry_scheduled_job_preparation(
         raise HTTPException(status_code=400, detail="Cannot retry preparation for a completed/cancelled job")
 
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    prep_state = "content_generating"
     await run_sync(
         st.update_scheduled_job_fields,
         jid,
         {
-            "state": "scheduled",
+            "state": prep_state,
             "last_error": "",
             "attempts": 0,
             "last_attempt_at": "",
@@ -267,6 +273,7 @@ async def retry_scheduled_job_preparation(
         raise HTTPException(status_code=404, detail="Scheduled job not found")
 
     start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj, art=art, job=job_after)
+    job_after = {**job_after, "state": prep_state, "last_error": ""}
     return {
         "ok": True,
         "message": "Preparation started. The job will move to Ready when content and image are generated.",

@@ -231,6 +231,18 @@ def start_scheduled_job_preparation_task(*, st, jid: str, proj: dict, art: dict,
     if not job_id:
         return
 
+    try:
+        st.update_scheduled_job_fields(
+            job_id,
+            {
+                "state": "content_generating",
+                "last_error": "",
+                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+    except Exception:
+        pass
+
     async def _prep() -> None:
         try:
             await prepare_article_for_scheduled_job(st=st, jid=job_id, proj=proj, art=art, job=job)
