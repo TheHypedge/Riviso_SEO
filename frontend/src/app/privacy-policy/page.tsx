@@ -1,10 +1,15 @@
+import Image from "next/image";
 import Link from "next/link";
 
 export default function PrivacyPolicyPage() {
   return (
     <div style={{ minHeight: "100vh", background: "#07070a", color: "#fff", padding: "40px 16px" }}>
       <div style={{ width: "min(900px, 100%)", margin: "0 auto" }}>
-        <div style={{ marginBottom: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 18 }}>
+          <Link href="/" aria-label="Riviso — home" style={{ display: "inline-flex", alignItems: "center", gap: 10, textDecoration: "none", color: "#fff" }}>
+            <Image src="/riviso-logo.png" alt="" width={28} height={28} priority />
+            <span style={{ fontWeight: 900, letterSpacing: "-0.02em", fontSize: 18 }}>Riviso</span>
+          </Link>
           <Link href="/" style={{ color: "rgba(255,255,255,0.75)", textDecoration: "none", fontWeight: 700 }}>
             ← Home
           </Link>
@@ -17,7 +22,7 @@ export default function PrivacyPolicyPage() {
 
         <div style={{ color: "rgba(255,255,255,0.78)", lineHeight: 1.7, fontSize: 14 }}>
           <p>
-            This Privacy Policy explains how Auto Articles (“we”, “us”) collects, uses, and protects information when you use
+            This Privacy Policy explains how Riviso (“we”, “us”) collects, uses, and protects information when you use
             the application.
           </p>
 

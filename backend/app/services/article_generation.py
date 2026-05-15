@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from datetime import datetime
+from functools import lru_cache
+from typing import Any, Callable
 
 from app.core.config import settings
 from app.services.content_sanitizer import (
@@ -20,6 +23,34 @@ from app.services.seo_guardrails import (
 )
 
 log = logging.getLogger(__name__)
+
+@lru_cache(maxsize=16)
+def _callable_param_names(fn: Callable[..., Any]) -> frozenset[str]:
+    """Parameter names accepted by ``fn`` (cached for hot scheduled-job paths)."""
+    return frozenset(inspect.signature(fn).parameters.keys())
+
+
+def filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """
+    Drop keyword arguments that ``fn`` does not accept.
+
+    Scheduled jobs pass ``image_prompt_text`` for token estimation and generation.
+    During rolling deploys the API worker can briefly load an older
+    ``estimate_tokens_for_generation_bundle`` without that parameter, which
+    otherwise raises ``TypeError`` and marks the job FAILED.
+    """
+    allowed = _callable_param_names(fn)
+    return {k: v for k, v in kwargs.items() if k in allowed}
+
+
+def estimate_tokens_for_generation_bundle_safe(**kwargs: Any) -> int:
+    """Version-tolerant wrapper — always safe to pass ``image_prompt_text``."""
+    return estimate_tokens_for_generation_bundle(**filter_kwargs_for_callable(estimate_tokens_for_generation_bundle, kwargs))
+
+
+async def generate_article_bundle_safe(**kwargs: Any) -> dict:
+    """Version-tolerant wrapper — always safe to pass ``image_prompt_text``."""
+    return await generate_article_bundle(**filter_kwargs_for_callable(generate_article_bundle, kwargs))
 
 
 def _apply_placeholders(prompt: str, *, title: str, keywords: list[str], focus_keyphrase: str) -> str:

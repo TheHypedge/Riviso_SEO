@@ -83,12 +83,25 @@
 .authBrand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   font-weight: 900;
   letter-spacing: -0.02em;
   margin-bottom: 34px;
   opacity: 0.95;
   color: rgba(255, 255, 255, 0.96);
+}
+
+.authBrandLogo {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  flex: 0 0 auto;
+  display: block;
+}
+
+.authBrandText {
+  font-size: 22px;
+  line-height: 1;
 }
 
 .authKicker {
@@ -168,16 +181,21 @@
 }
 
 .authMobileLogo {
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.10);
-  color: color-mix(in oklab, var(--aa-primary), #fff 25%);
   flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.authMobileLogoImg {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  display: block;
 }
 
 .authMobileBrandText {
@@ -775,8 +793,14 @@
 }
 
 .bulkPopupTitle strong {
-  font-size: 16px;
-  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+}
+
+.bulkPopupScheduleLayout .bulkPopupTitle strong {
+  font-size: 18px;
 }
 
 .bulkPopupTitle span {
@@ -786,18 +810,118 @@
 
 /* bulkPopupClose replaced by iconButton */
 
+.bulkPopupScheduleLayout {
+  width: min(640px, calc(100% - 32px));
+  padding: 22px 26px 20px;
+  max-height: min(88vh, 760px);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+}
+
+.bulkPopupScheduleLayout .bulkPopupHead {
+  flex-shrink: 0;
+  padding-bottom: 14px;
+  margin-bottom: 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 35%);
+}
+
+.bulkScheduleMetaLine {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: 0.01em;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 28%);
+}
+
+.bulkScheduleSettingsWrap {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 0 16px;
+}
+
+.bulkScheduleSettingsHint {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--aa-muted);
+}
+
 .bulkScheduleGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 16px 20px;
 }
 
 .bulkScheduleRow {
   display: grid;
-  grid-template-columns: 1fr 220px;
-  gap: 10px;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--button-secondary-border);
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 240px);
+  gap: 16px 24px;
+  align-items: start;
+  padding: 16px 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 40%);
+}
+
+.bulkScheduleRow:last-child {
+  border-bottom: none;
+  padding-bottom: 8px;
+}
+
+.bulkScheduleArticleTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.38;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.bulkScheduleArticleList {
+  flex: 1;
+  min-height: 120px;
+  max-height: 360px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin: 4px -6px 0;
+  padding: 4px 6px 8px;
+  border-top: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 30%);
+  scrollbar-gutter: stable;
+}
+
+.bulkScheduleDateLabel {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 22%);
+}
+
+.bulkScheduleDateLabel .input {
+  margin-top: 8px;
+}
+
+.bulkScheduleFooter {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  padding-top: 18px;
+  margin-top: 8px;
+  border-top: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 35%);
 }
 
 @media (max-width: 560px) {
@@ -806,6 +930,14 @@
   }
   .bulkScheduleRow {
     grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  .bulkPopupScheduleLayout {
+    padding: 18px 16px 16px;
+    width: calc(100% - 20px);
+  }
+  .bulkScheduleArticleList {
+    max-height: 280px;
   }
 }
 
@@ -1828,6 +1960,42 @@
   letter-spacing: 0.08em;
   color: var(--aa-muted);
   margin-bottom: 10px;
+}
+
+/* Brand row pinned to the top of every sidebar. The image is transparent
+   so it adapts to whatever background the sidebar uses; the wordmark sits
+   beside it for product recognition. */
+.sidebarBrand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--aa-body-strong);
+  padding: 4px 6px;
+  margin: 0 0 16px;
+  border-radius: var(--aa-r-md);
+  transition: background-color 120ms ease;
+}
+
+.sidebarBrand:hover,
+.sidebarBrand:focus-visible {
+  background: color-mix(in oklab, var(--aa-primary), transparent 92%);
+  outline: none;
+}
+
+.sidebarBrandLogo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  flex: 0 0 auto;
+  display: block;
+}
+
+.sidebarBrandText {
+  font-weight: 900;
+  font-size: 19px;
+  letter-spacing: -0.02em;
+  line-height: 1;
 }
 
 .navGroup {

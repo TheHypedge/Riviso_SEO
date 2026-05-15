@@ -8,7 +8,10 @@ from datetime import datetime, timezone
 from app.legacy.storage import get_legacy_storage_module
 from app.services.wordpress_client import WordpressClient
 from app.services.context_links import apply_context_links_html
-from app.services.article_generation import estimate_tokens_for_generation_bundle, generate_article_bundle
+from app.services.article_generation import (
+    estimate_tokens_for_generation_bundle_safe,
+    generate_article_bundle_safe,
+)
 from app.services.prompt_validation import assert_image_prompt_allowed, assert_writing_prompt_allowed
 from app.services.gsc_actions import maybe_request_url_inspection
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
@@ -52,10 +55,26 @@ def _fallback_first_prompt_text(prompts: list) -> str | None:
     return None
 
 
+def _is_generation_signature_mismatch_message(raw: str) -> bool:
+    text = (raw or "").strip().lower()
+    if not text:
+        return False
+    if "image_prompt_text" in text and "unexpected keyword argument" in text:
+        return True
+    if "backend generation configuration mismatch" in text:
+        return True
+    return False
+
+
 def _friendly_scheduler_error(exc: Exception) -> str:
     raw = str(exc) or exc.__class__.__name__
+    if _is_generation_signature_mismatch_message(raw):
+        return (
+            "Scheduled preparation hit a backend version mismatch. "
+            "Click Retry preparation or Re-Schedule — content generation will run again automatically."
+        )
     if "unexpected keyword argument" in raw:
-        return "Scheduled generation failed due to a backend generation configuration mismatch. Please retry after the latest deployment."
+        return "Scheduled generation failed due to a backend configuration mismatch. Please retry preparation."
     if "OPENAI_API_KEY" in raw:
         return "OpenAI is not configured on the backend. Add OPENAI_API_KEY and retry this scheduled article."
     return raw[:1000]
@@ -65,54 +84,16 @@ def scheduler_error_message(exc: Exception) -> str:
     return _friendly_scheduler_error(exc)
 
 
-def _is_image_prompt_text_mismatch(exc: Exception) -> bool:
-    raw = str(exc) or ""
-    return "unexpected keyword argument" in raw and "image_prompt_text" in raw
-
-
 def _is_retryable_generation_mismatch(job: dict) -> bool:
     raw = (job.get("last_error") or "").strip()
     if not raw:
         return False
-    if "unexpected keyword argument" in raw and "image_prompt_text" in raw:
-        return int(job.get("attempts") or 0) < 3
-    if "backend generation configuration mismatch" in raw.lower():
-        return int(job.get("attempts") or 0) < 3
+    if _is_generation_signature_mismatch_message(raw):
+        return int(job.get("attempts") or 0) < 5
     return False
 
 
-def _estimate_tokens_for_scheduled_generation(
-    *,
-    title: str,
-    keywords: list[str],
-    focus_keyphrase: str,
-    writing_prompt_text: str,
-    brand_identity: str | None,
-    niche_identifier: str | None,
-    generate_image: bool,
-    image_prompt_text: str | None,
-) -> int:
-    base_kwargs = {
-        "title": title,
-        "keywords": keywords,
-        "focus_keyphrase": focus_keyphrase,
-        "writing_prompt_text": writing_prompt_text,
-        "brand_identity": brand_identity,
-        "niche_identifier": niche_identifier,
-        "generate_image": generate_image,
-    }
-    try:
-        return estimate_tokens_for_generation_bundle(**base_kwargs, image_prompt_text=image_prompt_text)
-    except TypeError as e:
-        if not _is_image_prompt_text_mismatch(e):
-            raise
-        # Compatibility for live deployments where the scheduler was updated
-        # before the estimator signature. The image itself is still generated;
-        # this only omits the custom image prompt text from token estimation.
-        return estimate_tokens_for_generation_bundle(**base_kwargs)
-
-
-async def _generate_article_bundle_for_scheduled_job(
+def _scheduled_generation_kwargs(
     *,
     title: str,
     keywords: list[str],
@@ -123,7 +104,7 @@ async def _generate_article_bundle_for_scheduled_job(
     generate_image: bool,
     image_prompt_text: str | None,
 ) -> dict:
-    base_kwargs = {
+    return {
         "title": title,
         "keywords": keywords,
         "focus_keyphrase": focus_keyphrase,
@@ -131,15 +112,8 @@ async def _generate_article_bundle_for_scheduled_job(
         "brand_identity": brand_identity,
         "niche_identifier": niche_identifier,
         "generate_image": generate_image,
+        "image_prompt_text": image_prompt_text,
     }
-    try:
-        return await generate_article_bundle(**base_kwargs, image_prompt_text=image_prompt_text)
-    except TypeError as e:
-        if not _is_image_prompt_text_mismatch(e):
-            raise
-        # Same compatibility guard as token estimation. If an older generator
-        # is loaded, keep the scheduled job moving instead of failing outright.
-        return await generate_article_bundle(**base_kwargs)
 
 
 async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: dict, job: dict) -> dict:
@@ -197,7 +171,7 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
     keywords = [str(x).strip() for x in (art.get("keywords") or []) if str(x).strip()]
     focus = (art.get("focus_keyphrase") or "").strip()
 
-    token_estimate = _estimate_tokens_for_scheduled_generation(
+    gen_kwargs = _scheduled_generation_kwargs(
         title=title,
         keywords=keywords,
         focus_keyphrase=focus,
@@ -207,6 +181,7 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
         generate_image=generate_image,
         image_prompt_text=image_text,
     )
+    token_estimate = estimate_tokens_for_generation_bundle_safe(**gen_kwargs)
 
     owner_row = st.get_user_by_id(owner_uid) if owner_uid and hasattr(st, "get_user_by_id") else None
     owner_role = ((owner_row or {}).get("role") or "").strip().lower()
@@ -225,16 +200,7 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
             st.update_scheduled_job_fields(jid, {"state": "failed", "last_error": msg_t or "Token budget exceeded"})
             raise RuntimeError(msg_t or "Token budget exceeded")
 
-    gen = await _generate_article_bundle_for_scheduled_job(
-        title=title,
-        keywords=keywords,
-        focus_keyphrase=focus,
-        writing_prompt_text=writing_text,
-        brand_identity=(proj.get("brand_identity") or ""),
-        niche_identifier=(proj.get("niche_identifier") or ""),
-        generate_image=generate_image,
-        image_prompt_text=image_text,
-    )
+    gen = await generate_article_bundle_safe(**gen_kwargs)
 
     if owner_uid and owner_role != "admin":
         st.consume_llm_generation_tokens(owner_uid, token_estimate)
@@ -254,6 +220,42 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
     # Reload and return updated row (best effort)
     art2 = next((a for a in (st.load_articles() or []) if isinstance(a, dict) and (a.get("id") or "") == aid), None)
     return art2 if isinstance(art2, dict) else art
+
+
+def start_scheduled_job_preparation_task(*, st, jid: str, proj: dict, art: dict, job: dict) -> None:
+    """
+    Fire-and-forget background generation for a scheduled job (content + image).
+    Used after schedule, reschedule, and manual retry of failed preparation.
+    """
+    job_id = (jid or "").strip()
+    if not job_id:
+        return
+
+    async def _prep() -> None:
+        try:
+            await prepare_article_for_scheduled_job(st=st, jid=job_id, proj=proj, art=art, job=job)
+            await run_sync(
+                st.update_scheduled_job_fields,
+                job_id,
+                {
+                    "state": "ready_to_post",
+                    "last_error": "",
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+        except Exception as e:
+            err = scheduler_error_message(e)
+            await run_sync(
+                st.update_scheduled_job_fields,
+                job_id,
+                {
+                    "state": "failed",
+                    "last_error": err,
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+
+    asyncio.create_task(_prep())
 
 
 async def publish_article_to_wordpress(*, proj: dict, article: dict, post_type: str, wp_status: str, category_ids: list[int]) -> dict:

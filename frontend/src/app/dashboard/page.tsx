@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -502,6 +503,17 @@ export default function DashboardPage() {
                 <Icon.X className={styles.icon20} />
               </button>
             </div>
+            <Link href="/dashboard" className={styles.sidebarBrand} aria-label="Riviso — go to dashboard">
+              <Image
+                src="/riviso-logo.png"
+                alt=""
+                width={32}
+                height={32}
+                priority
+                className={styles.sidebarBrandLogo}
+              />
+              <span className={styles.sidebarBrandText}>Riviso</span>
+            </Link>
             <div className={styles.sidebarTitle}>{isAdmin ? "ADMIN" : "WORKSPACE"}</div>
             <div className={styles.navGroup}>
               <button

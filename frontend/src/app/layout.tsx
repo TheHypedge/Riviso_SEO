@@ -44,12 +44,21 @@ export const metadata: Metadata = {
     description:
       "Plan, generate, and publish SEO-optimized articles to WordPress on a schedule, with built-in guardrails and Search Console integration.",
     url: SITE_URL,
+    images: [
+      {
+        url: "/riviso-logo.png",
+        width: 512,
+        height: 512,
+        alt: "Riviso",
+      },
+    ],
   },
   twitter: {
     card: "summary_large_image",
     title: "Riviso — SEO content operations",
     description:
       "Plan, generate, and publish SEO-optimized articles to WordPress on a schedule.",
+    images: ["/riviso-logo.png"],
   },
   robots: {
     index: true,

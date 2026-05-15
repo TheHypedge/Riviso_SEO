@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,7 +8,7 @@ from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobUpdate
-from app.services.scheduler import prepare_article_for_scheduled_job, scheduler_error_message
+from app.services.scheduler import start_scheduled_job_preparation_task
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.to_thread import run_sync
 
@@ -165,6 +164,14 @@ async def update_scheduled_job(
     if payload.generate_image is not None:
         updates["generate_image"] = bool(payload.generate_image)
 
+    prev_state = (row.get("state") or "").strip().lower()
+    # Failed jobs must return to the scheduled queue so preparation can run again.
+    if prev_state == "failed":
+        updates["state"] = "scheduled"
+        updates["last_error"] = ""
+        updates["attempts"] = 0
+        updates["last_attempt_at"] = ""
+
     await run_sync(st.update_scheduled_job_fields, jid, updates)
 
     # Keep the article row in sync so the Articles list can show the latest scheduled time.
@@ -200,31 +207,7 @@ async def update_scheduled_job(
             art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
             if proj and art:
 
-                async def _prep() -> None:
-                    try:
-                        await prepare_article_for_scheduled_job(st=st, jid=jid, proj=proj, art=art, job=job_after)
-                        await run_sync(
-                            st.update_scheduled_job_fields,
-                            jid,
-                            {
-                                "state": "ready_to_post",
-                                "last_error": "",
-                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                            },
-                        )
-                    except Exception as e:
-                        err = scheduler_error_message(e)
-                        await run_sync(
-                            st.update_scheduled_job_fields,
-                            jid,
-                            {
-                                "state": "failed",
-                                "last_error": err,
-                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                            },
-                        )
-
-                asyncio.create_task(_prep())
+                start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj, art=art, job=job_after)
     except Exception:
         # Don't fail the update if background prep can't start.
         pass
@@ -234,6 +217,61 @@ async def update_scheduled_job(
     if not row2:
         raise HTTPException(status_code=404, detail="Scheduled job not found")
     return _to_public(row2)
+
+
+@router.post("/{job_id}/retry-preparation", status_code=200)
+async def retry_scheduled_job_preparation(
+    project_id: str,
+    job_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Re-run background content/image generation for a scheduled job.
+
+    Use when a job is FAILED (e.g. legacy ``image_prompt_text`` signature mismatch)
+    or stuck before posting.
+    """
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    _require_verified_website(proj)
+    jid = (job_id or "").strip()
+    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
+    if not row:
+        raise HTTPException(status_code=404, detail="Scheduled job not found")
+    state = (row.get("state") or "").strip().lower()
+    if state in {"posted", "cancelled"}:
+        raise HTTPException(status_code=400, detail="Cannot retry preparation for a completed/cancelled job")
+
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    await run_sync(
+        st.update_scheduled_job_fields,
+        jid,
+        {
+            "state": "scheduled",
+            "last_error": "",
+            "attempts": 0,
+            "last_attempt_at": "",
+            "updated_at": now_str,
+        },
+    )
+
+    aid = (row.get("article_id") or "").strip()
+    art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid) if aid else None
+    if not art:
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    rows_after = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    job_after = next((r for r in (rows_after or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
+    if not isinstance(job_after, dict):
+        raise HTTPException(status_code=404, detail="Scheduled job not found")
+
+    start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj, art=art, job=job_after)
+    return {
+        "ok": True,
+        "message": "Preparation started. The job will move to Ready when content and image are generated.",
+        "job": _to_public(job_after),
+    }
 
 
 @router.delete("/{job_id}", status_code=200)

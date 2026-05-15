@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -797,6 +798,7 @@ export default function ProjectPage() {
   const [articles, setArticles] = useState<ArticlePublic[]>([]);
   const [scheduledJobs, setScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [scheduledLoading, setScheduledLoading] = useState(false);
+  const [retryPrepBusyId, setRetryPrepBusyId] = useState<string | null>(null);
   const [scheduledSearch, setScheduledSearch] = useState("");
   const [scheduledOrder, setScheduledOrder] = useState<"desc" | "asc">("desc");
   const [title, setTitle] = useState("");
@@ -2428,6 +2430,19 @@ export default function ProjectPage() {
     }
   }
 
+  async function retryScheduledPreparation(jobId: string) {
+    setError(null);
+    setRetryPrepBusyId(jobId);
+    try {
+      const res = await api.retryScheduledJobPreparation(projectId, jobId);
+      setScheduledJobs((prev) => prev.map((j) => (j.id === jobId ? res.job : j)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Retry preparation failed");
+    } finally {
+      setRetryPrepBusyId(null);
+    }
+  }
+
   async function openEditScheduledJob(j: import("@/lib/api").ScheduledJobPublic) {
     setError(null);
     const min = new Date(Date.now() + 10 * 60 * 1000);
@@ -3844,6 +3859,17 @@ export default function ProjectPage() {
 
         <div className={styles.shell}>
           <aside className={styles.sidebar} aria-label="Project navigation">
+            <Link href="/dashboard" className={styles.sidebarBrand} aria-label="Riviso — go to dashboard">
+              <Image
+                src="/riviso-logo.png"
+                alt=""
+                width={32}
+                height={32}
+                priority
+                className={styles.sidebarBrandLogo}
+              />
+              <span className={styles.sidebarBrandText}>Riviso</span>
+            </Link>
             <div className={styles.sidebarTitle}>PROJECT</div>
             <div className={styles.navGroup}>
               <Link className={styles.navItem} href="/dashboard">
@@ -4131,10 +4157,27 @@ export default function ProjectPage() {
             {showBulkPopup ? (
               <>
                 <div className={styles.bulkBackdrop} onClick={() => setShowBulkPopup(false)} />
-                <div className={styles.bulkPopup} role="dialog" aria-modal="true" aria-label="Bulk actions">
+                <div
+                  className={`${styles.bulkPopup} ${bulkMode === "schedule" ? styles.bulkPopupScheduleLayout : ""}`}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Bulk actions"
+                >
                   <div className={styles.bulkPopupHead}>
                     <div className={styles.bulkPopupTitle}>
-                      <strong>Schedule articles</strong>
+                      <strong>
+                        {bulkMode === "schedule"
+                          ? "Schedule articles"
+                          : bulkMode === "change_status"
+                            ? "Change status"
+                            : "Bulk actions"}
+                      </strong>
+                      {bulkMode === "schedule" ? (
+                        <span className={styles.bulkScheduleMetaLine}>
+                          {bulkScheduleRows.length} article{bulkScheduleRows.length === 1 ? "" : "s"}
+                          {profileTz ? <> · {profileTz}</> : null}
+                        </span>
+                      ) : null}
                     </div>
                     <button className={styles.iconButton} type="button" aria-label="Close bulk actions" onClick={() => setShowBulkPopup(false)}>
                       <Icon.X className={styles.icon20} />
@@ -4185,69 +4228,65 @@ export default function ProjectPage() {
                     </>
                   ) : (
                     <>
-                      <div className={styles.row} style={{ paddingTop: 12, justifyContent: "space-between", alignItems: "center" }}>
-                        <div className={styles.muted} style={{ fontWeight: 700 }}>
-                          Schedule {bulkScheduleRows.length} article(s) {profileTz ? <span style={{ fontWeight: 500 }}>(Timezone: {profileTz})</span> : null}
+                      <div className={styles.bulkScheduleSettingsWrap}>
+                        <p className={styles.bulkScheduleSettingsHint}>Defaults for all articles</p>
+                        <div className={styles.bulkScheduleGrid}>
+                          <label className={styles.label}>
+                            WordPress post type
+                            <select className={styles.input} value={bulkSchedulePostType} onChange={(e) => setBulkSchedulePostType(e.target.value)} disabled={bulkScheduling}>
+                              <option value="posts">Posts</option>
+                              <option value="pages">Pages</option>
+                              {wpTypesForSchedule
+                                .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
+                                .map((t) => (
+                                  <option key={t.rest_base} value={t.rest_base}>
+                                    {t.name || t.rest_base}
+                                  </option>
+                                ))}
+                            </select>
+                          </label>
+                          <label className={styles.label}>
+                            WordPress status
+                            <select className={styles.input} value={bulkScheduleWpStatus} onChange={(e) => setBulkScheduleWpStatus(e.target.value as "draft" | "publish")} disabled={bulkScheduling}>
+                              <option value="draft">Draft</option>
+                              <option value="publish">Publish</option>
+                            </select>
+                          </label>
+                        </div>
+
+                        <div className={styles.bulkScheduleGrid}>
+                          <label className={styles.label}>
+                            Writing prompt
+                            <select className={styles.input} value={scheduleWritingPromptId} onChange={(e) => setScheduleWritingPromptId(e.target.value)} disabled={bulkScheduling}>
+                              <option value="">Use project default</option>
+                              {(scheduleWritingPrompts?.items || []).map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name || p.id}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className={styles.label}>
+                            Image prompt
+                            <select className={styles.input} value={scheduleImagePromptId} onChange={(e) => setScheduleImagePromptId(e.target.value)} disabled={bulkScheduling}>
+                              <option value="">Use project default</option>
+                              {(scheduleImagePrompts?.items || []).map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name || p.id}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
                         </div>
                       </div>
 
-                      <div className={styles.bulkScheduleGrid} style={{ paddingTop: 10 }}>
-                        <label className={styles.label}>
-                          WordPress post type (applies to all)
-                          <select className={styles.input} value={bulkSchedulePostType} onChange={(e) => setBulkSchedulePostType(e.target.value)} disabled={bulkScheduling}>
-                            <option value="posts">Posts</option>
-                            <option value="pages">Pages</option>
-                            {wpTypesForSchedule
-                              .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
-                              .map((t) => (
-                                <option key={t.rest_base} value={t.rest_base}>
-                                  {t.name || t.rest_base}
-                                </option>
-                              ))}
-                          </select>
-                        </label>
-                        <label className={styles.label}>
-                          WordPress status (applies to all)
-                          <select className={styles.input} value={bulkScheduleWpStatus} onChange={(e) => setBulkScheduleWpStatus(e.target.value as "draft" | "publish")} disabled={bulkScheduling}>
-                            <option value="draft">Draft</option>
-                            <option value="publish">Publish</option>
-                          </select>
-                        </label>
-                      </div>
-
-                      <div className={styles.bulkScheduleGrid} style={{ paddingTop: 10 }}>
-                        <label className={styles.label}>
-                          Writing prompt (applies to all)
-                          <select className={styles.input} value={scheduleWritingPromptId} onChange={(e) => setScheduleWritingPromptId(e.target.value)} disabled={bulkScheduling}>
-                            <option value="">Use project default</option>
-                            {(scheduleWritingPrompts?.items || []).map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name || p.id}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className={styles.label}>
-                          Image prompt (applies to all)
-                          <select className={styles.input} value={scheduleImagePromptId} onChange={(e) => setScheduleImagePromptId(e.target.value)} disabled={bulkScheduling}>
-                            <option value="">Use project default</option>
-                            {(scheduleImagePrompts?.items || []).map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name || p.id}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
-
-                      <div style={{ paddingTop: 10, maxHeight: 340, overflow: "auto", borderTop: "1px solid var(--button-secondary-border)", marginTop: 12 }}>
+                      <div className={styles.bulkScheduleArticleList}>
                         {bulkScheduleRows.map((r, idx) => (
                           <div key={r.id} className={styles.bulkScheduleRow}>
-                            <div style={{ minWidth: 0 }}>
-                              <div style={{ fontWeight: 800, fontSize: 13, wordBreak: "break-word" }}>{idx + 1}. {r.title}</div>
-                              <div className={styles.muted} style={{ fontSize: 12 }}>{r.id}</div>
-                            </div>
-                            <label className={styles.label} style={{ margin: 0 }}>
+                            <p className={styles.bulkScheduleArticleTitle} title={`${idx + 1}. ${r.title}`}>
+                              {idx + 1}. {r.title}
+                            </p>
+                            <label className={`${styles.label} ${styles.bulkScheduleDateLabel}`}>
                               Date & time
                               <input
                                 className={styles.input}
@@ -4266,9 +4305,9 @@ export default function ProjectPage() {
                         ))}
                       </div>
 
-                      {error ? <p className={styles.error} style={{ marginTop: 10 }}>{error}</p> : null}
+                      {error ? <p className={styles.error} style={{ marginTop: 12, marginBottom: 0 }}>{error}</p> : null}
 
-                      <div className={styles.row} style={{ paddingTop: 12, justifyContent: "flex-end", gap: 10 }}>
+                      <div className={styles.bulkScheduleFooter}>
                         <button type="button" className={styles.btnSecondary} onClick={() => setBulkMode("root")} disabled={bulkScheduling}>
                           Cancel
                         </button>
@@ -6191,6 +6230,7 @@ export default function ProjectPage() {
               {scheduledVisible.map((j) => {
                 const jobState = (j.state || "").toLowerCase();
                 const canPostNow = !["posted", "cancelled", "posting"].includes(jobState);
+                const isFailed = jobState === "failed";
                 return (
                 <div key={j.id} className={styles.scheduledRow}>
                   <div style={{ minWidth: 0, flex: 1 }}>
@@ -6213,11 +6253,22 @@ export default function ProjectPage() {
                       >
                         Post Now
                       </button>
+                      {isFailed ? (
+                        <button
+                          type="button"
+                          className={styles.miniBtn}
+                          onClick={() => void retryScheduledPreparation(j.id)}
+                          disabled={retryPrepBusyId === j.id}
+                          title="Re-run article and image generation for this scheduled post"
+                        >
+                          {retryPrepBusyId === j.id ? "Retrying…" : "Retry preparation"}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className={styles.miniBtn}
                         onClick={() => void openEditScheduledJob(j)}
-                        disabled={["posted", "cancelled"].includes((j.state || "").toLowerCase())}
+                        disabled={["posted", "cancelled"].includes(jobState)}
                       >
                         Re-Schedule
                       </button>
@@ -6227,7 +6278,7 @@ export default function ProjectPage() {
                         onClick={async () => {
                           setConfirmCancelJob(j);
                         }}
-                        disabled={["posted", "cancelled"].includes((j.state || "").toLowerCase())}
+                        disabled={["posted", "cancelled"].includes(jobState)}
                       >
                         Cancel
                       </button>

@@ -1,10 +1,15 @@
+import Image from "next/image";
 import Link from "next/link";
 
 export default function TermsPage() {
   return (
     <div style={{ minHeight: "100vh", background: "#07070a", color: "#fff", padding: "40px 16px" }}>
       <div style={{ width: "min(900px, 100%)", margin: "0 auto" }}>
-        <div style={{ marginBottom: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 18 }}>
+          <Link href="/" aria-label="Riviso — home" style={{ display: "inline-flex", alignItems: "center", gap: 10, textDecoration: "none", color: "#fff" }}>
+            <Image src="/riviso-logo.png" alt="" width={28} height={28} priority />
+            <span style={{ fontWeight: 900, letterSpacing: "-0.02em", fontSize: 18 }}>Riviso</span>
+          </Link>
           <Link href="/" style={{ color: "rgba(255,255,255,0.75)", textDecoration: "none", fontWeight: 700 }}>
             ← Home
           </Link>
@@ -17,7 +22,7 @@ export default function TermsPage() {
 
         <div style={{ color: "rgba(255,255,255,0.78)", lineHeight: 1.7, fontSize: 14 }}>
           <p>
-            By using Auto Articles, you agree to these Terms & Conditions. If you do not agree, do not use the service.
+            By using Riviso, you agree to these Terms & Conditions. If you do not agree, do not use the service.
           </p>
 
           <h2 style={{ marginTop: 22, fontSize: 18 }}>Use of the service</h2>
@@ -29,7 +34,7 @@ export default function TermsPage() {
 
           <h2 style={{ marginTop: 22, fontSize: 18 }}>Integrations</h2>
           <p>
-            When you connect integrations, you authorize Auto Articles to act on your behalf for the specific actions you enable
+            When you connect integrations, you authorize Riviso to act on your behalf for the specific actions you enable
             (e.g. publishing to WordPress; requesting a Search Console URL inspection after a live publish).
           </p>
 

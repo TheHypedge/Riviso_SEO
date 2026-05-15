@@ -15,8 +15,8 @@ from fastapi import HTTPException
 
 from app.core.config import settings
 from app.services.article_generation import (
-    estimate_tokens_for_generation_bundle,
-    generate_article_bundle,
+    estimate_tokens_for_generation_bundle_safe,
+    generate_article_bundle_safe,
     generate_featured_image_only,
 )
 from app.services.prompt_validation import assert_image_prompt_allowed, assert_writing_prompt_allowed
@@ -90,7 +90,7 @@ async def execute_article_generation(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
-    token_estimate = estimate_tokens_for_generation_bundle(
+    token_estimate = estimate_tokens_for_generation_bundle_safe(
         title=title,
         keywords=keywords,
         focus_keyphrase=focus,
@@ -98,6 +98,7 @@ async def execute_article_generation(
         brand_identity=(proj.get("brand_identity") or ""),
         niche_identifier=(proj.get("niche_identifier") or ""),
         generate_image=generate_image,
+        image_prompt_text=(resolved_image or {}).get("text") or None,
     )
 
     plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
@@ -125,7 +126,7 @@ async def execute_article_generation(
         quota_consumed = True
 
     try:
-        gen = await generate_article_bundle(
+        gen = await generate_article_bundle_safe(
             title=title,
             keywords=keywords,
             focus_keyphrase=focus,

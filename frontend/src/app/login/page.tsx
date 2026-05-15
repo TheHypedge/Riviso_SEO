@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 
 import styles from "../page.module.css";
@@ -139,7 +140,17 @@ export default function LoginPage() {
     <div className={styles.authPage}>
       <div className={styles.authShell}>
         <section className={styles.authLeft}>
-          <div className={styles.authBrand}>Auto Articles</div>
+          <div className={styles.authBrand} aria-label="Riviso">
+            <Image
+              src="/riviso-logo.png"
+              alt="Riviso"
+              width={36}
+              height={36}
+              priority
+              className={styles.authBrandLogo}
+            />
+            <span className={styles.authBrandText}>Riviso</span>
+          </div>
           <div className={styles.authKicker}>Why teams choose us</div>
           <h1 className={styles.authHero}>Where your content strategy becomes reality.</h1>
           <div className={styles.authTypeRow} aria-label="Typewriter marketing text">
@@ -156,14 +167,14 @@ export default function LoginPage() {
           <div className={styles.authMobileTop}>
             <div className={styles.authMobileBrand} aria-label="Riviso">
               <span className={styles.authMobileLogo} aria-hidden="true">
-                <svg viewBox="0 0 24 24" width="18" height="18" focusable="false" aria-hidden="true">
-                  <path
-                    d="M12 2.6c4.85 0 8.8 3.95 8.8 8.8 0 4.85-3.95 8.8-8.8 8.8-4.85 0-8.8-3.95-8.8-8.8 0-4.85 3.95-8.8 8.8-8.8Zm0 3.2a5.6 5.6 0 1 0 0 11.2 5.6 5.6 0 0 0 0-11.2Z"
-                    fill="currentColor"
-                    opacity="0.95"
-                  />
-                  <path d="M12 7.2a4.8 4.8 0 1 1 0 9.6 4.8 4.8 0 0 1 0-9.6Z" fill="currentColor" opacity="0.22" />
-                </svg>
+                <Image
+                  src="/riviso-logo.png"
+                  alt=""
+                  width={28}
+                  height={28}
+                  priority
+                  className={styles.authMobileLogoImg}
+                />
               </span>
               <span className={styles.authMobileBrandText}>Riviso</span>
             </div>

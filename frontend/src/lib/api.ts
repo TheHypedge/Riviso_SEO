@@ -1090,6 +1090,12 @@ export const api = {
   ) {
     return apiFetch<ScheduledJobPublic>(`/api/projects/${projectId}/scheduled-jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(patch) });
   },
+  async retryScheduledJobPreparation(projectId: string, jobId: string) {
+    return apiFetch<{ ok: boolean; message: string; job: ScheduledJobPublic }>(
+      `/api/projects/${projectId}/scheduled-jobs/${jobId}/retry-preparation`,
+      { method: "POST" },
+    );
+  },
   async listArticles(projectId: string) {
     return apiFetch<ArticlePublic[]>(`/api/projects/${projectId}/articles`);
   },
