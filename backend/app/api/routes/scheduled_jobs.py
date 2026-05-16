@@ -10,6 +10,7 @@ from app.legacy.storage import get_legacy_storage_module
 from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobUpdate
 from app.services.scheduler import start_scheduled_job_preparation_task
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
+from app.services.schedule_timing import SCHEDULE_TOO_SOON_MESSAGE, is_schedule_time_allowed, minimum_schedule_utc
 from app.services.to_thread import run_sync
 
 
@@ -154,14 +155,13 @@ async def update_scheduled_job(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
 
-        min_utc = datetime.now(timezone.utc) + timedelta(minutes=10)
-        if dt_utc < min_utc:
+        if not is_schedule_time_allowed(dt_utc):
             # Failed jobs often keep an old run_at in the past; bump forward so
             # Re-Schedule works instead of returning 400 and leaving them stuck.
             if prev_state == "failed":
-                dt_utc = min_utc
+                dt_utc = minimum_schedule_utc()
             else:
-                raise HTTPException(status_code=400, detail="Scheduled time must be at least 10 minutes from now")
+                raise HTTPException(status_code=400, detail=SCHEDULE_TOO_SOON_MESSAGE)
 
         norm_utc = dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
         updates["run_at"] = norm_utc

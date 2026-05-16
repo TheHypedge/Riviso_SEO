@@ -341,11 +341,10 @@ class TopicClusterService:
                 raise HTTPException(status_code=400, detail=str(e) or "Invalid schedule time format") from None
             except Exception:
                 raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
-            if scheduled_dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=10)):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Scheduled time must be at least 10 minutes from now.",
-                )
+            from app.services.schedule_timing import SCHEDULE_TOO_SOON_MESSAGE, is_schedule_time_allowed
+
+            if not is_schedule_time_allowed(scheduled_dt_utc):
+                raise HTTPException(status_code=400, detail=SCHEDULE_TOO_SOON_MESSAGE)
             # Pre-check schedule quota for the whole batch.
             if role != "admin" and uid and hasattr(st, "consume_scheduled_usage"):
                 plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")

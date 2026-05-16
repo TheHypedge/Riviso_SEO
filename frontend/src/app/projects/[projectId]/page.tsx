@@ -23,9 +23,11 @@ import {
   describeBulkScheduleSummary,
   parseDatetimeLocal,
   validateBulkScheduleCadence,
+  isScheduleWhenAllowed,
   type BulkScheduleMode,
   type WeekdayIso,
 } from "@/lib/bulkScheduleDates";
+import { SCHEDULE_BUFFER_MINUTES, SCHEDULE_PREP_MINUTES, scheduleMinFromNowMs } from "@/lib/scheduleTiming";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 type TabKey =
@@ -2617,14 +2619,26 @@ export default function ProjectPage() {
     router.push(`/projects/${projectId}/articles/${aid}`);
   }
 
+  const scheduleTimeZone = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  const buildScheduleMinStr = useCallback(() => {
+    return toDatetimeLocalFromDateInProfileTz(scheduleMinFromNowMs());
+  }, [profileTz]);
+
   const recomputeBulkScheduleRows = useCallback(
-    (rows: Array<{ id: string; title: string; when: string }>, mode: BulkScheduleMode) => {
+    (
+      rows: Array<{ id: string; title: string; when: string }>,
+      mode: BulkScheduleMode,
+      minWhen?: string,
+    ) => {
       if (mode === "manual" || rows.length < 2) return rows;
+      const min = minWhen || bulkScheduleMin;
       return applyBulkScheduleDates({
         mode,
         rows,
-        startWhen: bulkScheduleStartWhen || bulkScheduleMin,
-        minWhen: bulkScheduleMin,
+        startWhen: bulkScheduleStartWhen || min,
+        minWhen: min,
+        timeZone: scheduleTimeZone,
         articlesPerWeek: bulkScheduleArticlesPerWeek,
         weekdays: bulkScheduleWeekdays,
         postsPerMonth: bulkSchedulePostsPerMonth,
@@ -2636,6 +2650,7 @@ export default function ProjectPage() {
       bulkScheduleArticlesPerWeek,
       bulkScheduleWeekdays,
       bulkSchedulePostsPerMonth,
+      scheduleTimeZone,
     ],
   );
 
@@ -2679,12 +2694,22 @@ export default function ProjectPage() {
     recomputeBulkScheduleRows,
   ]);
 
+  useEffect(() => {
+    if (bulkMode !== "schedule") return;
+    const refreshMin = () => {
+      const minStr = buildScheduleMinStr();
+      setBulkScheduleMin((prev) => (prev === minStr ? prev : minStr));
+    };
+    refreshMin();
+    const id = window.setInterval(refreshMin, 30_000);
+    return () => window.clearInterval(id);
+  }, [bulkMode, buildScheduleMinStr]);
+
   function bulkSchedule() {
     if (!selectedIds.length) return;
     if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
     void ensureScheduleMetaLoaded();
-    const min = new Date(Date.now() + 10 * 60 * 1000);
-    const minStr = toDatetimeLocalFromDateInProfileTz(min);
+    const minStr = buildScheduleMinStr();
     setBulkScheduleMin(minStr);
     setBulkScheduleStartWhen(minStr);
     setBulkScheduleMode("manual");
@@ -2719,17 +2744,22 @@ export default function ProjectPage() {
       setError(cadenceErr);
       return;
     }
-    const minP = parseDatetimeLocal(bulkScheduleMin);
+    const minStr = buildScheduleMinStr();
+    setBulkScheduleMin(minStr);
+    let rowsToSubmit = bulkScheduleRows;
+    if (bulkScheduleMode !== "manual" && bulkScheduleRows.length >= 2) {
+      rowsToSubmit = recomputeBulkScheduleRows(bulkScheduleRows, bulkScheduleMode, minStr);
+      setBulkScheduleRows(rowsToSubmit);
+    }
     setBulkScheduling(true);
     try {
-      for (const r of bulkScheduleRows) {
+      for (const r of rowsToSubmit) {
         const when = (r.when || "").trim();
         if (!when) throw new Error("Please set date/time for all selected articles");
-        if (minP) {
-          const wp = parseDatetimeLocal(when);
-          if (wp && new Date(wp.y, wp.m - 1, wp.d, wp.h, wp.min) < new Date(minP.y, minP.m - 1, minP.d, minP.h, minP.min)) {
-            throw new Error("Each scheduled time must be at least 10 minutes from now");
-          }
+        if (!isScheduleWhenAllowed(when, minStr, scheduleTimeZone)) {
+          throw new Error(
+            `Each scheduled time must be at least ${SCHEDULE_BUFFER_MINUTES} minutes from now (articles need ~${SCHEDULE_PREP_MINUTES} minutes to prepare)`,
+          );
         }
         await api.scheduleArticle(projectId, r.id, {
           wp_scheduled_at: when,
@@ -4555,14 +4585,17 @@ export default function ProjectPage() {
                                     disabled={bulkScheduling}
                                     onChange={(e) => {
                                       const n = Math.max(1, Math.min(7, Number(e.target.value) || 1));
-                                      setBulkScheduleArticlesPerWeek(n);
-                                      setBulkScheduleWeekdays((prev) => {
-                                        if (prev.length >= n) return prev;
-                                        return defaultWeekdaysForArticlesPerWeek(
-                                          n,
-                                          bulkScheduleStartWhen || bulkScheduleMin,
+                                      const wdLen = bulkScheduleWeekdays.length;
+                                      let capped = wdLen ? Math.min(n, wdLen) : n;
+                                      if (wdLen < capped) {
+                                        setBulkScheduleWeekdays(
+                                          defaultWeekdaysForArticlesPerWeek(
+                                            capped,
+                                            bulkScheduleStartWhen || bulkScheduleMin,
+                                          ),
                                         );
-                                      });
+                                      }
+                                      setBulkScheduleArticlesPerWeek(capped);
                                     }}
                                   />
                                 </label>
@@ -4583,7 +4616,11 @@ export default function ProjectPage() {
                                               const next = on
                                                 ? prev.filter((d) => d !== iso)
                                                 : [...prev, iso].sort((a, b) => a - b);
-                                              return next.length ? next : [iso];
+                                              const days = next.length ? next : [iso];
+                                              setBulkScheduleArticlesPerWeek((apw) =>
+                                                Math.min(apw, Math.max(days.length, 1)),
+                                              );
+                                              return days;
                                             });
                                           }}
                                         />

@@ -51,6 +51,7 @@ from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.scheduler import start_scheduled_job_preparation_task
 from app.services.to_thread import run_sync
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
+from app.services.schedule_timing import SCHEDULE_TOO_SOON_MESSAGE, is_schedule_time_allowed
 from app.services.prompt_validation import assert_writing_prompt_allowed
 from app.services.article_pipeline import (
     execute_article_generation,
@@ -876,8 +877,8 @@ async def schedule_article(
     # Enforce minimum gap of 10 minutes from current time (UTC). The scheduler
     # needs ~6-8 minutes to fully prepare an article (content + image + WP
     # upload) before it can publish, so 10 minutes is the safe minimum.
-    if dt_utc < (datetime.now(timezone.utc) + timedelta(minutes=10)):
-        raise HTTPException(status_code=400, detail="Scheduled time must be at least 10 minutes from now")
+    if not is_schedule_time_allowed(dt_utc):
+        raise HTTPException(status_code=400, detail=SCHEDULE_TOO_SOON_MESSAGE)
 
     wp_status = (payload.wp_status or "draft").strip().lower()
     if wp_status not in {"draft", "publish"}:
