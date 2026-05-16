@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { TutorialStepperModal } from "@/components/TutorialStepperModal";
 import styles from "../page.module.css";
 import dashStyles from "./dashboard.module.css";
 import {
@@ -73,6 +74,7 @@ export default function DashboardPage() {
     const raw = (params.get("section") || "projects") as DashSection;
     return DASH_SECTIONS.has(raw) ? raw : "projects";
   });
+  const [showTutorial, setShowTutorial] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showWpConnect, setShowWpConnect] = useState(false);
   const [wpProject, setWpProject] = useState<ProjectPublic | null>(null);
@@ -565,7 +567,10 @@ export default function DashboardPage() {
               <button
                 type="button"
                 className={styles.navItem}
-                onClick={() => alert("Tutorial will be wired next.")}
+                onClick={() => {
+                  setMobileNavOpen(false);
+                  setShowTutorial(true);
+                }}
               >
                 Watch tutorial
               </button>
@@ -1556,6 +1561,8 @@ export default function DashboardPage() {
           </div>
         </>
       ) : null}
+
+      {showTutorial ? <TutorialStepperModal onClose={() => setShowTutorial(false)} /> : null}
     </div>
   );
 }
