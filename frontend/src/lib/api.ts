@@ -525,6 +525,28 @@ export type ArticlePublic = {
   internal_links_count?: number | null; // Feature 3
 };
 
+export type ArticleListPage = {
+  items: ArticlePublic[];
+  total: number;
+  page: number;
+  per_page: number;
+};
+
+export type ArticleTitleRef = {
+  id: string;
+  title: string;
+};
+
+export type ArticleListQuery = {
+  page?: number;
+  per_page?: number;
+  q?: string;
+  status?: string;
+  date_from?: string;
+  date_to?: string;
+  sort?: "asc" | "desc";
+};
+
 export type BulkUploadRow = {
   title: string;
   focus_keyphrase?: string | null;
@@ -1102,8 +1124,35 @@ export const api = {
       { method: "POST" },
     );
   },
-  async listArticles(projectId: string) {
-    return apiFetch<ArticlePublic[]>(`/api/projects/${projectId}/articles`);
+  async listArticlesPage(projectId: string, query: ArticleListQuery = {}) {
+    const sp = new URLSearchParams();
+    if (query.page != null) sp.set("page", String(query.page));
+    if (query.per_page != null) sp.set("per_page", String(query.per_page));
+    if (query.q) sp.set("q", query.q);
+    if (query.status) sp.set("status", query.status);
+    if (query.date_from) sp.set("date_from", query.date_from);
+    if (query.date_to) sp.set("date_to", query.date_to);
+    if (query.sort) sp.set("sort", query.sort);
+    const qs = sp.toString();
+    return apiFetch<ArticleListPage>(`/api/projects/${projectId}/articles${qs ? `?${qs}` : ""}`);
+  },
+  async listArticleTitles(projectId: string) {
+    return apiFetch<ArticleTitleRef[]>(`/api/projects/${projectId}/articles/titles`);
+  },
+  /** Fetch all pages for export (bounded). */
+  async listArticlesAll(projectId: string, query: Omit<ArticleListQuery, "page" | "per_page"> = {}) {
+    const per_page = 500;
+    const items: ArticlePublic[] = [];
+    let page = 1;
+    let total = 0;
+    while (page <= 50) {
+      const res = await api.listArticlesPage(projectId, { ...query, page, per_page });
+      total = res.total;
+      items.push(...(res.items || []));
+      if (items.length >= total || !(res.items || []).length) break;
+      page += 1;
+    }
+    return items;
   },
   async consumeExportQuota(projectId: string) {
     return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/articles/export/consume`, { method: "POST" });

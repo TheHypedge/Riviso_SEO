@@ -772,6 +772,9 @@
 }
 
 .offcanvasItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   text-align: left;
   border: 1px solid var(--aa-hairline);
   background: var(--aa-surface-soft);
@@ -780,6 +783,15 @@
   padding: 12px 12px;
   font-weight: 800;
   cursor: pointer;
+}
+
+.offcanvasItem .navItemIcon {
+  width: 20px;
+  height: 20px;
+}
+
+.offcanvasItemActive .navItemIcon {
+  color: var(--aa-ink);
 }
 
 .offcanvasItemActive {
@@ -2488,20 +2500,56 @@
   margin-bottom: 12px;
 }
 
+.navGroup a.navItem {
+  text-decoration: none;
+  color: inherit;
+}
+
 .navItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
   background: var(--aa-surface-card);
   color: var(--aa-body-strong);
   border-radius: var(--aa-r-lg);
-  padding: 10px 12px;
+  padding: 9px 12px;
   text-align: left;
   cursor: pointer;
   font-weight: 600;
+  font-size: 14px;
+  line-height: 1.25;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease;
+}
+
+.navItem:hover {
+  border-color: color-mix(in oklab, var(--aa-hairline), transparent 4%);
+  background: color-mix(in oklab, var(--aa-surface-card), var(--aa-primary) 6%);
+}
+
+.navItemIcon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: color-mix(in oklab, var(--aa-body-strong), transparent 38%);
+  transition: color 140ms ease;
+}
+
+.navItemLabel {
+  min-width: 0;
+  flex: 1;
 }
 
 .navItemActive {
   background: color-mix(in oklab, var(--aa-primary), transparent 86%);
   border-color: transparent;
+}
+
+.navItemActive .navItemIcon {
+  color: var(--aa-body-strong);
 }
 
 .sidebarAccountCard {

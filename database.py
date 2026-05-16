@@ -97,6 +97,7 @@ def init_db() -> None:
     db.scheduled_jobs.create_index("project_id")
     db.scheduled_jobs.create_index([("project_id", 1), ("run_at", 1)])
     db.scheduled_jobs.create_index([("state", 1), ("run_at", 1)])
+    db.scheduled_jobs.create_index([("project_id", 1), ("state", 1), ("article_id", 1)])
 
 
 def remove_scoped_session() -> None:

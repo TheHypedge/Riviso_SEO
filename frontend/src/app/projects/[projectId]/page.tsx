@@ -28,6 +28,7 @@ import {
   type WeekdayIso,
 } from "@/lib/bulkScheduleDates";
 import { SCHEDULE_BUFFER_MINUTES, SCHEDULE_PREP_MINUTES, scheduleMinFromNowMs } from "@/lib/scheduleTiming";
+import { ProjectTabIcon, SidebarBackIcon, type ProjectTabKey } from "@/components/ProjectTabIcon";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 type TabKey =
@@ -653,6 +654,8 @@ export default function ProjectPage() {
   // Pagination + filtering for the "Existing articles — indexing status" table on the
   // Tools tab. Defaults to 10 rows/page; status filter aligns with the coverage states
   // surfaced by the backend (pending / inspected / requested).
+  const [indexingArticles, setIndexingArticles] = useState<ArticlePublic[]>([]);
+  const [indexingArticlesLoading, setIndexingArticlesLoading] = useState(false);
   const [indexingPage, setIndexingPage] = useState<number>(1);
   const [indexingPageSize, setIndexingPageSize] = useState<number>(10);
   const [indexingStatusFilter, setIndexingStatusFilter] = useState<string>("");
@@ -805,7 +808,12 @@ export default function ProjectPage() {
     targetCities,
     targetCitiesAll,
   ]);
-  const [articles, setArticles] = useState<ArticlePublic[]>([]);
+  const [listItems, setListItems] = useState<ArticlePublic[]>([]);
+  const [listTotal, setListTotal] = useState(0);
+  const [articlesListLoading, setArticlesListLoading] = useState(false);
+  const [articleTitlesById, setArticleTitlesById] = useState<Record<string, string>>({});
+  const [selectedMeta, setSelectedMeta] = useState<Record<string, { title: string }>>({});
+  const [debouncedQ, setDebouncedQ] = useState("");
   const [scheduledJobs, setScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [scheduledLoading, setScheduledLoading] = useState(false);
   const [retryPrepBusyId, setRetryPrepBusyId] = useState<string | null>(null);
@@ -985,12 +993,12 @@ export default function ProjectPage() {
   useEffect(() => {
     if (!researchHydrated) return;
     if (!researchResults.length) return;
-    if (!articles || !articles.length) return;
+    if (!Object.keys(articleTitlesById).length) return;
     const titleToId = new Map<string, string>();
-    for (const a of articles) {
-      const k = (a.title || "").trim().toLowerCase();
+    for (const [id, title] of Object.entries(articleTitlesById)) {
+      const k = (title || "").trim().toLowerCase();
       if (!k) continue;
-      if (!titleToId.has(k)) titleToId.set(k, a.id);
+      if (!titleToId.has(k)) titleToId.set(k, id);
     }
     let changed = false;
     const next = researchResults.map((r) => {
@@ -1008,7 +1016,12 @@ export default function ProjectPage() {
       return r;
     });
     if (changed) setResearchResults(next);
-  }, [articles, researchHydrated, researchResults]);
+  }, [articleTitlesById, researchHydrated, researchResults]);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQ(q), 300);
+    return () => window.clearTimeout(t);
+  }, [q]);
 
   // Persist research state on changes (after hydration).
   useEffect(() => {
@@ -1048,14 +1061,12 @@ export default function ProjectPage() {
       setError(null);
       setLoading(true);
       try {
-        const [list, ps, prof, limits, quota] = await Promise.all([
-          api.listArticles(projectId),
+        const [ps, prof, limits, quota] = await Promise.all([
           api.getProjectSettings(projectId),
           api.profileMe(),
           api.projectFeatureLimits(projectId).catch(() => null),
           api.articleQuota(projectId).catch(() => null),
         ]);
-        setArticles(list);
         setSettings(ps);
         setFeatureLimits(limits);
         setArticleQuota(quota);
@@ -1073,6 +1084,79 @@ export default function ProjectPage() {
       }
     })();
   }, [projectId, router, token]);
+
+  useEffect(() => {
+    if (!token || !projectId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const titles = await api.listArticleTitles(projectId);
+        if (cancelled) return;
+        const map: Record<string, string> = {};
+        for (const row of titles || []) {
+          if (row.id) map[row.id] = row.title || "";
+        }
+        setArticleTitlesById(map);
+      } catch {
+        // Non-fatal — scheduled tab falls back to "(Untitled article)".
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, token]);
+
+  useEffect(() => {
+    if (!token || !projectId) return;
+    let cancelled = false;
+    (async () => {
+      setArticlesListLoading(true);
+      try {
+        const res = await api.listArticlesPage(projectId, {
+          page,
+          per_page: pageSize,
+          q: debouncedQ.trim() || undefined,
+          status: status || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
+          sort: dateOrder,
+        });
+        if (cancelled) return;
+        setListItems(res.items || []);
+        setListTotal(res.total || 0);
+      } catch {
+        if (!cancelled) {
+          clearAuth();
+          router.replace("/login");
+        }
+      } finally {
+        if (!cancelled) setArticlesListLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, router, token, page, pageSize, debouncedQ, status, dateFrom, dateTo, dateOrder]);
+
+  useEffect(() => {
+    if (!token || !projectId || tab !== "tools") return;
+    let cancelled = false;
+    (async () => {
+      setIndexingArticlesLoading(true);
+      try {
+        const items = await api.listArticlesAll(projectId, { status: "published" });
+        if (cancelled) return;
+        setIndexingArticles((items || []).filter((a) => (a.wp_link || "").trim()));
+      } catch {
+        if (!cancelled) setIndexingArticles([]);
+      } finally {
+        if (!cancelled) setIndexingArticlesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, tab, token]);
 
   // Load the user's full project list so the sidebar switcher can render
   // every project they own. Runs once per mount — projects rarely change
@@ -1271,7 +1355,7 @@ export default function ProjectPage() {
       parts.push("Press 'Open in Search Console' to finish via the manual REQUEST INDEXING button.");
       setRequestIndexingMsg(parts.join(" "));
       const newStatus = (res?.gsc_status || "manual_required").toString();
-      setArticles((prev) =>
+      setListItems((prev) =>
         prev.map((a) => (a.id === articleId ? { ...a, gsc_status: newStatus } : a)),
       );
     } catch (e) {
@@ -1807,7 +1891,7 @@ export default function ProjectPage() {
       const res = await api.articleMarkMonitor(projectId, articleId, status);
       const newStatus = res?.monitor?.status || status;
       // Optimistic local update so the list re-renders immediately.
-      setArticles((rows) =>
+      setListItems((rows) =>
         rows.map((r) => (r.id === articleId ? { ...r, monitor_status: newStatus } : r)),
       );
     } catch (e) {
@@ -1858,7 +1942,7 @@ export default function ProjectPage() {
       }
       parts.push("Click 'Open in Search Console' to finish via the manual Request Indexing button.");
       setArticleIndexMsg((m) => ({ ...m, [articleId]: parts.join(" ") }));
-      setArticles((prev) =>
+      setListItems((prev) =>
         prev.map((a) => (a.id === articleId ? { ...a, gsc_status: res?.gsc_status || a.gsc_status } : a)),
       );
     } catch (e) {
@@ -2062,7 +2146,10 @@ export default function ProjectPage() {
     setCreating(true);
     try {
       const a = await api.createArticle(projectId, title);
-      setArticles((prev) => [a, ...prev]);
+      setPage(1);
+      await reloadArticleTitles();
+      await refreshArticlesList();
+      setArticleTitlesById((prev) => ({ ...prev, [a.id]: a.title || "" }));
       setTitle("");
       setShowAddArticle(false);
     } catch (e) {
@@ -2098,7 +2185,12 @@ export default function ProjectPage() {
     setExporting(true);
     try {
       await api.consumeExportQuota(projectId);
-      const all = await api.listArticles(projectId);
+      const all = await api.listArticlesAll(projectId, {
+        status: exportStatus || undefined,
+        date_from: exportFrom || undefined,
+        date_to: exportTo || undefined,
+        sort: "desc",
+      });
       const df = parseDateOnly(exportFrom);
       const dt = parseDateOnly(exportTo);
 
@@ -2285,7 +2377,8 @@ export default function ProjectPage() {
         skipProjectDuplicateConflicts: confirmSkipProjectDup,
       });
       // fastest: refresh list (also ensures ordering latest->oldest)
-      setArticles(await api.listArticles(projectId));
+      await reloadArticleTitles();
+      await refreshArticlesList();
       setBulkProjectDupModal(null);
       setBulkDupExpandList(false);
       setShowBulkUpload(false);
@@ -2337,59 +2430,70 @@ export default function ProjectPage() {
     }
   }
 
-  const filtered = useMemo(() => {
-    const qn = q.trim().toLowerCase();
-    const df = parseDateOnly(dateFrom);
-    const dt = parseDateOnly(dateTo);
-
-    const out = articles.filter((a) => {
-      if (status && (a.status || "").toLowerCase() !== status) return false;
-
-      if (qn) {
-        const hay = [
-          a.title,
-          a.focus_keyphrase || "",
-          ...(a.keywords || []),
-        ]
-          .join(" ")
-          .toLowerCase();
-        if (!hay.includes(qn)) return false;
-      }
-
-      const ca = parseCreatedAt(a.created_at);
-      if (df && ca && ca < df) return false;
-      if (dt && ca) {
-        // inclusive end date
-        const end = new Date(dt.getTime() + 24 * 60 * 60 * 1000);
-        if (ca >= end) return false;
-      }
-      return true;
-    });
-
-    const createdAtMs = (a: { created_at?: string | null }) => {
-      const d = parseCreatedAt(a.created_at);
-      return d ? d.getTime() : 0;
-    };
-
-    out.sort((a, b) => (dateOrder === "asc" ? createdAtMs(a) - createdAtMs(b) : createdAtMs(b) - createdAtMs(a)));
-    return out;
-  }, [articles, dateFrom, dateTo, q, status, dateOrder]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(listTotal / pageSize));
   const pageClamped = Math.min(Math.max(1, page), totalPages);
-  const pageItems = filtered.slice((pageClamped - 1) * pageSize, pageClamped * pageSize);
+  const pageItems = listItems;
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  function articleTitleFor(id: string) {
+    return selectedMeta[id]?.title || articleTitlesById[id] || "(Untitled)";
+  }
+
+  async function refreshArticlesList() {
+    const res = await api.listArticlesPage(projectId, {
+      page,
+      per_page: pageSize,
+      q: debouncedQ.trim() || undefined,
+      status: status || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      sort: dateOrder,
+    });
+    setListItems(res.items || []);
+    setListTotal(res.total || 0);
+  }
+
+  async function reloadArticleTitles() {
+    const titles = await api.listArticleTitles(projectId);
+    const map: Record<string, string> = {};
+    for (const row of titles || []) {
+      if (row.id) map[row.id] = row.title || "";
+    }
+    setArticleTitlesById(map);
+  }
 
   const allOnPageSelected = pageItems.length > 0 && pageItems.every((a) => selected[a.id]);
 
   function toggleAllOnPage() {
     const next = { ...selected };
+    const nextMeta = { ...selectedMeta };
     const value = !allOnPageSelected;
-    for (const a of pageItems) next[a.id] = value;
+    for (const a of pageItems) {
+      next[a.id] = value;
+      if (value) {
+        nextMeta[a.id] = { title: a.title || "(Untitled)" };
+      } else {
+        delete nextMeta[a.id];
+      }
+    }
     setSelected(next);
+    setSelectedMeta(nextMeta);
   }
 
   function toggleOne(id: string) {
-    setSelected((prev) => ({ ...prev, [id]: !prev[id] }));
+    const turningOn = !selected[id];
+    setSelected((prev) => ({ ...prev, [id]: turningOn }));
+    const row = pageItems.find((a) => a.id === id);
+    setSelectedMeta((prev) => {
+      if (!turningOn) {
+        const { [id]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [id]: { title: row?.title || articleTitlesById[id] || "(Untitled)" } };
+    });
   }
 
   async function bulkDelete() {
@@ -2398,8 +2502,10 @@ export default function ProjectPage() {
     setError(null);
     try {
       await api.bulkDeleteArticles(projectId, selectedIds);
-      setArticles((prev) => prev.filter((a) => !selectedIds.includes(a.id)));
       setSelected({});
+      setSelectedMeta({});
+      await reloadArticleTitles();
+      await refreshArticlesList();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Bulk delete failed");
     }
@@ -2409,13 +2515,14 @@ export default function ProjectPage() {
     setError(null);
     try {
       await api.bulkDeleteArticles(projectId, [articleId]);
-      setArticles((prev) => prev.filter((x) => x.id !== articleId));
       setSelected((prev) => {
         const next = { ...prev };
         delete next[articleId];
         return next;
       });
       setConfirmDeleteId(null);
+      await reloadArticleTitles();
+      await refreshArticlesList();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Delete failed");
     }
@@ -2441,7 +2548,7 @@ export default function ProjectPage() {
       // which can time out on production proxies.
       if (scheduled?.wp_scheduled_at) {
         const runAt = String(scheduled.wp_scheduled_at || "");
-        setArticles((prev) =>
+        setListItems((prev) =>
           prev.map((a) =>
             a.id === articleId
               ? {
@@ -2483,7 +2590,7 @@ export default function ProjectPage() {
         wp_status: (String(j.wp_status || "draft").toLowerCase() === "publish" ? "publish" : "draft") as "draft" | "publish",
         category_ids: j.category_ids || [],
       });
-      setArticles(await api.listArticles(projectId));
+      await refreshArticlesList();
       setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
       setConfirmPostNowJob(null);
     } catch (e) {
@@ -2604,10 +2711,11 @@ export default function ProjectPage() {
     setError(null);
     try {
       await api.bulkChangeStatus(projectId, selectedIds, newStatus);
-      setArticles((prev) =>
+      setListItems((prev) =>
         prev.map((a) => (selectedIds.includes(a.id) ? { ...a, status: newStatus } : a)),
       );
       setSelected({});
+      setSelectedMeta({});
     } catch (e) {
       setError(e instanceof Error ? e.message : "Bulk status update failed");
     }
@@ -2723,7 +2831,7 @@ export default function ProjectPage() {
     setBulkScheduleRows(
       selectedIds.map((id) => ({
         id,
-        title: articles.find((a) => a.id === id)?.title || "(Untitled)",
+        title: articleTitleFor(id),
         when: minStr,
       })),
     );
@@ -2771,7 +2879,7 @@ export default function ProjectPage() {
         });
       }
 
-      setArticles(await api.listArticles(projectId));
+      await refreshArticlesList();
       try {
         setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
       } catch {
@@ -3037,6 +3145,15 @@ export default function ProjectPage() {
     if (k === "performance") return performanceTabAvailable;
     return true;
   });
+
+  function renderNavLabel(k: TabKey) {
+    return (
+      <>
+        <ProjectTabIcon tab={k as ProjectTabKey} className={styles.navItemIcon} />
+        <span className={styles.navItemLabel}>{tabLabel[k]}</span>
+      </>
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // Research helpers (seeds, runs, filters, import)
@@ -3670,12 +3787,10 @@ export default function ProjectPage() {
       const res = await api.bulkUploadArticles(projectId, rows, {
         skipProjectDuplicateConflicts: opts.skipDuplicates,
       });
-      const refreshedArticles = await api.listArticles(projectId);
-      setArticles(refreshedArticles);
-
-      // Build a title -> article-id map for newly imported items.
+      await reloadArticleTitles();
+      const titleRows = await api.listArticleTitles(projectId);
       const titleToId = new Map<string, string>();
-      for (const a of refreshedArticles) {
+      for (const a of titleRows) {
         const k = (a.title || "").trim().toLowerCase();
         if (!k) continue;
         if (!titleToId.has(k)) titleToId.set(k, a.id);
@@ -3697,11 +3812,12 @@ export default function ProjectPage() {
         `${opts.successVerb} ${res.created} article${res.created === 1 ? "" : "s"}${skipped ? ` (${skipped} skipped as duplicates)` : ""}.`
       );
       setResearchFilter("imported");
+      await refreshArticlesList();
       return {
         articleIds: selected
           .map((r) => titleToId.get((r.title || "").trim().toLowerCase()))
           .filter((id): id is string => !!id),
-        refreshedArticles,
+        refreshedArticles: [],
         created: res.created,
         skipped,
       };
@@ -3822,8 +3938,8 @@ export default function ProjectPage() {
         setResearchImportMsg(`Scheduled ${scheduled} article${scheduled === 1 ? "" : "s"} with featured image generation enabled.`);
         void refreshFeatureLimits();
       }
-      const refreshedArticles = await api.listArticles(projectId);
-      setArticles(refreshedArticles);
+      await reloadArticleTitles();
+      await refreshArticlesList();
       setCurationPromptModal(null);
       setResearchFilter("imported");
     } catch (e) {
@@ -3894,7 +4010,7 @@ export default function ProjectPage() {
 
   const scheduledVisible = useMemo(() => {
     const q = scheduledSearch.trim().toLowerCase();
-    const titleFor = (articleId: string) => (articles.find((a) => a.id === articleId)?.title || "").trim();
+    const titleFor = (articleId: string) => articleTitleFor(articleId).trim();
     const parseTs = (runAt: string | null | undefined) => {
       const v = (runAt || "").trim();
       if (!v) return 0;
@@ -3916,7 +4032,7 @@ export default function ProjectPage() {
       return scheduledOrder === "asc" ? ta - tb : tb - ta;
     });
     return rows;
-  }, [articles, scheduledJobs, scheduledOrder, scheduledSearch]);
+  }, [articleTitlesById, selectedMeta, scheduledJobs, scheduledOrder, scheduledSearch]);
 
   const clusterPlanLimitReached = Boolean(
     featureLimits?.cluster_plans &&
@@ -4089,7 +4205,7 @@ export default function ProjectPage() {
                     className={`${styles.offcanvasItem} ${tab === k ? styles.offcanvasItemActive : ""}`}
                     onClick={() => goTab(k)}
                   >
-                    {tabLabel[k]}
+                    {renderNavLabel(k)}
                   </button>
                 ))}
               </div>
@@ -4128,7 +4244,8 @@ export default function ProjectPage() {
             <div className={styles.sidebarTitle}>PROJECT</div>
             <div className={styles.navGroup}>
               <Link className={styles.navItem} href="/dashboard">
-                ← Back to dashboard
+                <SidebarBackIcon className={styles.navItemIcon} />
+                <span className={styles.navItemLabel}>Back to dashboard</span>
               </Link>
             </div>
 
@@ -4196,7 +4313,7 @@ export default function ProjectPage() {
                   className={`${styles.navItem} ${tab === k ? styles.navItemActive : ""}`}
                   onClick={() => goTab(k)}
                 >
-                  {tabLabel[k]}
+                  {renderNavLabel(k)}
                 </button>
               ))}
             </div>
@@ -4865,10 +4982,10 @@ export default function ProjectPage() {
                   <div className={`${styles.smallMuted} ${styles.pushRight}`}>Status</div>
                 </div>
 
-                {loading ? <div style={{ padding: 14 }}>Loading…</div> : null}
-                {!loading && filtered.length === 0 ? <div style={{ padding: 14 }}>No articles match the current filters.</div> : null}
+                {loading || articlesListLoading ? <div style={{ padding: 14 }}>Loading…</div> : null}
+                {!loading && !articlesListLoading && listTotal === 0 ? <div style={{ padding: 14 }}>No articles match the current filters.</div> : null}
 
-                {!loading
+                {!loading && !articlesListLoading
                   ? pageItems.map((a) => (
                       <div
                         key={a.id}
@@ -5049,7 +5166,7 @@ export default function ProjectPage() {
                   Prev
                 </button>
                 <span style={{ fontSize: 13, color: "#666" }}>
-                  Page {pageClamped} / {totalPages} · {filtered.length} item(s)
+                  Page {pageClamped} / {totalPages} · {listTotal} item(s)
                 </span>
                 <button className={styles.button} type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageClamped >= totalPages}>
                   Next
@@ -6708,7 +6825,7 @@ export default function ProjectPage() {
                             href={`/projects/${projectId}/articles/${j.article_id}`}
                             className={styles.articleTitleLink}
                           >
-                            {articles.find((a) => a.id === j.article_id)?.title || "(Untitled article)"}
+                            {articleTitleFor(j.article_id)}
                           </Link>
                           <div className={styles.scheduledActions}>
                             <button
@@ -6979,7 +7096,7 @@ export default function ProjectPage() {
                       Are you sure you want to post it now? With this, the post will be published to the website now.
                     </p>
                     <div className={styles.muted} style={{ fontSize: 12 }}>
-                      {articles.find((a) => a.id === confirmPostNowJob.article_id)?.title || "(Untitled article)"}
+                      {articleTitleFor(confirmPostNowJob.article_id)}
                     </div>
                     {error ? <p className={styles.error} style={{ marginTop: 10 }}>{error}</p> : null}
                   </div>
@@ -7009,7 +7126,7 @@ export default function ProjectPage() {
                       This removes the article from Scheduled Articles and returns it to your Articles list as pending.
                     </p>
                     <div className={styles.muted} style={{ fontSize: 12 }}>
-                      {articles.find((a) => a.id === confirmCancelJob.article_id)?.title || "(Untitled article)"}
+                      {articleTitleFor(confirmCancelJob.article_id)}
                     </div>
                   </div>
                   <div className={styles.modalFooter}>
@@ -7030,7 +7147,7 @@ export default function ProjectPage() {
                                 j.id !== cancelled.id && j.article_id !== cancelled.article_id,
                             ),
                           );
-                          setArticles(await api.listArticles(projectId));
+                          await refreshArticlesList();
                           setConfirmCancelJob(null);
                           setTab("articles");
                         } catch (e) {
@@ -7871,7 +7988,14 @@ export default function ProjectPage() {
                   Connect Google and link a property above to use these actions.
                 </div>
               ) : (() => {
-                const allPublished = (articles || []).filter((a) => (a.wp_link || "").trim());
+                if (indexingArticlesLoading) {
+                  return (
+                    <div className={styles.muted} style={{ fontSize: 13 }}>
+                      Loading published articles…
+                    </div>
+                  );
+                }
+                const allPublished = indexingArticles;
                 if (!allPublished.length) {
                   return (
                     <div className={styles.muted} style={{ fontSize: 13 }}>

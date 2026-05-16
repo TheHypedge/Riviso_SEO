@@ -32,7 +32,7 @@ import re
 import asyncio
 import hashlib
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 import markdown as md
 from pymongo.errors import PyMongoError
 
@@ -63,7 +63,9 @@ from app.core.article_duplicates import sync_project_title_index as _sync_projec
 from app.schemas.articles import (
     ArticleCreate,
     ArticleDetailResponse,
+    ArticleListPageResponse,
     ArticlePublic,
+    ArticleTitleRef,
     ArticleUpdateRequest,
     BulkActionRequest,
     BulkUploadRequest,
@@ -160,7 +162,11 @@ def _fetch_posted_job_overlay_map(st, project_id: str) -> dict[str, dict]:
     if not pid or not hasattr(st, "load_scheduled_jobs"):
         return {}
     try:
-        jobs = st.load_scheduled_jobs(project_id=pid) or []
+        jobs = (
+            st.load_scheduled_jobs(project_id=pid, state="posted", limit=5000)
+            if hasattr(st, "load_scheduled_jobs")
+            else []
+        ) or []
     except Exception:
         return {}
     best: dict[str, dict] = {}
@@ -181,6 +187,30 @@ def _fetch_posted_job_overlay_map(st, project_id: str) -> dict[str, dict]:
         if jw and not cw:
             best[aid] = j
     return best
+
+
+def _fetch_posted_job_overlay_for_article_ids(
+    st,
+    project_id: str,
+    article_ids: list[str],
+) -> dict[str, dict]:
+    """Overlay map for a bounded set of article ids (list page) — avoids scanning all jobs."""
+    pid = (project_id or "").strip()
+    aids = [(x or "").strip() for x in (article_ids or []) if (x or "").strip()]
+    if not pid or not aids:
+        return {}
+    if hasattr(st, "load_posted_scheduled_jobs_for_articles"):
+        try:
+            return st.load_posted_scheduled_jobs_for_articles(pid, aids) or {}
+        except Exception:
+            return {}
+    # Fallback: per-id lookup (still far cheaper than full-project scan for a single page).
+    out: dict[str, dict] = {}
+    for aid in aids:
+        job = _fetch_posted_job_overlay_for_article(st, pid, aid)
+        if job:
+            out[aid] = job
+    return out
 
 
 def _fetch_posted_job_overlay_for_article(st, project_id: str, article_id: str) -> dict | None:
@@ -383,24 +413,265 @@ def _duplicate_title_http_detail(
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_model=list[ArticlePublic])
-async def list_articles(project_id: str, user: dict = Depends(get_current_user)) -> list[ArticlePublic]:
-    """List articles for a project, newest first, with WordPress/schedule overlay when present."""
-    st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+_LISTING_STATUS_KEYS = frozenset({"pending", "draft", "published", "scheduled"})
+_LISTING_MAX_SCAN = 20000
+
+
+async def _listing_rows_page(
+    st,
+    project_id: str,
+    *,
+    page: int,
+    per_page: int,
+    q: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    sort: str,
+) -> list[dict]:
+    if hasattr(st, "load_articles_listing_page_for_project"):
+        return await run_sync(
+            st.load_articles_listing_page_for_project,
+            project_id,
+            page=page,
+            per_page=per_page,
+            q=q,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+        )
     if hasattr(st, "load_articles_listing_for_project"):
         rows = await run_sync(st.load_articles_listing_for_project, project_id, limit=5000)
-    else:
-        all_rows = await run_sync(st.load_articles)
-        rows = [a for a in (all_rows or []) if isinstance(a, dict) and (a.get("project_id") or "") == project_id]
-    posted_jobs = await run_sync(_fetch_posted_job_overlay_map, st, project_id)
-    out = [
+        # Legacy fallback: filter/sort/paginate in-process (small projects / JSON mode).
+        qs = (q or "").strip().lower()
+        df = (date_from or "").strip()
+        dt = (date_to or "").strip()
+
+        def _row_ok(a: dict) -> bool:
+            if qs:
+                hay = " ".join(
+                    [
+                        str(a.get("title") or ""),
+                        str(a.get("focus_keyphrase") or ""),
+                        " ".join(str(x) for x in (a.get("keywords") or [])),
+                    ]
+                ).lower()
+                if qs not in hay:
+                    return False
+            ca = str(a.get("created_at") or "")
+            if df and ca < (df if len(df) > 10 else f"{df} 00:00:00"):
+                return False
+            if dt:
+                try:
+                    d0 = datetime.strptime(dt[:10], "%Y-%m-%d")
+                    end = (d0 + timedelta(days=1)).strftime("%Y-%m-%d") + " 00:00:00"
+                    if ca >= end:
+                        return False
+                except Exception:
+                    pass
+            return True
+
+        filtered = [a for a in (rows or []) if isinstance(a, dict) and _row_ok(a)]
+        filtered.sort(key=lambda x: str(x.get("created_at") or ""), reverse=(sort or "desc").lower() != "asc")
+        skip = (max(1, page) - 1) * per_page
+        return filtered[skip : skip + per_page]
+    all_rows = await run_sync(st.load_articles)
+    rows = [a for a in (all_rows or []) if isinstance(a, dict) and (a.get("project_id") or "") == project_id]
+    return rows[:per_page]
+
+
+async def _public_listing_items_for_rows(st, project_id: str, rows: list[dict]) -> list[ArticlePublic]:
+    ids = [(a.get("id") or "").strip() for a in rows if isinstance(a, dict) and (a.get("id") or "").strip()]
+    posted_jobs = await run_sync(_fetch_posted_job_overlay_for_article_ids, st, project_id, ids)
+    return [
         _to_public(_merge_posted_job_into_article_row(a, posted_jobs.get((a.get("id") or "").strip())))
         for a in rows
         if isinstance(a, dict)
     ]
-    out.sort(key=lambda x: (x.created_at or ""), reverse=True)
-    return out
+
+
+async def _count_listing_with_derived_status(
+    st,
+    project_id: str,
+    *,
+    status_key: str,
+    q: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    sort: str,
+) -> int:
+    """Count rows matching mongo pre-filters and derived listing status (bounded scan)."""
+    batch_size = 200
+    mongo_page = 1
+    scanned = 0
+    total = 0
+    while scanned < _LISTING_MAX_SCAN:
+        rows = await _listing_rows_page(
+            st,
+            project_id,
+            page=mongo_page,
+            per_page=batch_size,
+            q=q,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+        )
+        if not rows:
+            break
+        items = await _public_listing_items_for_rows(st, project_id, rows)
+        for it in items:
+            if (it.status or "").strip().lower() == status_key:
+                total += 1
+        scanned += len(rows)
+        if len(rows) < batch_size:
+            break
+        mongo_page += 1
+    return total
+
+
+async def _listing_page_with_derived_status(
+    st,
+    project_id: str,
+    *,
+    page: int,
+    per_page: int,
+    status_key: str,
+    q: str | None,
+    date_from: str | None,
+    date_to: str | None,
+    sort: str,
+) -> list[ArticlePublic]:
+    """Fill one UI page when status is derived (not a raw Mongo field)."""
+    need = per_page
+    skip = (max(1, page) - 1) * per_page
+    collected: list[ArticlePublic] = []
+    mongo_page = 1
+    batch_size = max(per_page * 3, 50)
+    scanned = 0
+    while len(collected) < skip + need and scanned < _LISTING_MAX_SCAN:
+        rows = await _listing_rows_page(
+            st,
+            project_id,
+            page=mongo_page,
+            per_page=batch_size,
+            q=q,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+        )
+        if not rows:
+            break
+        items = await _public_listing_items_for_rows(st, project_id, rows)
+        for it in items:
+            if (it.status or "").strip().lower() != status_key:
+                continue
+            collected.append(it)
+        scanned += len(rows)
+        if len(rows) < batch_size:
+            break
+        mongo_page += 1
+    return collected[skip : skip + need]
+
+
+@router.get("/titles", response_model=list[ArticleTitleRef])
+async def list_article_titles(project_id: str, user: dict = Depends(get_current_user)) -> list[ArticleTitleRef]:
+    """Lightweight id/title list for scheduled jobs and import reconciliation."""
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    if hasattr(st, "load_article_titles_for_project"):
+        rows = await run_sync(st.load_article_titles_for_project, project_id, limit=20000)
+    elif hasattr(st, "load_articles_listing_for_project"):
+        rows = await run_sync(st.load_articles_listing_for_project, project_id, limit=20000)
+        rows = [{"id": (r.get("id") or "").strip(), "title": (r.get("title") or "").strip()} for r in rows if isinstance(r, dict)]
+    else:
+        all_rows = await run_sync(st.load_articles)
+        rows = [
+            {"id": (a.get("id") or "").strip(), "title": (a.get("title") or "").strip()}
+            for a in (all_rows or [])
+            if isinstance(a, dict) and (a.get("project_id") or "").strip() == project_id
+        ]
+    return [ArticleTitleRef(id=(r.get("id") or "").strip(), title=(r.get("title") or "").strip()) for r in rows if (r.get("id") or "").strip()]
+
+
+@router.get("", response_model=ArticleListPageResponse)
+async def list_articles(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(10, ge=1, le=5000),
+    q: str | None = Query(None, max_length=200),
+    status: str | None = Query(None, max_length=32),
+    date_from: str | None = Query(None, max_length=32),
+    date_to: str | None = Query(None, max_length=32),
+    sort: str = Query("desc", pattern="^(asc|desc)$"),
+) -> ArticleListPageResponse:
+    """
+    Paginated article list for the project UI.
+
+    Applies Mongo filters for text and created_at range, derives listing status in Python,
+    and merges posted scheduled-job overlays only for rows on the current page.
+    """
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    status_key = (status or "").strip().lower()
+    if status_key and status_key not in _LISTING_STATUS_KEYS:
+        status_key = ""
+
+    if status_key:
+        total = await _count_listing_with_derived_status(
+            st,
+            project_id,
+            status_key=status_key,
+            q=q,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+        )
+        items = await _listing_page_with_derived_status(
+            st,
+            project_id,
+            page=page,
+            per_page=per_page,
+            status_key=status_key,
+            q=q,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+        )
+    else:
+        if hasattr(st, "count_articles_listing_for_project"):
+            total = await run_sync(
+                st.count_articles_listing_for_project,
+                project_id,
+                q=q,
+                date_from=date_from,
+                date_to=date_to,
+            )
+        else:
+            total = len(
+                await _listing_rows_page(
+                    st,
+                    project_id,
+                    page=1,
+                    per_page=5000,
+                    q=q,
+                    date_from=date_from,
+                    date_to=date_to,
+                    sort=sort,
+                )
+            )
+        rows = await _listing_rows_page(
+            st,
+            project_id,
+            page=page,
+            per_page=per_page,
+            q=q,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+        )
+        items = await _public_listing_items_for_rows(st, project_id, rows)
+
+    return ArticleListPageResponse(items=items, total=int(total), page=page, per_page=per_page)
 
 
 @router.post("/export/consume", status_code=200)

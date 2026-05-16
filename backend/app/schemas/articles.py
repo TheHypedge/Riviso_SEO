@@ -10,6 +10,22 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class ArticleListPageResponse(BaseModel):
+    """Paginated article list for the project Articles tab."""
+
+    items: list["ArticlePublic"] = Field(default_factory=list)
+    total: int = Field(ge=0, description="Total rows matching filters (derived status included when status filter is set).")
+    page: int = Field(ge=1)
+    per_page: int = Field(ge=1, le=5000)
+
+
+class ArticleTitleRef(BaseModel):
+    """Lightweight id/title pair for scheduled jobs and research reconciliation."""
+
+    id: str
+    title: str
+
+
 class ArticlePublic(BaseModel):
     """Article fields exposed in list views and lightweight responses."""
 

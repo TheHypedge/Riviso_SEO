@@ -1894,6 +1894,263 @@ def load_articles_listing_for_project(
     return out
 
 
+_LISTING_PROJECTION_STAGE = {
+    "$project": {
+        "_id": 0,
+        "id": 1,
+        "project_id": 1,
+        "title": 1,
+        "keywords": 1,
+        "status": {"$ifNull": ["$status", "pending"]},
+        "focus_keyphrase": 1,
+        "meta_title": 1,
+        "meta_description": 1,
+        "generated_at": 1,
+        "posted_at": 1,
+        "created_at": 1,
+        "updated_at": 1,
+        "wp_post_id": 1,
+        "wp_link": 1,
+        "wp_rest_base": 1,
+        "wp_last_wp_status": 1,
+        "wp_scheduled_at": 1,
+        "wp_schedule_wp_status": 1,
+        "wp_schedule_error": 1,
+        "wp_schedule_batch_id": 1,
+        "wp_schedule_batch_index": 1,
+        "wp_schedule_batch_total": 1,
+        "gsc_status": 1,
+        "gsc_inspection_requested_at": 1,
+        "gsc_inspection_error": 1,
+        "monitor_status": 1,
+        "monitor_last_checked_at": 1,
+        "internal_links_count": 1,
+        "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
+    }
+}
+
+
+def _listing_match_for_project(
+    project_id: str,
+    *,
+    q: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> dict[str, Any]:
+    """Mongo match for listing queries (project, optional text + created_at range)."""
+    pid = (project_id or "").strip()
+    match: dict[str, Any] = {"project_id": pid}
+    qs = (q or "").strip()
+    if qs:
+        import re
+
+        rx = re.escape(qs)
+        match["$or"] = [
+            {"title": {"$regex": rx, "$options": "i"}},
+            {"focus_keyphrase": {"$regex": rx, "$options": "i"}},
+            {"keywords": {"$elemMatch": {"$regex": rx, "$options": "i"}}},
+        ]
+    df = (date_from or "").strip()
+    dt = (date_to or "").strip()
+    created: dict[str, Any] = {}
+    if df:
+        created["$gte"] = df if len(df) > 10 else f"{df} 00:00:00"
+    if dt:
+        # Inclusive end date: rows strictly before the next calendar day.
+        try:
+            from datetime import datetime, timedelta
+
+            d0 = datetime.strptime(dt[:10], "%Y-%m-%d")
+            next_day = (d0 + timedelta(days=1)).strftime("%Y-%m-%d")
+            created["$lt"] = f"{next_day} 00:00:00"
+        except Exception:
+            created["$lte"] = f"{dt} 23:59:59"
+    if created:
+        match["created_at"] = created
+    return match
+
+
+def _normalize_listing_row(d: dict[str, Any]) -> dict[str, Any]:
+    d["wp_scheduled_at"] = _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at"))
+    return d
+
+
+def count_articles_listing_for_project(
+    project_id: str,
+    *,
+    q: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """Count articles matching listing filters (excludes derived status)."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return 0
+    if _storage_mode != "mongo":
+        rows = load_articles_listing_for_project(pid, limit=20000)
+        match = _listing_match_for_project(pid, q=q, date_from=date_from, date_to=date_to)
+        # JSON fallback: approximate by re-filtering in Python
+        out = []
+        for r in rows:
+            if match.get("$or"):
+                qs = (q or "").strip().lower()
+                hay = " ".join(
+                    [
+                        str(r.get("title") or ""),
+                        str(r.get("focus_keyphrase") or ""),
+                        " ".join(str(x) for x in (r.get("keywords") or [])),
+                    ]
+                ).lower()
+                if qs not in hay:
+                    continue
+            ca = str(r.get("created_at") or "")
+            cr = match.get("created_at") or {}
+            if "$gte" in cr and ca < str(cr["$gte"]):
+                continue
+            if "$lt" in cr and ca >= str(cr["$lt"]):
+                continue
+            out.append(r)
+        return len(out)
+    db = get_db()
+    return int(db.articles.count_documents(_listing_match_for_project(pid, q=q, date_from=date_from, date_to=date_to)))
+
+
+def load_articles_listing_page_for_project(
+    project_id: str,
+    *,
+    page: int = 1,
+    per_page: int = 10,
+    q: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sort: str = "desc",
+) -> list[dict[str, Any]]:
+    """One page of listing rows (no full article body), sorted by created_at."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    pg = max(1, int(page or 1))
+    pp = max(1, min(int(per_page or 10), 5000))
+    direction = -1 if (sort or "desc").strip().lower() != "asc" else 1
+    skip = (pg - 1) * pp
+
+    if _storage_mode != "mongo":
+        rows = load_articles_listing_for_project(pid, limit=20000)
+        match = _listing_match_for_project(pid, q=q, date_from=date_from, date_to=date_to)
+        filtered: list[dict[str, Any]] = []
+        for r in rows:
+            if match.get("$or"):
+                qs = (q or "").strip().lower()
+                hay = " ".join(
+                    [
+                        str(r.get("title") or ""),
+                        str(r.get("focus_keyphrase") or ""),
+                        " ".join(str(x) for x in (r.get("keywords") or [])),
+                    ]
+                ).lower()
+                if qs not in hay:
+                    continue
+            ca = str(r.get("created_at") or "")
+            cr = match.get("created_at") or {}
+            if "$gte" in cr and ca < str(cr["$gte"]):
+                continue
+            if "$lt" in cr and ca >= str(cr["$lt"]):
+                continue
+            filtered.append(r)
+        filtered.sort(key=lambda x: str(x.get("created_at") or ""), reverse=(direction < 0))
+        return filtered[skip : skip + pp]
+
+    db = get_db()
+    pipeline = [
+        {"$match": _listing_match_for_project(pid, q=q, date_from=date_from, date_to=date_to)},
+        _LISTING_PROJECTION_STAGE,
+        {"$sort": {"created_at": direction}},
+        {"$skip": skip},
+        {"$limit": pp},
+    ]
+    out: list[dict[str, Any]] = []
+    for d in db.articles.aggregate(pipeline, allowDiskUse=False):
+        out.append(_normalize_listing_row(dict(d)))
+    return out
+
+
+def load_article_titles_for_project(project_id: str, *, limit: int = 20000) -> list[dict[str, Any]]:
+    """Id + title only — for scheduled-job labels and research import reconciliation."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    lim = max(1, min(int(limit or 20000), 20000))
+    if _storage_mode != "mongo":
+        rows = load_articles_listing_for_project(pid, limit=lim)
+        return [{"id": (r.get("id") or "").strip(), "title": (r.get("title") or "").strip()} for r in rows if (r.get("id") or "").strip()]
+
+    db = get_db()
+    cur = (
+        db.articles.find({"project_id": pid}, {"_id": 0, "id": 1, "title": 1})
+        .sort("created_at", -1)
+        .limit(lim)
+    )
+    return [{"id": (d.get("id") or "").strip(), "title": (d.get("title") or "").strip()} for d in cur if (d.get("id") or "").strip()]
+
+
+def load_posted_scheduled_jobs_for_articles(
+    project_id: str,
+    article_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    """Posted scheduled-job rows keyed by article_id (only for the given ids)."""
+    pid = (project_id or "").strip()
+    aids = sorted({(x or "").strip() for x in (article_ids or []) if (x or "").strip()})
+    if not pid or not aids:
+        return {}
+    if _storage_mode != "mongo":
+        rows = load_scheduled_jobs(project_id=pid, state="posted", limit=5000) or []
+        best: dict[str, dict[str, Any]] = {}
+        aid_set = set(aids)
+        for j in rows:
+            if not isinstance(j, dict):
+                continue
+            aid = (j.get("article_id") or "").strip()
+            if aid not in aid_set:
+                continue
+            cur = best.get(aid)
+            if cur is None:
+                best[aid] = j
+                continue
+            jw = (j.get("wp_link") or "").strip()
+            cw = (cur.get("wp_link") or "").strip()
+            if jw and not cw:
+                best[aid] = j
+        return best
+
+    q: dict[str, Any] = {"project_id": pid, "state": "posted", "article_id": {"$in": aids}}
+    proj = {
+        "_id": 0,
+        "article_id": 1,
+        "wp_link": 1,
+        "wp_post_id": 1,
+        "wp_status": 1,
+        "updated_at": 1,
+        "last_attempt_at": 1,
+        "created_at": 1,
+    }
+    best: dict[str, dict[str, Any]] = {}
+    for doc in get_db().scheduled_jobs.find(q, proj):
+        if not isinstance(doc, dict):
+            continue
+        aid = (doc.get("article_id") or "").strip()
+        if not aid:
+            continue
+        cur = best.get(aid)
+        if cur is None:
+            best[aid] = dict(doc)
+            continue
+        jw = (doc.get("wp_link") or "").strip()
+        cw = (cur.get("wp_link") or "").strip()
+        if jw and not cw:
+            best[aid] = dict(doc)
+    return best
+
+
 def article_totals_per_project(project_ids: list[str]) -> dict[str, int]:
     """Return total article counts keyed by project_id (admin reporting)."""
     pids = sorted({str(x).strip() for x in (project_ids or []) if str(x).strip()})
