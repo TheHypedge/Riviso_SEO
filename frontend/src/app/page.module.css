@@ -854,6 +854,134 @@
   color: var(--aa-muted);
 }
 
+.bulkScheduleModeSection {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 0 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 35%);
+}
+
+.bulkScheduleModeTabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--aa-surface-raised, #1a1a1f), transparent 20%);
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 30%);
+}
+
+.bulkScheduleModeTab {
+  flex: 1 1 0;
+  min-width: 88px;
+  padding: 10px 14px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 35%);
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.bulkScheduleModeTab:hover:not(:disabled) {
+  color: var(--aa-body-strong);
+  background: color-mix(in oklab, #ffffff, transparent 94%);
+}
+
+.bulkScheduleModeTabActive {
+  color: #111;
+  background: linear-gradient(180deg, #ffb347 0%, #ff8c1a 100%);
+  box-shadow: 0 1px 0 color-mix(in oklab, #ff8c1a, #000 18%);
+}
+
+.bulkScheduleModeTab:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.bulkScheduleCadencePanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bulkScheduleCadenceGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 20px;
+}
+
+.bulkScheduleCadenceLabel {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 22%);
+}
+
+.bulkScheduleWeekdayRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bulkScheduleWeekdayChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 25%);
+  background: color-mix(in oklab, #ffffff, transparent 96%);
+  font-size: 12px;
+  font-weight: 600;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 18%);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.bulkScheduleWeekdayChip:has(input:checked) {
+  border-color: color-mix(in oklab, #ff8c1a, transparent 20%);
+  background: color-mix(in oklab, #ff8c1a, transparent 88%);
+  color: #fff;
+}
+
+.bulkScheduleWeekdayChip input {
+  margin: 0;
+  accent-color: #ff8c1a;
+}
+
+.bulkScheduleCadenceSummary {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 28%);
+}
+
+.bulkScheduleWhenReadonly {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in oklab, #ffffff, transparent 96%);
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 35%);
+}
+
+.bulkScheduleWhenReadonlyValue {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 12%);
+}
+
 .bulkScheduleGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -925,7 +1053,8 @@
 }
 
 @media (max-width: 560px) {
-  .bulkScheduleGrid {
+  .bulkScheduleGrid,
+  .bulkScheduleCadenceGrid {
     grid-template-columns: 1fr;
   }
   .bulkScheduleRow {

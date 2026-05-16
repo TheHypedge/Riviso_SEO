@@ -16,6 +16,16 @@ import {
   citiesForCountry,
 } from "@/lib/brand_dictionaries";
 import { useClusterValidation, type ValidatableTopic } from "@/hooks/useClusterValidation";
+import {
+  applyBulkScheduleDates,
+  BULK_SCHEDULE_WEEKDAYS,
+  defaultWeekdaysForArticlesPerWeek,
+  describeBulkScheduleSummary,
+  parseDatetimeLocal,
+  validateBulkScheduleCadence,
+  type BulkScheduleMode,
+  type WeekdayIso,
+} from "@/lib/bulkScheduleDates";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 type TabKey =
@@ -835,6 +845,11 @@ export default function ProjectPage() {
   const [editJobMin, setEditJobMin] = useState("");
   const [bulkScheduleMin, setBulkScheduleMin] = useState("");
   const [bulkScheduleRows, setBulkScheduleRows] = useState<Array<{ id: string; title: string; when: string }>>([]);
+  const [bulkScheduleMode, setBulkScheduleMode] = useState<BulkScheduleMode>("manual");
+  const [bulkScheduleStartWhen, setBulkScheduleStartWhen] = useState("");
+  const [bulkScheduleArticlesPerWeek, setBulkScheduleArticlesPerWeek] = useState(1);
+  const [bulkScheduleWeekdays, setBulkScheduleWeekdays] = useState<WeekdayIso[]>([1, 4]);
+  const [bulkSchedulePostsPerMonth, setBulkSchedulePostsPerMonth] = useState(1);
   const [bulkScheduleWpStatus, setBulkScheduleWpStatus] = useState<"draft" | "publish">("draft");
   const [bulkSchedulePostType, setBulkSchedulePostType] = useState("posts");
   const [bulkScheduling, setBulkScheduling] = useState(false);
@@ -1190,6 +1205,22 @@ export default function ProjectPage() {
     } catch {
       return d.toLocaleString();
     }
+  }
+
+  function formatBulkScheduleWhenDisplay(when: string): { date: string; time: string; tz: string } {
+    const p = parseDatetimeLocal(when);
+    if (!p) return { date: (when || "").trim() || "—", time: "", tz: "" };
+    const d = new Date(p.y, p.m - 1, p.d);
+    const date = new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(d);
+    const h12 = p.h % 12 || 12;
+    const time = `${h12}:${String(p.min).padStart(2, "0")} ${p.h >= 12 ? "PM" : "AM"}`;
+    const tz = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return { date, time, tz };
   }
 
   function formatScheduledRunAt(utcLike: string | null | undefined): { date: string; time: string; tz: string } {
@@ -2588,6 +2619,68 @@ export default function ProjectPage() {
     router.push(`/projects/${projectId}/articles/${aid}`);
   }
 
+  const recomputeBulkScheduleRows = useCallback(
+    (rows: Array<{ id: string; title: string; when: string }>, mode: BulkScheduleMode) => {
+      if (mode === "manual" || rows.length < 2) return rows;
+      return applyBulkScheduleDates({
+        mode,
+        rows,
+        startWhen: bulkScheduleStartWhen || bulkScheduleMin,
+        minWhen: bulkScheduleMin,
+        articlesPerWeek: bulkScheduleArticlesPerWeek,
+        weekdays: bulkScheduleWeekdays,
+        postsPerMonth: bulkSchedulePostsPerMonth,
+      });
+    },
+    [
+      bulkScheduleStartWhen,
+      bulkScheduleMin,
+      bulkScheduleArticlesPerWeek,
+      bulkScheduleWeekdays,
+      bulkSchedulePostsPerMonth,
+    ],
+  );
+
+  const bulkScheduleCadenceSummary = useMemo(() => {
+    if (bulkScheduleMode === "manual" || bulkScheduleRows.length < 2) return "";
+    return describeBulkScheduleSummary({
+      mode: bulkScheduleMode,
+      count: bulkScheduleRows.length,
+      articlesPerWeek: bulkScheduleArticlesPerWeek,
+      weekdays: bulkScheduleWeekdays,
+      postsPerMonth: bulkSchedulePostsPerMonth,
+      whens: bulkScheduleRows.map((r) => r.when),
+    });
+  }, [
+    bulkScheduleMode,
+    bulkScheduleRows,
+    bulkScheduleArticlesPerWeek,
+    bulkScheduleWeekdays,
+    bulkSchedulePostsPerMonth,
+  ]);
+
+  function setBulkScheduleModeAndApply(mode: BulkScheduleMode) {
+    setBulkScheduleMode(mode);
+    if (mode !== "manual" && bulkScheduleRows.length >= 2) {
+      setBulkScheduleRows((prev) => recomputeBulkScheduleRows(prev, mode));
+    }
+  }
+
+  useEffect(() => {
+    if (bulkMode !== "schedule" || bulkScheduleMode === "manual" || bulkScheduleRows.length < 2) return;
+    setBulkScheduleRows((prev) => recomputeBulkScheduleRows(prev, bulkScheduleMode));
+  }, [
+    bulkMode,
+    bulkScheduleMode,
+    bulkScheduleRows.length,
+    bulkScheduleStartWhen,
+    bulkScheduleArticlesPerWeek,
+    bulkScheduleWeekdays,
+    bulkSchedulePostsPerMonth,
+    bulkScheduleMin,
+    recomputeBulkScheduleRows,
+  ]);
+
   function bulkSchedule() {
     if (!selectedIds.length) return;
     if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
@@ -2595,6 +2688,11 @@ export default function ProjectPage() {
     const min = new Date(Date.now() + 10 * 60 * 1000);
     const minStr = toDatetimeLocalFromDateInProfileTz(min);
     setBulkScheduleMin(minStr);
+    setBulkScheduleStartWhen(minStr);
+    setBulkScheduleMode("manual");
+    setBulkScheduleArticlesPerWeek(1);
+    setBulkScheduleWeekdays(defaultWeekdaysForArticlesPerWeek(1, minStr));
+    setBulkSchedulePostsPerMonth(1);
     setBulkScheduleWpStatus(wpDefaults?.wp_status || "draft");
     setBulkSchedulePostType(wpDefaults?.post_type || "posts");
     setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
@@ -2613,11 +2711,28 @@ export default function ProjectPage() {
     if (!bulkScheduleRows.length) return;
     if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
     setError(null);
+    const cadenceErr = validateBulkScheduleCadence({
+      mode: bulkScheduleMode,
+      articlesPerWeek: bulkScheduleArticlesPerWeek,
+      weekdays: bulkScheduleWeekdays,
+      postsPerMonth: bulkSchedulePostsPerMonth,
+    });
+    if (cadenceErr) {
+      setError(cadenceErr);
+      return;
+    }
+    const minP = parseDatetimeLocal(bulkScheduleMin);
     setBulkScheduling(true);
     try {
       for (const r of bulkScheduleRows) {
         const when = (r.when || "").trim();
         if (!when) throw new Error("Please set date/time for all selected articles");
+        if (minP) {
+          const wp = parseDatetimeLocal(when);
+          if (wp && new Date(wp.y, wp.m - 1, wp.d, wp.h, wp.min) < new Date(minP.y, minP.m - 1, minP.d, minP.h, minP.min)) {
+            throw new Error("Each scheduled time must be at least 10 minutes from now");
+          }
+        }
         await api.scheduleArticle(projectId, r.id, {
           wp_scheduled_at: when,
           wp_status: bulkScheduleWpStatus,
@@ -4393,29 +4508,184 @@ export default function ProjectPage() {
                         </div>
                       </div>
 
-                      <div className={styles.bulkScheduleArticleList}>
-                        {bulkScheduleRows.map((r, idx) => (
-                          <div key={r.id} className={styles.bulkScheduleRow}>
-                            <p className={styles.bulkScheduleArticleTitle} title={`${idx + 1}. ${r.title}`}>
-                              {idx + 1}. {r.title}
-                            </p>
-                            <label className={`${styles.label} ${styles.bulkScheduleDateLabel}`}>
-                              Date & time
-                              <input
-                                className={styles.input}
-                                type="datetime-local"
-                                value={r.when}
-                                min={bulkScheduleMin || undefined}
-                                step={60}
+                      {bulkScheduleRows.length >= 2 ? (
+                        <div className={styles.bulkScheduleModeSection}>
+                          <p className={styles.bulkScheduleSettingsHint}>Schedule mode</p>
+                          <div className={styles.bulkScheduleModeTabs} role="tablist" aria-label="Schedule mode">
+                            {(
+                              [
+                                ["manual", "Manual"],
+                                ["weekly", "Weekly"],
+                                ["monthly", "Monthly"],
+                              ] as const
+                            ).map(([mode, label]) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                role="tab"
+                                aria-selected={bulkScheduleMode === mode}
+                                className={`${styles.bulkScheduleModeTab} ${bulkScheduleMode === mode ? styles.bulkScheduleModeTabActive : ""}`}
                                 disabled={bulkScheduling}
-                                onChange={(e) => {
-                                  const v = e.target.value;
-                                  setBulkScheduleRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, when: v } : x)));
-                                }}
-                              />
-                            </label>
+                                onClick={() => setBulkScheduleModeAndApply(mode)}
+                              >
+                                {label}
+                              </button>
+                            ))}
                           </div>
-                        ))}
+
+                          {bulkScheduleMode === "weekly" ? (
+                            <div className={styles.bulkScheduleCadencePanel}>
+                              <div className={styles.bulkScheduleCadenceGrid}>
+                                <label className={styles.label}>
+                                  Start date & time
+                                  <input
+                                    className={styles.input}
+                                    type="datetime-local"
+                                    value={bulkScheduleStartWhen}
+                                    min={bulkScheduleMin || undefined}
+                                    step={60}
+                                    disabled={bulkScheduling}
+                                    onChange={(e) => setBulkScheduleStartWhen(e.target.value)}
+                                  />
+                                </label>
+                                <label className={styles.label}>
+                                  Articles per week
+                                  <input
+                                    className={styles.input}
+                                    type="number"
+                                    min={1}
+                                    max={7}
+                                    value={bulkScheduleArticlesPerWeek}
+                                    disabled={bulkScheduling}
+                                    onChange={(e) => {
+                                      const n = Math.max(1, Math.min(7, Number(e.target.value) || 1));
+                                      setBulkScheduleArticlesPerWeek(n);
+                                      setBulkScheduleWeekdays((prev) => {
+                                        if (prev.length >= n) return prev;
+                                        return defaultWeekdaysForArticlesPerWeek(
+                                          n,
+                                          bulkScheduleStartWhen || bulkScheduleMin,
+                                        );
+                                      });
+                                    }}
+                                  />
+                                </label>
+                              </div>
+                              <div>
+                                <span className={styles.bulkScheduleCadenceLabel}>Publish days</span>
+                                <div className={styles.bulkScheduleWeekdayRow}>
+                                  {BULK_SCHEDULE_WEEKDAYS.map(({ iso, label }) => {
+                                    const on = bulkScheduleWeekdays.includes(iso);
+                                    return (
+                                      <label key={iso} className={styles.bulkScheduleWeekdayChip}>
+                                        <input
+                                          type="checkbox"
+                                          checked={on}
+                                          disabled={bulkScheduling}
+                                          onChange={() => {
+                                            setBulkScheduleWeekdays((prev) => {
+                                              const next = on
+                                                ? prev.filter((d) => d !== iso)
+                                                : [...prev, iso].sort((a, b) => a - b);
+                                              return next.length ? next : [iso];
+                                            });
+                                          }}
+                                        />
+                                        {label}
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {bulkScheduleMode === "monthly" ? (
+                            <div className={styles.bulkScheduleCadencePanel}>
+                              <div className={styles.bulkScheduleCadenceGrid}>
+                                <label className={styles.label}>
+                                  Start date & time
+                                  <input
+                                    className={styles.input}
+                                    type="datetime-local"
+                                    value={bulkScheduleStartWhen}
+                                    min={bulkScheduleMin || undefined}
+                                    step={60}
+                                    disabled={bulkScheduling}
+                                    onChange={(e) => setBulkScheduleStartWhen(e.target.value)}
+                                  />
+                                </label>
+                                <label className={styles.label}>
+                                  Posts per month
+                                  <input
+                                    className={styles.input}
+                                    type="number"
+                                    min={1}
+                                    max={12}
+                                    value={bulkSchedulePostsPerMonth}
+                                    disabled={bulkScheduling}
+                                    onChange={(e) =>
+                                      setBulkSchedulePostsPerMonth(
+                                        Math.max(1, Math.min(12, Number(e.target.value) || 1)),
+                                      )
+                                    }
+                                  />
+                                </label>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {bulkScheduleCadenceSummary ? (
+                            <p className={styles.bulkScheduleCadenceSummary}>{bulkScheduleCadenceSummary}</p>
+                          ) : null}
+                        </div>
+                      ) : null}
+
+                      <div className={styles.bulkScheduleArticleList}>
+                        {bulkScheduleRows.map((r, idx) => {
+                          const whenDisplay = formatBulkScheduleWhenDisplay(r.when);
+                          const readOnly = bulkScheduleRows.length >= 2 && bulkScheduleMode !== "manual";
+                          return (
+                            <div key={r.id} className={styles.bulkScheduleRow}>
+                              <p className={styles.bulkScheduleArticleTitle} title={`${idx + 1}. ${r.title}`}>
+                                {idx + 1}. {r.title}
+                              </p>
+                              {readOnly ? (
+                                <div className={styles.bulkScheduleWhenReadonly}>
+                                  <span className={styles.bulkScheduleDateLabel}>Publish at</span>
+                                  <span className={styles.bulkScheduleWhenReadonlyValue}>
+                                    {whenDisplay.date}
+                                    {whenDisplay.time ? (
+                                      <>
+                                        <br />
+                                        {whenDisplay.time}
+                                        {whenDisplay.tz ? ` · ${whenDisplay.tz}` : null}
+                                      </>
+                                    ) : null}
+                                  </span>
+                                </div>
+                              ) : (
+                                <label className={`${styles.label} ${styles.bulkScheduleDateLabel}`}>
+                                  Date & time
+                                  <input
+                                    className={styles.input}
+                                    type="datetime-local"
+                                    value={r.when}
+                                    min={bulkScheduleMin || undefined}
+                                    step={60}
+                                    disabled={bulkScheduling}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      setBulkScheduleRows((prev) =>
+                                        prev.map((x) => (x.id === r.id ? { ...x, when: v } : x)),
+                                      );
+                                    }}
+                                  />
+                                </label>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
 
                       {error ? <p className={styles.error} style={{ marginTop: 12, marginBottom: 0 }}>{error}</p> : null}
