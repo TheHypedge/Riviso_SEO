@@ -534,6 +534,54 @@
   align-items: stretch;
 }
 
+/* App shell: fixed-height viewport; sidebar stays put, main column scrolls. */
+@media (min-width: 981px) {
+  .pageTop {
+    min-height: 100dvh;
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow: hidden;
+  }
+
+  .mainWide {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    max-height: 100%;
+    overflow: hidden;
+  }
+
+  .shell {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    gap: 0;
+    align-items: stretch;
+    overflow: hidden;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    align-self: stretch;
+    height: 100%;
+    max-height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .contentCol {
+    min-height: 0;
+    height: 100%;
+    max-height: 100%;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+}
+
 .main {
   display: flex;
   flex: 1;
@@ -552,6 +600,8 @@
   width: 100%;
   padding: 0;
   justify-content: flex-start;
+  flex: 1;
+  min-height: 0;
 }
 
 .card {
@@ -1218,16 +1268,61 @@
   .showOnMobile {
     display: flex;
   }
+  .showOnMobile .limitStatusStrip {
+    width: 100%;
+    margin-bottom: 8px;
+    padding: 6px 8px;
+    font-size: 11px;
+    gap: 6px;
+  }
   .hideOnMobile {
     display: none;
   }
   .mobileActionChips {
     display: flex;
   }
-  /* Mobile: keep the list clean; filters live in the Filter popup. */
+  /* Mobile: articles filters live in the Filter popup (toolbar card is hideOnMobile). */
   .filtersGrid,
-  .filtersActionsRow {
+  .filtersActionsRow,
+  .hideOnMobile.articlesToolbar {
     display: none;
+  }
+}
+
+@media (min-width: 981px) {
+  .articlesToolbarMain {
+    flex-wrap: nowrap;
+  }
+
+  .articlesToolbarDivider {
+    display: block;
+  }
+}
+
+@media (max-width: 980px) {
+  .articlesToolbarDivider {
+    display: none;
+  }
+
+  .articlesFilterFieldWide {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .articlesToolbarSelection {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+    padding-top: 4px;
+    border-top: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 35%);
+  }
+
+  .articlesToolbarMain > .articlesToolbarActions:last-child {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-end;
+    padding-top: 4px;
+    border-top: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 35%);
   }
 }
 
@@ -1235,6 +1330,243 @@
   display: grid;
   grid-template-columns: 1fr 180px 140px 140px 180px;
   gap: 10px;
+}
+
+/* Articles list: compact toolbar (filters + actions in one card) */
+.articlesToolbar {
+  gap: 10px;
+  padding: 10px 14px;
+  background: color-mix(in oklab, var(--aa-surface-card), #000 8%);
+  border-color: color-mix(in oklab, var(--aa-hairline), transparent 10%);
+}
+
+.articlesToolbar .limitStatusStrip {
+  margin: 0;
+  padding: 6px 8px;
+  gap: 6px;
+  border-radius: var(--aa-r-md);
+  border-color: color-mix(in oklab, var(--aa-hairline), transparent 25%);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 20%);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.articlesToolbar .limitStatusStrip span {
+  min-height: 20px;
+  padding: 2px 7px;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 18%);
+  background: color-mix(in oklab, #ffffff, transparent 94%);
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
+}
+
+.articlesToolbarMain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+
+.articlesToolbarFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 10px;
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.articlesFilterField {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.articlesFilterField:nth-child(1) {
+  min-width: 148px;
+}
+
+.articlesFilterField:nth-child(2),
+.articlesFilterField:nth-child(3) {
+  min-width: 132px;
+}
+
+.articlesFilterField:nth-child(4) {
+  min-width: 168px;
+}
+
+.articlesFilterFieldWide {
+  flex: 1 1 240px;
+  min-width: 200px;
+  max-width: min(520px, 100%);
+}
+
+.articlesFilterLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 12%);
+  white-space: nowrap;
+}
+
+.articlesFilterControl {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 8%);
+  border-radius: 9px;
+  background: color-mix(in oklab, #ffffff, transparent 94%);
+  color: var(--aa-ink);
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+  color-scheme: dark;
+}
+
+.articlesFilterControl:focus {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 20%);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--aa-primary), transparent 86%);
+}
+
+.articlesToolbarClear {
+  align-self: flex-end;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 35%);
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--aa-primary), transparent 88%);
+  color: color-mix(in oklab, var(--aa-primary), #fff 22%);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.articlesToolbarClear:hover {
+  background: color-mix(in oklab, var(--aa-primary), transparent 82%);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 18%);
+  color: #fff;
+}
+
+.articlesToolbarDivider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 34px;
+  background: color-mix(in oklab, var(--aa-hairline), transparent 15%);
+  flex-shrink: 0;
+}
+
+.articlesToolbarActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.articlesToolbarBtn {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 5%);
+  border-radius: 9px;
+  background: color-mix(in oklab, #ffffff, transparent 92%);
+  color: var(--aa-ink);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.articlesToolbarBtn:hover {
+  background: #ffffff;
+  border-color: color-mix(in oklab, #ffffff, var(--aa-hairline) 40%);
+}
+
+.articlesToolbarBtnWarn {
+  border-color: color-mix(in oklab, #faad14, transparent 32%);
+  background: color-mix(in oklab, #faad14, transparent 86%);
+  color: color-mix(in oklab, #ffe7ba, #fff 35%);
+}
+
+.articlesToolbarBtnWarn:hover:not(:disabled) {
+  background: color-mix(in oklab, #faad14, transparent 76%);
+  border-color: color-mix(in oklab, #faad14, transparent 18%);
+  color: #fff;
+}
+
+.articlesToolbarIconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 5%);
+  border-radius: 9px;
+  background: color-mix(in oklab, #ffffff, transparent 92%);
+  color: var(--aa-ink);
+  cursor: pointer;
+}
+
+.articlesToolbarIconBtn:hover:not(:disabled) {
+  background: #ffffff;
+  border-color: color-mix(in oklab, #ffffff, var(--aa-hairline) 40%);
+}
+
+.articlesToolbarIconBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.listToolbarStatus {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 28%);
+}
+
+.articlesToolbarSelection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.articlesSelectedCount {
+  font-size: 12px;
+  font-weight: 600;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 22%);
+  white-space: nowrap;
+}
+
+.articlesToolbarActionsBtn {
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 5%);
+  border-radius: 9px;
+  background: color-mix(in oklab, #ffffff, transparent 94%);
+  color: color-mix(in oklab, var(--aa-muted), var(--aa-ink) 35%);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: not-allowed;
+  white-space: nowrap;
+}
+
+.articlesToolbarActionsBtnActive {
+  border-color: transparent;
+  background: var(--aa-primary);
+  color: var(--aa-on-primary);
+  cursor: pointer;
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--aa-primary), #000 22%);
+}
+
+.articlesToolbarActionsBtnActive:hover {
+  background: var(--aa-primary-active);
 }
 
 .desktopFiltersWrap {
@@ -1973,34 +2305,41 @@
   width: 100%;
   display: grid;
   grid-template-columns: 288px 1fr;
-  gap: 20px;
-  align-items: start;
+  gap: 0;
+  align-items: stretch;
 }
 
 @media (max-width: 980px) {
   .shell {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
+
+  .sidebar {
+    min-height: 0;
+    overflow-y: auto;
+  }
+
   .contentCol {
     padding: 18px 14px 32px;
+    height: auto;
+    max-height: none;
+    overflow: visible;
   }
 }
 
 .sidebar {
   position: sticky;
   top: 0;
-  align-self: start;
+  align-self: stretch;
   box-sizing: border-box;
   border-right: 1px solid var(--aa-hairline);
   border-radius: 0;
   padding: 16px 14px;
   background: #0a0a0e;
   width: 100%;
-  height: 100vh;
-  height: 100dvh;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
 }

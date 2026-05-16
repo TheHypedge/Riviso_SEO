@@ -31,7 +31,7 @@ export function parseDatetimeLocal(value: string): LocalParts | null {
   const min = Number(m[5]);
   if (![y, mo, d, h, min].every(Number.isFinite)) return null;
   if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || min > 59) return null;
-  return { y, mo, d, h, min };
+  return { y, m: mo, d, h, min };
 }
 
 export function formatDatetimeLocal(p: LocalParts): string {

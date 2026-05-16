@@ -32,7 +32,6 @@ type TabKey =
   | "articles"
   | "research"
   | "scheduled_articles"
-  | "configuration"
   | "prompts"
   | "context_links"
   | "tools"
@@ -49,7 +48,6 @@ const TAB_KEYS: ReadonlySet<TabKey> = new Set<TabKey>([
   "articles",
   "research",
   "scheduled_articles",
-  "configuration",
   "prompts",
   "context_links",
   "tools",
@@ -2964,7 +2962,6 @@ export default function ProjectPage() {
     articles: "Articles",
     research: "Research",
     scheduled_articles: "Scheduled Articles",
-    configuration: "Configuration",
     prompts: "Prompts",
     context_links: "Context links",
     tools: "Tools",
@@ -4302,16 +4299,15 @@ export default function ProjectPage() {
               )}
             </div>
 
-            {tab === "articles"
-              ? renderLimitStrip([
+            {tab === "articles" ? (
+              <div className={styles.showOnMobile}>
+                {renderLimitStrip([
                   articleGenerationLimitStatus(),
                   monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles),
                   monthlyLimitStatus("Article export", featureLimits?.export_articles),
-                ])
-              : null}
-            {tab === "scheduled_articles"
-              ? renderLimitStrip([monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles)])
-              : null}
+                ])}
+              </div>
+            ) : null}
 
             {showMobileFilters ? (
               <>
@@ -4704,53 +4700,84 @@ export default function ProjectPage() {
               </>
             ) : null}
 
-              <div className={`${styles.card} ${styles.cardWide} ${styles.hideOnMobile} ${styles.desktopFiltersWrap}`}>
-                <div className={styles.filtersGrid}>
-                  <label className={styles.label}>
-                    Status
-                    <select className={styles.input} value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-                      <option value="">All</option>
-                      <option value="pending">Pending</option>
-                      <option value="draft">Draft</option>
-                      <option value="scheduled">Scheduled</option>
-                      <option value="published">Published</option>
-                    </select>
-                  </label>
-                  <label className={styles.label}>
-                    From
-                    <input className={styles.input} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-                  </label>
-                  <label className={styles.label}>
-                    To
-                    <input className={styles.input} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-                  </label>
-                  <label className={styles.label}>
-                    Date order
-                    <select
-                      className={styles.input}
-                      value={dateOrder}
-                      onChange={(e) => {
-                        setDateOrder(e.target.value as "asc" | "desc");
-                        setPage(1);
-                      }}
-                    >
-                      <option value="desc">Latest → Oldest</option>
-                      <option value="asc">Oldest → Latest</option>
-                    </select>
-                  </label>
-                  {q.trim() || status || dateFrom || dateTo ? (
-                    <button className={styles.button} type="button" onClick={() => { setQ(""); setStatus(""); setDateFrom(""); setDateTo(""); }}>
-                      Clear filters
-                    </button>
-                  ) : (
-                    <div />
-                  )}
-                </div>
+              <div className={`${styles.card} ${styles.cardWide} ${styles.hideOnMobile} ${styles.articlesToolbar}`}>
+                {tab === "articles"
+                  ? renderLimitStrip([
+                      articleGenerationLimitStatus(),
+                      monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles),
+                      monthlyLimitStatus("Article export", featureLimits?.export_articles),
+                    ])
+                  : null}
 
-                <div className={styles.filtersActionsRow}>
-                  <div className={styles.filtersActionsLeft}>
+                <div className={styles.articlesToolbarMain}>
+                  <div className={styles.articlesToolbarFilters} role="group" aria-label="Article filters">
+                    <label className={styles.articlesFilterField}>
+                      <span className={styles.articlesFilterLabel}>Status</span>
+                      <select
+                        className={styles.articlesFilterControl}
+                        value={status}
+                        onChange={(e) => setStatus(e.target.value as StatusFilter)}
+                      >
+                        <option value="">All</option>
+                        <option value="pending">Pending</option>
+                        <option value="draft">Draft</option>
+                        <option value="scheduled">Scheduled</option>
+                        <option value="published">Published</option>
+                      </select>
+                    </label>
+                    <label className={styles.articlesFilterField}>
+                      <span className={styles.articlesFilterLabel}>From</span>
+                      <input
+                        className={styles.articlesFilterControl}
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => setDateFrom(e.target.value)}
+                      />
+                    </label>
+                    <label className={styles.articlesFilterField}>
+                      <span className={styles.articlesFilterLabel}>To</span>
+                      <input
+                        className={styles.articlesFilterControl}
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => setDateTo(e.target.value)}
+                      />
+                    </label>
+                    <label className={styles.articlesFilterField}>
+                      <span className={styles.articlesFilterLabel}>Sort</span>
+                      <select
+                        className={styles.articlesFilterControl}
+                        value={dateOrder}
+                        onChange={(e) => {
+                          setDateOrder(e.target.value as "asc" | "desc");
+                          setPage(1);
+                        }}
+                      >
+                        <option value="desc">Latest → Oldest</option>
+                        <option value="asc">Oldest → Latest</option>
+                      </select>
+                    </label>
+                    {q.trim() || status || dateFrom || dateTo ? (
+                      <button
+                        className={styles.articlesToolbarClear}
+                        type="button"
+                        onClick={() => {
+                          setQ("");
+                          setStatus("");
+                          setDateFrom("");
+                          setDateTo("");
+                        }}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+
+                  <div className={styles.articlesToolbarDivider} aria-hidden="true" />
+
+                  <div className={styles.articlesToolbarActions}>
                     <button
-                      className={styles.btnSecondary}
+                      className={styles.articlesToolbarBtn}
                       type="button"
                       onClick={() => {
                         setError(null);
@@ -4763,7 +4790,7 @@ export default function ProjectPage() {
                       Bulk Upload
                     </button>
                     <button
-                      className={styles.btnSecondary}
+                      className={styles.articlesToolbarBtn}
                       type="button"
                       onClick={() => {
                         setError(null);
@@ -4773,13 +4800,14 @@ export default function ProjectPage() {
                         setShowExportArticles(true);
                       }}
                     >
-                      Export Articles
+                      Export
                     </button>
                   </div>
-                  <div className={styles.filtersActionsRight}>
-                    <span className={styles.smallMuted}>{selectedIds.length} selected</span>
+
+                  <div className={styles.articlesToolbarSelection}>
+                    <span className={styles.articlesSelectedCount}>{selectedIds.length} selected</span>
                     <button
-                      className={`${styles.button} ${selectedIds.length ? styles.buttonHighlight : ""}`}
+                      className={`${styles.articlesToolbarActionsBtn} ${selectedIds.length ? styles.articlesToolbarActionsBtnActive : ""}`}
                       type="button"
                       onClick={() => {
                         if (!selectedIds.length) return;
@@ -4793,7 +4821,6 @@ export default function ProjectPage() {
                   </div>
                 </div>
               </div>
-
               <div className={`${styles.card} ${styles.cardWide} ${styles.articleListCard}`} style={{ padding: 0 }}>
                 <div className={styles.articlesListHead}>
                   <input type="checkbox" checked={allOnPageSelected} onChange={toggleAllOnPage} />
@@ -6557,42 +6584,52 @@ export default function ProjectPage() {
 
         {tab === "scheduled_articles" ? (
           <>
-            <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={styles.scheduledHeadRow}>
-                <div className={styles.scheduledHeadFilters}>
-                  <label className={styles.label} style={{ margin: 0 }}>
-                    Order
-                    <select className={styles.input} value={scheduledOrder} onChange={(e) => setScheduledOrder(e.target.value as "asc" | "desc")}>
+            <div className={`${styles.card} ${styles.cardWide} ${styles.articlesToolbar}`}>
+              {renderLimitStrip([monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles)])}
+
+              <div className={styles.articlesToolbarMain}>
+                <div className={styles.articlesToolbarFilters} role="group" aria-label="Scheduled article filters">
+                  <label className={styles.articlesFilterField}>
+                    <span className={styles.articlesFilterLabel}>Order</span>
+                    <select
+                      className={styles.articlesFilterControl}
+                      value={scheduledOrder}
+                      onChange={(e) => setScheduledOrder(e.target.value as "asc" | "desc")}
+                    >
                       <option value="desc">Latest → Oldest</option>
                       <option value="asc">Oldest → Latest</option>
                     </select>
                   </label>
-                  <label className={styles.label} style={{ margin: 0 }}>
-                    Search
+                  <label className={`${styles.articlesFilterField} ${styles.articlesFilterFieldWide}`}>
+                    <span className={styles.articlesFilterLabel}>Search</span>
                     <input
-                      className={styles.input}
+                      className={styles.articlesFilterControl}
                       value={scheduledSearch}
                       onChange={(e) => setScheduledSearch(e.target.value)}
-                      placeholder="Search by article title…"
+                      placeholder="Article title…"
                     />
                   </label>
                 </div>
-                <div className={styles.scheduledHeadActions}>
+
+                <div className={styles.articlesToolbarDivider} aria-hidden="true" />
+
+                <div className={styles.articlesToolbarActions}>
                   {scheduledJobs.some((j) => (j.state || "").toLowerCase() === "failed") ? (
                     <button
                       type="button"
-                      className={styles.btnSecondary}
+                      className={`${styles.articlesToolbarBtn} ${styles.articlesToolbarBtnWarn}`}
                       disabled={retryAllFailedBusy || !!retryPrepBusyId}
                       onClick={() => void retryAllFailedScheduledPreparations()}
-                      title="Re-run generation for every failed scheduled job (use after deploying the backend fix)"
+                      title="Re-run generation for every failed scheduled job"
                     >
                       {retryAllFailedBusy ? "Retrying all…" : "Retry all failed"}
                     </button>
                   ) : null}
                   <button
                     type="button"
-                    className={styles.iconButton}
+                    className={styles.articlesToolbarIconBtn}
                     aria-label="Refresh scheduled articles"
+                    disabled={scheduledLoading}
                     onClick={async () => {
                       setScheduledLoading(true);
                       try {
@@ -6607,8 +6644,8 @@ export default function ProjectPage() {
                 </div>
               </div>
 
-              {scheduledLoading ? <div className={styles.muted}>Loading…</div> : null}
-              {error ? <p className={styles.error}>{error}</p> : null}
+              {scheduledLoading ? <p className={styles.listToolbarStatus}>Loading scheduled articles…</p> : null}
+              {error ? <p className={styles.error} style={{ margin: 0 }}>{error}</p> : null}
             </div>
 
             <div className={`${styles.card} ${styles.cardWide} ${styles.scheduledListCard}`}>
@@ -6972,17 +7009,6 @@ export default function ProjectPage() {
             ) : null}
 
           </>
-        ) : null}
-
-        {tab === "configuration" ? (
-          <div className={`${styles.card} ${styles.cardWide}`}>
-            <h2 className={styles.clusterCardTitle}>Configuration</h2>
-            <p className={styles.clusterCardSubtitle}>
-              WordPress defaults, featured-image settings, and Search Console wiring live in
-              <strong> Project Settings</strong> and <strong>Tools</strong> for now. We&apos;ll move
-              the most-used controls back here once the dedicated form lands.
-            </p>
-          </div>
         ) : null}
 
         {tab === "prompts" ? (
