@@ -17,29 +17,35 @@ type Props = {
 
 function StepImage({ step }: { step: RivisoTutorialStep }) {
   const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const src = (step.imageSrc || "").trim();
 
   if (!src || failed) {
     return (
       <div className={styles.imagePlaceholder}>
-        <div>Screenshot placeholder</div>
-        <div style={{ marginTop: 8 }}>
-          Add an image at{" "}
-          <code>{src || `/tutorial/step-${step.stepNumber}-${step.id}.png`}</code>
-        </div>
+        <span className={styles.imagePlaceholderTitle}>Screenshot</span>
+        <span className={styles.imagePlaceholderHint}>
+          Add <code>{src || `/tutorial/step-${step.stepNumber}-${step.id}.png`}</code>
+        </span>
       </div>
     );
   }
 
+  const encoded = encodeURI(src);
+
   return (
-    // User-provided tutorial screenshots; paths are static under /public/tutorial.
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      className={styles.image}
-      src={src}
-      alt={step.imageAlt || step.title}
-      onError={() => setFailed(true)}
-    />
+    <div className={styles.imageWrap}>
+      {!loaded ? <div className={styles.imageSkeleton} aria-hidden="true" /> : null}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        className={`${styles.image} ${loaded ? styles.imageLoaded : ""}`}
+        src={encoded}
+        alt={step.imageAlt || step.title}
+        decoding="async"
+        onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
+      />
+    </div>
   );
 }
 
@@ -76,7 +82,7 @@ export function TutorialStepperModal({ onClose, steps = RIVISO_TUTORIAL_STEPS }:
         aria-labelledby="riviso-tutorial-title"
         aria-describedby="riviso-tutorial-body"
       >
-        <div className={styles.head}>
+        <header className={styles.head}>
           <div className={styles.headText}>
             <p className={styles.kicker}>Getting started</p>
             <h2 id="riviso-tutorial-title" className={styles.title}>
@@ -85,39 +91,45 @@ export function TutorialStepperModal({ onClose, steps = RIVISO_TUTORIAL_STEPS }:
             <p className={styles.intro}>{RIVISO_TUTORIAL_INTRO}</p>
           </div>
           <button type="button" className={styles.closeBtn} aria-label="Close" onClick={close}>
-            ×
+            <span aria-hidden="true">×</span>
           </button>
-        </div>
+        </header>
 
         <div className={styles.progress} aria-label="Tutorial progress">
           {steps.map((s, i) => (
             <button
               key={s.id}
               type="button"
-              className={`${styles.dot} ${i === index ? styles.dotActive : ""}`}
-              aria-label={`Go to step ${s.stepNumber}: ${s.title}`}
+              className={`${styles.progressStep} ${i === index ? styles.progressStepActive : ""} ${i < index ? styles.progressStepDone : ""}`}
+              aria-label={`Step ${s.stepNumber}: ${s.title}`}
               aria-current={i === index ? "step" : undefined}
               onClick={() => setIndex(i)}
-            />
+            >
+              <span className={styles.progressStepNum}>{s.stepNumber}</span>
+              <span className={styles.progressStepLabel}>{s.title}</span>
+            </button>
           ))}
         </div>
 
         <div className={styles.body}>
-          <div>
-            <div className={styles.stepBadge}>Step {step.stepNumber}</div>
+          <div className={styles.stepCopy}>
+            <p className={styles.stepBadge}>
+              Step {step.stepNumber} of {total}
+            </p>
             <h3 className={styles.stepTitle}>{step.title}</h3>
             <p id="riviso-tutorial-body" className={styles.stepBody}>
               {step.body}
             </p>
           </div>
-          <div className={styles.imageFrame}>
+
+          <figure className={styles.imageFrame} aria-label={`Screenshot: ${step.title}`}>
             <StepImage key={`${step.id}-${step.imageSrc || ""}`} step={step} />
-          </div>
+          </figure>
         </div>
 
-        <div className={styles.footer}>
+        <footer className={styles.footer}>
           <span className={styles.stepCounter}>
-            Step {step.stepNumber} of {total}
+            {step.stepNumber} / {total}
           </span>
           <div className={styles.footerActions}>
             <button
@@ -142,7 +154,7 @@ export function TutorialStepperModal({ onClose, steps = RIVISO_TUTORIAL_STEPS }:
               </button>
             )}
           </div>
-        </div>
+        </footer>
       </div>
     </>
   );

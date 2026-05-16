@@ -532,6 +532,8 @@
 .pageTop {
   justify-content: flex-start;
   align-items: stretch;
+  width: 100%;
+  align-self: stretch;
 }
 
 /* App shell: fixed-height viewport; sidebar stays put, main column scrolls. */
@@ -561,24 +563,36 @@
     overflow: hidden;
   }
 
+  /* Grid children need min-height: 0 so the main column can scroll internally. */
+  .shell > * {
+    min-height: 0;
+  }
+
   .sidebar {
     position: sticky;
     top: 0;
     align-self: stretch;
     height: 100%;
     max-height: 100%;
-    min-height: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
+    flex-shrink: 0;
   }
 
   .contentCol {
+    flex: 1;
     min-height: 0;
     height: 100%;
     max-height: 100%;
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Don't shrink stacked sections — let contentCol scroll instead of clipping rows. */
+  .contentCol > * {
+    flex-shrink: 0;
   }
 }
 
@@ -1646,8 +1660,9 @@
 
 .articleListCard {
   position: relative;
-  overflow: hidden;
-  min-height: 260px;
+  overflow: visible;
+  min-height: 0;
+  flex-shrink: 0;
 }
 
 .articleConnectionOverlay {

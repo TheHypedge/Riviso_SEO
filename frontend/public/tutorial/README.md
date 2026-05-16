@@ -2,13 +2,13 @@
 
 Add PNG or WebP files here for the dashboard **Watch tutorial** stepper.
 
-Expected filenames (configured in `src/content/rivisoTutorial.ts`):
+Configured in `src/content/rivisoTutorial.ts`:
 
-| File | Step |
+| Step | File |
 |------|------|
-| `step-1-register.png` | Register your account |
-| `step-2-connect-wordpress.png` | Connect your website |
-| `step-3-add-project.png` | Add your project |
-| `step-4-operations.png` | Operations |
+| 1 — Register your account | `Register Account.png` |
+| 2 — Add your project | `Add Project.png` |
+| 3 — Connect your website | `Connect Website.png` |
+| 4 — Run your workflow | `Operations.png` |
 
 Until a file exists, the modal shows a placeholder with the path to add.
