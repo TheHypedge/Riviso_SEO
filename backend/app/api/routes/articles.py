@@ -49,6 +49,7 @@ from app.services.wordpress_client import WordpressClient, resolve_featured_medi
 from app.services.gsc_actions import inspect_url_status, maybe_request_url_inspection, request_url_inspection_now
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.scheduler import start_scheduled_job_preparation_task
+from app.services.generation_queue import generation_slot
 from app.services.to_thread import run_sync
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.schedule_timing import SCHEDULE_TOO_SOON_MESSAGE, is_schedule_time_allowed
@@ -70,6 +71,9 @@ from app.schemas.articles import (
     BulkActionRequest,
     BulkUploadRequest,
     BulkUploadResponse,
+    BulkScheduleFailure,
+    BulkScheduleRequest,
+    BulkScheduleResponse,
     GenerateRequest,
     RegenerateImageRequest,
     ScheduleRequest,
@@ -1080,18 +1084,19 @@ async def generate_article_and_image(
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     wp_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
     ip_id = (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
-    return await execute_article_generation(
-        st=st,
-        user=user,
-        proj=proj,
-        project_id=project_id,
-        article_id=(article_id or "").strip(),
-        row=row,
-        writing_prompt_id=wp_id,
-        image_prompt_id=ip_id,
-        generate_image=bool(payload.generate_image),
-        focus_keyphrase_override=payload.focus_keyphrase,
-    )
+    async with generation_slot():
+        return await execute_article_generation(
+            st=st,
+            user=user,
+            proj=proj,
+            project_id=project_id,
+            article_id=(article_id or "").strip(),
+            row=row,
+            writing_prompt_id=wp_id,
+            image_prompt_id=ip_id,
+            generate_image=bool(payload.generate_image),
+            focus_keyphrase_override=payload.focus_keyphrase,
+        )
 
 
 @router.post("/{article_id}/regenerate-image")
@@ -1107,14 +1112,273 @@ async def regenerate_article_featured_image(
     _require_verified_website(proj)
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     ip_id = (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
-    return await execute_featured_image_regeneration(
-        st=st,
-        user=user,
-        proj=proj,
-        article_id=(article_id or "").strip(),
-        row=row,
-        image_prompt_id=ip_id,
-    )
+    async with generation_slot():
+        return await execute_featured_image_regeneration(
+            st=st,
+            user=user,
+            proj=proj,
+            article_id=(article_id or "").strip(),
+            row=row,
+            image_prompt_id=ip_id,
+        )
+
+
+def _parse_schedule_time_utc(*, raw: str, user: dict) -> datetime:
+    s = (raw or "").strip()
+    if not s:
+        raise HTTPException(status_code=400, detail="Missing schedule time")
+    try:
+        user_tz = zoneinfo_for_user(user.get("timezone"))
+        return parse_schedule_input_to_utc(s, user_tz=user_tz)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e) or "Invalid schedule time format") from None
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
+
+
+def _user_schedule_plan(st, user: dict) -> tuple[str, str, dict]:
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    plan: dict = {}
+    if role != "admin" and uid:
+        try:
+            plans = st.load_plans() or {}
+            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+            if not isinstance(plan, dict):
+                plan = {}
+        except Exception:
+            plan = {}
+    return uid, role, plan
+
+
+async def _persist_schedule_row(
+    *,
+    st,
+    project_id: str,
+    article_id: str,
+    article: dict,
+    proj: dict,
+    norm_utc: str,
+    wp_status: str,
+    post_type: str,
+    writing_prompt_id: str,
+    image_prompt_id: str,
+    generate_image: bool,
+    enqueue_preparation: bool = True,
+    skip_article_update: bool = False,
+) -> dict:
+    """Write article + scheduled-job rows; optionally queue background prep (non-blocking)."""
+    cat_raw = (proj.get("wp_category_ids") or "").strip()
+    if not skip_article_update:
+        await run_sync(
+            st.update_article_fields,
+            article_id,
+            {
+                "wp_scheduled_at": norm_utc,
+                "wp_schedule_wp_status": wp_status,
+                "wp_rest_base": post_type,
+                "wp_schedule_error": "",
+                "status": (article.get("status") or "pending"),
+            },
+        )
+
+    job_row: dict | None = None
+    if hasattr(st, "insert_scheduled_job") and hasattr(st, "update_scheduled_job_fields"):
+        stable = hashlib.sha1(f"{project_id}:{article_id}".encode("utf-8")).hexdigest()[:20]
+        job_id = f"job_{stable}"
+        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        job_updates = {
+            "id": job_id,
+            "project_id": project_id,
+            "article_id": article_id,
+            "run_at": norm_utc,
+            "post_type": post_type,
+            "wp_status": wp_status,
+            "category_ids": cat_raw,
+            "writing_prompt_id": writing_prompt_id,
+            "image_prompt_id": image_prompt_id,
+            "generate_image": generate_image,
+            "state": "scheduled",
+            "attempts": 0,
+            "last_attempt_at": "",
+            "last_error": "",
+            "updated_at": now_str,
+        }
+        updated = False
+        try:
+            updated = bool(await run_sync(st.update_scheduled_job_fields, job_id, job_updates))
+        except Exception:
+            updated = False
+        if not updated:
+            try:
+                await run_sync(st.insert_scheduled_job, {**job_updates, "created_at": now_str})
+            except Exception:
+                try:
+                    await run_sync(st.update_scheduled_job_fields, job_id, job_updates)
+                except Exception:
+                    pass
+        job_row = {**job_updates}
+        if enqueue_preparation:
+            try:
+                start_scheduled_job_preparation_task(st=st, jid=job_id, proj=proj, art=article, job=job_row)
+            except Exception:
+                pass
+    return job_row or {}
+
+
+def _enqueue_bulk_preparation(*, st, proj: dict, prep_rows: list[tuple[dict, dict]]) -> None:
+    """Queue content prep after the HTTP response (bounded by the generation worker)."""
+    from app.services.generation_worker import enqueue_scheduled_prep
+
+    pid = (proj.get("id") or "").strip()
+    for art, job in prep_rows:
+        jid = (job.get("id") or "").strip()
+        aid = (art.get("id") or job.get("article_id") or "").strip()
+        if not jid or not pid or not aid:
+            continue
+        try:
+            patch = getattr(st, "patch_scheduled_job_fields", None) or st.update_scheduled_job_fields
+            patch(
+                jid,
+                {
+                    "state": "content_generating",
+                    "last_error": "",
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+        except Exception:
+            pass
+        try:
+            enqueue_scheduled_prep(job_id=jid, project_id=pid, article_id=aid)
+        except Exception:
+            pass
+
+
+@router.post("/bulk-schedule", response_model=BulkScheduleResponse, status_code=200)
+async def bulk_schedule_articles(
+    project_id: str,
+    payload: BulkScheduleRequest,
+    user: dict = Depends(get_current_user),
+) -> BulkScheduleResponse:
+    """Schedule many articles in one round-trip (bulk weekly/monthly UI)."""
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    _require_verified_website(proj)
+
+    wp_status = (payload.wp_status or "draft").strip().lower()
+    if wp_status not in {"draft", "publish"}:
+        raise HTTPException(status_code=400, detail="Invalid wp_status (draft|publish)")
+
+    post_type = (payload.post_type or "").strip() or (proj.get("default_wp_rest_base") or "").strip() or "posts"
+    writing_prompt_id = (payload.writing_prompt_id or "").strip()
+    image_prompt_id = (payload.image_prompt_id or "").strip()
+    generate_image = bool(payload.generate_image)
+
+    # Dedupe by article_id (last wins).
+    by_aid: dict[str, str] = {}
+    for it in payload.items or []:
+        aid = (it.article_id or "").strip()
+        raw = (it.wp_scheduled_at or "").strip()
+        if aid and raw:
+            by_aid[aid] = raw
+    if not by_aid:
+        raise HTTPException(status_code=400, detail="No articles to schedule")
+
+    aids = list(by_aid.keys())[:500]
+    uid, role, plan = _user_schedule_plan(st, user)
+    if role != "admin" and uid:
+        if plan.get("allow_scheduling") is False:
+            raise HTTPException(status_code=403, detail="Scheduling is not enabled for your plan.")
+
+    if hasattr(st, "load_articles_by_ids_for_project"):
+        articles_map = await run_sync(st.load_articles_by_ids_for_project, project_id, aids)
+    else:
+        articles_map = {}
+        for aid in aids:
+            try:
+                a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=aid)
+                articles_map[aid] = a
+            except HTTPException:
+                pass
+
+    parsed: list[tuple[str, str, datetime]] = []
+    failed: list[BulkScheduleFailure] = []
+    for aid, raw in by_aid.items():
+        if aid not in articles_map:
+            failed.append(BulkScheduleFailure(article_id=aid, error="Article not found"))
+            continue
+        try:
+            dt_utc = _parse_schedule_time_utc(raw=raw, user=user)
+        except HTTPException as e:
+            failed.append(BulkScheduleFailure(article_id=aid, error=str(e.detail) or "Invalid schedule time"))
+            continue
+        if not is_schedule_time_allowed(dt_utc):
+            failed.append(BulkScheduleFailure(article_id=aid, error=SCHEDULE_TOO_SOON_MESSAGE))
+            continue
+        parsed.append((aid, dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"), dt_utc))
+
+    if not parsed:
+        return BulkScheduleResponse(ok=True, scheduled=0, failed=failed)
+
+    if role != "admin" and uid and hasattr(st, "consume_scheduled_usage"):
+        ok, msg = st.consume_scheduled_usage(
+            uid,
+            month_limit=plan.get("max_scheduled_per_month"),
+            amount=len(parsed),
+        )
+        if not ok:
+            raise HTTPException(status_code=403, detail=msg or "Schedule limit reached for your plan")
+
+    article_updates: list[tuple[str, dict]] = []
+    prep_rows: list[tuple[dict, dict]] = []
+    for aid, norm_utc, _dt in parsed:
+        art = articles_map[aid]
+        article_updates.append(
+            (
+                aid,
+                {
+                    "wp_scheduled_at": norm_utc,
+                    "wp_schedule_wp_status": wp_status,
+                    "wp_rest_base": post_type,
+                    "wp_schedule_error": "",
+                    "status": (art.get("status") or "pending"),
+                },
+            )
+        )
+
+    if hasattr(st, "bulk_update_articles"):
+        await run_sync(st.bulk_update_articles, article_updates)
+    else:
+        for aid, u in article_updates:
+            await run_sync(st.update_article_fields, aid, u)
+
+    for aid, norm_utc, _dt in parsed:
+        art = articles_map[aid]
+        job_row = await _persist_schedule_row(
+            st=st,
+            project_id=project_id,
+            article_id=aid,
+            article=art,
+            proj=proj,
+            norm_utc=norm_utc,
+            wp_status=wp_status,
+            post_type=post_type,
+            writing_prompt_id=writing_prompt_id,
+            image_prompt_id=image_prompt_id,
+            generate_image=generate_image,
+            enqueue_preparation=False,
+            skip_article_update=True,
+        )
+        if job_row:
+            prep_rows.append((art, job_row))
+
+    if prep_rows:
+        _enqueue_bulk_preparation(st=st, proj=proj, prep_rows=prep_rows)
+
+    return BulkScheduleResponse(ok=True, scheduled=len(parsed), failed=failed)
 
 
 @router.post("/{article_id}/schedule", status_code=200)
@@ -1129,25 +1393,9 @@ async def schedule_article(
     _require_verified_website(proj)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
-    raw = (payload.wp_scheduled_at or "").strip()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Missing schedule time")
-
-    # Naive datetime-local values are interpreted in the user's profile IANA timezone (normalized for legacy names).
-    # Values with explicit offsets / Z are interpreted as that instant in UTC.
-    try:
-        user_tz = zoneinfo_for_user(user.get("timezone"))
-        dt_utc = parse_schedule_input_to_utc(raw, user_tz=user_tz)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e) or "Invalid schedule time format") from None
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid schedule time format") from None
-
+    dt_utc = _parse_schedule_time_utc(raw=payload.wp_scheduled_at or "", user=user)
     norm_utc = dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
-    # Enforce minimum gap of 10 minutes from current time (UTC). The scheduler
-    # needs ~6-8 minutes to fully prepare an article (content + image + WP
-    # upload) before it can publish, so 10 minutes is the safe minimum.
     if not is_schedule_time_allowed(dt_utc):
         raise HTTPException(status_code=400, detail=SCHEDULE_TOO_SOON_MESSAGE)
 
@@ -1155,19 +1403,8 @@ async def schedule_article(
     if wp_status not in {"draft", "publish"}:
         raise HTTPException(status_code=400, detail="Invalid wp_status (draft|publish)")
 
-    # Plan enforcement: scheduling must be enabled and consumes monthly schedule quota.
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
+    uid, role, plan = _user_schedule_plan(st, user)
     if role != "admin" and uid:
-        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
-        plan = {}
-        try:
-            plans = st.load_plans() or {}
-            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
-            if not isinstance(plan, dict):
-                plan = {}
-        except Exception:
-            plan = {}
         if plan.get("allow_scheduling") is False:
             raise HTTPException(status_code=403, detail="Scheduling is not enabled for your plan.")
         if hasattr(st, "consume_scheduled_usage"):
@@ -1176,73 +1413,21 @@ async def schedule_article(
                 raise HTTPException(status_code=403, detail=msg or "Schedule limit reached for your plan")
 
     post_type = (payload.post_type or "").strip() or (proj.get("default_wp_rest_base") or "").strip() or "posts"
-    # For scheduled jobs, categories default from project settings unless overridden later.
-    cat_raw = (proj.get("wp_category_ids") or "").strip()
 
-    await run_sync(
-        st.update_article_fields,
-        article_id,
-        {
-            # Store UTC timestamp string; UI can display in user timezone.
-            "wp_scheduled_at": norm_utc,
-            "wp_schedule_wp_status": wp_status,
-            "wp_rest_base": post_type,
-            "wp_schedule_error": "",
-            # keep current draft/pending/published status; UI will show "scheduled" via wp_scheduled_at
-            "status": (a.get("status") or "pending"),
-        },
+    await _persist_schedule_row(
+        st=st,
+        project_id=project_id,
+        article_id=article_id,
+        article=a,
+        proj=proj,
+        norm_utc=norm_utc,
+        wp_status=wp_status,
+        post_type=post_type,
+        writing_prompt_id=(payload.writing_prompt_id or "").strip(),
+        image_prompt_id=(payload.image_prompt_id or "").strip(),
+        generate_image=bool(payload.generate_image),
+        enqueue_preparation=True,
     )
-
-    # Insert/update scheduled job row.
-    #
-    # IMPORTANT: avoid loading/scanning all jobs during the request (can be slow on production DBs and cause Nginx 504).
-    # We use a stable job id derived from (project_id, article_id) so reschedules are O(1).
-    if hasattr(st, "insert_scheduled_job") and hasattr(st, "update_scheduled_job_fields"):
-        stable = hashlib.sha1(f"{project_id}:{article_id}".encode("utf-8")).hexdigest()[:20]
-        job_id = f"job_{stable}"
-        now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        job_updates = {
-            "project_id": project_id,
-            "article_id": article_id,
-            "run_at": norm_utc,
-            "post_type": post_type,
-            "wp_status": wp_status,
-            "category_ids": cat_raw,
-            "writing_prompt_id": (payload.writing_prompt_id or "").strip(),
-            "image_prompt_id": (payload.image_prompt_id or "").strip(),
-            "generate_image": bool(payload.generate_image),
-            "state": "scheduled",
-            "attempts": 0,
-            "last_attempt_at": "",
-            "last_error": "",
-            "updated_at": now_str,
-        }
-
-        updated = False
-        try:
-            updated = bool(await run_sync(st.update_scheduled_job_fields, job_id, job_updates))
-        except Exception:
-            updated = False
-        if not updated:
-            try:
-                await run_sync(st.insert_scheduled_job, {"id": job_id, **job_updates, "created_at": now_str})
-            except Exception:
-                # If insert races (already exists), just update.
-                try:
-                    await run_sync(st.update_scheduled_job_fields, job_id, job_updates)
-                except Exception:
-                    pass
-
-        # Start background preparation immediately so the article is ready well before posting.
-        # This is best-effort and does not block the schedule response.
-        try:
-            proj2 = proj
-            art2 = a
-            job2 = {"id": job_id, **job_updates}
-
-            start_scheduled_job_preparation_task(st=st, jid=job_id, proj=proj2, art=art2, job=job2)
-        except Exception:
-            pass
     return {
         "ok": True,
         "status": "scheduled",

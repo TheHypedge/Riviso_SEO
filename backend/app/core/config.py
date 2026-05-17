@@ -84,6 +84,28 @@ class Settings(BaseSettings):
     # Google Indexing API (service account JSON; raw JSON or base64 JSON)
     google_indexing_service_account_json: str = Field(default="", validation_alias="GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON")
 
+    # Generation queue (Redis-backed; falls back to in-process queue when Redis is down)
+    max_concurrent_generations: int = Field(
+        default=3,
+        validation_alias="MAX_CONCURRENT_GENERATIONS",
+        description="Max simultaneous OpenAI article/image generations per API process.",
+    )
+    generation_queue_enabled: bool = Field(
+        default=True,
+        validation_alias="GENERATION_QUEUE_ENABLED",
+        description="When true, background prep uses the generation queue instead of raw asyncio tasks.",
+    )
+    generation_worker_poll_seconds: float = Field(
+        default=0.5,
+        validation_alias="GENERATION_WORKER_POLL_SECONDS",
+        description="Queue poll interval for the in-process generation worker.",
+    )
+    scheduler_due_jobs_limit: int = Field(
+        default=200,
+        validation_alias="SCHEDULER_DUE_JOBS_LIMIT",
+        description="Max due scheduled jobs loaded per scheduler tick.",
+    )
+
     # OpenAI (generation)
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_text_model: str = "gpt-4.1-mini"

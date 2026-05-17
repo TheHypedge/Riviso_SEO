@@ -21,6 +21,22 @@ export const BULK_SCHEDULE_WEEKDAYS: { iso: WeekdayIso; label: string }[] = [
   { iso: 7, label: "Sun" },
 ];
 
+/** Sun → Sat display order for the weekly bulk-schedule UI. */
+export const BULK_SCHEDULE_WEEKDAYS_SUN_FIRST: { iso: WeekdayIso; label: string }[] = [
+  { iso: 7, label: "Sun" },
+  { iso: 1, label: "Mon" },
+  { iso: 2, label: "Tue" },
+  { iso: 3, label: "Wed" },
+  { iso: 4, label: "Thu" },
+  { iso: 5, label: "Fri" },
+  { iso: 6, label: "Sat" },
+];
+
+/** Hours added per extra post on the same posting day (afternoon/evening spread). */
+const SAME_DAY_SPREAD_HOURS = 2;
+const SAME_DAY_EVENING_CAP_H = 21;
+const SAME_DAY_EVENING_CAP_MIN = 0;
+
 type LocalParts = { y: number; m: number; d: number; h: number; min: number };
 
 export function parseDatetimeLocal(value: string): LocalParts | null {
@@ -39,6 +55,59 @@ export function parseDatetimeLocal(value: string): LocalParts | null {
 export function formatDatetimeLocal(p: LocalParts): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${p.y}-${pad(p.m)}-${pad(p.d)}T${pad(p.h)}:${pad(p.min)}`;
+}
+
+export function parsePreferredTime(value: string): { h: number; min: number } | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec((value || "").trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min) || h > 23 || min > 59) return null;
+  return { h, min };
+}
+
+/** Extract HH:mm from a datetime-local string. */
+export function preferredTimeFromDatetimeLocal(when: string): string {
+  const p = parseDatetimeLocal(when);
+  if (!p) return "09:00";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(p.h)}:${pad(p.min)}`;
+}
+
+function timeForSameDaySlot(prefH: number, prefMin: number, sameDayIndex: number): { h: number; min: number } {
+  if (sameDayIndex <= 0) return { h: prefH, min: prefMin };
+  let h = prefH + sameDayIndex * SAME_DAY_SPREAD_HOURS;
+  const min = prefMin;
+  if (h > SAME_DAY_EVENING_CAP_H || (h === SAME_DAY_EVENING_CAP_H && min > SAME_DAY_EVENING_CAP_MIN)) {
+    return { h: SAME_DAY_EVENING_CAP_H, min: SAME_DAY_EVENING_CAP_MIN };
+  }
+  return { h, min };
+}
+
+/**
+ * First selected posting day on or after the schedule minimum, at preferred time (profile TZ).
+ */
+export function buildWeeklyAnchorDatetime(
+  minWhen: string,
+  preferredTime: string,
+  weekdays: WeekdayIso[],
+  timeZone: string,
+): string | null {
+  const minP = parseDatetimeLocal(minWhen);
+  if (!minP) return null;
+  const pref = parsePreferredTime(preferredTime) || { h: minP.h, min: minP.min };
+  const days = weekdays.length ? ([...weekdays].sort((a, b) => a - b) as WeekdayIso[]) : [isoWeekday(minP)];
+  const daySet = new Set<WeekdayIso>(days);
+
+  let cursor: LocalParts = { y: minP.y, m: minP.m, d: minP.d, h: pref.h, min: pref.min };
+  for (let guard = 0; guard < 400; guard++) {
+    if (daySet.has(isoWeekday(cursor))) {
+      const anchorStr = formatDatetimeLocal(cursor);
+      if (compareDatetimeLocalInTz(anchorStr, minWhen, timeZone) >= 0) return anchorStr;
+    }
+    cursor = addDays({ ...cursor, h: pref.h, min: pref.min }, 1);
+  }
+  return formatDatetimeLocal({ ...minP, h: pref.h, min: pref.min });
 }
 
 function wallClockPartsInTimeZone(ms: number, timeZone: string): LocalParts | null {
@@ -65,25 +134,36 @@ function wallClockPartsInTimeZone(ms: number, timeZone: string): LocalParts | nu
   }
 }
 
-/** Map a profile-TZ wall-clock datetime-local string to UTC epoch ms. */
+function compareLocalPartsToTarget(p: LocalParts | null, target: LocalParts): number {
+  if (!p) return -2;
+  if (p.y !== target.y) return p.y - target.y;
+  if (p.m !== target.m) return p.m - target.m;
+  if (p.d !== target.d) return p.d - target.d;
+  if (p.h !== target.h) return p.h - target.h;
+  return p.min - target.min;
+}
+
+/** Map a profile-TZ wall-clock datetime-local string to UTC epoch ms (binary search, ~log n). */
 export function wallClockToInstantMs(value: string, timeZone: string): number | null {
   const target = parseDatetimeLocal(value);
   if (!target) return null;
   const tz = (timeZone || "UTC").trim() || "UTC";
-  const lo = Date.UTC(target.y, target.m - 1, target.d, 0, 0) - 36 * 60 * 60 * 1000;
-  const hi = Date.UTC(target.y, target.m - 1, target.d, 23, 59) + 36 * 60 * 60 * 1000;
-  for (let ms = lo; ms <= hi; ms += 60 * 1000) {
+
+  let lo = Date.UTC(target.y, target.m - 1, target.d - 1, 0, 0, 0, 0);
+  let hi = Date.UTC(target.y, target.m - 1, target.d + 2, 0, 0, 0, 0);
+
+  while (hi - lo > 60_000) {
+    const mid = lo + Math.floor((hi - lo) / (2 * 60_000)) * 60_000;
+    const p = wallClockPartsInTimeZone(mid, tz);
+    const c = compareLocalPartsToTarget(p, target);
+    if (c === 0) return mid;
+    if (c < 0) lo = mid + 60_000;
+    else hi = mid - 60_000;
+  }
+
+  for (let ms = lo; ms <= hi; ms += 60_000) {
     const p = wallClockPartsInTimeZone(ms, tz);
-    if (
-      p &&
-      p.y === target.y &&
-      p.m === target.m &&
-      p.d === target.d &&
-      p.h === target.h &&
-      p.min === target.min
-    ) {
-      return ms;
-    }
+    if (compareLocalPartsToTarget(p, target) === 0) return ms;
   }
   return null;
 }
@@ -169,12 +249,21 @@ function effectiveStart(start: LocalParts, min: LocalParts, timeZone: string): L
   return start;
 }
 
-function bumpForwardUntilMin(p: LocalParts, minWhen: string, timeZone: string): LocalParts {
+function bumpForwardUntilMin(
+  p: LocalParts,
+  minWhen: string,
+  timeZone: string,
+  minInstantMs?: number | null,
+): LocalParts {
   const minP = parseDatetimeLocal(minWhen);
   if (!minP) return p;
+  const minMs = minInstantMs ?? wallClockToInstantMs(minWhen, timeZone);
+  if (minMs == null) return p;
+
   let cur = p;
-  for (let guard = 0; guard < 800; guard++) {
-    if (compareDatetimeLocalInTz(formatDatetimeLocal(cur), minWhen, timeZone) >= 0) return cur;
+  for (let guard = 0; guard < 400; guard++) {
+    const curMs = wallClockToInstantMs(formatDatetimeLocal(cur), timeZone);
+    if (curMs != null && curMs >= minMs) return cur;
     cur = addDays(cur, 1);
   }
   return minP;
@@ -184,14 +273,15 @@ function finalizeScheduleDates(dates: LocalParts[], minWhen: string, timeZone: s
   const minP = parseDatetimeLocal(minWhen);
   if (!minP || !dates.length) return dates;
 
+  const minMs = wallClockToInstantMs(minWhen, timeZone);
   const out: LocalParts[] = [];
   for (let i = 0; i < dates.length; i++) {
-    let p = bumpForwardUntilMin(dates[i], minWhen, timeZone);
+    let p = bumpForwardUntilMin(dates[i], minWhen, timeZone, minMs);
     if (out.length > 0) {
       const prev = out[out.length - 1];
       if (compareLocal(p, prev) <= 0) {
         p = addMinutes(prev, 1);
-        p = bumpForwardUntilMin(p, minWhen, timeZone);
+        p = bumpForwardUntilMin(p, minWhen, timeZone, minMs);
       }
     }
     out.push(p);
@@ -206,31 +296,66 @@ function computeWeeklyDates(
   timeZone: string,
   articlesPerWeek: number,
   weekdays: WeekdayIso[],
+  preferredTime: string,
+  minInstantMs?: number | null,
 ): LocalParts[] {
-  const apw = Math.max(1, Math.min(7, Math.floor(articlesPerWeek) || 1));
+  const apw = Math.max(1, Math.min(count, Math.floor(articlesPerWeek) || 1));
   const days = weekdays.length ? ([...weekdays].sort((a, b) => a - b) as WeekdayIso[]) : [isoWeekday(start)];
-  const time = { h: start.h, min: start.min };
+  const pref = parsePreferredTime(preferredTime) || { h: start.h, min: start.min };
+  const minMs = minInstantMs ?? wallClockToInstantMs(minWhen, timeZone);
+  const sameDayCount = new Map<string, number>();
   const out: LocalParts[] = [];
 
   for (let i = 0; i < count; i++) {
     const weekIndex = Math.floor(i / apw);
     const slotInWeek = i % apw;
     const isoDow = days[slotInWeek % days.length];
+    const key = `${weekIndex}-${isoDow}`;
+    const sameDayIndex = sameDayCount.get(key) ?? 0;
+    sameDayCount.set(key, sameDayIndex + 1);
+    const t = timeForSameDaySlot(pref.h, pref.min, sameDayIndex);
     const weekMonday = addDays(mondayOfWeekContaining(start), weekIndex * 7);
-    let candidate = dateOnIsoWeekdayInWeek(weekMonday, isoDow, time);
-    candidate = bumpForwardUntilMin(candidate, minWhen, timeZone);
+    let candidate = dateOnIsoWeekdayInWeek(weekMonday, isoDow, t);
+    candidate = bumpForwardUntilMin(candidate, minWhen, timeZone, minMs);
     out.push(candidate);
   }
   return out;
 }
 
-function dayOfMonthForSlot(slot: number, postsPerMonth: number, anchorDay: number, y: number, m: number): number {
+function firstOfMonth(p: LocalParts): LocalParts {
+  return { y: p.y, m: p.m, d: 1, h: p.h, min: p.min };
+}
+
+/** Nth occurrence (0-based) of iso weekday on or after `notBeforeDay` in the calendar month. */
+function nthIsoWeekdayInMonth(
+  y: number,
+  m: number,
+  isoDow: WeekdayIso,
+  n: number,
+  notBeforeDay = 1,
+): number | null {
   const last = daysInMonth(y, m);
-  const ppm = Math.max(1, Math.min(12, Math.floor(postsPerMonth) || 1));
-  if (ppm === 1) return Math.min(Math.max(anchorDay, 1), last);
-  const k = slot + 1;
-  const day = Math.round((k * last) / (ppm + 1));
-  return Math.min(Math.max(day, 1), last);
+  let count = 0;
+  for (let d = Math.max(1, notBeforeDay); d <= last; d++) {
+    if (isoWeekday({ y, m, d, h: 0, min: 0 }) === isoDow) {
+      if (count === n) return d;
+      count++;
+    }
+  }
+  return null;
+}
+
+function lastIsoWeekdayInMonth(
+  y: number,
+  m: number,
+  isoDow: WeekdayIso,
+  notBeforeDay = 1,
+): number {
+  const last = daysInMonth(y, m);
+  for (let d = last; d >= Math.max(1, notBeforeDay); d--) {
+    if (isoWeekday({ y, m, d, h: 0, min: 0 }) === isoDow) return d;
+  }
+  return Math.max(1, notBeforeDay);
 }
 
 function computeMonthlyDates(
@@ -238,23 +363,43 @@ function computeMonthlyDates(
   start: LocalParts,
   minWhen: string,
   timeZone: string,
-  postsPerMonth: number,
+  articlesPerMonth: number,
+  weekdays: WeekdayIso[],
+  preferredTime: string,
+  minInstantMs?: number | null,
 ): LocalParts[] {
-  const ppm = Math.max(1, Math.min(12, Math.floor(postsPerMonth) || 1));
+  const apm = Math.max(1, Math.min(count, Math.floor(articlesPerMonth) || 1));
+  const days = weekdays.length ? ([...weekdays].sort((a, b) => a - b) as WeekdayIso[]) : [isoWeekday(start)];
+  const pref = parsePreferredTime(preferredTime) || { h: start.h, min: start.min };
+  const minMs = minInstantMs ?? wallClockToInstantMs(minWhen, timeZone);
+  const sameDayCount = new Map<string, number>();
   const out: LocalParts[] = [];
+
   for (let i = 0; i < count; i++) {
-    const monthIndex = Math.floor(i / ppm);
-    const slotInMonth = i % ppm;
-    const monthBase = addMonths({ ...start, d: 1 }, monthIndex);
-    const d = dayOfMonthForSlot(slotInMonth, ppm, start.d, monthBase.y, monthBase.m);
+    const monthIndex = Math.floor(i / apm);
+    const slotInMonth = i % apm;
+    const isoDow = days[slotInMonth % days.length];
+    const key = `${monthIndex}-${isoDow}`;
+    const sameDayIndex = sameDayCount.get(key) ?? 0;
+    sameDayCount.set(key, sameDayIndex + 1);
+
+    const monthBase = addMonths(firstOfMonth(start), monthIndex);
+    const sameMonthAsStart = monthBase.y === start.y && monthBase.m === start.m;
+    const notBefore = monthIndex === 0 && sameMonthAsStart ? start.d : 1;
+
+    let d =
+      nthIsoWeekdayInMonth(monthBase.y, monthBase.m, isoDow, sameDayIndex, notBefore) ??
+      lastIsoWeekdayInMonth(monthBase.y, monthBase.m, isoDow, notBefore);
+
+    const t = timeForSameDaySlot(pref.h, pref.min, sameDayIndex);
     let candidate: LocalParts = {
       y: monthBase.y,
       m: monthBase.m,
       d,
-      h: start.h,
-      min: start.min,
+      h: t.h,
+      min: t.min,
     };
-    candidate = bumpForwardUntilMin(candidate, minWhen, timeZone);
+    candidate = bumpForwardUntilMin(candidate, minWhen, timeZone, minMs);
     out.push(candidate);
   }
   return out;
@@ -278,6 +423,8 @@ export type ApplyBulkScheduleParams = {
   articlesPerWeek?: number;
   weekdays?: WeekdayIso[];
   postsPerMonth?: number;
+  /** HH:mm — weekly/monthly modes use this instead of startWhen's clock time. */
+  preferredTime?: string;
 };
 
 export function applyBulkScheduleDates(params: ApplyBulkScheduleParams): BulkScheduleRow[] {
@@ -286,14 +433,22 @@ export function applyBulkScheduleDates(params: ApplyBulkScheduleParams): BulkSch
 
   const tz = (params.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC").trim();
   const minP = parseDatetimeLocal(minWhen);
-  const startRaw = parseDatetimeLocal(startWhen);
-  if (!minP || !startRaw) return rows;
+  if (!minP) return rows;
 
-  const start = effectiveStart(startRaw, minP, tz);
+  const minMs = wallClockToInstantMs(minWhen, tz);
 
   let dates: LocalParts[];
   if (mode === "weekly") {
-    const weekdays = (params.weekdays?.length ? params.weekdays : [isoWeekday(start)]) as WeekdayIso[];
+    const weekdays = (params.weekdays?.length ? params.weekdays : [isoWeekday(minP)]) as WeekdayIso[];
+    const pref =
+      (params.preferredTime || "").trim() || preferredTimeFromDatetimeLocal(minWhen);
+    const prefParts = parsePreferredTime(pref) || { h: minP.h, min: minP.min };
+    const anchorWhen =
+      buildWeeklyAnchorDatetime(minWhen, pref, weekdays, tz) ||
+      formatDatetimeLocal({ ...minP, ...prefParts });
+    const startRaw = parseDatetimeLocal(anchorWhen);
+    if (!startRaw) return rows;
+    const start = effectiveStart(startRaw, minP, tz);
     dates = computeWeeklyDates(
       rows.length,
       start,
@@ -301,9 +456,32 @@ export function applyBulkScheduleDates(params: ApplyBulkScheduleParams): BulkSch
       tz,
       params.articlesPerWeek ?? 1,
       weekdays,
+      pref,
+      minMs,
+    );
+  } else if (mode === "monthly") {
+    const weekdays = (params.weekdays?.length ? params.weekdays : [isoWeekday(minP)]) as WeekdayIso[];
+    const pref =
+      (params.preferredTime || "").trim() || preferredTimeFromDatetimeLocal(minWhen);
+    const prefParts = parsePreferredTime(pref) || { h: minP.h, min: minP.min };
+    const anchorWhen =
+      buildWeeklyAnchorDatetime(minWhen, pref, weekdays, tz) ||
+      formatDatetimeLocal({ ...minP, ...prefParts });
+    const startRaw = parseDatetimeLocal(anchorWhen);
+    if (!startRaw) return rows;
+    const start = effectiveStart(startRaw, minP, tz);
+    dates = computeMonthlyDates(
+      rows.length,
+      start,
+      minWhen,
+      tz,
+      params.postsPerMonth ?? 1,
+      weekdays,
+      pref,
+      minMs,
     );
   } else {
-    dates = computeMonthlyDates(rows.length, start, minWhen, tz, params.postsPerMonth ?? 1);
+    return rows;
   }
 
   dates = finalizeScheduleDates(dates, minWhen, tz);
@@ -330,46 +508,49 @@ export function describeBulkScheduleSummary(params: {
       "";
     return `${count} article${count === 1 ? "" : "s"} · ${apw}/week${labels ? ` on ${labels}` : ""} · over ${weeks} week${weeks === 1 ? "" : "s"}`;
   }
-  const ppm = Math.max(1, params.postsPerMonth ?? 1);
-  const months = Math.ceil(count / ppm);
-  return `${count} article${count === 1 ? "" : "s"} · ${ppm}/month · over ${months} month${months === 1 ? "" : "s"}`;
+  const apm = Math.max(1, params.postsPerMonth ?? 1);
+  const months = Math.ceil(count / apm);
+  const labels =
+    params.weekdays?.map((iso) => BULK_SCHEDULE_WEEKDAYS.find((w) => w.iso === iso)?.label).filter(Boolean).join(", ") ||
+    "";
+  return `${count} article${count === 1 ? "" : "s"} · ${apm}/month${labels ? ` on ${labels}` : ""} · over ${months} month${months === 1 ? "" : "s"}`;
 }
 
-export function defaultWeekdaysForArticlesPerWeek(
-  articlesPerWeek: number,
-  startWhen: string,
-): WeekdayIso[] {
-  const start = parseDatetimeLocal(startWhen);
+/** Default posting days when opening bulk schedule: weekday of the schedule minimum. */
+export function defaultPostingDaysFromMin(minWhen: string): WeekdayIso[] {
+  const start = parseDatetimeLocal(minWhen);
   if (!start) return [1];
-  const startDow = isoWeekday(start);
-  const apw = Math.max(1, Math.min(7, articlesPerWeek));
-  if (apw === 1) return [startDow];
-  if (apw === 2) return [1, 4];
-  const out: WeekdayIso[] = [];
-  for (let i = 0; i < apw; i++) {
-    let d = ((startDow - 1 + i * Math.floor(7 / apw)) % 7) + 1;
-    if (d < 1) d = 1;
-    out.push(d as WeekdayIso);
-  }
-  return Array.from(new Set(out)).sort((a, b) => a - b) as WeekdayIso[];
+  return [isoWeekday(start)];
 }
 
 export function validateBulkScheduleCadence(params: {
   mode: BulkScheduleMode;
+  articleCount?: number;
   articlesPerWeek?: number;
   weekdays?: WeekdayIso[];
   postsPerMonth?: number;
 }): string | null {
   if (params.mode === "weekly") {
-    const apw = Math.max(1, Math.min(7, Math.floor(params.articlesPerWeek ?? 1) || 1));
+    const count = Math.max(0, params.articleCount ?? 0);
     const wd = params.weekdays ?? [];
-    if (wd.length < apw) {
-      return `Select at least ${apw} publish day${apw === 1 ? "" : "s"} for ${apw} article${apw === 1 ? "" : "s"} per week.`;
+    if (!wd.length) return "Select at least one posting day.";
+    const apw = Math.floor(params.articlesPerWeek ?? 1) || 1;
+    if (apw < 1 || (count > 0 && apw > count)) {
+      return count > 0
+        ? `Articles per week must be between 1 and ${count}.`
+        : "Articles per week must be at least 1.";
     }
   }
   if (params.mode === "monthly") {
-    const ppm = Math.floor(params.postsPerMonth ?? 1) || 1;
-    if (ppm < 1 || ppm > 12) return "Posts per month must be between 1 and 12.";
+    const count = Math.max(0, params.articleCount ?? 0);
+    const wd = params.weekdays ?? [];
+    if (!wd.length) return "Select at least one posting day.";
+    const apm = Math.floor(params.postsPerMonth ?? 1) || 1;
+    if (apm < 1 || (count > 0 && apm > count)) {
+      return count > 0
+        ? `Total monthly articles must be between 1 and ${count}.`
+        : "Total monthly articles must be at least 1.";
+    }
   }
   return null;
 }

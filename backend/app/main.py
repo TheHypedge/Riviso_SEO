@@ -32,6 +32,7 @@ from app.core.config import settings
 from app.core.logging import configure_logging
 from app.core.production import run_startup_checks
 from app.services.scheduler import scheduler_loop
+from app.services.generation_worker import start_generation_worker, stop_generation_worker
 from app.legacy.storage import get_legacy_storage_module
 
 _log = logging.getLogger("uvicorn.error")
@@ -118,6 +119,12 @@ async def lifespan(app: FastAPI):
             _log.warning("Could not read storage mode after init: %s", e)
 
     scheduler_task: asyncio.Task | None = None
+    generation_worker_task: asyncio.Task | None = None
+
+    enable_worker = (os.environ.get("ENABLE_GENERATION_WORKER", "1") or "1").strip()
+    if enable_worker in {"1", "true", "yes", "on"}:
+        generation_worker_task = start_generation_worker()
+
     enable = (os.environ.get("ENABLE_SCHEDULER", "1") or "1").strip()
     if enable in {"1", "true", "yes", "on"}:
         # One task per process; use ENABLE_SCHEDULER=0 when running multiple uvicorn workers.
@@ -125,6 +132,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    if generation_worker_task:
+        await stop_generation_worker()
     if scheduler_task:
         scheduler_task.cancel()
         try:

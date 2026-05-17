@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState, startTransition } from "react";
 
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
@@ -18,10 +18,11 @@ import {
 import { useClusterValidation, type ValidatableTopic } from "@/hooks/useClusterValidation";
 import {
   applyBulkScheduleDates,
-  BULK_SCHEDULE_WEEKDAYS,
-  defaultWeekdaysForArticlesPerWeek,
+  BULK_SCHEDULE_WEEKDAYS_SUN_FIRST,
+  defaultPostingDaysFromMin,
   describeBulkScheduleSummary,
   parseDatetimeLocal,
+  preferredTimeFromDatetimeLocal,
   validateBulkScheduleCadence,
   isScheduleWhenAllowed,
   type BulkScheduleMode,
@@ -852,11 +853,13 @@ export default function ProjectPage() {
   const [scheduleMin, setScheduleMin] = useState("");
   const [editJobMin, setEditJobMin] = useState("");
   const [bulkScheduleMin, setBulkScheduleMin] = useState("");
-  const [bulkScheduleRows, setBulkScheduleRows] = useState<Array<{ id: string; title: string; when: string }>>([]);
+  const [bulkScheduleSeedRows, setBulkScheduleSeedRows] = useState<Array<{ id: string; title: string }>>([]);
+  const [bulkScheduleManualWhen, setBulkScheduleManualWhen] = useState<Record<string, string>>({});
   const [bulkScheduleMode, setBulkScheduleMode] = useState<BulkScheduleMode>("manual");
   const [bulkScheduleStartWhen, setBulkScheduleStartWhen] = useState("");
+  const [bulkSchedulePreferredTime, setBulkSchedulePreferredTime] = useState("09:00");
   const [bulkScheduleArticlesPerWeek, setBulkScheduleArticlesPerWeek] = useState(1);
-  const [bulkScheduleWeekdays, setBulkScheduleWeekdays] = useState<WeekdayIso[]>([1, 4]);
+  const [bulkScheduleWeekdays, setBulkScheduleWeekdays] = useState<WeekdayIso[]>([1]);
   const [bulkSchedulePostsPerMonth, setBulkSchedulePostsPerMonth] = useState(1);
   const [bulkScheduleWpStatus, setBulkScheduleWpStatus] = useState<"draft" | "publish">("draft");
   const [bulkSchedulePostType, setBulkSchedulePostType] = useState("posts");
@@ -2733,74 +2736,81 @@ export default function ProjectPage() {
     return toDatetimeLocalFromDateInProfileTz(scheduleMinFromNowMs());
   }, [profileTz]);
 
-  const recomputeBulkScheduleRows = useCallback(
-    (
-      rows: Array<{ id: string; title: string; when: string }>,
-      mode: BulkScheduleMode,
-      minWhen?: string,
-    ) => {
-      if (mode === "manual" || rows.length < 2) return rows;
-      const min = minWhen || bulkScheduleMin;
-      return applyBulkScheduleDates({
-        mode,
-        rows,
-        startWhen: bulkScheduleStartWhen || min,
-        minWhen: min,
-        timeZone: scheduleTimeZone,
-        articlesPerWeek: bulkScheduleArticlesPerWeek,
-        weekdays: bulkScheduleWeekdays,
-        postsPerMonth: bulkSchedulePostsPerMonth,
-      });
-    },
-    [
-      bulkScheduleStartWhen,
-      bulkScheduleMin,
-      bulkScheduleArticlesPerWeek,
-      bulkScheduleWeekdays,
-      bulkSchedulePostsPerMonth,
-      scheduleTimeZone,
-    ],
-  );
-
-  const bulkScheduleCadenceSummary = useMemo(() => {
-    if (bulkScheduleMode === "manual" || bulkScheduleRows.length < 2) return "";
-    return describeBulkScheduleSummary({
+  const bulkScheduleCadenceInputs = useMemo(
+    () => ({
       mode: bulkScheduleMode,
-      count: bulkScheduleRows.length,
+      startWhen: bulkScheduleStartWhen,
+      preferredTime: bulkSchedulePreferredTime,
       articlesPerWeek: bulkScheduleArticlesPerWeek,
       weekdays: bulkScheduleWeekdays,
       postsPerMonth: bulkSchedulePostsPerMonth,
-      whens: bulkScheduleRows.map((r) => r.when),
+      min: bulkScheduleMin,
+    }),
+    [
+      bulkScheduleMode,
+      bulkScheduleStartWhen,
+      bulkSchedulePreferredTime,
+      bulkScheduleArticlesPerWeek,
+      bulkScheduleWeekdays,
+      bulkSchedulePostsPerMonth,
+      bulkScheduleMin,
+    ],
+  );
+  const deferredBulkCadence = useDeferredValue(bulkScheduleCadenceInputs);
+
+  const bulkScheduleRows = useMemo(() => {
+    const min = deferredBulkCadence.min || buildScheduleMinStr();
+    const base = bulkScheduleSeedRows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      when: bulkScheduleManualWhen[r.id] || min,
+    }));
+    if (deferredBulkCadence.mode === "manual" || base.length < 2) return base;
+    return applyBulkScheduleDates({
+      mode: deferredBulkCadence.mode,
+      rows: base,
+      startWhen: deferredBulkCadence.startWhen || min,
+      minWhen: min,
+      timeZone: scheduleTimeZone,
+      articlesPerWeek: deferredBulkCadence.articlesPerWeek,
+      weekdays: deferredBulkCadence.weekdays,
+      postsPerMonth: deferredBulkCadence.postsPerMonth,
+      preferredTime:
+        deferredBulkCadence.mode === "weekly" || deferredBulkCadence.mode === "monthly"
+          ? deferredBulkCadence.preferredTime
+          : undefined,
     });
   }, [
-    bulkScheduleMode,
-    bulkScheduleRows,
-    bulkScheduleArticlesPerWeek,
-    bulkScheduleWeekdays,
-    bulkSchedulePostsPerMonth,
+    bulkScheduleSeedRows,
+    bulkScheduleManualWhen,
+    deferredBulkCadence,
+    scheduleTimeZone,
+    buildScheduleMinStr,
   ]);
+
+  const bulkScheduleWhenDisplay = useMemo(() => {
+    const out: Record<string, { date: string; time: string; tz: string }> = {};
+    for (const r of bulkScheduleRows) {
+      out[r.id] = formatBulkScheduleWhenDisplay(r.when);
+    }
+    return out;
+  }, [bulkScheduleRows, profileTz]);
+
+  const bulkScheduleCadenceSummary = useMemo(() => {
+    if (deferredBulkCadence.mode === "manual" || bulkScheduleRows.length < 2) return "";
+    return describeBulkScheduleSummary({
+      mode: deferredBulkCadence.mode,
+      count: bulkScheduleRows.length,
+      articlesPerWeek: deferredBulkCadence.articlesPerWeek,
+      weekdays: deferredBulkCadence.weekdays,
+      postsPerMonth: deferredBulkCadence.postsPerMonth,
+      whens: bulkScheduleRows.map((r) => r.when),
+    });
+  }, [deferredBulkCadence, bulkScheduleRows]);
 
   function setBulkScheduleModeAndApply(mode: BulkScheduleMode) {
-    setBulkScheduleMode(mode);
-    if (mode !== "manual" && bulkScheduleRows.length >= 2) {
-      setBulkScheduleRows((prev) => recomputeBulkScheduleRows(prev, mode));
-    }
+    startTransition(() => setBulkScheduleMode(mode));
   }
-
-  useEffect(() => {
-    if (bulkMode !== "schedule" || bulkScheduleMode === "manual" || bulkScheduleRows.length < 2) return;
-    setBulkScheduleRows((prev) => recomputeBulkScheduleRows(prev, bulkScheduleMode));
-  }, [
-    bulkMode,
-    bulkScheduleMode,
-    bulkScheduleRows.length,
-    bulkScheduleStartWhen,
-    bulkScheduleArticlesPerWeek,
-    bulkScheduleWeekdays,
-    bulkSchedulePostsPerMonth,
-    bulkScheduleMin,
-    recomputeBulkScheduleRows,
-  ]);
 
   useEffect(() => {
     if (bulkMode !== "schedule") return;
@@ -2820,21 +2830,22 @@ export default function ProjectPage() {
     const minStr = buildScheduleMinStr();
     setBulkScheduleMin(minStr);
     setBulkScheduleStartWhen(minStr);
+    setBulkSchedulePreferredTime(preferredTimeFromDatetimeLocal(minStr));
     setBulkScheduleMode("manual");
     setBulkScheduleArticlesPerWeek(1);
-    setBulkScheduleWeekdays(defaultWeekdaysForArticlesPerWeek(1, minStr));
+    setBulkScheduleWeekdays(defaultPostingDaysFromMin(minStr));
     setBulkSchedulePostsPerMonth(1);
     setBulkScheduleWpStatus(wpDefaults?.wp_status || "draft");
     setBulkSchedulePostType(wpDefaults?.post_type || "posts");
     setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
     setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
-    setBulkScheduleRows(
-      selectedIds.map((id) => ({
-        id,
-        title: articleTitleFor(id),
-        when: minStr,
-      })),
-    );
+    const whenInit: Record<string, string> = {};
+    const seeds = selectedIds.map((id) => {
+      whenInit[id] = minStr;
+      return { id, title: articleTitleFor(id) };
+    });
+    setBulkScheduleSeedRows(seeds);
+    setBulkScheduleManualWhen(whenInit);
     setBulkMode("schedule");
   }
 
@@ -2844,6 +2855,7 @@ export default function ProjectPage() {
     setError(null);
     const cadenceErr = validateBulkScheduleCadence({
       mode: bulkScheduleMode,
+      articleCount: bulkScheduleRows.length,
       articlesPerWeek: bulkScheduleArticlesPerWeek,
       weekdays: bulkScheduleWeekdays,
       postsPerMonth: bulkSchedulePostsPerMonth,
@@ -2854,14 +2866,10 @@ export default function ProjectPage() {
     }
     const minStr = buildScheduleMinStr();
     setBulkScheduleMin(minStr);
-    let rowsToSubmit = bulkScheduleRows;
-    if (bulkScheduleMode !== "manual" && bulkScheduleRows.length >= 2) {
-      rowsToSubmit = recomputeBulkScheduleRows(bulkScheduleRows, bulkScheduleMode, minStr);
-      setBulkScheduleRows(rowsToSubmit);
-    }
+    const rowsToSubmit = bulkScheduleRows;
     setBulkScheduling(true);
     try {
-      for (const r of rowsToSubmit) {
+      const items = rowsToSubmit.map((r) => {
         const when = (r.when || "").trim();
         if (!when) throw new Error("Please set date/time for all selected articles");
         if (!isScheduleWhenAllowed(when, minStr, scheduleTimeZone)) {
@@ -2869,14 +2877,25 @@ export default function ProjectPage() {
             `Each scheduled time must be at least ${SCHEDULE_BUFFER_MINUTES} minutes from now (articles need ~${SCHEDULE_PREP_MINUTES} minutes to prepare)`,
           );
         }
-        await api.scheduleArticle(projectId, r.id, {
-          wp_scheduled_at: when,
-          wp_status: bulkScheduleWpStatus,
-          post_type: bulkSchedulePostType,
-          writing_prompt_id: scheduleWritingPromptId || null,
-          image_prompt_id: scheduleImagePromptId || null,
-          generate_image: true,
-        });
+        return { article_id: r.id, wp_scheduled_at: when };
+      });
+
+      const schedulePayload = {
+        items,
+        wp_status: bulkScheduleWpStatus,
+        post_type: bulkSchedulePostType,
+        writing_prompt_id: scheduleWritingPromptId || null,
+        image_prompt_id: scheduleImagePromptId || null,
+        generate_image: true,
+      };
+
+      const res = await api.bulkScheduleArticles(projectId, schedulePayload);
+      if (res.failed?.length) {
+        const first = res.failed[0];
+        throw new Error(first?.error || `Failed to schedule ${res.failed.length} article(s)`);
+      }
+      if ((res.scheduled || 0) < items.length) {
+        throw new Error("Some articles could not be scheduled");
       }
 
       await refreshArticlesList();
@@ -2889,7 +2908,8 @@ export default function ProjectPage() {
       void refreshFeatureLimits();
       setShowBulkPopup(false);
       setBulkMode("root");
-      setBulkScheduleRows([]);
+      setBulkScheduleSeedRows([]);
+      setBulkScheduleManualWhen({});
     } catch (e) {
       if (showWebsiteConnectionErrorIfNeeded(e)) return;
       setError(e instanceof Error ? e.message : "Bulk schedule failed");
@@ -4006,6 +4026,125 @@ export default function ProjectPage() {
         />
       </svg>
     ),
+    Edit: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path
+          d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    Status: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.75" />
+        <path d="M8 12h8" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      </svg>
+    ),
+    Calendar: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="1.75" />
+        <path d="M16 2v4M8 2v4M3 10h18" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      </svg>
+    ),
+    Trash: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path
+          d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    ChevronRight: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
+    Document: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path
+          d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M9 13h6M9 17h4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    Layers: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path
+          d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    Globe: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.75" />
+        <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" fill="none" stroke="currentColor" strokeWidth="1.75" />
+      </svg>
+    ),
+    Pen: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path
+          d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    Image: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="1.75" />
+        <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" />
+        <path d="M21 15l-5-5L5 21" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
+    Clock: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.75" />
+        <path d="M12 7v5l3 2" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      </svg>
+    ),
+    List: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      </svg>
+    ),
+    Repeat: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path
+          d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+    CalendarMonth: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <rect x="3" y="4" width="18" height="18" rx="2" fill="none" stroke="currentColor" strokeWidth="1.75" />
+        <path d="M16 2v4M8 2v4M3 10h18M7 14h2M11 14h2M15 14h2" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+      </svg>
+    ),
   };
 
   const scheduledVisible = useMemo(() => {
@@ -4529,7 +4668,7 @@ export default function ProjectPage() {
               <>
                 <div className={styles.bulkBackdrop} onClick={() => setShowBulkPopup(false)} />
                 <div
-                  className={`${styles.bulkPopup} ${bulkMode === "schedule" ? styles.bulkPopupScheduleLayout : ""}`}
+                  className={`${styles.bulkPopup} ${bulkMode === "schedule" ? styles.bulkPopupScheduleLayout : ""} ${bulkMode === "root" || bulkMode === "change_status" ? styles.bulkPopupCompact : ""}`}
                   role="dialog"
                   aria-modal="true"
                   aria-label="Bulk actions"
@@ -4544,9 +4683,25 @@ export default function ProjectPage() {
                             : "Bulk actions"}
                       </strong>
                       {bulkMode === "schedule" ? (
-                        <span className={styles.bulkScheduleMetaLine}>
-                          {bulkScheduleRows.length} article{bulkScheduleRows.length === 1 ? "" : "s"}
-                          {profileTz ? <> · {profileTz}</> : null}
+                        <div className={styles.bulkScheduleMetaChips}>
+                          <span className={styles.bulkScheduleMetaChip}>
+                            <Icon.Document className={styles.icon16} />
+                            {bulkScheduleRows.length} article{bulkScheduleRows.length === 1 ? "" : "s"}
+                          </span>
+                          {profileTz ? (
+                            <span className={styles.bulkScheduleMetaChip}>
+                              <Icon.Clock className={styles.icon16} />
+                              {profileTz}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : bulkMode === "root" ? (
+                        <span className={styles.bulkPopupSubtitle}>
+                          {selectedIds.length} article{selectedIds.length === 1 ? "" : "s"} selected
+                        </span>
+                      ) : bulkMode === "change_status" ? (
+                        <span className={styles.bulkPopupSubtitle}>
+                          Apply to {selectedIds.length} article{selectedIds.length === 1 ? "" : "s"}
                         </span>
                       ) : null}
                     </div>
@@ -4555,113 +4710,225 @@ export default function ProjectPage() {
                     </button>
                   </div>
                   {bulkMode === "root" ? (
-                    <div className={styles.bulkPopupActions} style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+                    <div className={styles.bulkActionList} role="menu">
                       <button
-                        className={styles.button}
+                        className={styles.bulkActionItem}
                         type="button"
+                        role="menuitem"
                         onClick={bulkEdit}
                         disabled={selectedIds.length !== 1}
                         title={selectedIds.length !== 1 ? "Select exactly 1 article to edit" : "Edit selected article"}
                       >
-                        Edit article
+                        <span className={styles.bulkActionIcon} aria-hidden="true">
+                          <Icon.Edit className={styles.icon20} />
+                        </span>
+                        <span className={styles.bulkActionText}>
+                          <span className={styles.bulkActionLabel}>Edit article</span>
+                          <span className={styles.bulkActionHint}>Opens the editor for one article</span>
+                        </span>
                       </button>
-                      <button className={styles.button} type="button" onClick={() => setBulkMode("change_status")}>
-                        Change status
+                      <button
+                        className={styles.bulkActionItem}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => setBulkMode("change_status")}
+                      >
+                        <span className={styles.bulkActionIcon} aria-hidden="true">
+                          <Icon.Status className={styles.icon20} />
+                        </span>
+                        <span className={styles.bulkActionText}>
+                          <span className={styles.bulkActionLabel}>Change status</span>
+                          <span className={styles.bulkActionHint}>Pending, draft, or published</span>
+                        </span>
+                        <Icon.ChevronRight className={styles.bulkActionChevron} />
                       </button>
-                      <button className={styles.button} type="button" onClick={bulkSchedule}>
-                        Schedule articles
+                      <button className={styles.bulkActionItem} type="button" role="menuitem" onClick={bulkSchedule}>
+                        <span className={styles.bulkActionIcon} aria-hidden="true">
+                          <Icon.Calendar className={styles.icon20} />
+                        </span>
+                        <span className={styles.bulkActionText}>
+                          <span className={styles.bulkActionLabel}>Schedule articles</span>
+                          <span className={styles.bulkActionHint}>Set WordPress publish times</span>
+                        </span>
+                        <Icon.ChevronRight className={styles.bulkActionChevron} />
                       </button>
-                      <button className={styles.button} type="button" onClick={bulkDelete}>
-                        Delete articles
+                      <button
+                        className={`${styles.bulkActionItem} ${styles.bulkActionItemDanger}`}
+                        type="button"
+                        role="menuitem"
+                        onClick={bulkDelete}
+                      >
+                        <span className={`${styles.bulkActionIcon} ${styles.bulkActionIconDanger}`} aria-hidden="true">
+                          <Icon.Trash className={styles.icon20} />
+                        </span>
+                        <span className={styles.bulkActionText}>
+                          <span className={styles.bulkActionLabel}>Delete articles</span>
+                          <span className={styles.bulkActionHint}>Removes selected articles permanently</span>
+                        </span>
                       </button>
                     </div>
                   ) : bulkMode === "change_status" ? (
                     <>
-                      <div className={styles.row} style={{ paddingTop: 12, justifyContent: "space-between", alignItems: "center" }}>
-                        <div className={styles.muted} style={{ fontWeight: 700 }}>
-                          Pick a status
-                        </div>
-                        <button type="button" className={styles.btnSecondary} onClick={() => setBulkMode("root")}>
-                          Back
+                      <button type="button" className={styles.bulkActionBack} onClick={() => setBulkMode("root")}>
+                        <Icon.Back className={styles.icon20} />
+                        Back to actions
+                      </button>
+                      <div className={styles.bulkActionList} role="menu">
+                        <button
+                          className={styles.bulkActionItem}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => bulkChangeStatus("pending")}
+                        >
+                          <span className={`${styles.bulkActionStatusDot} ${styles.bulkActionStatusDotPending}`} aria-hidden="true" />
+                          <span className={styles.bulkActionText}>
+                            <span className={styles.bulkActionLabel}>Pending</span>
+                          </span>
                         </button>
-                      </div>
-                      <div className={styles.bulkPopupActions} style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
-                        <button className={styles.button} type="button" onClick={() => bulkChangeStatus("pending")}>
-                          Pending
+                        <button
+                          className={styles.bulkActionItem}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => bulkChangeStatus("draft")}
+                        >
+                          <span className={`${styles.bulkActionStatusDot} ${styles.bulkActionStatusDotDraft}`} aria-hidden="true" />
+                          <span className={styles.bulkActionText}>
+                            <span className={styles.bulkActionLabel}>Draft</span>
+                          </span>
                         </button>
-                        <button className={styles.button} type="button" onClick={() => bulkChangeStatus("draft")}>
-                          Draft
-                        </button>
-                        <button className={styles.button} type="button" onClick={() => bulkChangeStatus("published")}>
-                          Published
+                        <button
+                          className={styles.bulkActionItem}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => bulkChangeStatus("published")}
+                        >
+                          <span className={`${styles.bulkActionStatusDot} ${styles.bulkActionStatusDotPublished}`} aria-hidden="true" />
+                          <span className={styles.bulkActionText}>
+                            <span className={styles.bulkActionLabel}>Published</span>
+                          </span>
                         </button>
                       </div>
                     </>
                   ) : (
                     <>
-                      <div className={styles.bulkScheduleSettingsWrap}>
-                        <p className={styles.bulkScheduleSettingsHint}>Defaults for all articles</p>
-                        <div className={styles.bulkScheduleGrid}>
-                          <label className={styles.label}>
-                            WordPress post type
-                            <select className={styles.input} value={bulkSchedulePostType} onChange={(e) => setBulkSchedulePostType(e.target.value)} disabled={bulkScheduling}>
-                              <option value="posts">Posts</option>
-                              <option value="pages">Pages</option>
-                              {wpTypesForSchedule
-                                .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
-                                .map((t) => (
-                                  <option key={t.rest_base} value={t.rest_base}>
-                                    {t.name || t.rest_base}
-                                  </option>
-                                ))}
-                            </select>
-                          </label>
-                          <label className={styles.label}>
-                            WordPress status
-                            <select className={styles.input} value={bulkScheduleWpStatus} onChange={(e) => setBulkScheduleWpStatus(e.target.value as "draft" | "publish")} disabled={bulkScheduling}>
-                              <option value="draft">Draft</option>
-                              <option value="publish">Publish</option>
-                            </select>
-                          </label>
-                        </div>
-
-                        <div className={styles.bulkScheduleGrid}>
-                          <label className={styles.label}>
-                            Writing prompt
-                            <select className={styles.input} value={scheduleWritingPromptId} onChange={(e) => setScheduleWritingPromptId(e.target.value)} disabled={bulkScheduling}>
-                              <option value="">Use project default</option>
-                              {(scheduleWritingPrompts?.items || []).map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name || p.id}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className={styles.label}>
-                            Image prompt
-                            <select className={styles.input} value={scheduleImagePromptId} onChange={(e) => setScheduleImagePromptId(e.target.value)} disabled={bulkScheduling}>
-                              <option value="">Use project default</option>
-                              {(scheduleImagePrompts?.items || []).map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.name || p.id}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                      </div>
+                      <div className={styles.bulkScheduleBody}>
+                        <section
+                          className={`${styles.bulkScheduleSection} ${styles.bulkScheduleSectionCompact}`}
+                          aria-labelledby="bulk-schedule-defaults-heading"
+                        >
+                          <div className={styles.bulkScheduleSectionHead} id="bulk-schedule-defaults-heading">
+                            <span className={styles.bulkScheduleSectionIconWrap} aria-hidden="true">
+                              <Icon.Globe className={styles.icon18} />
+                            </span>
+                            <span className={styles.bulkScheduleSectionTitle}>Publishing defaults</span>
+                          </div>
+                          <div className={`${styles.bulkScheduleFieldList} ${styles.bulkScheduleFieldListGrid}`}>
+                            <div className={styles.bulkScheduleFieldRow}>
+                              <span className={styles.bulkScheduleFieldIcon} aria-hidden="true">
+                                <Icon.Layers className={styles.icon18} />
+                              </span>
+                              <label className={styles.bulkScheduleFieldControl}>
+                                <span className={styles.bulkScheduleFieldLabel}>WordPress post type</span>
+                                <select
+                                  className={styles.bulkScheduleInput}
+                                  value={bulkSchedulePostType}
+                                  onChange={(e) => setBulkSchedulePostType(e.target.value)}
+                                  disabled={bulkScheduling}
+                                >
+                                  <option value="posts">Posts</option>
+                                  <option value="pages">Pages</option>
+                                  {wpTypesForSchedule
+                                    .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
+                                    .map((t) => (
+                                      <option key={t.rest_base} value={t.rest_base}>
+                                        {t.name || t.rest_base}
+                                      </option>
+                                    ))}
+                                </select>
+                              </label>
+                            </div>
+                            <div className={styles.bulkScheduleFieldRow}>
+                              <span className={styles.bulkScheduleFieldIcon} aria-hidden="true">
+                                <Icon.Status className={styles.icon18} />
+                              </span>
+                              <label className={styles.bulkScheduleFieldControl}>
+                                <span className={styles.bulkScheduleFieldLabel}>WordPress status</span>
+                                <select
+                                  className={styles.bulkScheduleInput}
+                                  value={bulkScheduleWpStatus}
+                                  onChange={(e) => setBulkScheduleWpStatus(e.target.value as "draft" | "publish")}
+                                  disabled={bulkScheduling}
+                                >
+                                  <option value="draft">Draft</option>
+                                  <option value="publish">Publish</option>
+                                </select>
+                              </label>
+                            </div>
+                            <div className={styles.bulkScheduleFieldRow}>
+                              <span className={styles.bulkScheduleFieldIcon} aria-hidden="true">
+                                <Icon.Pen className={styles.icon18} />
+                              </span>
+                              <label className={styles.bulkScheduleFieldControl}>
+                                <span className={styles.bulkScheduleFieldLabel}>Writing prompt</span>
+                                <select
+                                  className={styles.bulkScheduleInput}
+                                  value={scheduleWritingPromptId}
+                                  onChange={(e) => setScheduleWritingPromptId(e.target.value)}
+                                  disabled={bulkScheduling}
+                                >
+                                  <option value="">Use project default</option>
+                                  {(scheduleWritingPrompts?.items || []).map((p) => (
+                                    <option key={p.id} value={p.id}>
+                                      {p.name || p.id}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            </div>
+                            <div className={styles.bulkScheduleFieldRow}>
+                              <span className={styles.bulkScheduleFieldIcon} aria-hidden="true">
+                                <Icon.Image className={styles.icon18} />
+                              </span>
+                              <label className={styles.bulkScheduleFieldControl}>
+                                <span className={styles.bulkScheduleFieldLabel}>Image prompt</span>
+                                <select
+                                  className={styles.bulkScheduleInput}
+                                  value={scheduleImagePromptId}
+                                  onChange={(e) => setScheduleImagePromptId(e.target.value)}
+                                  disabled={bulkScheduling}
+                                >
+                                  <option value="">Use project default</option>
+                                  {(scheduleImagePrompts?.items || []).map((p) => (
+                                    <option key={p.id} value={p.id}>
+                                      {p.name || p.id}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            </div>
+                          </div>
+                        </section>
 
                       {bulkScheduleRows.length >= 2 ? (
-                        <div className={styles.bulkScheduleModeSection}>
-                          <p className={styles.bulkScheduleSettingsHint}>Schedule mode</p>
-                          <div className={styles.bulkScheduleModeTabs} role="tablist" aria-label="Schedule mode">
+                        <section
+                          className={`${styles.bulkScheduleSection} ${styles.bulkScheduleSectionCompact} ${styles.bulkScheduleModeSection}`}
+                          aria-labelledby="bulk-schedule-mode-heading"
+                        >
+                          <div className={styles.bulkScheduleModeHeaderRow}>
+                            <div className={styles.bulkScheduleSectionHead} id="bulk-schedule-mode-heading">
+                              <span className={styles.bulkScheduleSectionIconWrap} aria-hidden="true">
+                                <Icon.Calendar className={styles.icon18} />
+                              </span>
+                              <span className={styles.bulkScheduleSectionTitle}>Schedule mode</span>
+                            </div>
+                            <div className={styles.bulkScheduleModeTabs} role="tablist" aria-label="Schedule mode">
                             {(
                               [
-                                ["manual", "Manual"],
-                                ["weekly", "Weekly"],
-                                ["monthly", "Monthly"],
+                                ["manual", "Manual", Icon.List] as const,
+                                ["weekly", "Weekly", Icon.Repeat] as const,
+                                ["monthly", "Monthly", Icon.CalendarMonth] as const,
                               ] as const
-                            ).map(([mode, label]) => (
+                            ).map(([mode, label, ModeIcon]) => (
                               <button
                                 key={mode}
                                 type="button"
@@ -4671,56 +4938,19 @@ export default function ProjectPage() {
                                 disabled={bulkScheduling}
                                 onClick={() => setBulkScheduleModeAndApply(mode)}
                               >
-                                {label}
+                                <ModeIcon className={styles.bulkScheduleModeTabIcon} />
+                                <span>{label}</span>
                               </button>
                             ))}
+                            </div>
                           </div>
 
                           {bulkScheduleMode === "weekly" ? (
                             <div className={styles.bulkScheduleCadencePanel}>
-                              <div className={styles.bulkScheduleCadenceGrid}>
-                                <label className={styles.label}>
-                                  Start date & time
-                                  <input
-                                    className={styles.input}
-                                    type="datetime-local"
-                                    value={bulkScheduleStartWhen}
-                                    min={bulkScheduleMin || undefined}
-                                    step={60}
-                                    disabled={bulkScheduling}
-                                    onChange={(e) => setBulkScheduleStartWhen(e.target.value)}
-                                  />
-                                </label>
-                                <label className={styles.label}>
-                                  Articles per week
-                                  <input
-                                    className={styles.input}
-                                    type="number"
-                                    min={1}
-                                    max={7}
-                                    value={bulkScheduleArticlesPerWeek}
-                                    disabled={bulkScheduling}
-                                    onChange={(e) => {
-                                      const n = Math.max(1, Math.min(7, Number(e.target.value) || 1));
-                                      const wdLen = bulkScheduleWeekdays.length;
-                                      let capped = wdLen ? Math.min(n, wdLen) : n;
-                                      if (wdLen < capped) {
-                                        setBulkScheduleWeekdays(
-                                          defaultWeekdaysForArticlesPerWeek(
-                                            capped,
-                                            bulkScheduleStartWhen || bulkScheduleMin,
-                                          ),
-                                        );
-                                      }
-                                      setBulkScheduleArticlesPerWeek(capped);
-                                    }}
-                                  />
-                                </label>
-                              </div>
                               <div>
-                                <span className={styles.bulkScheduleCadenceLabel}>Publish days</span>
+                                <span className={styles.bulkScheduleCadenceLabel}>Posting days</span>
                                 <div className={styles.bulkScheduleWeekdayRow}>
-                                  {BULK_SCHEDULE_WEEKDAYS.map(({ iso, label }) => {
+                                  {BULK_SCHEDULE_WEEKDAYS_SUN_FIRST.map(({ iso, label }) => {
                                     const on = bulkScheduleWeekdays.includes(iso);
                                     return (
                                       <label key={iso} className={styles.bulkScheduleWeekdayChip}>
@@ -4729,15 +4959,13 @@ export default function ProjectPage() {
                                           checked={on}
                                           disabled={bulkScheduling}
                                           onChange={() => {
-                                            setBulkScheduleWeekdays((prev) => {
-                                              const next = on
-                                                ? prev.filter((d) => d !== iso)
-                                                : [...prev, iso].sort((a, b) => a - b);
-                                              const days = next.length ? next : [iso];
-                                              setBulkScheduleArticlesPerWeek((apw) =>
-                                                Math.min(apw, Math.max(days.length, 1)),
-                                              );
-                                              return days;
+                                            startTransition(() => {
+                                              setBulkScheduleWeekdays((prev) => {
+                                                const next = on
+                                                  ? prev.filter((d) => d !== iso)
+                                                  : [...prev, iso].sort((a, b) => a - b);
+                                                return next.length ? next : [iso];
+                                              });
                                             });
                                           }}
                                         />
@@ -4747,36 +4975,106 @@ export default function ProjectPage() {
                                   })}
                                 </div>
                               </div>
+                              <div className={styles.bulkScheduleCadenceFieldsRow}>
+                                <label className={styles.label}>
+                                  Articles per week
+                                  <input
+                                    className={styles.input}
+                                    type="number"
+                                    min={1}
+                                    max={Math.max(1, bulkScheduleSeedRows.length)}
+                                    value={bulkScheduleArticlesPerWeek}
+                                    disabled={bulkScheduling}
+                                    onChange={(e) => {
+                                      const maxApw = Math.max(1, bulkScheduleSeedRows.length);
+                                      const n = Math.max(
+                                        1,
+                                        Math.min(maxApw, Number(e.target.value) || 1),
+                                      );
+                                      startTransition(() => setBulkScheduleArticlesPerWeek(n));
+                                    }}
+                                  />
+                                </label>
+                                <label className={styles.label}>
+                                  Preferred time
+                                  <input
+                                    className={styles.input}
+                                    type="time"
+                                    value={bulkSchedulePreferredTime}
+                                    step={60}
+                                    disabled={bulkScheduling}
+                                    onChange={(e) =>
+                                      startTransition(() =>
+                                        setBulkSchedulePreferredTime(e.target.value),
+                                      )
+                                    }
+                                  />
+                                </label>
+                              </div>
                             </div>
                           ) : null}
 
                           {bulkScheduleMode === "monthly" ? (
                             <div className={styles.bulkScheduleCadencePanel}>
-                              <div className={styles.bulkScheduleCadenceGrid}>
+                              <div>
+                                <span className={styles.bulkScheduleCadenceLabel}>Posting days</span>
+                                <div className={styles.bulkScheduleWeekdayRow}>
+                                  {BULK_SCHEDULE_WEEKDAYS_SUN_FIRST.map(({ iso, label }) => {
+                                    const on = bulkScheduleWeekdays.includes(iso);
+                                    return (
+                                      <label key={iso} className={styles.bulkScheduleWeekdayChip}>
+                                        <input
+                                          type="checkbox"
+                                          checked={on}
+                                          disabled={bulkScheduling}
+                                          onChange={() => {
+                                            startTransition(() => {
+                                              setBulkScheduleWeekdays((prev) => {
+                                                const next = on
+                                                  ? prev.filter((d) => d !== iso)
+                                                  : [...prev, iso].sort((a, b) => a - b);
+                                                return next.length ? next : [iso];
+                                              });
+                                            });
+                                          }}
+                                        />
+                                        {label}
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              <div className={styles.bulkScheduleCadenceFieldsRow}>
                                 <label className={styles.label}>
-                                  Start date & time
-                                  <input
-                                    className={styles.input}
-                                    type="datetime-local"
-                                    value={bulkScheduleStartWhen}
-                                    min={bulkScheduleMin || undefined}
-                                    step={60}
-                                    disabled={bulkScheduling}
-                                    onChange={(e) => setBulkScheduleStartWhen(e.target.value)}
-                                  />
-                                </label>
-                                <label className={styles.label}>
-                                  Posts per month
+                                  Total monthly articles
                                   <input
                                     className={styles.input}
                                     type="number"
                                     min={1}
-                                    max={12}
+                                    max={Math.max(1, bulkScheduleSeedRows.length)}
                                     value={bulkSchedulePostsPerMonth}
                                     disabled={bulkScheduling}
+                                    onChange={(e) => {
+                                      const maxApm = Math.max(1, bulkScheduleSeedRows.length);
+                                      const n = Math.max(
+                                        1,
+                                        Math.min(maxApm, Number(e.target.value) || 1),
+                                      );
+                                      startTransition(() => setBulkSchedulePostsPerMonth(n));
+                                    }}
+                                  />
+                                </label>
+                                <label className={styles.label}>
+                                  Preferred time
+                                  <input
+                                    className={styles.input}
+                                    type="time"
+                                    value={bulkSchedulePreferredTime}
+                                    step={60}
+                                    disabled={bulkScheduling}
                                     onChange={(e) =>
-                                      setBulkSchedulePostsPerMonth(
-                                        Math.max(1, Math.min(12, Number(e.target.value) || 1)),
+                                      startTransition(() =>
+                                        setBulkSchedulePreferredTime(e.target.value),
                                       )
                                     }
                                   />
@@ -4786,23 +5084,44 @@ export default function ProjectPage() {
                           ) : null}
 
                           {bulkScheduleCadenceSummary ? (
-                            <p className={styles.bulkScheduleCadenceSummary}>{bulkScheduleCadenceSummary}</p>
+                            <p className={styles.bulkScheduleCadenceSummary}>
+                              <Icon.Clock className={styles.icon16} />
+                              {bulkScheduleCadenceSummary}
+                            </p>
                           ) : null}
-                        </div>
+                        </section>
                       ) : null}
 
-                      <div className={styles.bulkScheduleArticleList}>
+                      <section
+                        className={`${styles.bulkScheduleSection} ${styles.bulkScheduleTimelineSection}`}
+                        aria-labelledby="bulk-schedule-timeline-heading"
+                      >
+                        <div className={styles.bulkScheduleSectionHead} id="bulk-schedule-timeline-heading">
+                          <span className={styles.bulkScheduleSectionIconWrap} aria-hidden="true">
+                            <Icon.Document className={styles.icon18} />
+                          </span>
+                          <span className={styles.bulkScheduleSectionTitle}>Publish timeline</span>
+                        </div>
+                        <div className={styles.bulkScheduleArticleList}>
                         {bulkScheduleRows.map((r, idx) => {
-                          const whenDisplay = formatBulkScheduleWhenDisplay(r.when);
+                          const whenDisplay = bulkScheduleWhenDisplay[r.id] || formatBulkScheduleWhenDisplay(r.when);
                           const readOnly = bulkScheduleRows.length >= 2 && bulkScheduleMode !== "manual";
                           return (
-                            <div key={r.id} className={styles.bulkScheduleRow}>
-                              <p className={styles.bulkScheduleArticleTitle} title={`${idx + 1}. ${r.title}`}>
-                                {idx + 1}. {r.title}
-                              </p>
+                            <div key={r.id} className={styles.bulkScheduleArticleCard}>
+                              <div className={styles.bulkScheduleArticleCardMain}>
+                                <span className={styles.bulkScheduleArticleIndex} aria-hidden="true">
+                                  {idx + 1}
+                                </span>
+                                <p className={styles.bulkScheduleArticleTitle} title={r.title}>
+                                  {r.title}
+                                </p>
+                              </div>
                               {readOnly ? (
                                 <div className={styles.bulkScheduleWhenReadonly}>
-                                  <span className={styles.bulkScheduleDateLabel}>Publish at</span>
+                                  <span className={styles.bulkScheduleWhenReadonlyLabel}>
+                                    <Icon.Clock className={styles.icon16} />
+                                    Publish at
+                                  </span>
                                   <span className={styles.bulkScheduleWhenReadonlyValue}>
                                     {whenDisplay.date}
                                     {whenDisplay.time ? (
@@ -4815,10 +5134,13 @@ export default function ProjectPage() {
                                   </span>
                                 </div>
                               ) : (
-                                <label className={`${styles.label} ${styles.bulkScheduleDateLabel}`}>
-                                  Date & time
+                                <label className={styles.bulkScheduleDatetimeWrap}>
+                                  <span className={styles.bulkScheduleDatetimeLabel}>
+                                    <Icon.Clock className={styles.icon16} />
+                                    Date & time
+                                  </span>
                                   <input
-                                    className={styles.input}
+                                    className={styles.bulkScheduleInput}
                                     type="datetime-local"
                                     value={r.when}
                                     min={bulkScheduleMin || undefined}
@@ -4826,9 +5148,7 @@ export default function ProjectPage() {
                                     disabled={bulkScheduling}
                                     onChange={(e) => {
                                       const v = e.target.value;
-                                      setBulkScheduleRows((prev) =>
-                                        prev.map((x) => (x.id === r.id ? { ...x, when: v } : x)),
-                                      );
+                                      setBulkScheduleManualWhen((prev) => ({ ...prev, [r.id]: v }));
                                     }}
                                   />
                                 </label>
@@ -4836,16 +5156,31 @@ export default function ProjectPage() {
                             </div>
                           );
                         })}
+                        </div>
+                      </section>
                       </div>
 
                       {error ? <p className={styles.error} style={{ marginTop: 12, marginBottom: 0 }}>{error}</p> : null}
 
                       <div className={styles.bulkScheduleFooter}>
-                        <button type="button" className={styles.btnSecondary} onClick={() => setBulkMode("root")} disabled={bulkScheduling}>
+                        <button
+                          type="button"
+                          className={styles.bulkScheduleFooterCancel}
+                          onClick={() => setBulkMode("root")}
+                          disabled={bulkScheduling}
+                        >
                           Cancel
                         </button>
-                        <button type="button" className={styles.button} onClick={bulkScheduleSubmit} disabled={bulkScheduling || !bulkScheduleRows.length}>
-                          {bulkScheduling ? "Scheduling…" : "Schedule"}
+                        <button
+                          type="button"
+                          className={styles.bulkScheduleFooterPrimary}
+                          onClick={bulkScheduleSubmit}
+                          disabled={bulkScheduling || !bulkScheduleRows.length}
+                        >
+                          <Icon.Calendar className={styles.icon18} />
+                          {bulkScheduling
+                            ? `Scheduling ${bulkScheduleRows.length}…`
+                            : `Schedule ${bulkScheduleRows.length} article${bulkScheduleRows.length === 1 ? "" : "s"}`}
                         </button>
                       </div>
                     </>

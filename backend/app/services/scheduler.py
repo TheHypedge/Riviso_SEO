@@ -16,6 +16,7 @@ from app.services.prompt_validation import assert_image_prompt_allowed, assert_w
 from app.services.gsc_actions import maybe_request_url_inspection
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.to_thread import run_sync
+from app.core.config import settings
 
 
 log = logging.getLogger(__name__)
@@ -239,15 +240,18 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
 
 def start_scheduled_job_preparation_task(*, st, jid: str, proj: dict, art: dict, job: dict) -> None:
     """
-    Fire-and-forget background generation for a scheduled job (content + image).
+    Queue background generation for a scheduled job (content + image).
     Used after schedule, reschedule, and manual retry of failed preparation.
     """
     job_id = (jid or "").strip()
-    if not job_id:
+    pid = (proj.get("id") or job.get("project_id") or "").strip()
+    aid = (art.get("id") or job.get("article_id") or "").strip()
+    if not job_id or not pid or not aid:
         return
 
+    patch = getattr(st, "patch_scheduled_job_fields", None) or st.update_scheduled_job_fields
     try:
-        st.update_scheduled_job_fields(
+        patch(
             job_id,
             {
                 "state": "content_generating",
@@ -258,11 +262,20 @@ def start_scheduled_job_preparation_task(*, st, jid: str, proj: dict, art: dict,
     except Exception:
         pass
 
+    if settings.generation_queue_enabled:
+        from app.services.generation_worker import enqueue_scheduled_prep
+
+        enqueue_scheduled_prep(job_id=job_id, project_id=pid, article_id=aid)
+        return
+
     async def _prep() -> None:
+        from app.services.generation_queue import generation_slot
+
         try:
-            await prepare_article_for_scheduled_job(st=st, jid=job_id, proj=proj, art=art, job=job)
+            async with generation_slot():
+                await prepare_article_for_scheduled_job(st=st, jid=job_id, proj=proj, art=art, job=job)
             await run_sync(
-                st.update_scheduled_job_fields,
+                patch,
                 job_id,
                 {
                     "state": "ready_to_post",
@@ -273,7 +286,7 @@ def start_scheduled_job_preparation_task(*, st, jid: str, proj: dict, art: dict,
         except Exception as e:
             err = scheduler_error_message(e)
             await run_sync(
-                st.update_scheduled_job_fields,
+                patch,
                 job_id,
                 {
                     "state": "failed",
@@ -377,11 +390,35 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
         try:
             st = get_legacy_storage_module()
             try:
-                jobs = (
-                    await run_sync(st.load_scheduled_jobs, project_id=None)
-                    if hasattr(st, "load_scheduled_jobs")
-                    else []
-                )
+                now = datetime.now(timezone.utc)
+                now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+                if hasattr(st, "load_due_scheduled_jobs"):
+                    jobs = await run_sync(
+                        st.load_due_scheduled_jobs,
+                        due_before_utc_str=now_str,
+                        states=["scheduled", "ready_to_post", "failed"],
+                        limit=int(settings.scheduler_due_jobs_limit or 200),
+                    )
+                    # Heal pass: include recent failed rows even if not yet due.
+                    try:
+                        failed_rows = await run_sync(
+                            st.load_scheduled_jobs,
+                            state="failed",
+                            limit=50,
+                        )
+                    except TypeError:
+                        failed_rows = []
+                    seen = {(j.get("id") or "").strip() for j in jobs or [] if isinstance(j, dict)}
+                    for fj in failed_rows or []:
+                        if isinstance(fj, dict):
+                            fid = (fj.get("id") or "").strip()
+                            if fid and fid not in seen:
+                                jobs.append(fj)
+                                seen.add(fid)
+                elif hasattr(st, "load_scheduled_jobs"):
+                    jobs = await run_sync(st.load_scheduled_jobs, project_id=None)
+                else:
+                    jobs = []
                 consecutive_storage_failures = 0
             except Exception as e:
                 consecutive_storage_failures += 1
@@ -396,7 +433,6 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                 delay = min(120.0, max(float(poll_seconds), 2.0) * (2 ** min(consecutive_storage_failures, 6)))
                 await asyncio.sleep(delay)
                 continue
-            now = datetime.now(timezone.utc)
 
             # Heal failed rows when the article is already on WordPress (e.g. legacy media 403).
             for j in jobs or []:
@@ -496,20 +532,31 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                     continue
 
                 try:
-                    # Lookup project + article rows
-                    prows = await run_sync(st.load_projects)
-                    proj = next((p for p in (prows or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+                    # Point lookups — avoid loading all projects/articles each tick.
+                    if hasattr(st, "get_project_by_id"):
+                        proj = await run_sync(st.get_project_by_id, pid)
+                    else:
+                        prows = await run_sync(st.load_projects)
+                        proj = next(
+                            (p for p in (prows or []) if isinstance(p, dict) and (p.get("id") or "") == pid),
+                            None,
+                        )
                     if not proj:
                         raise RuntimeError("Project not found")
-                    arows = await run_sync(st.load_articles)
-                    art = next(
-                        (
-                            a
-                            for a in (arows or [])
-                            if isinstance(a, dict) and (a.get("id") or "") == aid and (a.get("project_id") or "") == pid
-                        ),
-                        None,
-                    )
+                    if hasattr(st, "get_article"):
+                        art = await run_sync(st.get_article, project_id=pid, article_id=aid)
+                    else:
+                        arows = await run_sync(st.load_articles)
+                        art = next(
+                            (
+                                a
+                                for a in (arows or [])
+                                if isinstance(a, dict)
+                                and (a.get("id") or "") == aid
+                                and (a.get("project_id") or "") == pid
+                            ),
+                            None,
+                        )
                     if not art:
                         raise RuntimeError("Article not found")
 

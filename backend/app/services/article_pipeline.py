@@ -164,7 +164,8 @@ async def execute_article_generation(
         if ((row.get("status") or "pending").strip().lower() != "published")
         else (row.get("status") or "published"),
     }
-    await asyncio.to_thread(st.update_article_fields, article_id, updates)
+    persist = getattr(st, "patch_article_fields", None) or st.update_article_fields
+    await asyncio.to_thread(persist, article_id, updates)
 
     return {
         "ok": True,
@@ -284,7 +285,8 @@ async def execute_featured_image_regeneration(
         "featured_image_prompt_final": gen.get("image_prompt") or "",
         "featured_image_model": gen.get("model") or "",
     }
-    await asyncio.to_thread(st.update_article_fields, article_id, updates)
+    persist = getattr(st, "patch_article_fields", None) or st.update_article_fields
+    await asyncio.to_thread(persist, article_id, updates)
     after = image_regeneration_limit_snapshot(used=used_after, limit=limit)
     return {
         "ok": True,

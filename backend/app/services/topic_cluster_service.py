@@ -27,6 +27,7 @@ from fastapi import HTTPException
 from app.core.article_duplicates import normalize_article_title_key, sync_project_title_index
 from app.legacy.storage import get_legacy_storage_module
 from app.services.article_pipeline import execute_article_generation
+from app.services.generation_queue import generation_slot
 from app.services.research_scraper import extract_serp, fetch_google_serp_html
 from app.services.topic_cluster_llm import derive_topical_cluster_map
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
@@ -606,18 +607,19 @@ class TopicClusterService:
                 fresh = await asyncio.to_thread(lambda: st.get_article(project_id=pid, article_id=aid))
                 if not isinstance(fresh, dict):
                     raise RuntimeError("inserted article not readable")
-                await execute_article_generation(
-                    st=st,
-                    user=user,
-                    proj=proj,
-                    project_id=pid,
-                    article_id=aid,
-                    row=fresh,
-                    writing_prompt_id=writing_prompt_id,
-                    image_prompt_id=image_prompt_id,
-                    generate_image=generate_image,
-                    focus_keyphrase_override=None,
-                )
+                async with generation_slot():
+                    await execute_article_generation(
+                        st=st,
+                        user=user,
+                        proj=proj,
+                        project_id=pid,
+                        article_id=aid,
+                        row=fresh,
+                        writing_prompt_id=writing_prompt_id,
+                        image_prompt_id=image_prompt_id,
+                        generate_image=generate_image,
+                        focus_keyphrase_override=None,
+                    )
                 return aid
             except HTTPException as he:
                 errors.append({"topic_id": topic_id, "message": (str(he.detail) if he.detail else str(he))[:500]})

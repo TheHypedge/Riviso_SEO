@@ -161,3 +161,32 @@ class ScheduleRequest(BaseModel):
     writing_prompt_id: str | None = Field(default=None, max_length=100)
     image_prompt_id: str | None = Field(default=None, max_length=100)
     generate_image: bool = True
+
+
+class BulkScheduleItem(BaseModel):
+    """One article row in a bulk schedule request."""
+
+    article_id: str = Field(min_length=1, max_length=100)
+    wp_scheduled_at: str = Field(min_length=1, max_length=64)
+
+
+class BulkScheduleRequest(BaseModel):
+    """Schedule many articles in one request (weekly/monthly/manual bulk UI)."""
+
+    items: list[BulkScheduleItem] = Field(min_length=1, max_length=500)
+    wp_status: str = Field(default="draft", max_length=16)
+    post_type: str = Field(default="posts", max_length=200)
+    writing_prompt_id: str | None = Field(default=None, max_length=100)
+    image_prompt_id: str | None = Field(default=None, max_length=100)
+    generate_image: bool = True
+
+
+class BulkScheduleFailure(BaseModel):
+    article_id: str
+    error: str
+
+
+class BulkScheduleResponse(BaseModel):
+    ok: bool = True
+    scheduled: int = 0
+    failed: list[BulkScheduleFailure] = Field(default_factory=list)

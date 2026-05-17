@@ -1420,6 +1420,27 @@ export const api = {
     );
   },
 
+  async bulkScheduleArticles(
+    projectId: string,
+    payload: {
+      items: Array<{ article_id: string; wp_scheduled_at: string }>;
+      wp_status: "draft" | "publish";
+      post_type: string;
+      writing_prompt_id?: string | null;
+      image_prompt_id?: string | null;
+      generate_image?: boolean;
+    },
+  ) {
+    return apiFetch<{
+      ok: boolean;
+      scheduled: number;
+      failed: Array<{ article_id: string; error: string }>;
+    }>(`/api/projects/${projectId}/articles/bulk-schedule`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
   async publishArticleToLiveSite(
     projectId: string,
     articleId: string,

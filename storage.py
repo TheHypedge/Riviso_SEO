@@ -1682,6 +1682,22 @@ def load_projects(owner_user_id: str | None = None) -> list[dict[str, Any]]:
     return [_mongo_doc_to_project(doc) for doc in cur]
 
 
+def get_project_by_id(project_id: str) -> dict[str, Any] | None:
+    """Point lookup for scheduler / generation worker (avoids loading all projects)."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if _storage_mode != "mongo":
+        for p in _load_json_list("projects.json"):
+            if isinstance(p, dict) and (p.get("id") or "").strip() == pid:
+                return _normalize_project_dict(dict(p))
+        return None
+    doc = get_db().projects.find_one({"id": pid})
+    if not isinstance(doc, dict):
+        return None
+    return _mongo_doc_to_project(doc)
+
+
 def load_articles() -> list[dict[str, Any]]:
     if _storage_mode != "mongo":
         return [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
@@ -1711,6 +1727,31 @@ def get_article(*, project_id: str, article_id: str) -> dict[str, Any] | None:
     if not isinstance(doc, dict):
         return None
     return _mongo_doc_to_article(doc)
+
+
+def load_articles_by_ids_for_project(project_id: str, article_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Return article rows keyed by id for bulk schedule / batch operations."""
+    pid = (project_id or "").strip()
+    aids = sorted({(x or "").strip() for x in (article_ids or []) if (x or "").strip()})
+    if not pid or not aids:
+        return {}
+    if _storage_mode != "mongo":
+        out: dict[str, dict[str, Any]] = {}
+        for a in _load_json_list("articles.json"):
+            if not isinstance(a, dict):
+                continue
+            aid = (a.get("id") or "").strip()
+            if aid in aids and (a.get("project_id") or "").strip() == pid:
+                out[aid] = _normalize_article_dict(a)
+        return out
+    out: dict[str, dict[str, Any]] = {}
+    for doc in get_db().articles.find({"project_id": pid, "id": {"$in": aids}}):
+        if isinstance(doc, dict):
+            a = _mongo_doc_to_article(doc)
+            aid = (a.get("id") or "").strip()
+            if aid:
+                out[aid] = a
+    return out
 
 
 def load_articles_for_project_minimal(
@@ -2452,6 +2493,53 @@ def load_scheduled_jobs(
     return out
 
 
+def load_due_scheduled_jobs(
+    *,
+    due_before_utc_str: str,
+    states: list[str] | None = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    """
+    Jobs with ``run_at`` on or before ``due_before_utc_str`` (UTC ``YYYY-MM-DD HH:MM:SS``).
+
+    Used by the scheduler loop to avoid scanning the full ``scheduled_jobs`` collection each tick.
+    """
+    before = (due_before_utc_str or "").strip()
+    if not before:
+        return []
+    states_norm = [
+        s.strip().lower()
+        for s in (states or ["scheduled", "ready_to_post"])
+        if isinstance(s, str) and s.strip()
+    ]
+    lim = max(1, min(int(limit or 200), 1000))
+    if _storage_mode != "mongo":
+        rows = [_normalize_scheduled_job_dict(x) for x in _load_json_list("scheduled_jobs.json")]
+        out = [
+            r
+            for r in rows
+            if (r.get("run_at") or "").strip() <= before
+            and (not states_norm or (r.get("state") or "").strip().lower() in states_norm)
+        ]
+        out.sort(key=lambda r: (r.get("run_at") or "", r.get("id") or ""))
+        return out[:lim]
+
+    q: dict[str, Any] = {"run_at": {"$lte": before}}
+    if states_norm:
+        q["state"] = {"$in": states_norm}
+    cur = get_db().scheduled_jobs.find(q).sort("run_at", 1).limit(lim)
+    out: list[dict[str, Any]] = []
+    for doc in cur:
+        if isinstance(doc, dict):
+            d = dict(doc)
+            d.pop("_id", None)
+            try:
+                out.append(_normalize_scheduled_job_dict(d))
+            except Exception:
+                continue
+    return out
+
+
 def insert_scheduled_job(job: dict[str, Any]) -> None:
     norm = _normalize_scheduled_job_dict(job)
     if _storage_mode != "mongo":
@@ -2498,6 +2586,21 @@ def update_scheduled_job_fields(job_id: str, updates: dict[str, Any]) -> bool:
         new_doc = {**norm, "_id": norm["id"]}
         res = get_db().scheduled_jobs.replace_one({"_id": jid}, new_doc)
         return bool(res.acknowledged and res.matched_count == 1)
+
+
+def patch_scheduled_job_fields(job_id: str, updates: dict[str, Any]) -> bool:
+    """Partial update (Mongo ``$set``) — lighter than read-merge-replace for state transitions."""
+    jid = (job_id or "").strip()
+    if not jid or not updates:
+        return False
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    u2 = dict(updates)
+    u2.setdefault("updated_at", ts)
+    if _storage_mode != "mongo":
+        return update_scheduled_job_fields(jid, u2)
+    with _db_write_lock:
+        res = get_db().scheduled_jobs.update_one({"_id": jid}, {"$set": u2})
+        return bool(res.acknowledged and res.matched_count >= 1)
 
 
 def claim_scheduled_job_for_posting(
@@ -2821,6 +2924,21 @@ def update_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
         return bool(res.acknowledged and res.matched_count == 1)
 
 
+def patch_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
+    """Partial update (Mongo ``$set``) — avoids full-document replace during generation."""
+    aid = (article_id or "").strip()
+    if not aid or not updates:
+        return False
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    u2 = dict(updates)
+    u2.setdefault("updated_at", ts)
+    if _storage_mode != "mongo":
+        return update_article_fields(aid, u2)
+    with _db_write_lock:
+        res = get_db().articles.update_one({"id": aid}, {"$set": u2})
+        return bool(res.acknowledged and res.matched_count >= 1)
+
+
 def delete_articles_by_ids(article_ids: list[str]) -> None:
     if not article_ids:
         return
@@ -2845,20 +2963,27 @@ def bulk_update_articles(updates: list[tuple[str, dict[str, Any]]]) -> None:
                 arts[idx] = _normalize_article_dict(d)
             _save_json_articles(arts)
         return
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     with _db_write_lock:
         db = get_db()
+        from pymongo import ReplaceOne
+
+        ops: list[ReplaceOne] = []
         for aid, u in updates:
             doc = db.articles.find_one({"id": aid})
             if not doc:
                 _log.warning("bulk_update_articles: missing article id %r in MongoDB", aid)
                 continue
             d = _mongo_doc_to_article(doc)
-            _apply_article_updates_dict(d, u)
+            u2 = dict(u or {})
+            u2.setdefault("updated_at", ts)
+            _apply_article_updates_dict(d, u2)
             norm = _normalize_article_dict(d)
-            new_doc = {**norm, "_id": norm["id"]}
-            res = db.articles.replace_one({"id": aid}, new_doc)
-            if not (res.acknowledged and res.matched_count == 1):
-                raise RuntimeError(f"MongoDB bulk article update failed for id={aid!r}")
+            ops.append(ReplaceOne({"id": aid}, {**norm, "_id": norm["id"]}))
+        if ops:
+            res = db.articles.bulk_write(ops, ordered=False)
+            if not res.acknowledged:
+                raise RuntimeError("MongoDB bulk_update_articles was not acknowledged")
 
 
 def export_tables_to_json() -> tuple[list[dict], list[dict]]:
