@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { DashboardNavIcon } from "@/components/DashboardNavIcon";
 import { TutorialStepperModal } from "@/components/TutorialStepperModal";
 import styles from "../page.module.css";
 import dashStyles from "./dashboard.module.css";
@@ -516,86 +517,90 @@ export default function DashboardPage() {
               />
               <span className={styles.sidebarBrandText}>Riviso</span>
             </Link>
-            <div className={styles.sidebarTitle}>{isAdmin ? "ADMIN" : "WORKSPACE"}</div>
-            <div className={styles.navGroup}>
-              <button
-                type="button"
-                className={`${styles.navItem} ${section === "projects" ? styles.navItemActive : ""}`}
-                onClick={() => goSection("projects")}
-              >
-                Project management
-              </button>
-              {isAdmin ? (
-                <>
-                  <button
-                    type="button"
-                    className={`${styles.navItem} ${section === "users" ? styles.navItemActive : ""}`}
-                    onClick={() => goSection("users")}
-                  >
-                    Manage users
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.navItem} ${section === "limits" ? styles.navItemActive : ""}`}
-                    onClick={() => goSection("limits")}
-                  >
-                    System limitations
-                  </button>
-                </>
-              ) : null}
-              <button
-                type="button"
-                className={`${styles.navItem} ${section === "profile" ? styles.navItemActive : ""}`}
-                onClick={() => goSection("profile")}
-              >
-                User profile
-              </button>
+            <div className={styles.sidebarNavMain}>
+              <div className={styles.sidebarTitle}>{isAdmin ? "ADMIN" : "WORKSPACE"}</div>
+              <div className={styles.navGroup}>
+                <button
+                  type="button"
+                  className={`${styles.navItem} ${section === "projects" ? styles.navItemActive : ""}`}
+                  onClick={() => goSection("projects")}
+                >
+                  <DashboardNavIcon nav="projects" className={styles.navItemIcon} />
+                  <span className={styles.navItemLabel}>Project management</span>
+                </button>
+                {isAdmin ? (
+                  <>
+                    <button
+                      type="button"
+                      className={`${styles.navItem} ${section === "users" ? styles.navItemActive : ""}`}
+                      onClick={() => goSection("users")}
+                    >
+                      <DashboardNavIcon nav="users" className={styles.navItemIcon} />
+                      <span className={styles.navItemLabel}>Manage users</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`${styles.navItem} ${section === "limits" ? styles.navItemActive : ""}`}
+                      onClick={() => goSection("limits")}
+                    >
+                      <DashboardNavIcon nav="limits" className={styles.navItemIcon} />
+                      <span className={styles.navItemLabel}>System limitations</span>
+                    </button>
+                  </>
+                ) : null}
+              </div>
             </div>
 
-            <div className={styles.sidebarTitle}>ACCOUNT</div>
-            <div className={styles.navGroup}>
-              <button
-                type="button"
-                className={styles.navItem}
-                onClick={() => {
-                  setMobileNavOpen(false);
-                  logout();
-                }}
-              >
-                Logout
-              </button>
-              <button
-                type="button"
-                className={styles.navItem}
-                onClick={() => {
-                  setMobileNavOpen(false);
-                  setShowTutorial(true);
-                }}
-              >
-                Watch tutorial
-              </button>
+            <div className={styles.sidebarFooter}>
+              <div className={styles.sidebarTitle}>ACCOUNT</div>
+              <div className={styles.navGroup} style={{ marginBottom: 0 }}>
+                <button
+                  type="button"
+                  className={`${styles.navItem} ${section === "profile" ? styles.navItemActive : ""}`}
+                  onClick={() => goSection("profile")}
+                >
+                  <DashboardNavIcon nav="profile" className={styles.navItemIcon} />
+                  <span className={styles.navItemLabel}>User profile</span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.navItem}
+                  onClick={() => {
+                    setMobileNavOpen(false);
+                    setShowTutorial(true);
+                  }}
+                >
+                  <DashboardNavIcon nav="tutorial" className={styles.navItemIcon} />
+                  <span className={styles.navItemLabel}>Watch tutorial</span>
+                </button>
+                <button
+                  type="button"
+                  className={styles.navItem}
+                  onClick={() => {
+                    setMobileNavOpen(false);
+                    logout();
+                  }}
+                >
+                  <DashboardNavIcon nav="logout" className={styles.navItemIcon} />
+                  <span className={styles.navItemLabel}>Logout</span>
+                </button>
+              </div>
+
+              <div className={styles.sidebarAccountCard} aria-label="Signed-in account">
+                <div className={styles.sidebarAvatar} aria-hidden="true">
+                  {(meEmail || "U").trim().charAt(0).toUpperCase()}
+                </div>
+                <div className={styles.sidebarAccountMeta}>
+                  <div className={styles.sidebarAccountEmail} title={meEmail || "Signed in"}>
+                    {meEmail || "Signed in"}
+                  </div>
+                  <div className={styles.sidebarAccountPlan}>
+                    Plan: {(mePlan || "beta").trim() || "beta"}
+                  </div>
+                </div>
+              </div>
             </div>
 
-            <Link
-              href="/dashboard?section=profile"
-              className={`${styles.sidebarAccountCard} ${styles.sidebarAccountLink}`}
-              onClick={() => {
-                setSection("profile");
-                setMobileNavOpen(false);
-              }}
-            >
-              <div className={styles.sidebarAvatar} aria-hidden="true">
-                {(meEmail || "U").trim().charAt(0).toUpperCase()}
-              </div>
-              <div className={styles.sidebarAccountMeta}>
-                <div className={styles.sidebarAccountEmail} title={meEmail || "Signed in"}>
-                  {meEmail || "Signed in"}
-                </div>
-                <div className={styles.sidebarAccountPlan}>
-                  Plan: {(mePlan || "beta").trim() || "beta"}
-                </div>
-              </div>
-            </Link>
           </aside>
 
           <section className={styles.contentCol}>
