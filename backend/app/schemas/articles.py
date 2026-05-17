@@ -174,6 +174,7 @@ class BulkScheduleRequest(BaseModel):
     """Schedule many articles in one request (weekly/monthly/manual bulk UI)."""
 
     items: list[BulkScheduleItem] = Field(min_length=1, max_length=500)
+    cadence: str | None = Field(default=None, max_length=16)  # manual | weekly | monthly
     wp_status: str = Field(default="draft", max_length=16)
     post_type: str = Field(default="posts", max_length=200)
     writing_prompt_id: str | None = Field(default=None, max_length=100)

@@ -1863,6 +1863,51 @@ def load_scheduled_pending_for_project_minimal(project_id: str, *, limit: int = 
     return [dict(d) for d in cur]
 
 
+def load_articles_schedule_stubs_for_project(project_id: str, *, limit: int = 500) -> list[dict[str, Any]]:
+    """Minimal rows for scheduled-articles UI (orphan job detection without full article bodies)."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    lim = max(1, min(int(limit or 500), 2000))
+    if _storage_mode != "mongo":
+        rows = [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
+        out = []
+        for r in rows:
+            if (r.get("project_id") or "") != pid:
+                continue
+            if not _coerce_wp_scheduled_at_str(r.get("wp_scheduled_at")):
+                continue
+            out.append(
+                {
+                    "id": (r.get("id") or "").strip(),
+                    "title": (r.get("title") or "").strip(),
+                    "wp_scheduled_at": _coerce_wp_scheduled_at_str(r.get("wp_scheduled_at")),
+                    "wp_link": (r.get("wp_link") or "").strip(),
+                }
+            )
+        return out[:lim]
+
+    q: dict[str, Any] = {
+        "project_id": pid,
+        "wp_scheduled_at": {"$exists": True, "$ne": ""},
+    }
+    proj = {"_id": 0, "id": 1, "title": 1, "wp_scheduled_at": 1, "wp_link": 1}
+    cur = get_db().articles.find(q, proj).sort("wp_scheduled_at", -1).limit(lim)
+    out: list[dict[str, Any]] = []
+    for d in cur:
+        if not _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at")):
+            continue
+        out.append(
+            {
+                "id": (d.get("id") or "").strip(),
+                "title": (d.get("title") or "").strip(),
+                "wp_scheduled_at": _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at")),
+                "wp_link": (d.get("wp_link") or "").strip(),
+            }
+        )
+    return out
+
+
 def load_articles_listing_for_project(
     project_id: str,
     *,
@@ -2527,6 +2572,44 @@ def load_due_scheduled_jobs(
     q: dict[str, Any] = {"run_at": {"$lte": before}}
     if states_norm:
         q["state"] = {"$in": states_norm}
+    cur = get_db().scheduled_jobs.find(q).sort("run_at", 1).limit(lim)
+    out: list[dict[str, Any]] = []
+    for doc in cur:
+        if isinstance(doc, dict):
+            d = dict(doc)
+            d.pop("_id", None)
+            try:
+                out.append(_normalize_scheduled_job_dict(d))
+            except Exception:
+                continue
+    return out
+
+
+def load_scheduled_jobs_due_for_prep(
+    *,
+    due_before_utc_str: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    Jobs that should begin background prep: ``state=scheduled`` and ``run_at`` on or before
+    ``due_before_utc_str`` (typically now + SCHEDULE_PREP_LEAD_MINUTES).
+    """
+    before = (due_before_utc_str or "").strip()
+    if not before:
+        return []
+    lim = max(1, min(int(limit or 50), 500))
+    if _storage_mode != "mongo":
+        rows = [_normalize_scheduled_job_dict(x) for x in _load_json_list("scheduled_jobs.json")]
+        out = [
+            r
+            for r in rows
+            if (r.get("state") or "").strip().lower() == "scheduled"
+            and (r.get("run_at") or "").strip() <= before
+        ]
+        out.sort(key=lambda r: (r.get("run_at") or "", r.get("id") or ""))
+        return out[:lim]
+
+    q: dict[str, Any] = {"state": "scheduled", "run_at": {"$lte": before}}
     cur = get_db().scheduled_jobs.find(q).sort("run_at", 1).limit(lim)
     out: list[dict[str, Any]] = []
     for doc in cur:

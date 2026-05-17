@@ -262,6 +262,9 @@ export function BulkScheduleForm({
                 <div className={styles.bulkScheduleCadenceFieldsRow}>
                   <label className={styles.label}>
                     Articles per week
+                    <span className={styles.bulkScheduleFieldHint}>
+                      Posts rotate across selected days each week (Mon → Tue → …). Use 1 for one post per week only.
+                    </span>
                     <input
                       className={styles.input}
                       type="number"
@@ -324,6 +327,9 @@ export function BulkScheduleForm({
                 <div className={styles.bulkScheduleCadenceFieldsRow}>
                   <label className={styles.label}>
                     Total monthly articles
+                    <span className={styles.bulkScheduleFieldHint}>
+                      Posts rotate across selected days each month. Use 1 for one post per month only.
+                    </span>
                     <input
                       className={styles.input}
                       type="number"

@@ -71,7 +71,7 @@ class GenerationJob:
 
 
 _semaphore: asyncio.Semaphore | None = None
-_local_queue: asyncio.Queue[GenerationJob] | None = None
+_local_job_queue: asyncio.Queue[GenerationJob] | None = None
 _redis_client: Any | None = None
 _redis_unavailable = False
 
@@ -95,11 +95,11 @@ async def generation_slot():
         sem.release()
 
 
-def _local_queue() -> asyncio.Queue[GenerationJob]:
-    global _local_queue
-    if _local_queue is None:
-        _local_queue = asyncio.Queue(maxsize=5000)
-    return _local_queue
+def _get_local_job_queue() -> asyncio.Queue[GenerationJob]:
+    global _local_job_queue
+    if _local_job_queue is None:
+        _local_job_queue = asyncio.Queue(maxsize=5000)
+    return _local_job_queue
 
 
 def _redis():
@@ -175,7 +175,7 @@ async def enqueue(job: GenerationJob, *, dedup_key: str | None = None) -> str | 
         except Exception as e:
             log.warning("Redis LPUSH failed; falling back to local queue: %s", e)
     try:
-        _local_queue().put_nowait(job)
+        _get_local_job_queue().put_nowait(job)
         return job.id
     except asyncio.QueueFull:
         await clear_dedup(dedup_key)
@@ -195,7 +195,7 @@ async def dequeue_blocking(*, timeout_seconds: float = 1.0) -> GenerationJob | N
         except Exception as e:
             log.debug("Redis BRPOP failed: %s", e)
     try:
-        return await asyncio.wait_for(_local_queue().get(), timeout=timeout_seconds)
+        return await asyncio.wait_for(_get_local_job_queue().get(), timeout=timeout_seconds)
     except asyncio.TimeoutError:
         return None
 
@@ -208,7 +208,7 @@ async def queue_depth() -> int:
             return int(n or 0)
         except Exception:
             pass
-    return _local_queue().qsize()
+    return _get_local_job_queue().qsize()
 
 
 async def close_redis() -> None:

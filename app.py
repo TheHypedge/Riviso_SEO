@@ -3805,22 +3805,36 @@ def download_wordpress_plugin(project_id: str):
         flash("Project not found.", "error")
         return redirect(url_for("home"))
 
-    plugin_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wordpress_plugin", "auto-articles-connector")
+    plugin_slug = "riviso-content-operations"
+    plugin_root = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "wordpress_plugin",
+        plugin_slug,
+    )
     if not os.path.isdir(plugin_root):
-        return Response("Plugin source not found on server.", status=500, mimetype="text/plain")
+        backend_root = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "backend",
+            "wordpress_plugin",
+            plugin_slug,
+        )
+        if os.path.isdir(backend_root):
+            plugin_root = backend_root
+        else:
+            return Response("Plugin source not found on server.", status=500, mimetype="text/plain")
 
-    safe_name = re.sub(r"[^a-zA-Z0-9\-_]+", "_", project.get("name") or "project")[:60] or "project"
-    filename = f"{safe_name}_auto-articles-connector.zip"
-
+    filename = f"{plugin_slug}.zip"
     mem = BytesIO()
+    bundle_files = (f"{plugin_slug}.php", "index.php", "readme.txt")
     with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for root, dirs, files in os.walk(plugin_root):
-            for fn in files:
-                if fn.startswith("."):
-                    continue
-                full = os.path.join(root, fn)
-                rel = os.path.relpath(full, os.path.dirname(plugin_root))
-                z.write(full, arcname=rel)
+        for fn in bundle_files:
+            full = os.path.join(plugin_root, fn)
+            if not os.path.isfile(full):
+                continue
+            with open(full, "rb") as fh:
+                data = fh.read().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            arcname = f"{plugin_slug}/{fn}".replace("\\", "/")
+            z.writestr(arcname, data)
     mem.seek(0)
     return Response(
         mem.getvalue(),

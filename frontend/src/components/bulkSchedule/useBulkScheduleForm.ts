@@ -29,6 +29,7 @@ export type BulkScheduleDefaults = {
 
 export type BulkScheduleFormValues = {
   rows: BulkScheduleRow[];
+  scheduleMode: BulkScheduleMode;
   wpStatus: "draft" | "publish";
   postType: string;
   writingPromptId: string;
@@ -171,9 +172,21 @@ export function useBulkScheduleForm({
     });
   }, [deferredCadence, rows]);
 
-  const setModeAndApply = useCallback((next: BulkScheduleMode) => {
-    startTransition(() => setMode(next));
-  }, []);
+  const setModeAndApply = useCallback(
+    (next: BulkScheduleMode) => {
+      startTransition(() => {
+        setMode(next);
+        const n = Math.max(1, seedRows.length);
+        if (next === "weekly") {
+          setArticlesPerWeek(Math.min(n, Math.max(1, weekdays.length)));
+        }
+        if (next === "monthly") {
+          setPostsPerMonth(Math.min(n, Math.max(1, weekdays.length)));
+        }
+      });
+    },
+    [seedRows.length, weekdays.length],
+  );
 
   const validate = useCallback((): string | null => {
     if (!rows.length) return "No articles to schedule.";
@@ -183,6 +196,8 @@ export function useBulkScheduleForm({
       articlesPerWeek,
       weekdays,
       postsPerMonth,
+      whens: rows.map((r) => r.when),
+      timeZone: scheduleTimeZone,
     });
     if (cadenceErr) return cadenceErr;
     const minStr = buildMinStr();
@@ -199,13 +214,14 @@ export function useBulkScheduleForm({
   const getValues = useCallback((): BulkScheduleFormValues => {
     return {
       rows,
+      scheduleMode: mode,
       wpStatus,
       postType,
       writingPromptId,
       imagePromptId,
       generateImage: true,
     };
-  }, [rows, wpStatus, postType, writingPromptId, imagePromptId]);
+  }, [rows, mode, wpStatus, postType, writingPromptId, imagePromptId]);
 
   return {
     rows,

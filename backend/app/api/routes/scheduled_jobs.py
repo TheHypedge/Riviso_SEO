@@ -40,6 +40,91 @@ def _require_verified_website(proj: dict) -> None:
         )
 
 
+_ACTIVE_SCHEDULED_JOB_STATES = frozenset(
+    {
+        "scheduled",
+        "content_generating",
+        "image_generating",
+        "ready_to_post",
+        "posting",
+        "failed",
+    }
+)
+
+
+def _scheduled_job_preference(row: ScheduledJobPublic) -> tuple[int, str]:
+    st = (row.state or "").strip().lower()
+    active = 1 if st in _ACTIVE_SCHEDULED_JOB_STATES else 0
+    return active, (row.run_at or "").strip()
+
+
+def _pick_better_scheduled_job(a: ScheduledJobPublic, b: ScheduledJobPublic) -> ScheduledJobPublic:
+    pa = _scheduled_job_preference(a)
+    pb = _scheduled_job_preference(b)
+    if pa[0] != pb[0]:
+        return a if pa[0] > pb[0] else b
+    if pa[1] != pb[1]:
+        return a if pa[1] > pb[1] else b
+    return a
+
+
+def _dedupe_scheduled_jobs(rows: list[ScheduledJobPublic]) -> list[ScheduledJobPublic]:
+    active = [j for j in rows if (j.state or "").strip().lower() != "cancelled"]
+    best_by_article: dict[str, ScheduledJobPublic] = {}
+    for j in active:
+        aid = (j.article_id or "").strip()
+        if not aid:
+            continue
+        cur = best_by_article.get(aid)
+        best_by_article[aid] = _pick_better_scheduled_job(cur, j) if cur else j
+    out = list(best_by_article.values())
+    out.sort(key=lambda x: x.run_at or "", reverse=True)
+    return out
+
+
+def _normalize_article_schedule_run_at(raw: str) -> str:
+    v = (raw or "").strip()
+    if not v:
+        return ""
+    if "T" in v:
+        return v.replace("T", " ").replace("Z", "").split(".")[0][:19]
+    return v[:19]
+
+
+def _build_scheduled_jobs_board(
+    *,
+    project_id: str,
+    jobs: list[ScheduledJobPublic],
+    article_stubs: list[dict],
+) -> list[ScheduledJobPublic]:
+    merged = _dedupe_scheduled_jobs(jobs)
+    have_job = {j.article_id for j in merged if j.article_id}
+    extras: list[ScheduledJobPublic] = []
+    pid = (project_id or "").strip()
+    for a in article_stubs or []:
+        if not isinstance(a, dict):
+            continue
+        aid = (a.get("id") or "").strip()
+        run_at = _normalize_article_schedule_run_at(str(a.get("wp_scheduled_at") or ""))
+        if not aid or not run_at or aid in have_job:
+            continue
+        extras.append(
+            ScheduledJobPublic(
+                id=f"pending_job_{aid}",
+                project_id=pid,
+                article_id=aid,
+                run_at=run_at,
+                post_type="posts",
+                wp_status="draft",
+                category_ids=[],
+                state="scheduled",
+                attempts=0,
+                wp_link=(a.get("wp_link") or "").strip() or None,
+            )
+        )
+    return _dedupe_scheduled_jobs([*merged, *extras])
+
+
 def _to_public(row: dict) -> ScheduledJobPublic:
     cats: list[int] = []
     raw = (row.get("category_ids") or "").strip()
@@ -119,6 +204,28 @@ async def list_scheduled(project_id: str, user: dict = Depends(get_current_user)
     # Latest scheduled first
     out.sort(key=lambda x: x.run_at, reverse=True)
     return out
+
+
+@router.get("/board", response_model=list[ScheduledJobPublic])
+async def list_scheduled_board(project_id: str, user: dict = Depends(get_current_user)) -> list[ScheduledJobPublic]:
+    """
+    Scheduled tab: jobs plus orphan article stubs in one request (deduped server-side).
+    Avoids loading every article page client-side.
+    """
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    jobs = [
+        _to_public(r)
+        for r in (rows or [])
+        if isinstance(r, dict) and (r.get("state") or "").strip().lower() != "cancelled"
+    ]
+    stubs: list[dict] = []
+    if hasattr(st, "load_articles_schedule_stubs_for_project"):
+        stubs = await run_sync(st.load_articles_schedule_stubs_for_project, project_id, limit=500) or []
+    elif hasattr(st, "load_scheduled_pending_for_project_minimal"):
+        stubs = await run_sync(st.load_scheduled_pending_for_project_minimal, project_id, limit=500) or []
+    return _build_scheduled_jobs_board(project_id=project_id, jobs=jobs, article_stubs=stubs)
 
 
 @router.patch("/{job_id}", response_model=ScheduledJobPublic)
@@ -288,7 +395,9 @@ async def retry_all_failed_preparations(
         rows_after = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
         job_after = next((r for r in (rows_after or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
         if isinstance(job_after, dict):
-            start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj, art=art, job=job_after)
+            start_scheduled_job_preparation_task(
+                st=st, jid=jid, proj=proj, art=art, job=job_after, force=True
+            )
             retried += 1
 
     return {
@@ -346,7 +455,7 @@ async def retry_scheduled_job_preparation(
     if not isinstance(job_after, dict):
         raise HTTPException(status_code=404, detail="Scheduled job not found")
 
-    start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj, art=art, job=job_after)
+    start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj, art=art, job=job_after, force=True)
     job_after = {**job_after, "state": prep_state, "last_error": ""}
     return {
         "ok": True,

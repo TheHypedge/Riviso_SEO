@@ -63,6 +63,24 @@ async def _handle_scheduled_prep(payload: dict) -> None:
         if state in {"ready_to_post", "posted", "posting"}:
             return
 
+        from app.services.schedule_timing import is_within_scheduled_prep_window
+
+        run_at = (job.get("run_at") or "").strip()
+        if run_at and not is_within_scheduled_prep_window(run_at):
+            if state in {"content_generating", "image_generating"}:
+                try:
+                    await run_sync(
+                        st.update_scheduled_job_fields,
+                        jid,
+                        {
+                            "state": "scheduled",
+                            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                        },
+                    )
+                except Exception:
+                    pass
+            return
+
         await run_sync(
             st.update_scheduled_job_fields,
             jid,

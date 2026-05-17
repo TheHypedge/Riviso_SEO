@@ -196,6 +196,7 @@ export type ProjectSettings = {
   wp_site_url?: string | null;
   wp_username?: string | null;
   wp_app_password_set: boolean;
+  wp_app_password?: string | null;
   /** Last-known WordPress verification snapshot (server-recorded). */
   wp_verified_at?: string | null;
   wp_verified_status?: string | null;
@@ -501,6 +502,8 @@ export type ScheduledJobPublic = {
   last_error?: string | null;
   attempts: number;
   last_attempt_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
   wp_post_id?: string | null;
   wp_link?: string | null;
 };
@@ -602,6 +605,48 @@ export function getApiBaseUrl(): string {
   const targetHost = host === "localhost" ? "127.0.0.1" : host;
   const proto = window.location.protocol === "https:" ? "https:" : "http:";
   return `${proto}//${targetHost}:8000`;
+}
+
+/** Same-origin path for the WordPress connector ZIP (proxied to the API in Next.js). */
+export function getWordpressPluginDownloadPath(): string {
+  return "/api/wordpress/plugin/download";
+}
+
+/** Download the Riviso WordPress connector ZIP (valid package for Plugins → Upload). */
+export async function downloadWordpressPlugin(): Promise<void> {
+  if (typeof window === "undefined") {
+    throw new Error("Plugin download is only available in the browser.");
+  }
+  const res = await fetch(getWordpressPluginDownloadPath(), { method: "GET", cache: "no-store" });
+  if (!res.ok) {
+    let detail = `Plugin download failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      if (body?.detail) detail = body.detail;
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(detail);
+  }
+  const blob = await res.blob();
+  if (!blob.size) {
+    throw new Error("Plugin download was empty. Check that the API server is running.");
+  }
+  const cd = res.headers.get("content-disposition") || "";
+  let filename = "riviso-content-operations.zip";
+  const quoted = /filename="([^"]+)"/i.exec(cd);
+  const plain = /filename=([^;\s]+)/i.exec(cd);
+  if (quoted?.[1]) filename = quoted[1];
+  else if (plain?.[1]) filename = plain[1].replace(/"/g, "");
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  anchor.rel = "noopener";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 function apiUrl(path: string) {
@@ -1091,6 +1136,10 @@ export const api = {
   async listScheduledJobs(projectId: string) {
     return apiFetch<ScheduledJobPublic[]>(`/api/projects/${projectId}/scheduled-jobs`);
   },
+  /** Deduped jobs + orphan article stubs — one round-trip for the Scheduled tab. */
+  async listScheduledJobsBoard(projectId: string) {
+    return apiFetch<ScheduledJobPublic[]>(`/api/projects/${projectId}/scheduled-jobs/board`);
+  },
   async cancelScheduledJob(projectId: string, jobId: string) {
     return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/scheduled-jobs/${jobId}`, { method: "DELETE" });
   },
@@ -1424,6 +1473,7 @@ export const api = {
     projectId: string,
     payload: {
       items: Array<{ article_id: string; wp_scheduled_at: string }>;
+      cadence?: "manual" | "weekly" | "monthly";
       wp_status: "draft" | "publish";
       post_type: string;
       writing_prompt_id?: string | null;

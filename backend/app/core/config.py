@@ -105,6 +105,16 @@ class Settings(BaseSettings):
         validation_alias="SCHEDULER_DUE_JOBS_LIMIT",
         description="Max due scheduled jobs loaded per scheduler tick.",
     )
+    schedule_prep_lead_minutes: int = Field(
+        default=45,
+        validation_alias="SCHEDULE_PREP_LEAD_MINUTES",
+        description="Start content/image prep when publish time is within this many minutes.",
+    )
+    scheduler_prep_dispatch_limit: int = Field(
+        default=30,
+        validation_alias="SCHEDULER_PREP_DISPATCH_LIMIT",
+        description="Max scheduled jobs to enqueue for prep per scheduler tick.",
+    )
 
     # OpenAI (generation)
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")

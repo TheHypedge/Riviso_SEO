@@ -84,6 +84,11 @@ def _friendly_scheduler_error(exc: Exception) -> str:
             "WordPress blocked the featured image upload (403). "
             "Give the connected user upload_files permission or allow REST media in your security plugin."
         )
+    if "403" in low and ("wp/v2/posts" in low or "wp-json/wp/v2" in low):
+        return (
+            "WordPress rejected the publish request (403 Forbidden). "
+            "Confirm the connected user can create posts via the REST API and that security plugins allow wp-json/wp/v2/posts."
+        )
     return raw[:1000]
 
 
@@ -238,15 +243,31 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
     return art2 if isinstance(art2, dict) else art
 
 
-def start_scheduled_job_preparation_task(*, st, jid: str, proj: dict, art: dict, job: dict) -> None:
+def start_scheduled_job_preparation_task(
+    *,
+    st,
+    jid: str,
+    proj: dict,
+    art: dict,
+    job: dict,
+    force: bool = False,
+) -> None:
     """
     Queue background generation for a scheduled job (content + image).
-    Used after schedule, reschedule, and manual retry of failed preparation.
+
+    Unless ``force`` is True, prep is deferred until ``run_at`` is within the configured
+    lead window (see ``SCHEDULE_PREP_LEAD_MINUTES``). The scheduler loop enqueues due jobs.
     """
+    from app.services.schedule_timing import is_within_scheduled_prep_window
+
     job_id = (jid or "").strip()
     pid = (proj.get("id") or job.get("project_id") or "").strip()
     aid = (art.get("id") or job.get("article_id") or "").strip()
     if not job_id or not pid or not aid:
+        return
+
+    run_at = (job.get("run_at") or "").strip()
+    if not force and run_at and not is_within_scheduled_prep_window(run_at):
         return
 
     patch = getattr(st, "patch_scheduled_job_fields", None) or st.update_scheduled_job_fields
@@ -361,18 +382,80 @@ async def publish_article_to_wordpress(*, proj: dict, article: dict, post_type: 
         except Exception:
             pass
 
-    try:
-        created = await wp.post_json(f"/wp-json/wp/v2/{post_type}", payload, timeout=60.0)
-    except Exception:
-        # Retry without tags for CPTs that don't support them.
-        if "tags" in payload:
-            payload.pop("tags", None)
-            created = await wp.post_json(f"/wp-json/wp/v2/{post_type}", payload, timeout=60.0)
-        else:
-            raise
-    if not isinstance(created, dict):
-        raise RuntimeError("Unexpected WordPress response")
+    from app.services.wordpress_publish import publish_post_to_wordpress
+
+    created = await publish_post_to_wordpress(wp, post_type=post_type, payload=payload)
     return created
+
+
+async def _heal_premature_generating_jobs(*, st, now: datetime) -> None:
+    """Reset far-future jobs stuck in generating state after legacy immediate bulk enqueue."""
+    from app.services.schedule_timing import is_within_scheduled_prep_window
+
+    if not hasattr(st, "load_scheduled_jobs"):
+        return
+    try:
+        rows = await run_sync(st.load_scheduled_jobs, project_id=None, limit=500)
+    except TypeError:
+        rows = await run_sync(st.load_scheduled_jobs, project_id=None)
+    for j in rows or []:
+        if not isinstance(j, dict):
+            continue
+        st_name = (j.get("state") or "").strip().lower()
+        if st_name not in {"content_generating", "image_generating"}:
+            continue
+        run_at = (j.get("run_at") or "").strip()
+        if not run_at or is_within_scheduled_prep_window(run_at, now=now):
+            continue
+        jid = (j.get("id") or "").strip()
+        if not jid:
+            continue
+        try:
+            await run_sync(
+                st.update_scheduled_job_fields,
+                jid,
+                {
+                    "state": "scheduled",
+                    "last_error": "",
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+        except Exception:
+            pass
+
+
+async def _dispatch_due_prep_jobs(*, st, now: datetime) -> None:
+    """Enqueue prep for scheduled jobs whose publish time is within the lead window."""
+    from app.services.generation_worker import enqueue_scheduled_prep
+    from app.services.schedule_timing import is_within_scheduled_prep_window, prep_dispatch_before_utc_str
+
+    if not hasattr(st, "load_scheduled_jobs_due_for_prep"):
+        return
+    before = prep_dispatch_before_utc_str(now=now)
+    lim = max(1, int(getattr(settings, "scheduler_prep_dispatch_limit", 30) or 30))
+    try:
+        rows = await run_sync(
+            st.load_scheduled_jobs_due_for_prep,
+            due_before_utc_str=before,
+            limit=lim,
+        )
+    except Exception:
+        return
+    for j in rows or []:
+        if not isinstance(j, dict):
+            continue
+        jid = (j.get("id") or "").strip()
+        pid = (j.get("project_id") or "").strip()
+        aid = (j.get("article_id") or "").strip()
+        run_at = (j.get("run_at") or "").strip()
+        if not jid or not pid or not aid or not run_at:
+            continue
+        if not is_within_scheduled_prep_window(run_at, now=now):
+            continue
+        try:
+            enqueue_scheduled_prep(job_id=jid, project_id=pid, article_id=aid)
+        except Exception:
+            log.debug("Prep enqueue skipped job_id=%s", jid, exc_info=True)
 
 
 async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
@@ -420,6 +503,8 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                 else:
                     jobs = []
                 consecutive_storage_failures = 0
+                await _heal_premature_generating_jobs(st=st, now=now)
+                await _dispatch_due_prep_jobs(st=st, now=now)
             except Exception as e:
                 consecutive_storage_failures += 1
                 now_mono = time.monotonic()

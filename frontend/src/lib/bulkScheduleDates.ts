@@ -36,6 +36,8 @@ export const BULK_SCHEDULE_WEEKDAYS_SUN_FIRST: { iso: WeekdayIso; label: string 
 const SAME_DAY_SPREAD_HOURS = 2;
 const SAME_DAY_EVENING_CAP_H = 21;
 const SAME_DAY_EVENING_CAP_MIN = 0;
+/** Beyond this many posts on one calendar day, roll to the next week/month instead of 1-minute bumps. */
+const MAX_POSTS_PER_CALENDAR_DAY = 2;
 
 type LocalParts = { y: number; m: number; d: number; h: number; min: number };
 
@@ -223,9 +225,12 @@ function addMonths(p: LocalParts, months: number): LocalParts {
   };
 }
 
-function compareLocal(a: LocalParts, b: LocalParts): number {
-  const ta = new Date(a.y, a.m - 1, a.d, a.h, a.min).getTime();
-  const tb = new Date(b.y, b.m - 1, b.d, b.h, b.min).getTime();
+function compareLocalInTz(a: LocalParts, b: LocalParts, timeZone: string): number {
+  const sa = formatDatetimeLocal(a);
+  const sb = formatDatetimeLocal(b);
+  const ta = wallClockToInstantMs(sa, timeZone);
+  const tb = wallClockToInstantMs(sb, timeZone);
+  if (ta == null || tb == null) return 0;
   return ta - tb;
 }
 
@@ -249,7 +254,8 @@ function effectiveStart(start: LocalParts, min: LocalParts, timeZone: string): L
   return start;
 }
 
-function bumpForwardUntilMin(
+/** Advance month-by-month (same day-of-month when possible) until >= minWhen. */
+function bumpForwardUntilMinPreservingMonth(
   p: LocalParts,
   minWhen: string,
   timeZone: string,
@@ -261,37 +267,67 @@ function bumpForwardUntilMin(
   if (minMs == null) return p;
 
   let cur = p;
-  for (let guard = 0; guard < 400; guard++) {
+  for (let guard = 0; guard < 36; guard++) {
     const curMs = wallClockToInstantMs(formatDatetimeLocal(cur), timeZone);
     if (curMs != null && curMs >= minMs) return cur;
-    cur = addDays(cur, 1);
+    cur = addMonths(cur, 1);
   }
   return minP;
 }
 
-function finalizeScheduleDates(dates: LocalParts[], minWhen: string, timeZone: string): LocalParts[] {
+/** Advance to the same weekday at preferred time until the instant is >= minWhen. */
+function bumpForwardUntilMinPreservingWeekday(
+  p: LocalParts,
+  minWhen: string,
+  timeZone: string,
+  minInstantMs?: number | null,
+): LocalParts {
   const minP = parseDatetimeLocal(minWhen);
-  if (!minP || !dates.length) return dates;
+  if (!minP) return p;
+  const minMs = minInstantMs ?? wallClockToInstantMs(minWhen, timeZone);
+  if (minMs == null) return p;
 
+  let cur = p;
+  for (let guard = 0; guard < 104; guard++) {
+    const curMs = wallClockToInstantMs(formatDatetimeLocal(cur), timeZone);
+    if (curMs != null && curMs >= minMs) return cur;
+    cur = addDays(cur, 7);
+  }
+  return minP;
+}
+
+function finalizeScheduleDates(
+  dates: LocalParts[],
+  minWhen: string,
+  timeZone: string,
+  mode: BulkScheduleMode = "manual",
+): LocalParts[] {
+  if (!dates.length) return dates;
   const minMs = wallClockToInstantMs(minWhen, timeZone);
+  if (mode === "weekly") {
+    return dates.map((p) => bumpForwardUntilMinPreservingWeekday(p, minWhen, timeZone, minMs));
+  }
+  if (mode === "monthly") {
+    return dates.map((p) => bumpForwardUntilMinPreservingMonth(p, minWhen, timeZone, minMs));
+  }
+  if (minMs == null) return dates;
   const out: LocalParts[] = [];
   for (let i = 0; i < dates.length; i++) {
-    let p = bumpForwardUntilMin(dates[i], minWhen, timeZone, minMs);
+    let p = dates[i];
     if (out.length > 0) {
       const prev = out[out.length - 1];
-      if (compareLocal(p, prev) <= 0) {
-        p = addMinutes(prev, 1);
-        p = bumpForwardUntilMin(p, minWhen, timeZone, minMs);
+      if (compareLocalInTz(p, prev, timeZone) <= 0) {
+        p = addMinutes(prev, SAME_DAY_SPREAD_HOURS * 60);
       }
     }
-    out.push(p);
+    out.push(bumpForwardUntilMinPreservingWeekday(p, minWhen, timeZone, minMs));
   }
   return out;
 }
 
 function computeWeeklyDates(
   count: number,
-  start: LocalParts,
+  anchor: LocalParts,
   minWhen: string,
   timeZone: string,
   articlesPerWeek: number,
@@ -300,26 +336,72 @@ function computeWeeklyDates(
   minInstantMs?: number | null,
 ): LocalParts[] {
   const apw = Math.max(1, Math.min(count, Math.floor(articlesPerWeek) || 1));
-  const days = weekdays.length ? ([...weekdays].sort((a, b) => a - b) as WeekdayIso[]) : [isoWeekday(start)];
-  const pref = parsePreferredTime(preferredTime) || { h: start.h, min: start.min };
+  const days = weekdays.length ? ([...weekdays].sort((a, b) => a - b) as WeekdayIso[]) : [isoWeekday(anchor)];
+  const pref = parsePreferredTime(preferredTime) || { h: anchor.h, min: anchor.min };
   const minMs = minInstantMs ?? wallClockToInstantMs(minWhen, timeZone);
   const sameDayCount = new Map<string, number>();
+  const anchorMonday = mondayOfWeekContaining(anchor);
   const out: LocalParts[] = [];
 
   for (let i = 0; i < count; i++) {
-    const weekIndex = Math.floor(i / apw);
     const slotInWeek = i % apw;
-    const isoDow = days[slotInWeek % days.length];
-    const key = `${weekIndex}-${isoDow}`;
-    const sameDayIndex = sameDayCount.get(key) ?? 0;
+    const daySlot = slotInWeek % days.length;
+    const repeatCycle = Math.floor(slotInWeek / days.length);
+    let weekIndex = Math.floor(i / apw) + repeatCycle;
+    const isoDow = days[daySlot];
+    let key = `${weekIndex}-${isoDow}`;
+    let sameDayIndex = sameDayCount.get(key) ?? 0;
+    while (sameDayIndex >= MAX_POSTS_PER_CALENDAR_DAY) {
+      weekIndex += 1;
+      key = `${weekIndex}-${isoDow}`;
+      sameDayIndex = sameDayCount.get(key) ?? 0;
+    }
     sameDayCount.set(key, sameDayIndex + 1);
     const t = timeForSameDaySlot(pref.h, pref.min, sameDayIndex);
-    const weekMonday = addDays(mondayOfWeekContaining(start), weekIndex * 7);
+    const weekMonday = addDays(anchorMonday, weekIndex * 7);
     let candidate = dateOnIsoWeekdayInWeek(weekMonday, isoDow, t);
-    candidate = bumpForwardUntilMin(candidate, minWhen, timeZone, minMs);
+    candidate = bumpForwardUntilMinPreservingWeekday(candidate, minWhen, timeZone, minMs);
     out.push(candidate);
   }
-  return out;
+  return dedupeScheduleDatesPreservingWeekday(out, minWhen, timeZone);
+}
+
+function dedupeScheduleDatesPreservingWeekday(
+  dates: LocalParts[],
+  minWhen: string,
+  timeZone: string,
+): LocalParts[] {
+  const seen = new Set<string>();
+  const minMs = wallClockToInstantMs(minWhen, timeZone);
+  return dates.map((p) => {
+    let cur = bumpForwardUntilMinPreservingWeekday(p, minWhen, timeZone, minMs);
+    let key = formatDatetimeLocal(cur);
+    while (seen.has(key)) {
+      cur = addDays(cur, 7);
+      key = formatDatetimeLocal(cur);
+    }
+    seen.add(key);
+    return cur;
+  });
+}
+
+function dedupeScheduleDatesPreservingMonth(
+  dates: LocalParts[],
+  minWhen: string,
+  timeZone: string,
+): LocalParts[] {
+  const seen = new Set<string>();
+  const minMs = wallClockToInstantMs(minWhen, timeZone);
+  return dates.map((p) => {
+    let cur = bumpForwardUntilMinPreservingMonth(p, minWhen, timeZone, minMs);
+    let key = formatDatetimeLocal(cur);
+    while (seen.has(key)) {
+      cur = addMonths(cur, 1);
+      key = formatDatetimeLocal(cur);
+    }
+    seen.add(key);
+    return cur;
+  });
 }
 
 function firstOfMonth(p: LocalParts): LocalParts {
@@ -360,7 +442,7 @@ function lastIsoWeekdayInMonth(
 
 function computeMonthlyDates(
   count: number,
-  start: LocalParts,
+  anchor: LocalParts,
   minWhen: string,
   timeZone: string,
   articlesPerMonth: number,
@@ -369,23 +451,30 @@ function computeMonthlyDates(
   minInstantMs?: number | null,
 ): LocalParts[] {
   const apm = Math.max(1, Math.min(count, Math.floor(articlesPerMonth) || 1));
-  const days = weekdays.length ? ([...weekdays].sort((a, b) => a - b) as WeekdayIso[]) : [isoWeekday(start)];
-  const pref = parsePreferredTime(preferredTime) || { h: start.h, min: start.min };
+  const days = weekdays.length ? ([...weekdays].sort((a, b) => a - b) as WeekdayIso[]) : [isoWeekday(anchor)];
+  const pref = parsePreferredTime(preferredTime) || { h: anchor.h, min: anchor.min };
   const minMs = minInstantMs ?? wallClockToInstantMs(minWhen, timeZone);
   const sameDayCount = new Map<string, number>();
   const out: LocalParts[] = [];
 
   for (let i = 0; i < count; i++) {
-    const monthIndex = Math.floor(i / apm);
     const slotInMonth = i % apm;
-    const isoDow = days[slotInMonth % days.length];
-    const key = `${monthIndex}-${isoDow}`;
-    const sameDayIndex = sameDayCount.get(key) ?? 0;
+    const daySlot = slotInMonth % days.length;
+    const repeatCycle = Math.floor(slotInMonth / days.length);
+    let monthIndex = Math.floor(i / apm) + repeatCycle;
+    const isoDow = days[daySlot];
+    let key = `${monthIndex}-${isoDow}`;
+    let sameDayIndex = sameDayCount.get(key) ?? 0;
+    while (sameDayIndex >= MAX_POSTS_PER_CALENDAR_DAY) {
+      monthIndex += 1;
+      key = `${monthIndex}-${isoDow}`;
+      sameDayIndex = sameDayCount.get(key) ?? 0;
+    }
     sameDayCount.set(key, sameDayIndex + 1);
 
-    const monthBase = addMonths(firstOfMonth(start), monthIndex);
-    const sameMonthAsStart = monthBase.y === start.y && monthBase.m === start.m;
-    const notBefore = monthIndex === 0 && sameMonthAsStart ? start.d : 1;
+    const monthBase = addMonths(firstOfMonth(anchor), monthIndex);
+    const sameMonthAsAnchor = monthBase.y === anchor.y && monthBase.m === anchor.m;
+    const notBefore = monthIndex === 0 && sameMonthAsAnchor ? anchor.d : 1;
 
     let d =
       nthIsoWeekdayInMonth(monthBase.y, monthBase.m, isoDow, sameDayIndex, notBefore) ??
@@ -399,18 +488,34 @@ function computeMonthlyDates(
       h: t.h,
       min: t.min,
     };
-    candidate = bumpForwardUntilMin(candidate, minWhen, timeZone, minMs);
+    while (true) {
+      const candMs = wallClockToInstantMs(formatDatetimeLocal(candidate), timeZone);
+      if (candMs == null || minMs == null || candMs >= minMs) break;
+      monthIndex += 1;
+      const monthBase = addMonths(firstOfMonth(anchor), monthIndex);
+      const sameMonthAsAnchor = monthBase.y === anchor.y && monthBase.m === anchor.m;
+      const notBefore = monthIndex === 0 && sameMonthAsAnchor ? anchor.d : 1;
+      d =
+        nthIsoWeekdayInMonth(monthBase.y, monthBase.m, isoDow, sameDayIndex, notBefore) ??
+        lastIsoWeekdayInMonth(monthBase.y, monthBase.m, isoDow, notBefore);
+      candidate = { y: monthBase.y, m: monthBase.m, d, h: t.h, min: t.min };
+    }
     out.push(candidate);
   }
-  return out;
+  return dedupeScheduleDatesPreservingMonth(out, minWhen, timeZone);
 }
 
-export function clampScheduleWhens(whens: string[], minWhen: string, timeZone?: string): string[] {
+export function clampScheduleWhens(
+  whens: string[],
+  minWhen: string,
+  timeZone?: string,
+  mode: BulkScheduleMode = "manual",
+): string[] {
   const tz = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   const minP = parseDatetimeLocal(minWhen);
   if (!minP) return whens;
   const dates = whens.map((w) => parseDatetimeLocal(w) || minP);
-  const finalized = finalizeScheduleDates(dates, minWhen, tz);
+  const finalized = finalizeScheduleDates(dates, minWhen, tz, mode);
   return finalized.map(formatDatetimeLocal);
 }
 
@@ -446,12 +551,12 @@ export function applyBulkScheduleDates(params: ApplyBulkScheduleParams): BulkSch
     const anchorWhen =
       buildWeeklyAnchorDatetime(minWhen, pref, weekdays, tz) ||
       formatDatetimeLocal({ ...minP, ...prefParts });
-    const startRaw = parseDatetimeLocal(anchorWhen);
-    if (!startRaw) return rows;
-    const start = effectiveStart(startRaw, minP, tz);
+    const anchorRaw = parseDatetimeLocal(anchorWhen);
+    if (!anchorRaw) return rows;
+    const anchor = effectiveStart(anchorRaw, minP, tz);
     dates = computeWeeklyDates(
       rows.length,
-      start,
+      anchor,
       minWhen,
       tz,
       params.articlesPerWeek ?? 1,
@@ -467,12 +572,12 @@ export function applyBulkScheduleDates(params: ApplyBulkScheduleParams): BulkSch
     const anchorWhen =
       buildWeeklyAnchorDatetime(minWhen, pref, weekdays, tz) ||
       formatDatetimeLocal({ ...minP, ...prefParts });
-    const startRaw = parseDatetimeLocal(anchorWhen);
-    if (!startRaw) return rows;
-    const start = effectiveStart(startRaw, minP, tz);
+    const anchorRaw = parseDatetimeLocal(anchorWhen);
+    if (!anchorRaw) return rows;
+    const anchor = effectiveStart(anchorRaw, minP, tz);
     dates = computeMonthlyDates(
       rows.length,
-      start,
+      anchor,
       minWhen,
       tz,
       params.postsPerMonth ?? 1,
@@ -484,10 +589,25 @@ export function applyBulkScheduleDates(params: ApplyBulkScheduleParams): BulkSch
     return rows;
   }
 
-  dates = finalizeScheduleDates(dates, minWhen, tz);
+  dates = finalizeScheduleDates(dates, minWhen, tz, mode);
   const whens = dates.map(formatDatetimeLocal);
 
   return rows.map((r, i) => ({ ...r, when: whens[i] || minWhen }));
+}
+
+/** True when cadence times are squeezed into sub-day gaps (usually wrong articles-per-week). */
+export function bulkScheduleTimesLookCompressed(whens: string[], mode: BulkScheduleMode, timeZone: string): boolean {
+  if (mode === "manual" || whens.length < 2) return false;
+  const tz = (timeZone || "UTC").trim();
+  const ms = whens
+    .map((w) => wallClockToInstantMs(w, tz))
+    .filter((x): x is number => x != null)
+    .sort((a, b) => a - b);
+  if (ms.length < 2) return false;
+  const minGapMs = Math.min(...ms.slice(1).map((t, i) => t - ms[i]));
+  if (mode === "weekly") return minGapMs < 12 * 60 * 60 * 1000;
+  if (mode === "monthly") return minGapMs < 5 * 24 * 60 * 60 * 1000;
+  return false;
 }
 
 export function describeBulkScheduleSummary(params: {
@@ -529,6 +649,8 @@ export function validateBulkScheduleCadence(params: {
   articlesPerWeek?: number;
   weekdays?: WeekdayIso[];
   postsPerMonth?: number;
+  whens?: string[];
+  timeZone?: string;
 }): string | null {
   if (params.mode === "weekly") {
     const count = Math.max(0, params.articleCount ?? 0);
@@ -540,6 +662,15 @@ export function validateBulkScheduleCadence(params: {
         ? `Articles per week must be between 1 and ${count}.`
         : "Articles per week must be at least 1.";
     }
+    if (count > 1 && apw > 1 && wd.length === 1 && apw >= count) {
+      return (
+        "For one posting day, use Articles per week = 1 to spread posts across multiple weeks. " +
+        "Higher values schedule multiple posts on the same day."
+      );
+    }
+    if (params.whens?.length && params.timeZone && bulkScheduleTimesLookCompressed(params.whens, "weekly", params.timeZone)) {
+      return "Weekly times are too close together. Set Articles per week to 1 or add more posting days.";
+    }
   }
   if (params.mode === "monthly") {
     const count = Math.max(0, params.articleCount ?? 0);
@@ -550,6 +681,15 @@ export function validateBulkScheduleCadence(params: {
       return count > 0
         ? `Total monthly articles must be between 1 and ${count}.`
         : "Total monthly articles must be at least 1.";
+    }
+    if (count > 1 && apm > 1 && wd.length === 1 && apm >= count) {
+      return (
+        "For one posting day, use Total monthly articles = 1 to spread posts across multiple months. " +
+        "Higher values schedule multiple posts in the same month."
+      );
+    }
+    if (params.whens?.length && params.timeZone && bulkScheduleTimesLookCompressed(params.whens, "monthly", params.timeZone)) {
+      return "Monthly times are too close together. Set Total monthly articles to 1 or add more posting days.";
     }
   }
   return null;

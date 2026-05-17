@@ -14,7 +14,7 @@ import {
   buildClusterScheduleSeeds,
 } from "@/components/bulkSchedule/clusterScheduleUtils";
 import type { BulkScheduleSeedRow } from "@/components/bulkSchedule/useBulkScheduleForm";
-import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse, ResearchIdeaRow as ApiResearchIdeaRow, TopicCluster } from "@/lib/api";
+import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, downloadWordpressPlugin, getAccessToken, PromptListResponse, ResearchIdeaRow as ApiResearchIdeaRow, TopicCluster } from "@/lib/api";
 import { COUNTRIES, DEFAULT_COUNTRY_CODE } from "@/lib/countries";
 import {
   AUDIENCE_PRESETS,
@@ -596,6 +596,7 @@ export default function ProjectPage() {
   const [sUrl, setSUrl] = useState("");
   const [sWpUser, setSWpUser] = useState("");
   const [sWpPass, setSWpPass] = useState("");
+  const [showWpAppPassword, setShowWpAppPassword] = useState(false);
   const [sWpDefaultPostType, setSWpDefaultPostType] = useState("posts");
   const [sWpDefaultStatus, setSWpDefaultStatus] = useState<"draft" | "publish">("draft");
   const [sWpDefaultCategoryIds, setSWpDefaultCategoryIds] = useState<number[]>([]);
@@ -1414,46 +1415,121 @@ export default function ProjectPage() {
     }
   }
 
+  const ACTIVE_SCHEDULED_JOB_STATES = new Set([
+    "scheduled",
+    "content_generating",
+    "image_generating",
+    "ready_to_post",
+    "posting",
+    "failed",
+  ]);
+
+  function scheduledJobPreference(j: import("@/lib/api").ScheduledJobPublic): { active: number; runAt: string } {
+    const st = (j.state || "").toLowerCase();
+    const active = ACTIVE_SCHEDULED_JOB_STATES.has(st) ? 1 : 0;
+    return { active, runAt: (j.run_at || "").trim() };
+  }
+
+  function pickBetterScheduledJob(
+    a: import("@/lib/api").ScheduledJobPublic,
+    b: import("@/lib/api").ScheduledJobPublic,
+  ): import("@/lib/api").ScheduledJobPublic {
+    const pa = scheduledJobPreference(a);
+    const pb = scheduledJobPreference(b);
+    if (pa.active !== pb.active) return pa.active > pb.active ? a : b;
+    if (pa.runAt !== pb.runAt) return pa.runAt > pb.runAt ? a : b;
+    return a;
+  }
+
+  /** One row per article — prefer upcoming pipeline jobs over legacy posted duplicates. */
   function dedupeScheduledJobs(rows: import("@/lib/api").ScheduledJobPublic[]) {
     const active = (rows || []).filter((j) => (j.state || "").toLowerCase() !== "cancelled");
     const bestByArticle = new Map<string, import("@/lib/api").ScheduledJobPublic>();
-    type JobWithTimestamps = import("@/lib/api").ScheduledJobPublic & { updated_at?: string; created_at?: string };
-    const score = (j: import("@/lib/api").ScheduledJobPublic) => {
-      const jj = j as JobWithTimestamps;
-      const s = jj.updated_at || jj.created_at || j.run_at || "";
-      return typeof s === "string" ? s : "";
-    };
     for (const j of active) {
       const aid = (j.article_id || "").trim();
       if (!aid) continue;
       const cur = bestByArticle.get(aid);
-      if (!cur) {
-        bestByArticle.set(aid, j);
-        continue;
-      }
-      if (score(j) > score(cur)) bestByArticle.set(aid, j);
+      bestByArticle.set(aid, cur ? pickBetterScheduledJob(cur, j) : j);
     }
     const out = Array.from(bestByArticle.values());
     out.sort((a, b) => (b.run_at || "").localeCompare(a.run_at || ""));
     return out;
   }
 
+  function normalizeArticleScheduleRunAt(raw: string): string {
+    const v = (raw || "").trim();
+    if (!v) return "";
+    if (v.includes("T")) return v.replace("T", " ").replace(/\.\d+Z?$/i, "").slice(0, 19);
+    return v.slice(0, 19);
+  }
+
+  /** Include articles with wp_scheduled_at when the job row is missing (bulk cadence safety net). */
+  function isOrphanScheduledJob(j: { id: string }) {
+    return (j.id || "").startsWith("pending_job_");
+  }
+
+  function buildScheduledJobsView(
+    jobs: import("@/lib/api").ScheduledJobPublic[],
+    articles: ArticlePublic[],
+  ): import("@/lib/api").ScheduledJobPublic[] {
+    const merged = dedupeScheduledJobs(jobs);
+    const haveJob = new Set(merged.map((j) => j.article_id));
+    const extras: import("@/lib/api").ScheduledJobPublic[] = [];
+    for (const a of articles) {
+      const runAt = normalizeArticleScheduleRunAt(a.wp_scheduled_at || "");
+      if (!runAt || haveJob.has(a.id)) continue;
+      extras.push({
+        id: `pending_job_${a.id}`,
+        project_id: projectId,
+        article_id: a.id,
+        run_at: runAt,
+        post_type: "posts",
+        wp_status: "draft",
+        category_ids: [],
+        state: "scheduled",
+        attempts: 0,
+        wp_link: a.wp_link || null,
+      });
+    }
+    return dedupeScheduledJobs([...merged, ...extras]);
+  }
+
+  const fetchScheduledJobsView = useCallback(async () => {
+    try {
+      return await api.listScheduledJobsBoard(projectId);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        const [jobs, articles] = await Promise.all([
+          api.listScheduledJobs(projectId),
+          api.listArticlesAll(projectId, {}).catch(() => [] as ArticlePublic[]),
+        ]);
+        return buildScheduledJobsView(jobs, articles);
+      }
+      throw e;
+    }
+  }, [projectId]);
+
+  const reloadScheduledJobs = useCallback(async (opts?: { quiet?: boolean }) => {
+    if (!opts?.quiet) {
+      setError(null);
+      setScheduledLoading(true);
+    }
+    try {
+      setScheduledJobs(await fetchScheduledJobsView());
+    } catch (e) {
+      if (!opts?.quiet) {
+        setError(e instanceof Error ? e.message : "Failed to load scheduled articles");
+      }
+    } finally {
+      if (!opts?.quiet) setScheduledLoading(false);
+    }
+  }, [fetchScheduledJobsView]);
+
   useEffect(() => {
     if (!token) return;
     if (tab !== "scheduled_articles") return;
-    (async () => {
-      setError(null);
-      setScheduledLoading(true);
-      try {
-        const jobs = await api.listScheduledJobs(projectId);
-        setScheduledJobs(dedupeScheduledJobs(jobs));
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "Failed to load scheduled articles");
-      } finally {
-        setScheduledLoading(false);
-      }
-    })();
-  }, [projectId, tab, token]);
+    void reloadScheduledJobs();
+  }, [projectId, tab, token, reloadScheduledJobs]);
 
   useEffect(() => {
     if (!token) return;
@@ -1480,7 +1556,7 @@ export default function ProjectPage() {
       setSName(s.name || "");
       setSUrl(s.wp_site_url || s.website_url || "");
       setSWpUser(s.wp_username || "");
-      setSWpPass("");
+      setSWpPass(s.wp_app_password || "");
       setBrandVoice((pm?.brand_voice || "") as string);
       setBrandTones(((pm?.brand_tones || []) as string[]).slice());
       setBrandRules((pm?.brand_rules || "") as string);
@@ -1556,10 +1632,12 @@ export default function ProjectPage() {
         default_wp_rest_base: sWpDefaultPostType,
         default_wp_status: sWpDefaultStatus,
         default_wp_category_ids: sWpDefaultCategoryIds,
-        ...(sWpPass.trim() ? { wp_app_password: sWpPass } : {}),
+        ...(sWpPass.replace(/\s+/g, "").trim()
+          ? { wp_app_password: sWpPass.replace(/\s+/g, "").trim() }
+          : {}),
       });
       setSettings(saved);
-      setSWpPass("");
+      if (saved.wp_app_password) setSWpPass(saved.wp_app_password);
       // Keep the sidebar project switcher in sync with project renames
       // without forcing a refetch of the entire list.
       setProjectsList((prev) =>
@@ -1615,8 +1693,9 @@ export default function ProjectPage() {
         wp_site_url: sUrl.trim(),
         wp_username: sWpUser.trim(),
       };
-      if (sWpPass.trim()) {
-        patch.wp_app_password = sWpPass.trim();
+      const passNorm = sWpPass.replace(/\s+/g, "").trim();
+      if (passNorm) {
+        patch.wp_app_password = passNorm;
       }
       try {
         await api.updateProjectSettings(projectId, patch);
@@ -1630,7 +1709,7 @@ export default function ProjectPage() {
       const res = await api.verifyWordpress(projectId, {
         wp_site_url: sUrl.trim(),
         wp_username: sWpUser.trim(),
-        ...(sWpPass.trim() ? { wp_app_password: sWpPass.trim() } : {}),
+        ...(passNorm ? { wp_app_password: passNorm } : {}),
       });
       setSettingsVerify(res);
 
@@ -1641,7 +1720,7 @@ export default function ProjectPage() {
         setSettings(fresh);
         // Clear the typed app-password field on success — the value is now
         // stored server-side and the placeholder will switch to "•••••• (set)".
-        if (res.ok) setSWpPass("");
+        if (fresh.wp_app_password) setSWpPass(fresh.wp_app_password);
       } catch {
         // Settings refresh failure is non-fatal; the inline ``settingsVerify``
         // result still shows the immediate outcome.
@@ -2554,10 +2633,7 @@ export default function ProjectPage() {
         );
       }
       // Best-effort: refresh Scheduled Articles in the background (don't block UX).
-      api
-        .listScheduledJobs(projectId)
-        .then((jobs) => setScheduledJobs(dedupeScheduledJobs(jobs)))
-        .catch(() => {});
+      void reloadScheduledJobs({ quiet: true });
       void refreshFeatureLimits();
       setScheduleId(null);
       setScheduleWhen("");
@@ -2584,7 +2660,7 @@ export default function ProjectPage() {
         category_ids: j.category_ids || [],
       });
       await refreshArticlesList();
-      setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
+      await reloadScheduledJobs({ quiet: true });
       setConfirmPostNowJob(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Post now failed");
@@ -2594,14 +2670,14 @@ export default function ProjectPage() {
   }
 
   async function refreshScheduledJobsList() {
-    setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
+    await reloadScheduledJobs({ quiet: true });
   }
 
   async function pollScheduledJobsUntilSettled(jobIds: string[]) {
     const targets = new Set(jobIds);
     for (const delayMs of [2500, 5000, 10000, 20000, 45000]) {
       await new Promise((r) => setTimeout(r, delayMs));
-      const rows = dedupeScheduledJobs(await api.listScheduledJobs(projectId));
+      const rows = await fetchScheduledJobsView();
       setScheduledJobs(rows);
       const tracked = rows.filter((j) => targets.has(j.id));
       if (
@@ -2650,7 +2726,7 @@ export default function ProjectPage() {
       const res = await api.retryAllFailedScheduledPreparations(projectId);
       await refreshScheduledJobsList();
       if (res.retried > 0) {
-        const rows = dedupeScheduledJobs(await api.listScheduledJobs(projectId));
+        const rows = await fetchScheduledJobsView();
         const ids = rows
           .filter((j) => ["content_generating", "image_generating"].includes((j.state || "").toLowerCase()))
           .map((j) => j.id);
@@ -2749,6 +2825,7 @@ export default function ProjectPage() {
 
       const schedulePayload = {
         items,
+        cadence: values.scheduleMode,
         wp_status: values.wpStatus,
         post_type: values.postType,
         writing_prompt_id: values.writingPromptId || null,
@@ -2766,11 +2843,7 @@ export default function ProjectPage() {
       }
 
       await refreshArticlesList();
-      try {
-        setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
-      } catch {
-        // ignore
-      }
+      await reloadScheduledJobs({ quiet: true });
       setSelected({});
       void refreshFeatureLimits();
       setShowBulkPopup(false);
@@ -2849,6 +2922,7 @@ export default function ProjectPage() {
 
       const res = await api.bulkScheduleArticles(projectId, {
         items,
+        cadence: values.scheduleMode,
         wp_status: values.wpStatus,
         post_type: values.postType,
         writing_prompt_id: values.writingPromptId || null,
@@ -2877,6 +2951,7 @@ export default function ProjectPage() {
         await refreshArticlesList();
       }
       void refreshFeatureLimits();
+      await reloadScheduledJobs({ quiet: true });
       setResearchScheduleModal(null);
     } catch (e) {
       if (showWebsiteConnectionErrorIfNeeded(e)) return;
@@ -3061,6 +3136,80 @@ export default function ProjectPage() {
   function formatSupportingKeywords(keywords?: string[] | null): string {
     const parts = (keywords || []).map((k) => String(k).trim()).filter(Boolean);
     return parts.length ? parts.join(", ") : "—";
+  }
+
+  function renderArticleActions(a: ArticlePublic, title: string, iconBtnClass: string) {
+    return (
+      <>
+        <Link
+          href={`/projects/${projectId}/articles/${a.id}`}
+          className={iconBtnClass}
+          aria-label={`Edit ${title}`}
+          data-tooltip="Edit article"
+        >
+          <Icon.Edit />
+        </Link>
+        <button
+          type="button"
+          className={iconBtnClass}
+          aria-label={`Schedule ${title}`}
+          data-tooltip="Schedule article"
+          onClick={() => {
+            void ensureScheduleMetaLoaded();
+            const min = new Date(Date.now() + 10 * 60 * 1000);
+            const minStr = toDatetimeLocalFromDateInProfileTz(min);
+            setScheduleMin(minStr);
+            setScheduleId(a.id);
+            setScheduleWhen(minStr);
+            setScheduleWpStatus(wpDefaults?.wp_status || "draft");
+            setSchedulePostType(wpDefaults?.post_type || "posts");
+            setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
+            setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
+          }}
+        >
+          <Icon.Calendar />
+        </button>
+        <span
+          className={styles.articlesTableTooltipWrap}
+          data-tooltip={!a.wp_link ? "Publish first to get a live URL" : "Request indexing in Search Console"}
+        >
+          <button
+            type="button"
+            className={iconBtnClass}
+            aria-label={`Request indexing for ${title}`}
+            disabled={!a.wp_link}
+            onClick={() => {
+              setRequestIndexingId(a.id);
+              setRequestIndexingMsg("");
+            }}
+          >
+            <Icon.Globe />
+          </button>
+        </span>
+        {a.wp_link ? (
+          <button
+            type="button"
+            className={iconBtnClass}
+            aria-label={a.monitor_status === "fresh" ? `Mark ${title} stale` : `Mark ${title} fresh`}
+            data-tooltip={a.monitor_status === "fresh" ? "Mark stale for refresh" : "Mark fresh"}
+            onClick={() =>
+              markArticleMonitor(a.id, (a.monitor_status === "fresh" ? "stale" : "fresh") as "fresh" | "stale")
+            }
+          >
+            <Icon.Refresh />
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className={`${iconBtnClass} ${styles.articlesTableIconBtnDanger}`}
+          aria-label={`Delete ${title}`}
+          data-tooltip="Delete article"
+          onClick={() => setConfirmDeleteId(a.id)}
+        >
+          <Icon.Trash />
+        </button>
+      </>
+    );
   }
 
   function jobStateLabel(s: string) {
@@ -4478,8 +4627,13 @@ export default function ProjectPage() {
                     >
                       Export
                     </button>
-                    <button className={`${styles.chipButton} ${styles.chipButtonPrimary}`} type="button" onClick={() => setShowMobileFilters(true)}>
-                      Filter
+                    <button
+                      className={`${styles.chipButton} ${styles.chipButtonPrimary}${status || dateFrom || dateTo ? ` ${styles.chipButtonFilterActive}` : ""}`}
+                      type="button"
+                      onClick={() => setShowMobileFilters(true)}
+                      aria-expanded={showMobileFilters}
+                    >
+                      Filter{status || dateFrom || dateTo ? " · On" : ""}
                     </button>
                     {selectedIds.length ? (
                       <button
@@ -4807,7 +4961,7 @@ export default function ProjectPage() {
                 </div>
               </div>
               <div className={`${styles.card} ${styles.cardWide} ${styles.articleListCard}`} style={{ padding: 0 }}>
-                <div className={styles.articlesTableScroll}>
+                <div className={`${styles.articlesTableScroll} ${styles.articlesDesktopOnly}`}>
                   <div className={styles.articlesTableHead} role="row">
                     <span className={styles.articlesTableCheckboxCol}>
                       <input
@@ -4850,7 +5004,7 @@ export default function ProjectPage() {
                                   aria-label={`Select ${title}`}
                                 />
                               </span>
-                              <div className={styles.articlesTableCell}>
+                              <div className={`${styles.articlesTableCell} ${styles.articlesTableCellTitle}`}>
                                 <Link
                                   href={`/projects/${projectId}/articles/${a.id}`}
                                   className={`${styles.articleTitleLink} ${styles.articlesTableClamp}`}
@@ -4861,6 +5015,7 @@ export default function ProjectPage() {
                               </div>
                               <div
                                 className={`${styles.articlesTableCell} ${styles.articlesTableCellMuted}`}
+                                data-mobile-label="Focus keyphrase"
                                 title={focus !== "—" ? focus : undefined}
                               >
                                 <span
@@ -4871,6 +5026,7 @@ export default function ProjectPage() {
                               </div>
                               <div
                                 className={`${styles.articlesTableCell} ${styles.articlesTableCellMuted}`}
+                                data-mobile-label="Supporting keywords"
                                 title={keywordsText !== "—" ? keywordsText : undefined}
                               >
                                 <span
@@ -4879,93 +5035,85 @@ export default function ProjectPage() {
                                   {keywordsText}
                                 </span>
                               </div>
-                              <div className={styles.articlesTableStatusCol} title={statusTitle}>
+                              <div className={styles.articlesTableStatusCol} data-mobile-label="Status" title={statusTitle}>
                                 <span className={statusPillClass(a.status)}>{statusLabel}</span>
                               </div>
                               <div className={styles.articlesTableActionsCol}>
-                                <Link
-                                  href={`/projects/${projectId}/articles/${a.id}`}
-                                  className={styles.articlesTableIconBtn}
-                                  aria-label={`Edit ${title}`}
-                                  data-tooltip="Edit article"
-                                >
-                                  <Icon.Edit />
-                                </Link>
-                                <button
-                                  type="button"
-                                  className={styles.articlesTableIconBtn}
-                                  aria-label={`Schedule ${title}`}
-                                  data-tooltip="Schedule article"
-                                  onClick={() => {
-                                    void ensureScheduleMetaLoaded();
-                                    const min = new Date(Date.now() + 10 * 60 * 1000);
-                                    const minStr = toDatetimeLocalFromDateInProfileTz(min);
-                                    setScheduleMin(minStr);
-                                    setScheduleId(a.id);
-                                    setScheduleWhen(minStr);
-                                    setScheduleWpStatus(wpDefaults?.wp_status || "draft");
-                                    setSchedulePostType(wpDefaults?.post_type || "posts");
-                                    setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
-                                    setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
-                                  }}
-                                >
-                                  <Icon.Calendar />
-                                </button>
-                                <span
-                                  className={styles.articlesTableTooltipWrap}
-                                  data-tooltip={
-                                    !a.wp_link
-                                      ? "Publish first to get a live URL"
-                                      : "Request indexing in Search Console"
-                                  }
-                                >
-                                  <button
-                                    type="button"
-                                    className={styles.articlesTableIconBtn}
-                                    aria-label={`Request indexing for ${title}`}
-                                    disabled={!a.wp_link}
-                                    onClick={() => {
-                                      setRequestIndexingId(a.id);
-                                      setRequestIndexingMsg("");
-                                    }}
-                                  >
-                                    <Icon.Globe />
-                                  </button>
-                                </span>
-                                {a.wp_link ? (
-                                  <button
-                                    type="button"
-                                    className={styles.articlesTableIconBtn}
-                                    aria-label={
-                                      a.monitor_status === "fresh"
-                                        ? `Mark ${title} stale`
-                                        : `Mark ${title} fresh`
-                                    }
-                                    data-tooltip={
-                                      a.monitor_status === "fresh"
-                                        ? "Mark stale for refresh"
-                                        : "Mark fresh"
-                                    }
-                                    onClick={() =>
-                                      markArticleMonitor(
-                                        a.id,
-                                        (a.monitor_status === "fresh" ? "stale" : "fresh") as "fresh" | "stale",
-                                      )
-                                    }
-                                  >
-                                    <Icon.Refresh />
-                                  </button>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  className={`${styles.articlesTableIconBtn} ${styles.articlesTableIconBtnDanger}`}
-                                  aria-label={`Delete ${title}`}
-                                  data-tooltip="Delete article"
-                                  onClick={() => setConfirmDeleteId(a.id)}
-                                >
-                                  <Icon.Trash />
-                                </button>
+                                {renderArticleActions(a, title, styles.articlesTableIconBtn)}
                               </div>
+                            </div>
+                          </article>
+                        );
+                      })
+                    : null}
+                </div>
+
+                <div className={styles.articlesMobileOnly} aria-label="Articles list">
+                  <div className={styles.articlesMobileToolbar}>
+                    <label className={styles.articlesMobileSelectAll}>
+                      <input
+                        type="checkbox"
+                        checked={allOnPageSelected}
+                        onChange={toggleAllOnPage}
+                        aria-label="Select all articles on this page"
+                      />
+                      <span>Select all on page</span>
+                    </label>
+                    {selectedIds.length ? (
+                      <span className={styles.articlesMobileSelectedCount}>{selectedIds.length} selected</span>
+                    ) : null}
+                  </div>
+
+                  {loading || articlesListLoading ? (
+                    <p className={styles.articlesMobileMessage}>Loading…</p>
+                  ) : null}
+                  {!loading && !articlesListLoading && listTotal === 0 ? (
+                    <p className={styles.articlesMobileMessage}>No articles match the current filters.</p>
+                  ) : null}
+
+                  {!loading && !articlesListLoading
+                    ? pageItems.map((a) => {
+                        const title = a.title || "(Untitled)";
+                        const focus = (a.focus_keyphrase || "").trim() || "—";
+                        const keywordsText = formatSupportingKeywords(a.keywords);
+                        const gscRequested = (a.gsc_status || "").toLowerCase() === "inspected";
+                        const statusLabel = (a.status || "pending").toUpperCase();
+                        const statusTitle = `${statusLabel} · ${gscRequested ? "Indexing requested" : "Indexing not requested"}`;
+                        return (
+                          <article key={`mobile-${a.id}`} className={styles.articlesMobileCard}>
+                            <div className={styles.articlesMobileCardTop}>
+                              <label className={styles.articlesMobileCardCheck}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!selected[a.id]}
+                                  onChange={() => toggleOne(a.id)}
+                                  aria-label={`Select ${title}`}
+                                />
+                              </label>
+                              <span className={statusPillClass(a.status)} title={statusTitle}>
+                                {statusLabel}
+                              </span>
+                            </div>
+                            <Link
+                              href={`/projects/${projectId}/articles/${a.id}`}
+                              className={styles.articlesMobileCardTitle}
+                            >
+                              {title}
+                            </Link>
+                            <dl className={styles.articlesMobileMeta}>
+                              <div className={styles.articlesMobileMetaRow}>
+                                <dt>Focus keyphrase</dt>
+                                <dd className={focus === "—" ? styles.articlesMobileMetaEmpty : undefined}>{focus}</dd>
+                              </div>
+                              <div className={styles.articlesMobileMetaRow}>
+                                <dt>Supporting keywords</dt>
+                                <dd className={keywordsText === "—" ? styles.articlesMobileMetaEmpty : undefined}>
+                                  {keywordsText}
+                                </dd>
+                              </div>
+                            </dl>
+                            <div className={styles.articlesMobileActions}>
+                              {renderArticleActions(a, title, styles.articlesMobileIconBtn)}
                             </div>
                           </article>
                         );
@@ -5002,11 +5150,11 @@ export default function ProjectPage() {
                 ) : null}
               </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div className={styles.articlesPagination}>
                 <button className={styles.button} type="button" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={pageClamped <= 1}>
                   Prev
                 </button>
-                <span style={{ fontSize: 13, color: "#666" }}>
+                <span className={styles.articlesPaginationMeta}>
                   Page {pageClamped} / {totalPages} · {listTotal} item(s)
                 </span>
                 <button className={styles.button} type="button" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={pageClamped >= totalPages}>
@@ -5242,6 +5390,108 @@ export default function ProjectPage() {
                     </button>
                     <button className={styles.button} type="button" onClick={createArticle} disabled={creating || !title.trim()}>
                       {creating ? "Adding…" : "Add"}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            {showMobileFilters ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.modalBackdrop}
+                  aria-label="Close filters"
+                  onClick={() => setShowMobileFilters(false)}
+                />
+                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Filter articles">
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Filter articles</h3>
+                    <button
+                      type="button"
+                      className={styles.iconButton}
+                      aria-label="Close"
+                      onClick={() => setShowMobileFilters(false)}
+                    >
+                      <Icon.X className={styles.icon20} />
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <label className={styles.label}>
+                      Status
+                      <select
+                        className={styles.input}
+                        value={status}
+                        onChange={(e) => {
+                          setStatus(e.target.value as StatusFilter);
+                          setPage(1);
+                        }}
+                      >
+                        <option value="">All</option>
+                        <option value="pending">Pending</option>
+                        <option value="draft">Draft</option>
+                        <option value="scheduled">Scheduled</option>
+                        <option value="published">Published</option>
+                      </select>
+                    </label>
+                    <div className={styles.articlesMobileFilterDates}>
+                      <label className={styles.label}>
+                        From
+                        <input
+                          className={styles.input}
+                          type="date"
+                          value={dateFrom}
+                          onChange={(e) => {
+                            setDateFrom(e.target.value);
+                            setPage(1);
+                          }}
+                        />
+                      </label>
+                      <label className={styles.label}>
+                        To
+                        <input
+                          className={styles.input}
+                          type="date"
+                          value={dateTo}
+                          onChange={(e) => {
+                            setDateTo(e.target.value);
+                            setPage(1);
+                          }}
+                        />
+                      </label>
+                    </div>
+                    <label className={styles.label}>
+                      Sort
+                      <select
+                        className={styles.input}
+                        value={dateOrder}
+                        onChange={(e) => {
+                          setDateOrder(e.target.value as "asc" | "desc");
+                          setPage(1);
+                        }}
+                      >
+                        <option value="desc">Latest → Oldest</option>
+                        <option value="asc">Oldest → Latest</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => {
+                        setQ("");
+                        setStatus("");
+                        setDateFrom("");
+                        setDateTo("");
+                        setPage(1);
+                      }}
+                      disabled={!q.trim() && !status && !dateFrom && !dateTo}
+                    >
+                      Clear all
+                    </button>
+                    <button type="button" className={styles.button} onClick={() => setShowMobileFilters(false)}>
+                      Done
                     </button>
                   </div>
                 </div>
@@ -6617,14 +6867,7 @@ export default function ProjectPage() {
                     className={styles.articlesToolbarIconBtn}
                     aria-label="Refresh scheduled articles"
                     disabled={scheduledLoading}
-                    onClick={async () => {
-                      setScheduledLoading(true);
-                      try {
-                        setScheduledJobs(dedupeScheduledJobs(await api.listScheduledJobs(projectId)));
-                      } finally {
-                        setScheduledLoading(false);
-                      }
-                    }}
+                    onClick={() => void reloadScheduledJobs()}
                   >
                     <Icon.Refresh className={styles.icon20} />
                   </button>
@@ -6682,7 +6925,7 @@ export default function ProjectPage() {
                                 type="button"
                                 className={styles.miniBtn}
                                 onClick={() => void retryScheduledPreparation(j.id)}
-                                disabled={retryPrepBusyId === j.id}
+                                disabled={retryPrepBusyId === j.id || isOrphanScheduledJob(j)}
                                 title="Re-run article and image generation for this scheduled post"
                               >
                                 {retryPrepBusyId === j.id ? "Retrying…" : "Retry preparation"}
@@ -6881,24 +7124,38 @@ export default function ProjectPage() {
                           setError(null);
                           if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before editing scheduled articles.")) return;
                           if (!editJobWhen.trim()) throw new Error("Invalid schedule time");
-                          const savedJobId = editJob.id;
-                          await api.updateScheduledJob(projectId, savedJobId, {
-                            // Backend interprets this as local time in the user's profile timezone and stores UTC.
-                            run_at: editJobWhen,
-                            post_type: editJobPostType,
-                            wp_status: editJobStatus,
-                            category_ids: editJobCats,
-                            writing_prompt_id: editJobWritingPromptId || null,
-                            image_prompt_id: editJobImagePromptId || null,
-                            generate_image: editJobGenerateImage,
-                          });
+                          let savedJobId = editJob.id;
+                          if (isOrphanScheduledJob(editJob)) {
+                            await api.scheduleArticle(projectId, editJob.article_id, {
+                              wp_scheduled_at: editJobWhen,
+                              wp_status: editJobStatus,
+                              post_type: editJobPostType,
+                              writing_prompt_id: editJobWritingPromptId || null,
+                              image_prompt_id: editJobImagePromptId || null,
+                              generate_image: editJobGenerateImage,
+                            });
+                          } else {
+                            await api.updateScheduledJob(projectId, savedJobId, {
+                              // Backend interprets this as local time in the user's profile timezone and stores UTC.
+                              run_at: editJobWhen,
+                              post_type: editJobPostType,
+                              wp_status: editJobStatus,
+                              category_ids: editJobCats,
+                              writing_prompt_id: editJobWritingPromptId || null,
+                              image_prompt_id: editJobImagePromptId || null,
+                              generate_image: editJobGenerateImage,
+                            });
+                          }
                           setEditJob(null);
                           await refreshScheduledJobsList();
                           for (const delayMs of [2500, 5000, 10000, 20000]) {
                             await new Promise((r) => setTimeout(r, delayMs));
-                            const rows = dedupeScheduledJobs(await api.listScheduledJobs(projectId));
+                            const rows = await fetchScheduledJobsView();
                             setScheduledJobs(rows);
-                            const row = rows.find((x) => x.id === savedJobId);
+                            const row =
+                              rows.find((x) => x.id === savedJobId) ||
+                              rows.find((x) => x.article_id === editJob.article_id);
+                            if (row) savedJobId = row.id;
                             const st = (row?.state || "").toLowerCase();
                             if (!row || st === "ready_to_post" || st === "posted" || st === "failed") break;
                           }
@@ -6973,7 +7230,9 @@ export default function ProjectPage() {
                         try {
                           setError(null);
                           const cancelled = confirmCancelJob;
-                          await api.cancelScheduledJob(projectId, cancelled.id);
+                          if (!isOrphanScheduledJob(cancelled)) {
+                            await api.cancelScheduledJob(projectId, cancelled.id);
+                          }
                           setScheduledJobs((prev) =>
                             prev.filter(
                               (j) =>
@@ -8439,9 +8698,17 @@ export default function ProjectPage() {
                     let pluginState: "verified" | "warning" | "failed" | "pending" = "pending";
                     let pluginTitle = pluginMsg;
                     if (pluginStatus === "active") {
-                      pluginLabel = "Plugin active";
+                      pluginLabel = "Plugin verified";
                       pluginState = "verified";
-                      pluginTitle = pluginMsg || "Connector plugin responded to /ping with 200.";
+                      pluginTitle =
+                        pluginMsg ||
+                        "Riviso connector /ping and /publish routes verified on this site.";
+                    } else if (pluginStatus === "upgrade_required") {
+                      pluginLabel = "Plugin upgrade required";
+                      pluginState = "warning";
+                      pluginTitle =
+                        pluginMsg ||
+                        "An older or incomplete Riviso connector was detected. Download v0.2.0+ and verify again.";
                     } else if (pluginStatus === "installed") {
                       pluginLabel = "Plugin registered, /ping unreachable";
                       pluginState = "warning";
@@ -8504,31 +8771,50 @@ export default function ProjectPage() {
                       className={styles.input}
                       value={sWpUser}
                       onChange={(e) => setSWpUser(e.target.value)}
-                      placeholder="e.g. admin"
+                      placeholder="Login username (not always your email)"
                       autoComplete="username"
                     />
                   </label>
                   <label className={styles.settingsFieldLabel}>
                     Application password
-                    <input
-                      className={styles.input}
-                      value={sWpPass}
-                      type="password"
-                      onChange={(e) => setSWpPass(e.target.value)}
-                      placeholder={settings.wp_app_password_set ? "•••••••••• (set)" : "xxxx xxxx xxxx xxxx"}
-                      autoComplete="new-password"
-                    />
+                    <span className={styles.authPasswordWrap}>
+                      <input
+                        className={`${styles.input} ${styles.authPasswordInput}`}
+                        value={sWpPass}
+                        type={showWpAppPassword ? "text" : "password"}
+                        onChange={(e) => setSWpPass(e.target.value)}
+                        placeholder="Paste from WordPress → Users → Profile → Application Passwords"
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      <button
+                        type="button"
+                        className={styles.authToggle}
+                        onClick={() => setShowWpAppPassword((v) => !v)}
+                        aria-label={showWpAppPassword ? "Hide application password" : "Show application password"}
+                        title={showWpAppPassword ? "Hide password" : "Show password"}
+                      >
+                        {showWpAppPassword ? "×" : "👁"}
+                      </button>
+                    </span>
                   </label>
                 </div>
 
                 <div className={styles.wpConnectionActions}>
-                  <a
+                  <button
                     className={styles.btnSecondary}
-                    href={`${getApiBaseUrl()}${settings.plugin_download_url}`}
-                    download
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await downloadWordpressPlugin();
+                      } catch (e) {
+                        const msg = e instanceof Error ? e.message : "Could not download plugin.";
+                        window.alert(msg);
+                      }
+                    }}
                   >
                     Download plugin
-                  </a>
+                  </button>
                   <button
                     className={styles.button}
                     type="button"

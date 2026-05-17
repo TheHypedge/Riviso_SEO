@@ -1123,6 +1123,29 @@ async def regenerate_article_featured_image(
         )
 
 
+def _validate_bulk_schedule_cadence(*, cadence: str | None, parsed: list[tuple[str, str, datetime]]) -> None:
+    """Reject weekly/monthly bulk payloads squeezed into same-day minute gaps."""
+    cadence_norm = (cadence or "").strip().lower()
+    if cadence_norm not in {"weekly", "monthly"} or len(parsed) < 2:
+        return
+    times = sorted(dt for _, _, dt in parsed)
+    if cadence_norm == "weekly":
+        min_gap = timedelta(hours=12)
+        detail = (
+            "Weekly bulk schedule times are too close together. "
+            "In the schedule dialog, set Articles per week to 1 or add more posting days."
+        )
+    else:
+        min_gap = timedelta(days=5)
+        detail = (
+            "Monthly bulk schedule times are too close together. "
+            "Set Total monthly articles to 1 or add more posting days."
+        )
+    for i in range(1, len(times)):
+        if times[i] - times[i - 1] < min_gap:
+            raise HTTPException(status_code=400, detail=detail)
+
+
 def _parse_schedule_time_utc(*, raw: str, user: dict) -> datetime:
     s = (raw or "").strip()
     if not s:
@@ -1189,6 +1212,20 @@ async def _persist_schedule_row(
     if hasattr(st, "insert_scheduled_job") and hasattr(st, "update_scheduled_job_fields"):
         stable = hashlib.sha1(f"{project_id}:{article_id}".encode("utf-8")).hexdigest()[:20]
         job_id = f"job_{stable}"
+        if hasattr(st, "load_scheduled_jobs"):
+            try:
+                for row in st.load_scheduled_jobs(project_id=project_id, article_id=article_id, limit=10) or []:
+                    if not isinstance(row, dict):
+                        continue
+                    st_row = (row.get("state") or "").strip().lower()
+                    if st_row == "cancelled":
+                        continue
+                    jid = (row.get("id") or "").strip()
+                    if jid:
+                        job_id = jid
+                        break
+            except Exception:
+                pass
         now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         job_updates = {
             "id": job_id,
@@ -1230,29 +1267,20 @@ async def _persist_schedule_row(
 
 
 def _enqueue_bulk_preparation(*, st, proj: dict, prep_rows: list[tuple[dict, dict]]) -> None:
-    """Queue content prep after the HTTP response (bounded by the generation worker)."""
-    from app.services.generation_worker import enqueue_scheduled_prep
-
-    pid = (proj.get("id") or "").strip()
+    """Start prep only for jobs within the lead window; others stay ``scheduled`` until the scheduler picks them up."""
     for art, job in prep_rows:
         jid = (job.get("id") or "").strip()
-        aid = (art.get("id") or job.get("article_id") or "").strip()
-        if not jid or not pid or not aid:
+        if not jid:
             continue
         try:
-            patch = getattr(st, "patch_scheduled_job_fields", None) or st.update_scheduled_job_fields
-            patch(
-                jid,
-                {
-                    "state": "content_generating",
-                    "last_error": "",
-                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                },
+            start_scheduled_job_preparation_task(
+                st=st,
+                jid=jid,
+                proj=proj,
+                art=art,
+                job=job,
+                force=False,
             )
-        except Exception:
-            pass
-        try:
-            enqueue_scheduled_prep(job_id=jid, project_id=pid, article_id=aid)
         except Exception:
             pass
 
@@ -1322,6 +1350,8 @@ async def bulk_schedule_articles(
 
     if not parsed:
         return BulkScheduleResponse(ok=True, scheduled=0, failed=failed)
+
+    _validate_bulk_schedule_cadence(cadence=payload.cadence, parsed=parsed)
 
     if role != "admin" and uid and hasattr(st, "consume_scheduled_usage"):
         ok, msg = st.consume_scheduled_usage(
@@ -1638,20 +1668,13 @@ async def publish_to_live_site(
         except Exception:
             pass
 
+    from app.services.wordpress_publish import publish_post_to_wordpress
+
     try:
-        created = await wp.post_json(f"/wp-json/wp/v2/{rest_base}", payload, timeout=90.0)
+        created = await publish_post_to_wordpress(wp, post_type=rest_base, payload=payload)
     except Exception as e:
-        # Some custom post types don't support tags; retry without them.
-        if "tags" in payload:
-            try:
-                payload.pop("tags", None)
-                created = await wp.post_json(f"/wp-json/wp/v2/{rest_base}", payload, timeout=90.0)
-            except Exception:
-                _release_manual_claim(f"WordPress publish failed: {e}")
-                raise HTTPException(status_code=502, detail=f"WordPress publish failed: {e}") from e
-        else:
-            _release_manual_claim(f"WordPress publish failed: {e}")
-            raise HTTPException(status_code=502, detail=f"WordPress publish failed: {e}") from e
+        _release_manual_claim(f"WordPress publish failed: {e}")
+        raise HTTPException(status_code=502, detail=f"WordPress publish failed: {e}") from e
 
     wp_post_id = created.get("id") if isinstance(created, dict) else None
     wp_link = created.get("link") if isinstance(created, dict) else None

@@ -1256,6 +1256,15 @@
   accent-color: var(--aa-primary);
 }
 
+.bulkScheduleFieldHint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  color: var(--aa-muted);
+}
+
 .bulkScheduleCadenceSummary {
   display: flex;
   align-items: flex-start;
@@ -1666,6 +1675,10 @@
   background: var(--aa-primary);
   border-color: transparent;
   color: var(--aa-on-primary);
+}
+
+.chipButtonFilterActive {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--aa-on-primary), transparent 70%);
 }
 
 @media (max-width: 640px) {
@@ -3787,6 +3800,234 @@
 
   .articlesTableActionsCol {
     gap: 2px;
+  }
+}
+
+/* Articles list — desktop table vs mobile cards (matches app shell ≤860px) */
+.articlesDesktopOnly {
+  display: block;
+}
+
+.articlesMobileOnly {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 14px;
+}
+
+.articlesMobileToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 2px 8px;
+  border-bottom: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 18%);
+}
+
+.articlesMobileSelectAll {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aa-body-strong);
+  cursor: pointer;
+}
+
+.articlesMobileSelectAll input {
+  margin: 0;
+  accent-color: var(--aa-primary);
+}
+
+.articlesMobileSelectedCount {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--aa-primary);
+}
+
+.articlesMobileMessage {
+  margin: 8px 0;
+  padding: 12px 4px;
+  font-size: 13px;
+  color: var(--aa-muted);
+}
+
+.articlesMobileCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: var(--aa-r-md);
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%);
+  background: color-mix(in oklab, var(--aa-surface-card), #000 6%);
+}
+
+.articlesMobileCardTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.articlesMobileCardCheck input {
+  margin: 0;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--aa-primary);
+}
+
+.articlesMobileCardTitle {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.4;
+  color: color-mix(in oklab, var(--aa-primary), #fff 16%);
+  text-decoration: none;
+  word-break: break-word;
+}
+
+.articlesMobileCardTitle:hover {
+  color: var(--aa-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.articlesMobileMeta {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.articlesMobileMetaRow {
+  display: grid;
+  grid-template-columns: minmax(0, 108px) minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: start;
+}
+
+.articlesMobileMetaRow dt {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--aa-muted);
+  line-height: 1.35;
+}
+
+.articlesMobileMetaRow dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 22%);
+  word-break: break-word;
+}
+
+.articlesMobileMetaEmpty {
+  color: color-mix(in oklab, var(--aa-muted), transparent 25%);
+  font-weight: 600;
+}
+
+.articlesMobileActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
+}
+
+.articlesMobileIconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 18%);
+  background: color-mix(in oklab, #ffffff, transparent 96%);
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 18%);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.articlesMobileIconBtn:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 40%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 90%);
+  color: color-mix(in oklab, var(--aa-primary), #fff 12%);
+}
+
+.articlesMobileIconBtn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.articlesMobileIconBtn svg {
+  width: 17px;
+  height: 17px;
+  pointer-events: none;
+}
+
+@media (max-width: 860px) {
+  .articlesDesktopOnly {
+    display: none !important;
+  }
+
+  .articlesMobileOnly {
+    display: flex;
+  }
+
+  .articleListCard {
+    border-radius: var(--aa-r-md);
+  }
+
+  .articlesPagination {
+    flex-wrap: wrap;
+    margin-top: 12px;
+  }
+
+  .articlesPaginationMeta {
+    flex: 1 1 100%;
+    order: -1;
+    text-align: center;
+    font-size: 12px;
+    color: var(--aa-muted);
+  }
+
+  .articlesPagination .button {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 0;
+  }
+}
+
+@media (max-width: 400px) {
+  .articlesMobileMetaRow {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
+.articlesPagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.articlesPaginationMeta {
+  font-size: 13px;
+  color: color-mix(in oklab, var(--aa-muted), #666 40%);
+}
+
+.articlesMobileFilterDates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 400px) {
+  .articlesMobileFilterDates {
+    grid-template-columns: 1fr;
   }
 }
 

@@ -15,6 +15,7 @@ import {
   AdminWorkspaceResponse,
   api,
   clearAuth,
+  downloadWordpressPlugin,
   getAccessToken,
   PlanPublic,
   ProfilePublic,
@@ -1298,9 +1299,20 @@ export default function DashboardPage() {
               </label>
 
               <div className={styles.row}>
-                <a className={styles.btnSecondary} href={wpSettings?.plugin_download_url || "/api/wordpress/plugin/download"}>
+                <button
+                  className={styles.btnSecondary}
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await downloadWordpressPlugin();
+                    } catch (e) {
+                      const msg = e instanceof Error ? e.message : "Could not download plugin.";
+                      window.alert(msg);
+                    }
+                  }}
+                >
                   Download plugin
-                </a>
+                </button>
                 <button
                   className={styles.button}
                   type="button"

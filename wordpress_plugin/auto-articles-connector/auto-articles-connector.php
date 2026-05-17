@@ -76,7 +76,87 @@ final class AutoArticlesConnector {
         }
     }
 
+    private static function normalize_post_type($raw) {
+        $t = sanitize_key(is_string($raw) ? $raw : 'post');
+        if ($t === 'posts') {
+            $t = 'post';
+        }
+        return $t ?: 'post';
+    }
+
     public static function register_rest_routes() {
+        register_rest_route(self::REST_NAMESPACE, '/publish', [
+            'methods' => 'POST',
+            'permission_callback' => function () {
+                return current_user_can('publish_posts');
+            },
+            'callback' => function (WP_REST_Request $request) {
+                $params = $request->get_json_params();
+                if (!is_array($params)) {
+                    return new WP_Error('riviso_invalid', 'Invalid JSON body', ['status' => 400]);
+                }
+
+                if (!empty($params['validate_only'])) {
+                    return new WP_REST_Response([
+                        'ok' => true,
+                        'can_publish' => current_user_can('publish_posts'),
+                    ], 200);
+                }
+
+                $post_type = self::normalize_post_type($params['post_type'] ?? 'post');
+                $title = sanitize_text_field($params['title'] ?? '');
+                $content = isset($params['content']) ? wp_kses_post((string) $params['content']) : '';
+                $status = sanitize_key($params['status'] ?? 'draft');
+                if (!in_array($status, ['publish', 'draft', 'pending', 'future', 'private'], true)) {
+                    $status = 'draft';
+                }
+
+                $postarr = [
+                    'post_title' => $title,
+                    'post_content' => $content,
+                    'post_status' => $status,
+                    'post_type' => $post_type,
+                ];
+
+                if (!empty($params['categories']) && is_array($params['categories'])) {
+                    $cats = array_filter(array_map('intval', $params['categories']));
+                    if ($cats) {
+                        $postarr['post_category'] = $cats;
+                    }
+                }
+
+                $post_id = wp_insert_post($postarr, true);
+                if (is_wp_error($post_id)) {
+                    return new WP_Error(
+                        'riviso_publish_failed',
+                        $post_id->get_error_message(),
+                        ['status' => 500]
+                    );
+                }
+
+                $post_id = (int) $post_id;
+
+                if (!empty($params['featured_media']) && is_numeric($params['featured_media'])) {
+                    set_post_thumbnail($post_id, (int) $params['featured_media']);
+                }
+
+                if (!empty($params['meta']) && is_array($params['meta'])) {
+                    foreach ($params['meta'] as $key => $val) {
+                        if (!is_string($key) || $key === '') {
+                            continue;
+                        }
+                        update_post_meta($post_id, $key, sanitize_text_field((string) $val));
+                    }
+                }
+
+                return new WP_REST_Response([
+                    'id' => $post_id,
+                    'link' => get_permalink($post_id),
+                    'status' => get_post_status($post_id),
+                ], 201);
+            },
+        ]);
+
         register_rest_route(self::REST_NAMESPACE, '/ping', [
             'methods' => 'GET',
             'permission_callback' => function () {
