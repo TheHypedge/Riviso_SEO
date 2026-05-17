@@ -3,10 +3,17 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useDeferredValue, useEffect, useMemo, useState, startTransition } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
+import { BulkScheduleForm, type BulkScheduleFormValues } from "@/components/bulkSchedule/BulkScheduleForm";
+import { BulkScheduleModal } from "@/components/bulkSchedule/BulkScheduleModal";
+import {
+  articleIdForClusterTopic,
+  buildClusterScheduleSeeds,
+} from "@/components/bulkSchedule/clusterScheduleUtils";
+import type { BulkScheduleSeedRow } from "@/components/bulkSchedule/useBulkScheduleForm";
 import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, getAccessToken, getApiBaseUrl, PromptListResponse, ResearchIdeaRow as ApiResearchIdeaRow, TopicCluster } from "@/lib/api";
 import { COUNTRIES, DEFAULT_COUNTRY_CODE } from "@/lib/countries";
 import {
@@ -16,19 +23,8 @@ import {
   citiesForCountry,
 } from "@/lib/brand_dictionaries";
 import { useClusterValidation, type ValidatableTopic } from "@/hooks/useClusterValidation";
-import {
-  applyBulkScheduleDates,
-  BULK_SCHEDULE_WEEKDAYS_SUN_FIRST,
-  defaultPostingDaysFromMin,
-  describeBulkScheduleSummary,
-  parseDatetimeLocal,
-  preferredTimeFromDatetimeLocal,
-  validateBulkScheduleCadence,
-  isScheduleWhenAllowed,
-  type BulkScheduleMode,
-  type WeekdayIso,
-} from "@/lib/bulkScheduleDates";
-import { SCHEDULE_BUFFER_MINUTES, SCHEDULE_PREP_MINUTES, scheduleMinFromNowMs } from "@/lib/scheduleTiming";
+import { parseDatetimeLocal } from "@/lib/bulkScheduleDates";
+import { scheduleMinFromNowMs } from "@/lib/scheduleTiming";
 import { ProjectTabIcon, SidebarBackIcon, type ProjectTabKey } from "@/components/ProjectTabIcon";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
@@ -702,15 +698,22 @@ export default function ProjectPage() {
     message: string;
     detail?: string | null;
   } | null>(null);
-  const [clusterScheduleModal, setClusterScheduleModal] = useState<{
-    clusterId: string;
-    topicIds: string[] | null; // null = all pending
-    runAt: string; // datetime-local value
-    wpStatus: "draft" | "publish";
-    writingPromptId: string;
-    imagePromptId: string;
-    busy: boolean;
-  } | null>(null);
+  const [researchScheduleModal, setResearchScheduleModal] = useState<
+    | {
+        kind: "cluster";
+        clusterId: string;
+        topicIds: string[] | null;
+        seedRows: BulkScheduleSeedRow[];
+      }
+    | {
+        kind: "curation";
+        ideaIds: string[];
+        seedRows: BulkScheduleSeedRow[];
+      }
+    | null
+  >(null);
+  const [researchScheduleBusy, setResearchScheduleBusy] = useState(false);
+  const [researchScheduleError, setResearchScheduleError] = useState<string | null>(null);
   const [clusterGeneratePromptModal, setClusterGeneratePromptModal] = useState<{
     clusterId: string;
     topicIds: string[] | null;
@@ -720,10 +723,7 @@ export default function ProjectPage() {
     busy: boolean;
   } | null>(null);
   const [curationPromptModal, setCurationPromptModal] = useState<{
-    action: "generate" | "schedule";
     ideaIds: string[];
-    runAt: string;
-    wpStatus: "draft" | "publish";
     writingPromptId: string;
     imagePromptId: string;
     busy: boolean;
@@ -852,17 +852,7 @@ export default function ProjectPage() {
   const [bulkMode, setBulkMode] = useState<"root" | "change_status" | "schedule">("root");
   const [scheduleMin, setScheduleMin] = useState("");
   const [editJobMin, setEditJobMin] = useState("");
-  const [bulkScheduleMin, setBulkScheduleMin] = useState("");
-  const [bulkScheduleSeedRows, setBulkScheduleSeedRows] = useState<Array<{ id: string; title: string }>>([]);
-  const [bulkScheduleManualWhen, setBulkScheduleManualWhen] = useState<Record<string, string>>({});
-  const [bulkScheduleMode, setBulkScheduleMode] = useState<BulkScheduleMode>("manual");
-  const [bulkScheduleStartWhen, setBulkScheduleStartWhen] = useState("");
-  const [bulkSchedulePreferredTime, setBulkSchedulePreferredTime] = useState("09:00");
-  const [bulkScheduleArticlesPerWeek, setBulkScheduleArticlesPerWeek] = useState(1);
-  const [bulkScheduleWeekdays, setBulkScheduleWeekdays] = useState<WeekdayIso[]>([1]);
-  const [bulkSchedulePostsPerMonth, setBulkSchedulePostsPerMonth] = useState(1);
-  const [bulkScheduleWpStatus, setBulkScheduleWpStatus] = useState<"draft" | "publish">("draft");
-  const [bulkSchedulePostType, setBulkSchedulePostType] = useState("posts");
+  const [bulkScheduleSeedRows, setBulkScheduleSeedRows] = useState<BulkScheduleSeedRow[]>([]);
   const [bulkScheduling, setBulkScheduling] = useState(false);
 
   // Research module state
@@ -2736,157 +2726,34 @@ export default function ProjectPage() {
     return toDatetimeLocalFromDateInProfileTz(scheduleMinFromNowMs());
   }, [profileTz]);
 
-  const bulkScheduleCadenceInputs = useMemo(
-    () => ({
-      mode: bulkScheduleMode,
-      startWhen: bulkScheduleStartWhen,
-      preferredTime: bulkSchedulePreferredTime,
-      articlesPerWeek: bulkScheduleArticlesPerWeek,
-      weekdays: bulkScheduleWeekdays,
-      postsPerMonth: bulkSchedulePostsPerMonth,
-      min: bulkScheduleMin,
-    }),
-    [
-      bulkScheduleMode,
-      bulkScheduleStartWhen,
-      bulkSchedulePreferredTime,
-      bulkScheduleArticlesPerWeek,
-      bulkScheduleWeekdays,
-      bulkSchedulePostsPerMonth,
-      bulkScheduleMin,
-    ],
-  );
-  const deferredBulkCadence = useDeferredValue(bulkScheduleCadenceInputs);
-
-  const bulkScheduleRows = useMemo(() => {
-    const min = deferredBulkCadence.min || buildScheduleMinStr();
-    const base = bulkScheduleSeedRows.map((r) => ({
-      id: r.id,
-      title: r.title,
-      when: bulkScheduleManualWhen[r.id] || min,
-    }));
-    if (deferredBulkCadence.mode === "manual" || base.length < 2) return base;
-    return applyBulkScheduleDates({
-      mode: deferredBulkCadence.mode,
-      rows: base,
-      startWhen: deferredBulkCadence.startWhen || min,
-      minWhen: min,
-      timeZone: scheduleTimeZone,
-      articlesPerWeek: deferredBulkCadence.articlesPerWeek,
-      weekdays: deferredBulkCadence.weekdays,
-      postsPerMonth: deferredBulkCadence.postsPerMonth,
-      preferredTime:
-        deferredBulkCadence.mode === "weekly" || deferredBulkCadence.mode === "monthly"
-          ? deferredBulkCadence.preferredTime
-          : undefined,
-    });
-  }, [
-    bulkScheduleSeedRows,
-    bulkScheduleManualWhen,
-    deferredBulkCadence,
-    scheduleTimeZone,
-    buildScheduleMinStr,
-  ]);
-
-  const bulkScheduleWhenDisplay = useMemo(() => {
-    const out: Record<string, { date: string; time: string; tz: string }> = {};
-    for (const r of bulkScheduleRows) {
-      out[r.id] = formatBulkScheduleWhenDisplay(r.when);
-    }
-    return out;
-  }, [bulkScheduleRows, profileTz]);
-
-  const bulkScheduleCadenceSummary = useMemo(() => {
-    if (deferredBulkCadence.mode === "manual" || bulkScheduleRows.length < 2) return "";
-    return describeBulkScheduleSummary({
-      mode: deferredBulkCadence.mode,
-      count: bulkScheduleRows.length,
-      articlesPerWeek: deferredBulkCadence.articlesPerWeek,
-      weekdays: deferredBulkCadence.weekdays,
-      postsPerMonth: deferredBulkCadence.postsPerMonth,
-      whens: bulkScheduleRows.map((r) => r.when),
-    });
-  }, [deferredBulkCadence, bulkScheduleRows]);
-
-  function setBulkScheduleModeAndApply(mode: BulkScheduleMode) {
-    startTransition(() => setBulkScheduleMode(mode));
-  }
-
-  useEffect(() => {
-    if (bulkMode !== "schedule") return;
-    const refreshMin = () => {
-      const minStr = buildScheduleMinStr();
-      setBulkScheduleMin((prev) => (prev === minStr ? prev : minStr));
-    };
-    refreshMin();
-    const id = window.setInterval(refreshMin, 30_000);
-    return () => window.clearInterval(id);
-  }, [bulkMode, buildScheduleMinStr]);
-
   function bulkSchedule() {
     if (!selectedIds.length) return;
     if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
     void ensureScheduleMetaLoaded();
-    const minStr = buildScheduleMinStr();
-    setBulkScheduleMin(minStr);
-    setBulkScheduleStartWhen(minStr);
-    setBulkSchedulePreferredTime(preferredTimeFromDatetimeLocal(minStr));
-    setBulkScheduleMode("manual");
-    setBulkScheduleArticlesPerWeek(1);
-    setBulkScheduleWeekdays(defaultPostingDaysFromMin(minStr));
-    setBulkSchedulePostsPerMonth(1);
-    setBulkScheduleWpStatus(wpDefaults?.wp_status || "draft");
-    setBulkSchedulePostType(wpDefaults?.post_type || "posts");
-    setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
-    setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
-    const whenInit: Record<string, string> = {};
-    const seeds = selectedIds.map((id) => {
-      whenInit[id] = minStr;
-      return { id, title: articleTitleFor(id) };
-    });
-    setBulkScheduleSeedRows(seeds);
-    setBulkScheduleManualWhen(whenInit);
+    setBulkScheduleSeedRows(
+      selectedIds.map((id) => ({ id, title: articleTitleFor(id) })),
+    );
     setBulkMode("schedule");
   }
 
-  async function bulkScheduleSubmit() {
-    if (!bulkScheduleRows.length) return;
+  async function bulkScheduleSubmit(values: BulkScheduleFormValues) {
+    if (!values.rows.length) return;
     if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
     setError(null);
-    const cadenceErr = validateBulkScheduleCadence({
-      mode: bulkScheduleMode,
-      articleCount: bulkScheduleRows.length,
-      articlesPerWeek: bulkScheduleArticlesPerWeek,
-      weekdays: bulkScheduleWeekdays,
-      postsPerMonth: bulkSchedulePostsPerMonth,
-    });
-    if (cadenceErr) {
-      setError(cadenceErr);
-      return;
-    }
-    const minStr = buildScheduleMinStr();
-    setBulkScheduleMin(minStr);
-    const rowsToSubmit = bulkScheduleRows;
     setBulkScheduling(true);
     try {
-      const items = rowsToSubmit.map((r) => {
-        const when = (r.when || "").trim();
-        if (!when) throw new Error("Please set date/time for all selected articles");
-        if (!isScheduleWhenAllowed(when, minStr, scheduleTimeZone)) {
-          throw new Error(
-            `Each scheduled time must be at least ${SCHEDULE_BUFFER_MINUTES} minutes from now (articles need ~${SCHEDULE_PREP_MINUTES} minutes to prepare)`,
-          );
-        }
-        return { article_id: r.id, wp_scheduled_at: when };
-      });
+      const items = values.rows.map((r) => ({
+        article_id: r.id,
+        wp_scheduled_at: (r.when || "").trim(),
+      }));
 
       const schedulePayload = {
         items,
-        wp_status: bulkScheduleWpStatus,
-        post_type: bulkSchedulePostType,
-        writing_prompt_id: scheduleWritingPromptId || null,
-        image_prompt_id: scheduleImagePromptId || null,
-        generate_image: true,
+        wp_status: values.wpStatus,
+        post_type: values.postType,
+        writing_prompt_id: values.writingPromptId || null,
+        image_prompt_id: values.imagePromptId || null,
+        generate_image: values.generateImage,
       };
 
       const res = await api.bulkScheduleArticles(projectId, schedulePayload);
@@ -2909,12 +2776,113 @@ export default function ProjectPage() {
       setShowBulkPopup(false);
       setBulkMode("root");
       setBulkScheduleSeedRows([]);
-      setBulkScheduleManualWhen({});
     } catch (e) {
       if (showWebsiteConnectionErrorIfNeeded(e)) return;
       setError(e instanceof Error ? e.message : "Bulk schedule failed");
     } finally {
       setBulkScheduling(false);
+    }
+  }
+
+  async function submitResearchBulkSchedule(values: BulkScheduleFormValues) {
+    const modal = researchScheduleModal;
+    if (!modal || !values.rows.length) return;
+    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
+    setResearchScheduleError(null);
+    setResearchScheduleBusy(true);
+    try {
+      let clusterAfterImport: TopicCluster | null = null;
+      const ideaToArticle = new Map<string, string>();
+
+      if (modal.kind === "cluster") {
+        const importRes = await api.topicClusterImport(projectId, modal.clusterId, {
+          topic_ids: modal.topicIds,
+          wp_status: values.wpStatus,
+          post_type: values.postType,
+          writing_prompt_id: values.writingPromptId || null,
+          image_prompt_id: values.imagePromptId || null,
+          generate_image: values.generateImage,
+        });
+        clusterAfterImport = importRes.cluster;
+        setTopicClusters((prev) =>
+          prev.map((c) => (c.id === importRes.cluster.id ? importRes.cluster : c)),
+        );
+        for (const row of values.rows) {
+          const articleId = articleIdForClusterTopic(importRes.cluster, row.id);
+          if (!articleId) {
+            throw new Error(`Could not resolve an article for “${row.title}”. Try importing again.`);
+          }
+          ideaToArticle.set(row.id, articleId);
+        }
+        if (importRes.errors?.length) {
+          setClusterErrorModal({
+            title: "Some topics couldn't be imported",
+            message: `${importRes.errors.length} topic(s) failed during import.`,
+            detail: importRes.errors.map((e) => `• ${e.topic_id}: ${e.message}`).join("\n"),
+          });
+        }
+      } else {
+        const selected = researchResults.filter((r) => modal.ideaIds.includes(r.id) && !r.imported);
+        const imported = await importResearchIdeaRows(selected, {
+          skipDuplicates: false,
+          successVerb: "Imported for scheduling",
+        });
+        if (!imported?.articleIds.length) {
+          throw new Error("Import did not create any articles to schedule.");
+        }
+        selected.forEach((r, idx) => {
+          const aid = imported.articleIds[idx];
+          if (aid) ideaToArticle.set(r.id, aid);
+        });
+      }
+
+      const items = values.rows.map((r) => {
+        const articleId =
+          modal.kind === "cluster"
+            ? articleIdForClusterTopic(clusterAfterImport!, r.id) || ideaToArticle.get(r.id)
+            : ideaToArticle.get(r.id);
+        if (!articleId) {
+          throw new Error(`Could not resolve an article for “${r.title}”.`);
+        }
+        return { article_id: articleId, wp_scheduled_at: (r.when || "").trim() };
+      });
+
+      const res = await api.bulkScheduleArticles(projectId, {
+        items,
+        wp_status: values.wpStatus,
+        post_type: values.postType,
+        writing_prompt_id: values.writingPromptId || null,
+        image_prompt_id: values.imagePromptId || null,
+        generate_image: values.generateImage,
+      });
+      if (res.failed?.length) {
+        const first = res.failed[0];
+        throw new Error(first?.error || `Failed to schedule ${res.failed.length} article(s)`);
+      }
+      if ((res.scheduled || 0) < items.length) {
+        throw new Error("Some articles could not be scheduled");
+      }
+
+      if (modal.kind === "cluster") {
+        clearClusterSelection(modal.clusterId);
+        setClusterPlanMsg(
+          `Scheduled ${res.scheduled} article${res.scheduled === 1 ? "" : "s"}. Track them in the Scheduled Articles tab.`,
+        );
+      } else {
+        setResearchImportMsg(
+          `Scheduled ${res.scheduled} article${res.scheduled === 1 ? "" : "s"} with featured image generation enabled.`,
+        );
+        setResearchFilter("imported");
+        await reloadArticleTitles();
+        await refreshArticlesList();
+      }
+      void refreshFeatureLimits();
+      setResearchScheduleModal(null);
+    } catch (e) {
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
+      setResearchScheduleError(e instanceof Error ? e.message : "Scheduling failed");
+    } finally {
+      setResearchScheduleBusy(false);
     }
   }
 
@@ -3088,6 +3056,11 @@ export default function ProjectPage() {
     if (s === "draft") return `${styles.statusPill} ${styles.statusDraft}`;
     if (s === "published") return `${styles.statusPill} ${styles.statusPublished}`;
     return `${styles.statusPill} ${styles.statusNeutral}`;
+  }
+
+  function formatSupportingKeywords(keywords?: string[] | null): string {
+    const parts = (keywords || []).map((k) => String(k).trim()).filter(Boolean);
+    return parts.length ? parts.join(", ") : "—";
   }
 
   function jobStateLabel(s: string) {
@@ -3553,9 +3526,11 @@ export default function ProjectPage() {
     }
   }
 
-  /** Open the schedule picker modal for a cluster (selected slots or all pending). */
+  /** Open bulk schedule modal for a cluster (selected slots or all pending). */
   async function openScheduleForCluster(clusterId: string) {
     if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
+    const cluster = topicClusters.find((c) => c.id === clusterId);
+    if (!cluster) return;
     const { topicIds, pendingCount } = effectiveSelectionForCluster(clusterId);
     if (pendingCount === 0) {
       setClusterErrorModal({
@@ -3564,57 +3539,17 @@ export default function ProjectPage() {
       });
       return;
     }
-    // Default schedule: ~24h from now, rounded to the next 5-min boundary.
-    const dt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    dt.setSeconds(0, 0);
-    dt.setMinutes(dt.getMinutes() + (5 - (dt.getMinutes() % 5 || 5)));
-    const prompts = await ensureScheduleMetaLoaded();
-    setClusterScheduleModal({
-      clusterId,
-      topicIds,
-      runAt: toDatetimeLocalValue(dt),
-      wpStatus: "draft",
-      writingPromptId: prompts.writingPrompts?.default_id || "",
-      imagePromptId: prompts.imagePrompts?.default_id || "",
-      busy: false,
-    });
-  }
-
-  /** Submit handler for the schedule modal. */
-  async function confirmScheduleForCluster() {
-    const m = clusterScheduleModal;
-    if (!m || m.busy) return;
-    setClusterScheduleModal({ ...m, busy: true });
-    try {
-      const res = await api.topicClusterImport(projectId, m.clusterId, {
-        topic_ids: m.topicIds,
-        schedule_at: m.runAt,
-        wp_status: m.wpStatus,
-        writing_prompt_id: m.writingPromptId || null,
-        image_prompt_id: m.imagePromptId || null,
-        generate_image: true,
+    const seedRows = buildClusterScheduleSeeds(cluster, topicIds);
+    if (!seedRows.length) {
+      setClusterErrorModal({
+        title: "Nothing to schedule",
+        message: "No pending topics are available to schedule.",
       });
-      setTopicClusters((prev) => prev.map((c) => (c.id === res.cluster.id ? res.cluster : c)));
-      void refreshFeatureLimits();
-      clearClusterSelection(m.clusterId);
-      setClusterScheduleModal(null);
-      if (res.errors?.length) {
-        setClusterErrorModal({
-          title: "Some topics couldn't be scheduled",
-          message: `Scheduled ${res.scheduled_count}, ${res.errors.length} failed.`,
-          detail: res.errors.map((e) => `• ${e.topic_id}: ${e.message}`).join("\n"),
-        });
-      } else {
-        setClusterPlanMsg(
-          `Scheduled ${res.scheduled_count} article${res.scheduled_count === 1 ? "" : "s"} starting ${m.runAt.replace("T", " ")}. Track them in the Scheduled Articles tab.`,
-        );
-      }
-    } catch (e) {
-      setClusterScheduleModal(m); // restore busy=false
-      setClusterErrorModal(buildErrorModalFromApiError(e, "Scheduling failed"));
-    } finally {
-      setClusterScheduleModal((prev) => (prev ? { ...prev, busy: false } : null));
+      return;
     }
+    await ensureScheduleMetaLoaded();
+    setResearchScheduleError(null);
+    setResearchScheduleModal({ kind: "cluster", clusterId, topicIds, seedRows });
   }
 
   function addSeedKeywordsFromInput() {
@@ -3893,15 +3828,19 @@ export default function ProjectPage() {
       setResearchImportMsg("Select at least one not-imported idea first.");
       return;
     }
+    if (action === "schedule") {
+      await ensureScheduleMetaLoaded();
+      setResearchScheduleError(null);
+      setResearchScheduleModal({
+        kind: "curation",
+        ideaIds: selected.map((r) => r.id),
+        seedRows: selected.map((r) => ({ id: r.id, title: r.title })),
+      });
+      return;
+    }
     const prompts = await ensureScheduleMetaLoaded();
-    const dt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    dt.setSeconds(0, 0);
-    dt.setMinutes(dt.getMinutes() + (5 - (dt.getMinutes() % 5 || 5)));
     setCurationPromptModal({
-      action,
       ideaIds: selected.map((r) => r.id),
-      runAt: toDatetimeLocalValue(dt),
-      wpStatus: "draft",
       writingPromptId: prompts.writingPrompts?.default_id || "",
       imagePromptId: prompts.imagePrompts?.default_id || "",
       busy: false,
@@ -3914,56 +3853,37 @@ export default function ProjectPage() {
     setCurationPromptModal({ ...m, busy: true });
     const selected = researchResults.filter((r) => m.ideaIds.includes(r.id) && !r.imported);
     try {
-      if (m.action === "generate") {
-        const q = await api.articleQuota(projectId).catch(() => null);
-        if (q && !q.unlimited && (q.max_can_consume_now ?? 0) < selected.length) {
-          setResearchImportMsg(
-            `Article generation limit reached. Your plan allows ${q.max_can_consume_now ?? 0} more generation${(q.max_can_consume_now ?? 0) === 1 ? "" : "s"} right now, but ${selected.length} selected idea${selected.length === 1 ? "" : "s"} need generation.`,
-          );
-          return;
-        }
+      const q = await api.articleQuota(projectId).catch(() => null);
+      if (q && !q.unlimited && (q.max_can_consume_now ?? 0) < selected.length) {
+        setResearchImportMsg(
+          `Article generation limit reached. Your plan allows ${q.max_can_consume_now ?? 0} more generation${(q.max_can_consume_now ?? 0) === 1 ? "" : "s"} right now, but ${selected.length} selected idea${selected.length === 1 ? "" : "s"} need generation.`,
+        );
+        return;
       }
 
       const imported = await importResearchIdeaRows(selected, {
         skipDuplicates: false,
-        successVerb: m.action === "generate" ? "Imported for generation" : "Imported for scheduling",
+        successVerb: "Imported for generation",
       });
       if (!imported?.articleIds.length) return;
 
-      if (m.action === "generate") {
-        let generated = 0;
-        for (const articleId of imported.articleIds) {
-          await api.generateArticle(projectId, articleId, {
-            writing_prompt_id: m.writingPromptId || null,
-            image_prompt_id: m.imagePromptId || null,
-            generate_image: true,
-          });
-          generated += 1;
-        }
-        setResearchImportMsg(`Generated ${generated} article${generated === 1 ? "" : "s"} with featured images.`);
-        void refreshArticleQuota();
-      } else {
-        let scheduled = 0;
-        for (const [idx, articleId] of imported.articleIds.entries()) {
-          await api.scheduleArticle(projectId, articleId, {
-            wp_scheduled_at: addMinutesToDatetimeLocal(m.runAt, idx * 5),
-            wp_status: m.wpStatus,
-            post_type: "post",
-            writing_prompt_id: m.writingPromptId || null,
-            image_prompt_id: m.imagePromptId || null,
-            generate_image: true,
-          });
-          scheduled += 1;
-        }
-        setResearchImportMsg(`Scheduled ${scheduled} article${scheduled === 1 ? "" : "s"} with featured image generation enabled.`);
-        void refreshFeatureLimits();
+      let generated = 0;
+      for (const articleId of imported.articleIds) {
+        await api.generateArticle(projectId, articleId, {
+          writing_prompt_id: m.writingPromptId || null,
+          image_prompt_id: m.imagePromptId || null,
+          generate_image: true,
+        });
+        generated += 1;
       }
+      setResearchImportMsg(`Generated ${generated} article${generated === 1 ? "" : "s"} with featured images.`);
+      void refreshArticleQuota();
       await reloadArticleTitles();
       await refreshArticlesList();
       setCurationPromptModal(null);
       setResearchFilter("imported");
     } catch (e) {
-      const modal = buildErrorModalFromApiError(e, m.action === "generate" ? "Generation failed" : "Scheduling failed");
+      const modal = buildErrorModalFromApiError(e, "Generation failed");
       setResearchImportMsg([modal.message, modal.detail].filter(Boolean).join("\n"));
     } finally {
       setCurationPromptModal((current) => (current ? { ...current, busy: false } : current));
@@ -4380,13 +4300,12 @@ export default function ProjectPage() {
               />
               <span className={styles.sidebarBrandText}>Riviso</span>
             </Link>
-            <div className={styles.sidebarTitle}>PROJECT</div>
-            <div className={styles.navGroup}>
-              <Link className={styles.navItem} href="/dashboard">
-                <SidebarBackIcon className={styles.navItemIcon} />
-                <span className={styles.navItemLabel}>Back to dashboard</span>
-              </Link>
-            </div>
+            <div className={styles.sidebarNavMain}>
+            
+            <Link className={styles.sidebarBackLink} href="/dashboard">
+              <SidebarBackIcon className={styles.sidebarBackIcon} aria-hidden="true" />
+              <span>Back to dashboard</span>
+            </Link>
 
             {/* Project switcher lives in its own labelled block so it
                 reads as a stand-alone control, not "another nav item"
@@ -4456,6 +4375,8 @@ export default function ProjectPage() {
                 </button>
               ))}
             </div>
+            </div>
+            <div className={styles.sidebarFooter}>
             <Link
               href="/dashboard?section=profile"
               className={`${styles.sidebarAccountCard} ${styles.sidebarAccountLink}`}
@@ -4470,6 +4391,7 @@ export default function ProjectPage() {
                 <div className={styles.sidebarAccountPlan}>Plan: {sidebarPlan}</div>
               </div>
             </Link>
+            </div>
           </aside>
 
           <section className={styles.contentCol}>
@@ -4577,90 +4499,23 @@ export default function ProjectPage() {
                 <>
                   <h1 style={{ margin: 0 }}>{tabLabel[tab]}</h1>
                   {tab === "research" ? (
-                    <div className={styles.muted} style={{ marginTop: 6, lineHeight: 1.55 }}>
-                      Generate optimized titles, focus keyphrases, and keywords — then import them into Articles.
-                    </div>
+                    <p className={styles.researchPageLead}>
+                      Plan topical clusters or run keyword curations — then generate, import, or schedule articles in one flow.
+                    </p>
+                  ) : null}
+                  {tab === "project_settings" ? (
+                    <p className={styles.settingsPageLead}>
+                      Connect WordPress, define how the AI writes, and set publishing defaults for this project.
+                    </p>
+                  ) : null}
+                  {tab === "prompts" ? (
+                    <p className={styles.promptsPageLead}>
+                      Manage writing and image prompts for generation and scheduling. Set project defaults or override per article.
+                    </p>
                   ) : null}
                 </>
               )}
             </div>
-
-            {tab === "articles" ? (
-              <div className={styles.showOnMobile}>
-                {renderLimitStrip([
-                  articleGenerationLimitStatus(),
-                  monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles),
-                  monthlyLimitStatus("Article export", featureLimits?.export_articles),
-                ])}
-              </div>
-            ) : null}
-
-            {showMobileFilters ? (
-              <>
-                <button type="button" className={styles.modalBackdrop} aria-label="Close filters" onClick={() => setShowMobileFilters(false)} />
-                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Filters">
-                  <div className={styles.modalHead}>
-                    <h3 className={styles.modalTitle}>Filter</h3>
-                    <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowMobileFilters(false)}>
-                      <Icon.X className={styles.icon20} />
-                    </button>
-                  </div>
-                  <div className={styles.modalBody}>
-                    <label className={styles.label}>
-                      Status
-                      <select className={styles.input} value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
-                        <option value="">All</option>
-                        <option value="pending">Pending</option>
-                        <option value="draft">Draft</option>
-                        <option value="scheduled">Scheduled</option>
-                        <option value="published">Published</option>
-                      </select>
-                    </label>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
-                      <label className={styles.label}>
-                        From
-                        <input className={styles.input} type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-                      </label>
-                      <label className={styles.label}>
-                        To
-                        <input className={styles.input} type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-                      </label>
-                    </div>
-                    <label className={styles.label} style={{ marginTop: 10 }}>
-                      Date order
-                      <select
-                        className={styles.input}
-                        value={dateOrder}
-                        onChange={(e) => {
-                          setDateOrder(e.target.value as "asc" | "desc");
-                          setPage(1);
-                        }}
-                      >
-                        <option value="desc">Latest → Oldest</option>
-                        <option value="asc">Oldest → Latest</option>
-                      </select>
-                    </label>
-                  </div>
-                  <div className={styles.modalFooter}>
-                    <button
-                      type="button"
-                      className={styles.btnSecondary}
-                      onClick={() => {
-                        setStatus("");
-                        setDateFrom("");
-                        setDateTo("");
-                        setDateOrder("desc");
-                      }}
-                    >
-                      Clear
-                    </button>
-                    <button type="button" className={styles.button} onClick={() => setShowMobileFilters(false)}>
-                      Apply
-                    </button>
-                  </div>
-                </div>
-              </>
-            ) : null}
 
         {tab === "articles" ? (
           <>
@@ -4686,7 +4541,7 @@ export default function ProjectPage() {
                         <div className={styles.bulkScheduleMetaChips}>
                           <span className={styles.bulkScheduleMetaChip}>
                             <Icon.Document className={styles.icon16} />
-                            {bulkScheduleRows.length} article{bulkScheduleRows.length === 1 ? "" : "s"}
+                            {bulkScheduleSeedRows.length} article{bulkScheduleSeedRows.length === 1 ? "" : "s"}
                           </span>
                           {profileTz ? (
                             <span className={styles.bulkScheduleMetaChip}>
@@ -4810,380 +4665,21 @@ export default function ProjectPage() {
                       </div>
                     </>
                   ) : (
-                    <>
-                      <div className={styles.bulkScheduleBody}>
-                        <section
-                          className={`${styles.bulkScheduleSection} ${styles.bulkScheduleSectionCompact}`}
-                          aria-labelledby="bulk-schedule-defaults-heading"
-                        >
-                          <div className={styles.bulkScheduleSectionHead} id="bulk-schedule-defaults-heading">
-                            <span className={styles.bulkScheduleSectionIconWrap} aria-hidden="true">
-                              <Icon.Globe className={styles.icon18} />
-                            </span>
-                            <span className={styles.bulkScheduleSectionTitle}>Publishing defaults</span>
-                          </div>
-                          <div className={`${styles.bulkScheduleFieldList} ${styles.bulkScheduleFieldListGrid}`}>
-                            <div className={styles.bulkScheduleFieldRow}>
-                              <span className={styles.bulkScheduleFieldIcon} aria-hidden="true">
-                                <Icon.Layers className={styles.icon18} />
-                              </span>
-                              <label className={styles.bulkScheduleFieldControl}>
-                                <span className={styles.bulkScheduleFieldLabel}>WordPress post type</span>
-                                <select
-                                  className={styles.bulkScheduleInput}
-                                  value={bulkSchedulePostType}
-                                  onChange={(e) => setBulkSchedulePostType(e.target.value)}
-                                  disabled={bulkScheduling}
-                                >
-                                  <option value="posts">Posts</option>
-                                  <option value="pages">Pages</option>
-                                  {wpTypesForSchedule
-                                    .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
-                                    .map((t) => (
-                                      <option key={t.rest_base} value={t.rest_base}>
-                                        {t.name || t.rest_base}
-                                      </option>
-                                    ))}
-                                </select>
-                              </label>
-                            </div>
-                            <div className={styles.bulkScheduleFieldRow}>
-                              <span className={styles.bulkScheduleFieldIcon} aria-hidden="true">
-                                <Icon.Status className={styles.icon18} />
-                              </span>
-                              <label className={styles.bulkScheduleFieldControl}>
-                                <span className={styles.bulkScheduleFieldLabel}>WordPress status</span>
-                                <select
-                                  className={styles.bulkScheduleInput}
-                                  value={bulkScheduleWpStatus}
-                                  onChange={(e) => setBulkScheduleWpStatus(e.target.value as "draft" | "publish")}
-                                  disabled={bulkScheduling}
-                                >
-                                  <option value="draft">Draft</option>
-                                  <option value="publish">Publish</option>
-                                </select>
-                              </label>
-                            </div>
-                            <div className={styles.bulkScheduleFieldRow}>
-                              <span className={styles.bulkScheduleFieldIcon} aria-hidden="true">
-                                <Icon.Pen className={styles.icon18} />
-                              </span>
-                              <label className={styles.bulkScheduleFieldControl}>
-                                <span className={styles.bulkScheduleFieldLabel}>Writing prompt</span>
-                                <select
-                                  className={styles.bulkScheduleInput}
-                                  value={scheduleWritingPromptId}
-                                  onChange={(e) => setScheduleWritingPromptId(e.target.value)}
-                                  disabled={bulkScheduling}
-                                >
-                                  <option value="">Use project default</option>
-                                  {(scheduleWritingPrompts?.items || []).map((p) => (
-                                    <option key={p.id} value={p.id}>
-                                      {p.name || p.id}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                            </div>
-                            <div className={styles.bulkScheduleFieldRow}>
-                              <span className={styles.bulkScheduleFieldIcon} aria-hidden="true">
-                                <Icon.Image className={styles.icon18} />
-                              </span>
-                              <label className={styles.bulkScheduleFieldControl}>
-                                <span className={styles.bulkScheduleFieldLabel}>Image prompt</span>
-                                <select
-                                  className={styles.bulkScheduleInput}
-                                  value={scheduleImagePromptId}
-                                  onChange={(e) => setScheduleImagePromptId(e.target.value)}
-                                  disabled={bulkScheduling}
-                                >
-                                  <option value="">Use project default</option>
-                                  {(scheduleImagePrompts?.items || []).map((p) => (
-                                    <option key={p.id} value={p.id}>
-                                      {p.name || p.id}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
-                            </div>
-                          </div>
-                        </section>
-
-                      {bulkScheduleRows.length >= 2 ? (
-                        <section
-                          className={`${styles.bulkScheduleSection} ${styles.bulkScheduleSectionCompact} ${styles.bulkScheduleModeSection}`}
-                          aria-labelledby="bulk-schedule-mode-heading"
-                        >
-                          <div className={styles.bulkScheduleModeHeaderRow}>
-                            <div className={styles.bulkScheduleSectionHead} id="bulk-schedule-mode-heading">
-                              <span className={styles.bulkScheduleSectionIconWrap} aria-hidden="true">
-                                <Icon.Calendar className={styles.icon18} />
-                              </span>
-                              <span className={styles.bulkScheduleSectionTitle}>Schedule mode</span>
-                            </div>
-                            <div className={styles.bulkScheduleModeTabs} role="tablist" aria-label="Schedule mode">
-                            {(
-                              [
-                                ["manual", "Manual", Icon.List] as const,
-                                ["weekly", "Weekly", Icon.Repeat] as const,
-                                ["monthly", "Monthly", Icon.CalendarMonth] as const,
-                              ] as const
-                            ).map(([mode, label, ModeIcon]) => (
-                              <button
-                                key={mode}
-                                type="button"
-                                role="tab"
-                                aria-selected={bulkScheduleMode === mode}
-                                className={`${styles.bulkScheduleModeTab} ${bulkScheduleMode === mode ? styles.bulkScheduleModeTabActive : ""}`}
-                                disabled={bulkScheduling}
-                                onClick={() => setBulkScheduleModeAndApply(mode)}
-                              >
-                                <ModeIcon className={styles.bulkScheduleModeTabIcon} />
-                                <span>{label}</span>
-                              </button>
-                            ))}
-                            </div>
-                          </div>
-
-                          {bulkScheduleMode === "weekly" ? (
-                            <div className={styles.bulkScheduleCadencePanel}>
-                              <div>
-                                <span className={styles.bulkScheduleCadenceLabel}>Posting days</span>
-                                <div className={styles.bulkScheduleWeekdayRow}>
-                                  {BULK_SCHEDULE_WEEKDAYS_SUN_FIRST.map(({ iso, label }) => {
-                                    const on = bulkScheduleWeekdays.includes(iso);
-                                    return (
-                                      <label key={iso} className={styles.bulkScheduleWeekdayChip}>
-                                        <input
-                                          type="checkbox"
-                                          checked={on}
-                                          disabled={bulkScheduling}
-                                          onChange={() => {
-                                            startTransition(() => {
-                                              setBulkScheduleWeekdays((prev) => {
-                                                const next = on
-                                                  ? prev.filter((d) => d !== iso)
-                                                  : [...prev, iso].sort((a, b) => a - b);
-                                                return next.length ? next : [iso];
-                                              });
-                                            });
-                                          }}
-                                        />
-                                        {label}
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                              <div className={styles.bulkScheduleCadenceFieldsRow}>
-                                <label className={styles.label}>
-                                  Articles per week
-                                  <input
-                                    className={styles.input}
-                                    type="number"
-                                    min={1}
-                                    max={Math.max(1, bulkScheduleSeedRows.length)}
-                                    value={bulkScheduleArticlesPerWeek}
-                                    disabled={bulkScheduling}
-                                    onChange={(e) => {
-                                      const maxApw = Math.max(1, bulkScheduleSeedRows.length);
-                                      const n = Math.max(
-                                        1,
-                                        Math.min(maxApw, Number(e.target.value) || 1),
-                                      );
-                                      startTransition(() => setBulkScheduleArticlesPerWeek(n));
-                                    }}
-                                  />
-                                </label>
-                                <label className={styles.label}>
-                                  Preferred time
-                                  <input
-                                    className={styles.input}
-                                    type="time"
-                                    value={bulkSchedulePreferredTime}
-                                    step={60}
-                                    disabled={bulkScheduling}
-                                    onChange={(e) =>
-                                      startTransition(() =>
-                                        setBulkSchedulePreferredTime(e.target.value),
-                                      )
-                                    }
-                                  />
-                                </label>
-                              </div>
-                            </div>
-                          ) : null}
-
-                          {bulkScheduleMode === "monthly" ? (
-                            <div className={styles.bulkScheduleCadencePanel}>
-                              <div>
-                                <span className={styles.bulkScheduleCadenceLabel}>Posting days</span>
-                                <div className={styles.bulkScheduleWeekdayRow}>
-                                  {BULK_SCHEDULE_WEEKDAYS_SUN_FIRST.map(({ iso, label }) => {
-                                    const on = bulkScheduleWeekdays.includes(iso);
-                                    return (
-                                      <label key={iso} className={styles.bulkScheduleWeekdayChip}>
-                                        <input
-                                          type="checkbox"
-                                          checked={on}
-                                          disabled={bulkScheduling}
-                                          onChange={() => {
-                                            startTransition(() => {
-                                              setBulkScheduleWeekdays((prev) => {
-                                                const next = on
-                                                  ? prev.filter((d) => d !== iso)
-                                                  : [...prev, iso].sort((a, b) => a - b);
-                                                return next.length ? next : [iso];
-                                              });
-                                            });
-                                          }}
-                                        />
-                                        {label}
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                              <div className={styles.bulkScheduleCadenceFieldsRow}>
-                                <label className={styles.label}>
-                                  Total monthly articles
-                                  <input
-                                    className={styles.input}
-                                    type="number"
-                                    min={1}
-                                    max={Math.max(1, bulkScheduleSeedRows.length)}
-                                    value={bulkSchedulePostsPerMonth}
-                                    disabled={bulkScheduling}
-                                    onChange={(e) => {
-                                      const maxApm = Math.max(1, bulkScheduleSeedRows.length);
-                                      const n = Math.max(
-                                        1,
-                                        Math.min(maxApm, Number(e.target.value) || 1),
-                                      );
-                                      startTransition(() => setBulkSchedulePostsPerMonth(n));
-                                    }}
-                                  />
-                                </label>
-                                <label className={styles.label}>
-                                  Preferred time
-                                  <input
-                                    className={styles.input}
-                                    type="time"
-                                    value={bulkSchedulePreferredTime}
-                                    step={60}
-                                    disabled={bulkScheduling}
-                                    onChange={(e) =>
-                                      startTransition(() =>
-                                        setBulkSchedulePreferredTime(e.target.value),
-                                      )
-                                    }
-                                  />
-                                </label>
-                              </div>
-                            </div>
-                          ) : null}
-
-                          {bulkScheduleCadenceSummary ? (
-                            <p className={styles.bulkScheduleCadenceSummary}>
-                              <Icon.Clock className={styles.icon16} />
-                              {bulkScheduleCadenceSummary}
-                            </p>
-                          ) : null}
-                        </section>
-                      ) : null}
-
-                      <section
-                        className={`${styles.bulkScheduleSection} ${styles.bulkScheduleTimelineSection}`}
-                        aria-labelledby="bulk-schedule-timeline-heading"
-                      >
-                        <div className={styles.bulkScheduleSectionHead} id="bulk-schedule-timeline-heading">
-                          <span className={styles.bulkScheduleSectionIconWrap} aria-hidden="true">
-                            <Icon.Document className={styles.icon18} />
-                          </span>
-                          <span className={styles.bulkScheduleSectionTitle}>Publish timeline</span>
-                        </div>
-                        <div className={styles.bulkScheduleArticleList}>
-                        {bulkScheduleRows.map((r, idx) => {
-                          const whenDisplay = bulkScheduleWhenDisplay[r.id] || formatBulkScheduleWhenDisplay(r.when);
-                          const readOnly = bulkScheduleRows.length >= 2 && bulkScheduleMode !== "manual";
-                          return (
-                            <div key={r.id} className={styles.bulkScheduleArticleCard}>
-                              <div className={styles.bulkScheduleArticleCardMain}>
-                                <span className={styles.bulkScheduleArticleIndex} aria-hidden="true">
-                                  {idx + 1}
-                                </span>
-                                <p className={styles.bulkScheduleArticleTitle} title={r.title}>
-                                  {r.title}
-                                </p>
-                              </div>
-                              {readOnly ? (
-                                <div className={styles.bulkScheduleWhenReadonly}>
-                                  <span className={styles.bulkScheduleWhenReadonlyLabel}>
-                                    <Icon.Clock className={styles.icon16} />
-                                    Publish at
-                                  </span>
-                                  <span className={styles.bulkScheduleWhenReadonlyValue}>
-                                    {whenDisplay.date}
-                                    {whenDisplay.time ? (
-                                      <>
-                                        <br />
-                                        {whenDisplay.time}
-                                        {whenDisplay.tz ? ` · ${whenDisplay.tz}` : null}
-                                      </>
-                                    ) : null}
-                                  </span>
-                                </div>
-                              ) : (
-                                <label className={styles.bulkScheduleDatetimeWrap}>
-                                  <span className={styles.bulkScheduleDatetimeLabel}>
-                                    <Icon.Clock className={styles.icon16} />
-                                    Date & time
-                                  </span>
-                                  <input
-                                    className={styles.bulkScheduleInput}
-                                    type="datetime-local"
-                                    value={r.when}
-                                    min={bulkScheduleMin || undefined}
-                                    step={60}
-                                    disabled={bulkScheduling}
-                                    onChange={(e) => {
-                                      const v = e.target.value;
-                                      setBulkScheduleManualWhen((prev) => ({ ...prev, [r.id]: v }));
-                                    }}
-                                  />
-                                </label>
-                              )}
-                            </div>
-                          );
-                        })}
-                        </div>
-                      </section>
-                      </div>
-
-                      {error ? <p className={styles.error} style={{ marginTop: 12, marginBottom: 0 }}>{error}</p> : null}
-
-                      <div className={styles.bulkScheduleFooter}>
-                        <button
-                          type="button"
-                          className={styles.bulkScheduleFooterCancel}
-                          onClick={() => setBulkMode("root")}
-                          disabled={bulkScheduling}
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.bulkScheduleFooterPrimary}
-                          onClick={bulkScheduleSubmit}
-                          disabled={bulkScheduling || !bulkScheduleRows.length}
-                        >
-                          <Icon.Calendar className={styles.icon18} />
-                          {bulkScheduling
-                            ? `Scheduling ${bulkScheduleRows.length}…`
-                            : `Schedule ${bulkScheduleRows.length} article${bulkScheduleRows.length === 1 ? "" : "s"}`}
-                        </button>
-                      </div>
-                    </>
+                    <BulkScheduleForm
+                      seedRows={bulkScheduleSeedRows}
+                      active={showBulkPopup && bulkMode === "schedule"}
+                      profileTz={profileTz}
+                      defaults={wpDefaults}
+                      wpTypesForSchedule={wpTypesForSchedule}
+                      scheduleWritingPrompts={scheduleWritingPrompts}
+                      scheduleImagePrompts={scheduleImagePrompts}
+                      submitting={bulkScheduling}
+                      error={error}
+                      onCancel={() => setBulkMode("root")}
+                      onValidationError={setError}
+                      onSubmit={bulkScheduleSubmit}
+                      cancelLabel="Back to actions"
+                    />
                   )}
                 </div>
               </>
@@ -5311,161 +4807,171 @@ export default function ProjectPage() {
                 </div>
               </div>
               <div className={`${styles.card} ${styles.cardWide} ${styles.articleListCard}`} style={{ padding: 0 }}>
-                <div className={styles.articlesListHead}>
-                  <input type="checkbox" checked={allOnPageSelected} onChange={toggleAllOnPage} />
-                  <div className={styles.smallMuted}>Title</div>
-                  <div className={`${styles.smallMuted} ${styles.pushRight}`}>Status</div>
-                </div>
+                <div className={styles.articlesTableScroll}>
+                  <div className={styles.articlesTableHead} role="row">
+                    <span className={styles.articlesTableCheckboxCol}>
+                      <input
+                        type="checkbox"
+                        checked={allOnPageSelected}
+                        onChange={toggleAllOnPage}
+                        aria-label="Select all articles on this page"
+                      />
+                    </span>
+                    <span>Title</span>
+                    <span>Focus Keyphrase</span>
+                    <span>Supporting Keywords</span>
+                    <span>Status</span>
+                    <span>Actions</span>
+                  </div>
 
-                {loading || articlesListLoading ? <div style={{ padding: 14 }}>Loading…</div> : null}
-                {!loading && !articlesListLoading && listTotal === 0 ? <div style={{ padding: 14 }}>No articles match the current filters.</div> : null}
+                  {loading || articlesListLoading ? (
+                    <div className={styles.articlesTableMessage}>Loading…</div>
+                  ) : null}
+                  {!loading && !articlesListLoading && listTotal === 0 ? (
+                    <div className={styles.articlesTableMessage}>No articles match the current filters.</div>
+                  ) : null}
 
-                {!loading && !articlesListLoading
-                  ? pageItems.map((a) => (
-                      <div
-                        key={a.id}
-                        className={styles.articleRow}
-                      >
-                        <input type="checkbox" checked={!!selected[a.id]} onChange={() => toggleOne(a.id)} />
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <Link
-                            href={`/projects/${projectId}/articles/${a.id}`}
-                            className={styles.articleTitleLink}
-                          >
-                            {a.title || "(Untitled)"}
-                          </Link>
-                          <div style={{ marginTop: 4, fontSize: 12, color: "#666", lineHeight: 1.4 }}>
-                            {a.focus_keyphrase ? (
-                              <span style={{ marginRight: 10 }}>
-                                <span style={{ color: "#999" }}>Focus:</span> {a.focus_keyphrase}
+                  {!loading && !articlesListLoading
+                    ? pageItems.map((a) => {
+                        const title = a.title || "(Untitled)";
+                        const focus = (a.focus_keyphrase || "").trim() || "—";
+                        const keywordsText = formatSupportingKeywords(a.keywords);
+                        const gscRequested = (a.gsc_status || "").toLowerCase() === "inspected";
+                        const statusLabel = (a.status || "pending").toUpperCase();
+                        const statusTitle = `${statusLabel} · ${gscRequested ? "Indexing requested" : "Indexing not requested"}`;
+                        return (
+                          <article key={a.id} className={styles.articleRow}>
+                            <div className={styles.articlesTableRowMain}>
+                              <span className={styles.articlesTableCheckboxCol}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!selected[a.id]}
+                                  onChange={() => toggleOne(a.id)}
+                                  aria-label={`Select ${title}`}
+                                />
                               </span>
-                            ) : null}
-                            {a.keywords && a.keywords.length ? (
-                              <span>
-                                <span style={{ color: "#999" }}>Keywords:</span> {a.keywords.join(", ")}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div style={{ marginTop: 4, fontSize: 12, color: "#777" }}>
-                            <span>Updated {a.updated_at || a.created_at || "—"}</span>
-                            <span> · Posted {a.posted_at || "—"}</span>
-                            <span> · Sched {formatInProfileTz(a.wp_scheduled_at)}</span>
-                            {a.wp_link ? (
-                              <span>
-                                {" "}
-                                ·{" "}
-                                <a href={a.wp_link} target="_blank" rel="noreferrer" style={{ color: "var(--link-color, #1677ff)" }}>
-                                  View live
-                                </a>
-                              </span>
-                            ) : null}
-                            {a.wp_schedule_error ? <span style={{ color: "#ff4d4f" }}> · Schedule error</span> : null}
-                            {a.wp_link ? (
-                              <span style={{ marginLeft: 6 }}>
-                                ·{" "}
+                              <div className={styles.articlesTableCell}>
+                                <Link
+                                  href={`/projects/${projectId}/articles/${a.id}`}
+                                  className={`${styles.articleTitleLink} ${styles.articlesTableClamp}`}
+                                  title={title}
+                                >
+                                  {title}
+                                </Link>
+                              </div>
+                              <div
+                                className={`${styles.articlesTableCell} ${styles.articlesTableCellMuted}`}
+                                title={focus !== "—" ? focus : undefined}
+                              >
                                 <span
-                                  title={
-                                    a.monitor_status === "fresh"
-                                      ? "Optimization status: fresh — recently published or refreshed."
-                                      : a.monitor_status === "stale"
-                                      ? "Optimization status: stale — schedule a Smart Refresh to keep rankings."
-                                      : "Optimization status not yet evaluated. Mark manually below; auto rank-monitoring lands in the next iteration."
-                                  }
-                                  style={{
-                                    display: "inline-block",
-                                    padding: "1px 6px",
-                                    borderRadius: 4,
-                                    fontWeight: 700,
-                                    fontSize: 11,
-                                    color:
-                                      a.monitor_status === "stale"
-                                        ? "#b00020"
-                                        : a.monitor_status === "fresh"
-                                        ? "#2f7d32"
-                                        : "#666",
-                                    background:
-                                      a.monitor_status === "stale"
-                                        ? "rgba(176,0,32,0.08)"
-                                        : a.monitor_status === "fresh"
-                                        ? "rgba(47,125,50,0.10)"
-                                        : "rgba(0,0,0,0.05)",
+                                  className={`${styles.articlesTableClamp} ${focus === "—" ? styles.articlesTableCellEmpty : ""}`}
+                                >
+                                  {focus}
+                                </span>
+                              </div>
+                              <div
+                                className={`${styles.articlesTableCell} ${styles.articlesTableCellMuted}`}
+                                title={keywordsText !== "—" ? keywordsText : undefined}
+                              >
+                                <span
+                                  className={`${styles.articlesTableClamp} ${keywordsText === "—" ? styles.articlesTableCellEmpty : ""}`}
+                                >
+                                  {keywordsText}
+                                </span>
+                              </div>
+                              <div className={styles.articlesTableStatusCol} title={statusTitle}>
+                                <span className={statusPillClass(a.status)}>{statusLabel}</span>
+                              </div>
+                              <div className={styles.articlesTableActionsCol}>
+                                <Link
+                                  href={`/projects/${projectId}/articles/${a.id}`}
+                                  className={styles.articlesTableIconBtn}
+                                  aria-label={`Edit ${title}`}
+                                  data-tooltip="Edit article"
+                                >
+                                  <Icon.Edit />
+                                </Link>
+                                <button
+                                  type="button"
+                                  className={styles.articlesTableIconBtn}
+                                  aria-label={`Schedule ${title}`}
+                                  data-tooltip="Schedule article"
+                                  onClick={() => {
+                                    void ensureScheduleMetaLoaded();
+                                    const min = new Date(Date.now() + 10 * 60 * 1000);
+                                    const minStr = toDatetimeLocalFromDateInProfileTz(min);
+                                    setScheduleMin(minStr);
+                                    setScheduleId(a.id);
+                                    setScheduleWhen(minStr);
+                                    setScheduleWpStatus(wpDefaults?.wp_status || "draft");
+                                    setSchedulePostType(wpDefaults?.post_type || "posts");
+                                    setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
+                                    setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
                                   }}
                                 >
-                                  {a.monitor_status === "stale"
-                                    ? "Stale"
-                                    : a.monitor_status === "fresh"
-                                    ? "Fresh"
-                                    : "Optimization: —"}
+                                  <Icon.Calendar />
+                                </button>
+                                <span
+                                  className={styles.articlesTableTooltipWrap}
+                                  data-tooltip={
+                                    !a.wp_link
+                                      ? "Publish first to get a live URL"
+                                      : "Request indexing in Search Console"
+                                  }
+                                >
+                                  <button
+                                    type="button"
+                                    className={styles.articlesTableIconBtn}
+                                    aria-label={`Request indexing for ${title}`}
+                                    disabled={!a.wp_link}
+                                    onClick={() => {
+                                      setRequestIndexingId(a.id);
+                                      setRequestIndexingMsg("");
+                                    }}
+                                  >
+                                    <Icon.Globe />
+                                  </button>
                                 </span>
-                              </span>
-                            ) : null}
-                          </div>
-
-                          <div className={styles.articleActions}>
-                            <Link href={`/projects/${projectId}/articles/${a.id}`} className={`${styles.miniBtn} ${styles.miniPrimary}`}>
-                              Edit
-                            </Link>
-                            <button
-                              type="button"
-                              className={styles.miniBtn}
-                              onClick={() => {
-                                void ensureScheduleMetaLoaded();
-                                const min = new Date(Date.now() + 10 * 60 * 1000);
-                                const minStr = toDatetimeLocalFromDateInProfileTz(min);
-                                setScheduleMin(minStr);
-                                setScheduleId(a.id);
-                                setScheduleWhen(minStr);
-                                setScheduleWpStatus(wpDefaults?.wp_status || "draft");
-                                setSchedulePostType(wpDefaults?.post_type || "posts");
-                                setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
-                                setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
-                              }}
-                            >
-                              Schedule
-                            </button>
-                            <button
-                              type="button"
-                              className={styles.miniBtn}
-                              onClick={() => {
-                                setRequestIndexingId(a.id);
-                                setRequestIndexingMsg("");
-                              }}
-                              disabled={!a.wp_link}
-                              title={!a.wp_link ? "Publish first to get a live URL." : "Request indexing (URL Inspection) in Google Search Console."}
-                            >
-                              Request Indexing
-                            </button>
-                            {a.wp_link ? (
-                              <button
-                                type="button"
-                                className={styles.miniBtn}
-                                onClick={() =>
-                                  markArticleMonitor(
-                                    a.id,
-                                    (a.monitor_status === "fresh" ? "stale" : "fresh") as "fresh" | "stale",
-                                  )
-                                }
-                                title={
-                                  a.monitor_status === "fresh"
-                                    ? "Mark this article stale — once Smart Refresh ships, it will queue an updated regeneration."
-                                    : "Mark this article fresh — clears the stale flag in the dashboard."
-                                }
-                              >
-                                {a.monitor_status === "fresh" ? "Mark stale" : "Mark fresh"}
-                              </button>
-                            ) : null}
-                            <button type="button" className={`${styles.miniBtn} ${styles.miniDanger}`} onClick={() => setConfirmDeleteId(a.id)}>
-                              Delete
-                            </button>
-                          </div>
-                        </div>
-                        <div className={styles.articleMetaCol}>
-                          <span style={{ fontSize: 12, color: "#666" }}>{(a.gsc_status || "").toLowerCase() === "inspected" ? "Requested" : "Not requested"}</span>
-                          <span className={statusPillClass(a.status)}>{(a.status || "pending").toUpperCase()}</span>
-                        </div>
-                      </div>
-                    ))
-                  : null}
+                                {a.wp_link ? (
+                                  <button
+                                    type="button"
+                                    className={styles.articlesTableIconBtn}
+                                    aria-label={
+                                      a.monitor_status === "fresh"
+                                        ? `Mark ${title} stale`
+                                        : `Mark ${title} fresh`
+                                    }
+                                    data-tooltip={
+                                      a.monitor_status === "fresh"
+                                        ? "Mark stale for refresh"
+                                        : "Mark fresh"
+                                    }
+                                    onClick={() =>
+                                      markArticleMonitor(
+                                        a.id,
+                                        (a.monitor_status === "fresh" ? "stale" : "fresh") as "fresh" | "stale",
+                                      )
+                                    }
+                                  >
+                                    <Icon.Refresh />
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className={`${styles.articlesTableIconBtn} ${styles.articlesTableIconBtnDanger}`}
+                                  aria-label={`Delete ${title}`}
+                                  data-tooltip="Delete article"
+                                  onClick={() => setConfirmDeleteId(a.id)}
+                                >
+                                  <Icon.Trash />
+                                </button>
+                              </div>
+                            </div>
+                          </article>
+                        );
+                      })
+                    : null}
+                </div>
                 {showWebsiteRequiredOverlay ? (
                   <div className={styles.articleConnectionOverlay} role="dialog" aria-modal="true" aria-label="Website connection required">
                     <div className={styles.articleConnectionPopup}>
@@ -6124,54 +5630,51 @@ export default function ProjectPage() {
         ) : null}
 
         {tab === "research" ? (
-          <>
-            {/* Sub-tab strip — switches the Research panel between Cluster Planner
-                (Feature 2) and the existing keyword-driven Custom Curations flow. */}
+          <div className={styles.researchPage}>
             <div
-              className={styles.subTabs}
+              className={styles.researchSubTabs}
               role="tablist"
-              aria-label="Research sub-sections"
+              aria-label="Research sections"
             >
               <button
                 type="button"
                 role="tab"
                 aria-selected={researchSubTab === "cluster"}
-                className={`${styles.subTab} ${researchSubTab === "cluster" ? styles.subTabActive : ""}`}
+                className={`${styles.researchSubTab} ${researchSubTab === "cluster" ? styles.researchSubTabActive : ""}`}
                 onClick={() => setResearchSubTab("cluster")}
               >
                 Cluster Planner
                 {topicClusters.length > 0 ? (
-                  <span className={styles.subTabBadge}>{topicClusters.length}</span>
+                  <span className={styles.researchSubTabBadge}>{topicClusters.length}</span>
                 ) : null}
               </button>
               <button
                 type="button"
                 role="tab"
                 aria-selected={researchSubTab === "curations"}
-                className={`${styles.subTab} ${researchSubTab === "curations" ? styles.subTabActive : ""}`}
+                className={`${styles.researchSubTab} ${researchSubTab === "curations" ? styles.researchSubTabActive : ""}`}
                 onClick={() => setResearchSubTab("curations")}
               >
                 Custom Curations
                 {researchResults.length > 0 ? (
-                  <span className={styles.subTabBadge}>{researchResults.length}</span>
+                  <span className={styles.researchSubTabBadge}>{researchResults.length}</span>
                 ) : null}
               </button>
             </div>
 
             {researchSubTab === "cluster" ? (
-              <>
-            {/* Feature 2 — Topical Authority Cluster Mapping */}
-            <div className={`${styles.card} ${styles.cardWide} ${styles.clusterPlanner}`}>
-              <div className={styles.clusterPlannerHead}>
-                <div style={{ minWidth: 0, flex: "1 1 320px" }}>
-                  <h2 className={styles.clusterCardTitle}>Topical authority — Cluster planner</h2>
-                  <p className={styles.clusterCardSubtitle}>
-                    Seed intent → live Google SERP snapshot (best-effort) → one Pillar + 4–6 Cluster
-                    articles. Uses the same country, language, and tone you set in Research curation
-                    below.
+              <div className={styles.researchPanelStack}>
+            <section className={`${styles.researchSectionCard} ${styles.clusterPlanner}`}>
+              <div className={styles.researchSectionHead}>
+                <div className={styles.researchSectionHeadMain}>
+                  <p className={styles.researchSectionKicker}>Topical authority</p>
+                  <h2 className={styles.researchSectionTitle}>Cluster planner</h2>
+                  <p className={styles.researchSectionDesc}>
+                    Enter a seed intent to map a pillar article plus 4–6 supporting cluster topics from a
+                    live SERP snapshot. Country, language, and tone follow your Custom Curations settings.
                   </p>
                 </div>
-                <div className={styles.clusterPlannerActions}>
+                <div className={styles.researchSectionActions}>
                   <button
                     type="button"
                     className={styles.miniBtn}
@@ -6237,7 +5740,24 @@ export default function ProjectPage() {
                   supporting topics tree.
                 </div>
               ) : null}
+            </section>
 
+            {topicClusters.length > 0 || topicClustersLoading ? (
+            <section className={styles.researchSectionCard}>
+              <div className={styles.researchSectionHead}>
+                <div className={styles.researchSectionHeadMain}>
+                  <p className={styles.researchSectionKicker}>Your plans</p>
+                  <h2 className={styles.researchSectionTitle}>Saved clusters</h2>
+                  <p className={styles.researchSectionDesc}>
+                    Select topics, then generate, import, or schedule in bulk. Leave selection empty to
+                    act on every pending topic.
+                  </p>
+                </div>
+              </div>
+              {topicClustersLoading ? (
+                <p className={styles.researchStatusLine}>Loading clusters…</p>
+              ) : null}
+              <div className={styles.researchClustersStack}>
               {topicClusters.map((cl) => {
                 const serpN = cl.serp_summary?.result_count ?? 0;
                 const pillarDone = !!(cl.pillar?.imported_article_id || "").trim();
@@ -6577,55 +6097,53 @@ export default function ProjectPage() {
                   </div>
                 );
               })}
-            </div>
-              </>
+              </div>
+            </section>
+            ) : null}
+              </div>
             ) : null}
 
             {researchSubTab === "curations" ? (
-              <>
-            <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={styles.sectionHead}>
-                <div>
-                  <h2 className={styles.clusterCardTitle}>Curation</h2>
-                  <p className={styles.clusterCardSubtitle}>
-                    Fine-tune results for your brand and intent.
+              <div className={styles.researchPanelStack}>
+            <section className={styles.researchSectionCard}>
+              <div className={styles.researchSectionHead}>
+                <div className={styles.researchSectionHeadMain}>
+                  <p className={styles.researchSectionKicker}>Keyword research</p>
+                  <h2 className={styles.researchSectionTitle}>Curation settings</h2>
+                  <p className={styles.researchSectionDesc}>
+                    Fine-tune brand context, intent, and seed keywords before you run research.
                   </p>
                 </div>
-                <button
-                  className={styles.button}
-                  type="button"
-                  disabled={researchBusy || researchGeneratingMore || researchSeeds.length === 0 || customResearchLimitReached}
-                  title={
-                    customResearchLimitReached
-                      ? "Monthly Custom Curations limit reached for your plan."
-                      : researchSeeds.length === 0
-                        ? "Add seed keywords first"
-                        : undefined
-                  }
-                  onClick={() =>
-                    runResearch({
-                      mode: "replace",
-                      seeds: researchSeeds,
-                      brandNiche: researchBrandNiche,
-                      intent: researchIntent,
-                      tone: researchTone,
-                      country: researchCountry,
-                      language: researchLanguage,
-                    })
-                  }
-                >
-                  {researchBusy ? "Researching…" : "Run research"}
-                </button>
+                <div className={styles.researchSectionActions}>
+                  <button
+                    className={styles.button}
+                    type="button"
+                    disabled={researchBusy || researchGeneratingMore || researchSeeds.length === 0 || customResearchLimitReached}
+                    title={
+                      customResearchLimitReached
+                        ? "Monthly Custom Curations limit reached for your plan."
+                        : researchSeeds.length === 0
+                          ? "Add seed keywords first"
+                          : undefined
+                    }
+                    onClick={() =>
+                      runResearch({
+                        mode: "replace",
+                        seeds: researchSeeds,
+                        brandNiche: researchBrandNiche,
+                        intent: researchIntent,
+                        tone: researchTone,
+                        country: researchCountry,
+                        language: researchLanguage,
+                      })
+                    }
+                  >
+                    {researchBusy ? "Researching…" : "Run research"}
+                  </button>
+                </div>
               </div>
 
-              <div
-                style={{
-                  marginTop: 12,
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                  gap: 12,
-                }}
-              >
+              <div className={styles.researchFieldsGrid}>
                 <label className={styles.label}>
                   Brand niche
                   <input className={styles.input} value={researchBrandNiche} onChange={(e) => setResearchBrandNiche(e.target.value)} placeholder="e.g. MSME legal services in India" />
@@ -6668,12 +6186,11 @@ export default function ProjectPage() {
                   <input className={styles.input} value={researchLanguage} onChange={(e) => setResearchLanguage(e.target.value)} placeholder="en" />
                 </label>
 
-                <div className={styles.label} style={{ gridColumn: "1 / -1" }}>
-                  <span>Seed keywords/topics</span>
-                  <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                <label className={`${styles.label} ${styles.researchFieldFull}`}>
+                  Seed keywords / topics
+                  <div className={styles.researchSeedRow}>
                     <input
                       className={styles.input}
-                      style={{ flex: "1 1 240px", minWidth: 200 }}
                       value={researchSeedInput}
                       onChange={(e) => setResearchSeedInput(e.target.value)}
                       onKeyDown={(e) => {
@@ -6693,32 +6210,19 @@ export default function ProjectPage() {
                       Add Keywords
                     </button>
                   </div>
-                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                  <p className={styles.researchHelperText}>
                     Tip: Paste comma-separated or newline-separated lists. Up to 200 seeds are saved with this project.
-                  </div>
+                  </p>
                   {researchSeeds.length ? (
-                    <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    <div className={styles.researchSeedChips}>
                       {researchSeeds.map((s, idx) => (
-                        <span
-                          key={`${s}-${idx}`}
-                          className={styles.pill}
-                          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-                        >
+                        <span key={`${s}-${idx}`} className={styles.researchSeedChip}>
                           {s}
                           <button
                             type="button"
+                            className={styles.researchSeedChipRemove}
                             aria-label={`Remove ${s}`}
                             onClick={() => removeSeedAt(idx)}
-                            style={{
-                              border: "none",
-                              background: "transparent",
-                              color: "inherit",
-                              cursor: "pointer",
-                              fontWeight: 900,
-                              padding: 0,
-                              lineHeight: 1,
-                              fontSize: 14,
-                            }}
                           >
                             ×
                           </button>
@@ -6737,11 +6241,9 @@ export default function ProjectPage() {
                       ) : null}
                     </div>
                   ) : (
-                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
-                      No seed keywords yet. Add a few to start research.
-                    </div>
+                    <p className={styles.researchHelperText}>No seed keywords yet. Add a few to start research.</p>
                   )}
-                </div>
+                </label>
               </div>
 
               {researchMsg ? (
@@ -6752,9 +6254,9 @@ export default function ProjectPage() {
               {renderLimitStrip([monthlyLimitStatus("Custom Curations", featureLimits?.custom_research)])}
 
               {researchKeywordAnalysis ? (
-                <div style={{ marginTop: 14, borderTop: "1px solid var(--aa-hairline)", paddingTop: 14 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Keyword analysis</div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+                <div className={styles.researchKeywordBlock}>
+                  <h3 className={styles.researchSectionTitle} style={{ fontSize: 15, marginBottom: 10 }}>Keyword analysis</h3>
+                  <div className={styles.researchKeywordGrid}>
                     <div>
                       <div className={styles.muted} style={{ fontSize: 12, marginBottom: 8 }}>
                         Primary keywords
@@ -6802,15 +6304,18 @@ export default function ProjectPage() {
                   </div>
                 </div>
               ) : null}
-            </div>
+            </section>
 
-            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-              <div className={styles.sectionHead}>
-                <div>
-                  <h2 style={{ margin: 0 }}>Results</h2>
-                  <div className={styles.muted}>Browse, filter, and import ideas into your Articles list.</div>
+            <section className={styles.researchSectionCard}>
+              <div className={styles.researchSectionHead}>
+                <div className={styles.researchSectionHeadMain}>
+                  <p className={styles.researchSectionKicker}>Ideas</p>
+                  <h2 className={styles.researchSectionTitle}>Research results</h2>
+                  <p className={styles.researchSectionDesc}>
+                    Browse, filter, and import ideas into your Articles list.
+                  </p>
                 </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                <div className={styles.researchSectionActions}>
                   <button
                     type="button"
                     className={styles.btnSecondary}
@@ -6864,7 +6369,7 @@ export default function ProjectPage() {
               </div>
 
               {researchResults.length ? (
-                <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                <div className={styles.researchFilterBar}>
                   {([
                     { key: "latest", label: `Latest${researchCounts.latest ? ` (${researchCounts.latest})` : ""}` },
                     { key: "not_imported", label: `Not Imported (${researchCounts.notImported})` },
@@ -6880,22 +6385,13 @@ export default function ProjectPage() {
                           setResearchFilter(opt.key);
                           setResearchSelected(new Set());
                         }}
-                        className={styles.miniBtn}
-                        style={
-                          active
-                            ? {
-                                borderColor: "var(--aa-ink)",
-                                background: "var(--aa-ink)",
-                                color: "var(--aa-canvas)",
-                              }
-                            : undefined
-                        }
+                        className={`${styles.researchFilterChip} ${active ? styles.researchFilterChipActive : ""}`}
                       >
                         {opt.label}
                       </button>
                     );
                   })}
-                  <span className={styles.muted} style={{ fontSize: 12, marginLeft: "auto" }}>
+                  <span className={styles.researchHelperText} style={{ marginLeft: "auto", marginTop: 0 }}>
                     Persisted locally for this project.
                   </span>
                   <button
@@ -6931,7 +6427,8 @@ export default function ProjectPage() {
               ) : null}
 
               {filteredResearchResults.length ? (
-                <table className={styles.table} style={{ marginTop: 10 }}>
+                <div className={styles.researchResultsScroll}>
+                <table className={styles.table}>
                   <thead>
                     <tr>
                       <th className={styles.th} style={{ width: 44 }}>
@@ -7007,8 +6504,9 @@ export default function ProjectPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               ) : null}
-            </div>
+            </section>
 
             {researchImportDupModal ? (
               <>
@@ -7066,9 +6564,9 @@ export default function ProjectPage() {
                 </div>
               </>
             ) : null}
-              </>
+              </div>
             ) : null}
-          </>
+          </div>
         ) : null}
 
         {tab === "scheduled_articles" ? (
@@ -7500,42 +6998,50 @@ export default function ProjectPage() {
           </>
         ) : null}
 
+
         {tab === "prompts" ? (
           <>
-            <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={styles.projectCardTop}>
-                <div>
-                  <h2 className={styles.clusterCardTitle}>Prompts</h2>
-                  <p className={styles.clusterCardSubtitle}>
-                    Manage writing prompts and image prompts. Set the defaults used by generation
-                    and scheduling — individual articles can override them anytime.
-                  </p>
-                </div>
-                <button className={styles.button} type="button" onClick={savePrompts} disabled={promptsSaving || promptsLoading}>
-                  {promptsSaving ? "Saving…" : "Save changes"}
-                </button>
-              </div>
-              {promptsLoading ? <div className={styles.muted}>Loading prompts…</div> : null}
-              {error ? <p className={styles.error}>{error}</p> : null}
+          <div className={styles.promptsPage}>
+            <div className={styles.settingsActionBar}>
+              <p className={styles.settingsActionBarHint}>
+                Set defaults for article and image generation. Individual articles can override either prompt.
+              </p>
+              <button
+                className={styles.button}
+                type="button"
+                onClick={savePrompts}
+                disabled={promptsSaving || promptsLoading}
+              >
+                {promptsSaving ? "Saving…" : "Save changes"}
+              </button>
             </div>
+            {promptsLoading ? <p className={styles.settingsStatusLine}>Loading prompts…</p> : null}
+            {error ? <p className={styles.error}>{error}</p> : null}
 
-            <div className={styles.twoCol}>
-              <div className={`${styles.card} ${styles.cardWide}`}>
-                <div className={styles.projectCardTop}>
-                  <div>
-                    <h3 className={styles.clusterTreeLabel}>Article writing prompts</h3>
+            <div className={styles.promptsPageGrid}>
+              <section className={styles.promptsPanel} aria-labelledby="prompts-writing-heading">
+                <div className={styles.promptsPanelHead}>
+                  <div className={styles.promptsPanelHeadMain}>
+                    <p className={styles.promptsPanelKicker}>Articles</p>
+                    <h2 className={styles.promptsPanelTitle} id="prompts-writing-heading">
+                      Article writing prompts
+                    </h2>
                     {(() => {
                       const cap = featureLimits?.writing_prompts;
                       if (!cap) return null;
                       const used = wpDrafts.length;
                       if (cap.unlimited || cap.limit == null) {
-                        return <div className={styles.muted} style={{ fontSize: 11.5, marginTop: 2 }}>{used} prompt{used === 1 ? "" : "s"} · unlimited on your {featureLimits?.plan_key} plan</div>;
+                        return (
+                          <p className={styles.promptsPanelMeta}>
+                            {used} prompt{used === 1 ? "" : "s"} · unlimited on your {featureLimits?.plan_key} plan
+                          </p>
+                        );
                       }
                       const limit = cap.limit;
                       return (
-                        <div className={styles.muted} style={{ fontSize: 11.5, marginTop: 2 }}>
-                          {used} / {limit} prompts used · {Math.max(0, limit - used)} left on your {featureLimits?.plan_key} plan
-                        </div>
+                        <p className={styles.promptsPanelMeta}>
+                          {used} / {limit} used · {Math.max(0, limit - used)} left on your {featureLimits?.plan_key} plan
+                        </p>
                       );
                     })()}
                   </div>
@@ -7544,7 +7050,7 @@ export default function ProjectPage() {
                     const atLimit = !!(cap && !cap.unlimited && typeof cap.limit === "number" && wpDrafts.length >= cap.limit);
                     return (
                       <button
-                        className={styles.btnSecondary}
+                        className={`${styles.btnSecondary} ${styles.promptsPanelAddBtn}`}
                         type="button"
                         onClick={() => startAddPrompt("writing")}
                         disabled={atLimit}
@@ -7555,26 +7061,35 @@ export default function ProjectPage() {
                     );
                   })()}
                 </div>
-                <div className={styles.clusterCardSubtitle} style={{ fontSize: 12.5 }}>
+                <p className={styles.promptsPanelDesc}>
                   Default is used when you generate or schedule unless you override on the article.
-                </div>
-
-                <div className={styles.list}>
-                  {wpDrafts.length === 0 ? <div className={styles.muted}>No writing prompts yet.</div> : null}
+                </p>
+                <div className={styles.promptsPromptList}>
+                  {wpDrafts.length === 0 ? (
+                    <div className={styles.promptsEmpty}>No writing prompts yet. Add one to get started.</div>
+                  ) : null}
                   {wpDrafts.map((p) => (
-                    <div key={p.id} className={styles.listItem}>
-                      <div className={styles.listItemTop}>
-                        <div style={{ fontWeight: 900 }}>{p.name || "(Untitled prompt)"}</div>
-                        <div className={styles.row}>
+                    <article
+                      key={p.id}
+                      className={styles.promptsPromptCard}
+                      data-default={wpDefault === p.id ? "true" : "false"}
+                    >
+                      <div className={styles.promptsPromptCardTop}>
+                        <h3 className={styles.promptsPromptName}>{p.name || "(Untitled prompt)"}</h3>
+                        <div className={styles.promptsPromptActions}>
                           <button className={styles.miniBtn} type="button" onClick={() => openPromptModal("writing", p.id)}>
                             Edit
                           </button>
-                          <button className={`${styles.miniBtn} ${styles.miniDanger}`} type="button" onClick={() => markDeletePrompt("writing", p.id)}>
+                          <button
+                            className={`${styles.miniBtn} ${styles.miniDanger}`}
+                            type="button"
+                            onClick={() => markDeletePrompt("writing", p.id)}
+                          >
                             Delete
                           </button>
                         </div>
                       </div>
-                      <div className={styles.checkboxRow}>
+                      <label className={styles.promptsDefaultRow}>
                         <input
                           type="radio"
                           name="wp-default"
@@ -7582,29 +7097,38 @@ export default function ProjectPage() {
                           onChange={() => setWpDefault(p.id)}
                         />
                         Set as default
-                      </div>
-                      <div className={styles.monoSmall}>{(p.text || "").slice(0, 240)}{(p.text || "").length > 240 ? "…" : ""}</div>
-                    </div>
+                      </label>
+                      <p className={styles.promptsPromptPreview} title={p.text || ""}>
+                        {(p.text || "").trim() || "No prompt text yet."}
+                      </p>
+                    </article>
                   ))}
                 </div>
-              </div>
+              </section>
 
-              <div className={`${styles.card} ${styles.cardWide}`}>
-                <div className={styles.projectCardTop}>
-                  <div>
-                    <h3 className={styles.clusterTreeLabel}>Image prompts</h3>
+              <section className={styles.promptsPanel} aria-labelledby="prompts-image-heading">
+                <div className={styles.promptsPanelHead}>
+                  <div className={styles.promptsPanelHeadMain}>
+                    <p className={styles.promptsPanelKicker}>Images</p>
+                    <h2 className={styles.promptsPanelTitle} id="prompts-image-heading">
+                      Image prompts
+                    </h2>
                     {(() => {
                       const cap = featureLimits?.image_prompts;
                       if (!cap) return null;
                       const used = ipDrafts.length;
                       if (cap.unlimited || cap.limit == null) {
-                        return <div className={styles.muted} style={{ fontSize: 11.5, marginTop: 2 }}>{used} prompt{used === 1 ? "" : "s"} · unlimited on your {featureLimits?.plan_key} plan</div>;
+                        return (
+                          <p className={styles.promptsPanelMeta}>
+                            {used} prompt{used === 1 ? "" : "s"} · unlimited on your {featureLimits?.plan_key} plan
+                          </p>
+                        );
                       }
                       const limit = cap.limit;
                       return (
-                        <div className={styles.muted} style={{ fontSize: 11.5, marginTop: 2 }}>
-                          {used} / {limit} prompts used · {Math.max(0, limit - used)} left on your {featureLimits?.plan_key} plan
-                        </div>
+                        <p className={styles.promptsPanelMeta}>
+                          {used} / {limit} used · {Math.max(0, limit - used)} left on your {featureLimits?.plan_key} plan
+                        </p>
                       );
                     })()}
                   </div>
@@ -7613,7 +7137,7 @@ export default function ProjectPage() {
                     const atLimit = !!(cap && !cap.unlimited && typeof cap.limit === "number" && ipDrafts.length >= cap.limit);
                     return (
                       <button
-                        className={styles.btnSecondary}
+                        className={`${styles.btnSecondary} ${styles.promptsPanelAddBtn}`}
                         type="button"
                         onClick={() => startAddPrompt("image")}
                         disabled={atLimit}
@@ -7624,27 +7148,35 @@ export default function ProjectPage() {
                     );
                   })()}
                 </div>
-                <div className={styles.clusterCardSubtitle} style={{ fontSize: 12.5 }}>
-                  Custom image prompts are allowed. During generation, Riviso appends the article
-                  focus, brand identity, and niche context, then validates that the prompt is image-only.
-                </div>
-
-                <div className={styles.list}>
-                  {ipDrafts.length === 0 ? <div className={styles.muted}>No image prompts yet.</div> : null}
+                <p className={styles.promptsPanelDesc}>
+                  Custom image prompts are allowed. Riviso appends article focus, brand identity, and niche context, then validates the prompt is image-only.
+                </p>
+                <div className={styles.promptsPromptList}>
+                  {ipDrafts.length === 0 ? (
+                    <div className={styles.promptsEmpty}>No image prompts yet. Add one to get started.</div>
+                  ) : null}
                   {ipDrafts.map((p) => (
-                    <div key={p.id} className={styles.listItem}>
-                      <div className={styles.listItemTop}>
-                        <div style={{ fontWeight: 900 }}>{p.name || "(Untitled prompt)"}</div>
-                        <div className={styles.row}>
+                    <article
+                      key={p.id}
+                      className={styles.promptsPromptCard}
+                      data-default={ipDefault === p.id ? "true" : "false"}
+                    >
+                      <div className={styles.promptsPromptCardTop}>
+                        <h3 className={styles.promptsPromptName}>{p.name || "(Untitled prompt)"}</h3>
+                        <div className={styles.promptsPromptActions}>
                           <button className={styles.miniBtn} type="button" onClick={() => openPromptModal("image", p.id)}>
                             Edit
                           </button>
-                          <button className={`${styles.miniBtn} ${styles.miniDanger}`} type="button" onClick={() => markDeletePrompt("image", p.id)}>
+                          <button
+                            className={`${styles.miniBtn} ${styles.miniDanger}`}
+                            type="button"
+                            onClick={() => markDeletePrompt("image", p.id)}
+                          >
                             Delete
                           </button>
                         </div>
                       </div>
-                      <div className={styles.checkboxRow}>
+                      <label className={styles.promptsDefaultRow}>
                         <input
                           type="radio"
                           name="ip-default"
@@ -7652,14 +7184,16 @@ export default function ProjectPage() {
                           onChange={() => setIpDefault(p.id)}
                         />
                         Set as default
-                      </div>
-                      <div className={styles.monoSmall}>{(p.text || "").slice(0, 240)}{(p.text || "").length > 240 ? "…" : ""}</div>
-                    </div>
+                      </label>
+                      <p className={styles.promptsPromptPreview} title={p.text || ""}>
+                        {(p.text || "").trim() || "No prompt text yet."}
+                      </p>
+                    </article>
                   ))}
                 </div>
-              </div>
+              </section>
             </div>
-
+          </div>
             {showPromptModal ? (() => {
               const promptKindCap = showPromptModal.kind === "writing"
                 ? featureLimits?.writing_prompts
@@ -8589,6 +8123,7 @@ export default function ProjectPage() {
           </>
         ) : null}
 
+
         {tab === "performance" ? (
           <>
             {/* Performance & Analysis — full-width chart with rich range controls. */}
@@ -8814,28 +8349,34 @@ export default function ProjectPage() {
         ) : null}
 
         {tab === "project_settings" ? (
-          <>
-            <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={styles.projectCardTop}>
-                {(() => {
-                  const wpOkForSave =
-                    !!settings &&
-                    (settings.wp_verified_status || "").toLowerCase() === "connected" &&
-                    !!(settings.wp_verified_at || "").trim();
-                  const showSave = settings ? settingsDirty || (wpOkForSave && identityDirty) : settingsDirty || identityDirty;
-                  return showSave ? (
-                    <button className={styles.button} type="button" onClick={saveSettings} disabled={settingsSaving || settingsLoading}>
-                      {settingsSaving ? "Saving…" : "Save"}
-                    </button>
-                  ) : null;
-                })()}
-              </div>
-              {settingsLoading ? <div className={styles.muted}>Loading settings…</div> : null}
-              {error ? <p className={styles.error}>{error}</p> : null}
-            </div>
+          <div className={styles.settingsPage}>
+            {(() => {
+              const wpOkForSave =
+                !!settings &&
+                (settings.wp_verified_status || "").toLowerCase() === "connected" &&
+                !!(settings.wp_verified_at || "").trim();
+              const showSave = settings ? settingsDirty || (wpOkForSave && identityDirty) : settingsDirty || identityDirty;
+              if (!showSave) return null;
+              return (
+                <div className={styles.settingsActionBar}>
+                  <p className={styles.settingsActionBarHint}>You have unsaved changes on this page.</p>
+                  <button
+                    className={styles.button}
+                    type="button"
+                    onClick={saveSettings}
+                    disabled={settingsSaving || settingsLoading}
+                  >
+                    {settingsSaving ? "Saving…" : "Save changes"}
+                  </button>
+                </div>
+              );
+            })()}
+            {settingsLoading ? <p className={styles.settingsStatusLine}>Loading settings…</p> : null}
+            {error ? <p className={styles.error}>{error}</p> : null}
 
             {settings ? (
-              <div className={`${styles.card} ${styles.cardWide}`}>
+              <>
+              <section className={styles.settingsSectionCard}>
                 {/*
                   WordPress connection block: header + clear status pill so a user
                   who skipped the "Connect WordPress" popup at project creation
@@ -8846,10 +8387,11 @@ export default function ProjectPage() {
                 */}
                 <div className={styles.wpConnectionHead}>
                   <div>
-                    <h3 className={styles.clusterTreeLabel} style={{ margin: 0 }}>
+                    <p className={styles.settingsSectionKicker}>Website</p>
+                    <h3 className={styles.settingsSectionTitle}>
                       WordPress connection
                     </h3>
-                    <p className={styles.clusterCardSubtitle}>
+                    <p className={styles.settingsSectionDesc}>
                       Riviso publishes generated articles via WordPress&apos;s REST API. Provide
                       your site URL, username, and an{" "}
                       <a
@@ -8940,12 +8482,12 @@ export default function ProjectPage() {
                   })()}
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  <label className={styles.label}>
+                <div className={styles.settingsFieldsGrid}>
+                  <label className={styles.settingsFieldLabel}>
                     Project display name
                     <input className={styles.input} value={sName} onChange={(e) => setSName(e.target.value)} />
                   </label>
-                  <label className={styles.label}>
+                  <label className={styles.settingsFieldLabel}>
                     WordPress site URL
                     <input
                       className={styles.input}
@@ -8956,7 +8498,7 @@ export default function ProjectPage() {
                       inputMode="url"
                     />
                   </label>
-                  <label className={styles.label}>
+                  <label className={styles.settingsFieldLabel}>
                     WordPress username
                     <input
                       className={styles.input}
@@ -8966,7 +8508,7 @@ export default function ProjectPage() {
                       autoComplete="username"
                     />
                   </label>
-                  <label className={styles.label}>
+                  <label className={styles.settingsFieldLabel}>
                     Application password
                     <input
                       className={styles.input}
@@ -9016,21 +8558,16 @@ export default function ProjectPage() {
                   </div>
                 ) : null}
 
+                </section>
+
                 {(() => {
+                  if (!settings) return null;
                   const wpVerifiedOk =
                     (settings.wp_verified_status || "").toLowerCase() === "connected" &&
                     !!(settings.wp_verified_at || "").trim();
                   if (!wpVerifiedOk) {
                     return (
-                      <div
-                        className={styles.clusterCardSubtitle}
-                        style={{
-                          marginTop: 16,
-                          paddingTop: 14,
-                          borderTop: "1px solid var(--button-secondary-border)",
-                          lineHeight: 1.55,
-                        }}
-                      >
+                      <div className={styles.settingsLockedBanner}>
                         <strong>Brand identity</strong>, <strong>niche</strong>, and <strong>WordPress defaults</strong> unlock
                         after WordPress returns a successful verify (green &quot;Verified&quot; pill above). Finish connecting your
                         site, then click <strong>Verify connection</strong> again if credentials changed.
@@ -9039,6 +8576,7 @@ export default function ProjectPage() {
                   }
                   return (
                     <>
+                      <section className={styles.settingsSectionCard}>
                       {/* ----------------------------------------------------------------
                        * Brand identity — structured form
                        * Replaces the old free-text textarea with three discrete inputs
@@ -9048,6 +8586,7 @@ export default function ProjectPage() {
                        * prompt builder) keep working without changes.
                        * ---------------------------------------------------------------- */}
                       <div className={styles.brandSection}>
+                        <p className={styles.settingsSectionKicker}>Content</p>
                         <h4 className={styles.brandSectionTitle}>Brand identity</h4>
                         <p className={styles.brandSectionSub}>
                           Sets <strong>how</strong> the AI writes for this project. Choose the
@@ -9073,8 +8612,8 @@ export default function ProjectPage() {
                               The overall posture every article should carry — pick one.
                             </span>
                           </label>
-                          <label className={styles.brandFieldLabel}>
-                            Tones <span style={{ opacity: 0.6, fontWeight: 500 }}>(pick up to 5)</span>
+                          <label className={`${styles.brandFieldLabel} ${styles.settingsFieldFull}`}>
+                            Tones <span className={styles.brandFieldHelp} style={{ fontWeight: 500, opacity: 1 }}>(pick up to 5)</span>
                             <div className={styles.chipPickerBox}>
                               {BRAND_TONES.map((t) => {
                                 const selected = brandTones.includes(t.label);
@@ -9105,7 +8644,7 @@ export default function ProjectPage() {
                             </span>
                           </label>
                         </div>
-                        <label className={styles.brandFieldLabel}>
+                        <label className={`${styles.brandFieldLabel} ${styles.settingsFieldFull}`}>
                           Rules
                           <textarea
                             className={styles.input}
@@ -9128,13 +8667,16 @@ export default function ProjectPage() {
                           </span>
                         </label>
                       </div>
+                      </section>
 
+                      <section className={styles.settingsSectionCard}>
                       {/* ----------------------------------------------------------------
                        * Niche identifier — structured form
                        * Topic + audience + countries + cities. The backend rebuilds the
                        * legacy `niche_identifier` plain-text string from this every save.
                        * ---------------------------------------------------------------- */}
                       <div className={styles.brandSection}>
+                        <p className={styles.settingsSectionKicker}>Targeting</p>
                         <h4 className={styles.brandSectionTitle}>Niche identifier</h4>
                         <p className={styles.brandSectionSub}>
                           Sets <strong>what</strong> and <strong>who</strong> every article is
@@ -9270,8 +8812,7 @@ export default function ProjectPage() {
                                 style={{ marginTop: 6 }}
                               />
                               <div
-                                className={styles.chipPickerBox}
-                                style={{ maxHeight: 220, overflowY: "auto" }}
+                                className={`${styles.chipPickerBox} ${styles.settingsChipScroll}`}
                               >
                                 {(() => {
                                   const q = countryFilter.trim().toLowerCase();
@@ -9512,14 +9053,16 @@ export default function ProjectPage() {
                         </label>
                         )}
                       </div>
+                      </section>
 
-                      <div style={{ marginTop: 14, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
-                        <div style={{ fontWeight: 900, marginBottom: 8 }}>WordPress defaults</div>
-                        <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>
-                          These defaults will be pre-selected when publishing articles. You can still change them per article.
-                        </div>
+                      <section className={styles.settingsSectionCard}>
+                        <p className={styles.settingsSectionKicker}>Publishing</p>
+                        <h3 className={styles.settingsSectionTitle}>WordPress defaults</h3>
+                        <p className={styles.settingsSectionDesc}>
+                          Pre-selected when publishing articles. You can still override per article.
+                        </p>
 
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                        <div className={styles.settingsFieldsGrid} style={{ marginTop: 16 }}>
                           <label className={styles.label}>
                             Default post type
                             <select className={styles.input} value={sWpDefaultPostType} onChange={(e) => setSWpDefaultPostType(e.target.value)}>
@@ -9566,41 +9109,36 @@ export default function ProjectPage() {
                             Hold Cmd/Ctrl to select multiple categories.
                           </div>
                         </label>
-                      </div>
+                      </section>
                     </>
                   );
                 })()}
 
-                <div style={{ marginTop: 14, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Google Search Console</div>
-                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
+                <div className={styles.settingsInfoCard}>
+                  <h3 className={styles.settingsInfoCardTitle}>Google Search Console</h3>
+                  <p className={styles.settingsInfoCardDesc}>
                     Search Console connection moved to{" "}
-                    <button
-                      type="button"
-                      className={styles.linkButton}
-                      onClick={() => setTab("tools")}
-                      style={{ background: "none", border: "none", padding: 0, color: "inherit", textDecoration: "underline", cursor: "pointer" }}
-                    >
+                    <button type="button" className={styles.settingsInfoLink} onClick={() => setTab("tools")}>
                       Tools → Search Console
                     </button>
-                    . Each project now connects to its own Google account and chooses its property there.
-                  </div>
+                    . Each project connects to its own Google account and chooses its property there.
+                  </p>
                 </div>
 
-                <div style={{ marginTop: 16, borderTop: "1px solid var(--button-secondary-border)", paddingTop: 14 }}>
-                  <div style={{ fontWeight: 900, marginBottom: 8 }}>Danger zone</div>
-                  <div className={styles.muted} style={{ fontSize: 13, lineHeight: 1.5 }}>
+                <div className={styles.settingsDangerCard}>
+                  <h3 className={styles.settingsDangerCardTitle}>Danger zone</h3>
+                  <p className={styles.settingsDangerCardDesc}>
                     Deleting a project removes it permanently, including all settings, website connections, prompts, scheduled jobs, and articles.
-                  </div>
-                  <div className={styles.row} style={{ justifyContent: "flex-end", marginTop: 10 }}>
+                  </p>
+                  <div className={styles.settingsDangerActions}>
                     <button type="button" className={`${styles.miniBtn} ${styles.miniDanger}`} onClick={() => setConfirmDeleteProject(true)} disabled={deletingProject}>
                       Delete project
                     </button>
                   </div>
                 </div>
-              </div>
+              </>
             ) : null}
-          </>
+          </div>
         ) : null}
 
         {confirmDeleteProject ? (
@@ -9731,12 +9269,12 @@ export default function ProjectPage() {
             className={styles.modalBackdrop}
             role="dialog"
             aria-modal="true"
-            aria-label={curationPromptModal.action === "generate" ? "Generate curation articles" : "Schedule curation articles"}
+            aria-label="Generate curation articles"
           >
             <div className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>
-                  {curationPromptModal.action === "generate" ? "Generate" : "Schedule"} {curationPromptModal.ideaIds.length} selected idea{curationPromptModal.ideaIds.length === 1 ? "" : "s"}
+                  Generate {curationPromptModal.ideaIds.length} selected idea{curationPromptModal.ideaIds.length === 1 ? "" : "s"}
                 </h3>
                 <button
                   type="button"
@@ -9750,44 +9288,8 @@ export default function ProjectPage() {
               </div>
               <div className={styles.modalBody}>
                 <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
-                  {curationPromptModal.action === "generate"
-                    ? "Selected ideas will be imported, then generated with article content and featured images."
-                    : "Selected ideas will be imported and queued for generation, featured images, and WordPress scheduling."}
+                  Selected ideas will be imported, then generated with article content and featured images.
                 </p>
-                {curationPromptModal.action === "schedule" ? (
-                  <>
-                    <label className={styles.label}>
-                      Start time
-                      <input
-                        type="datetime-local"
-                        className={styles.input}
-                        value={curationPromptModal.runAt}
-                        step={300}
-                        onChange={(e) =>
-                          setCurationPromptModal((m) => (m ? { ...m, runAt: e.target.value } : m))
-                        }
-                      />
-                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                        Each selected idea is staggered 5 minutes after the previous one.
-                      </div>
-                    </label>
-                    <label className={styles.label}>
-                      WordPress status on publish
-                      <select
-                        className={styles.input}
-                        value={curationPromptModal.wpStatus}
-                        onChange={(e) =>
-                          setCurationPromptModal((m) =>
-                            m ? { ...m, wpStatus: e.target.value as "draft" | "publish" } : m,
-                          )
-                        }
-                      >
-                        <option value="draft">Draft (review on WordPress before going live)</option>
-                        <option value="publish">Publish immediately at the scheduled time</option>
-                      </select>
-                    </label>
-                  </>
-                ) : null}
                 <label className={styles.label}>
                   Writing prompt
                   <select
@@ -9831,12 +9333,10 @@ export default function ProjectPage() {
                 <button
                   type="button"
                   className={styles.button}
-                  disabled={curationPromptModal.busy || (curationPromptModal.action === "schedule" && !curationPromptModal.runAt)}
+                  disabled={curationPromptModal.busy}
                   onClick={() => void confirmCurationPromptAction()}
                 >
-                  {curationPromptModal.busy
-                    ? curationPromptModal.action === "generate" ? "Generating…" : "Scheduling…"
-                    : curationPromptModal.action === "generate" ? "Generate articles + images" : "Schedule articles + images"}
+                  {curationPromptModal.busy ? "Generating…" : "Generate articles + images"}
                 </button>
               </div>
             </div>
@@ -9932,116 +9432,30 @@ export default function ProjectPage() {
           </div>
         ) : null}
 
-        {clusterScheduleModal ? (
-          <div
-            className={styles.modalBackdrop}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Schedule cluster articles"
-          >
-            <div className={styles.modalPanel}>
-              <div className={styles.modalHead}>
-                <h3 className={styles.modalTitle}>
-                  Schedule {clusterScheduleModal.topicIds ? `${clusterScheduleModal.topicIds.length} topic${clusterScheduleModal.topicIds.length === 1 ? "" : "s"}` : "all pending topics"}
-                </h3>
-                <button
-                  type="button"
-                  className={styles.iconButton}
-                  aria-label="Close"
-                  onClick={() => setClusterScheduleModal(null)}
-                  disabled={clusterScheduleModal.busy}
-                >
-                  <Icon.X className={styles.icon20} />
-                </button>
-              </div>
-              <div className={styles.modalBody}>
-                <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
-                  Each topic will be imported as a pending article and queued for the scheduler.
-                  Subsequent imports are staggered 5 minutes apart so WordPress doesn&apos;t reject
-                  them for rate limiting.
-                </p>
-                <label className={styles.label}>
-                  Start time
-                  <input
-                    type="datetime-local"
-                    className={styles.input}
-                    value={clusterScheduleModal.runAt}
-                    step={300}
-                    onChange={(e) =>
-                      setClusterScheduleModal((m) => (m ? { ...m, runAt: e.target.value } : m))
-                    }
-                  />
-                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                    Times are interpreted in your profile timezone. Minimum 10 minutes from now — the article needs ~6-8 minutes to fully prepare before posting.
-                  </div>
-                </label>
-                <label className={styles.label}>
-                  WordPress status on publish
-                  <select
-                    className={styles.input}
-                    value={clusterScheduleModal.wpStatus}
-                    onChange={(e) =>
-                      setClusterScheduleModal((m) =>
-                        m ? { ...m, wpStatus: e.target.value as "draft" | "publish" } : m,
-                      )
-                    }
-                  >
-                    <option value="draft">Draft (review on WordPress before going live)</option>
-                    <option value="publish">Publish immediately at the scheduled time</option>
-                  </select>
-                </label>
-                <label className={styles.label}>
-                  Writing prompt
-                  <select
-                    className={styles.input}
-                    value={clusterScheduleModal.writingPromptId}
-                    onChange={(e) =>
-                      setClusterScheduleModal((m) => (m ? { ...m, writingPromptId: e.target.value } : m))
-                    }
-                  >
-                    <option value="">Project default</option>
-                    {(scheduleWritingPrompts?.items || []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className={styles.label}>
-                  Image prompt
-                  <select
-                    className={styles.input}
-                    value={clusterScheduleModal.imagePromptId}
-                    onChange={(e) =>
-                      setClusterScheduleModal((m) => (m ? { ...m, imagePromptId: e.target.value } : m))
-                    }
-                  >
-                    <option value="">Project default</option>
-                    {(scheduleImagePrompts?.items || []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-              <div className={styles.modalFooter}>
-                <button
-                  type="button"
-                  className={styles.btnSecondary}
-                  onClick={() => setClusterScheduleModal(null)}
-                  disabled={clusterScheduleModal.busy}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className={styles.button}
-                  onClick={() => void confirmScheduleForCluster()}
-                  disabled={clusterScheduleModal.busy || !clusterScheduleModal.runAt}
-                >
-                  {clusterScheduleModal.busy ? "Scheduling…" : "Schedule"}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
+        <BulkScheduleModal
+          open={!!researchScheduleModal}
+          title={
+            researchScheduleModal?.kind === "cluster"
+              ? `Schedule ${researchScheduleModal.seedRows.length} topic${researchScheduleModal.seedRows.length === 1 ? "" : "s"}`
+              : `Schedule ${researchScheduleModal?.seedRows.length ?? 0} idea${researchScheduleModal?.seedRows.length === 1 ? "" : "s"}`
+          }
+          seedRows={researchScheduleModal?.seedRows ?? []}
+          profileTz={profileTz}
+          defaults={wpDefaults}
+          wpTypesForSchedule={wpTypesForSchedule}
+          scheduleWritingPrompts={scheduleWritingPrompts}
+          scheduleImagePrompts={scheduleImagePrompts}
+          submitting={researchScheduleBusy}
+          error={researchScheduleError}
+          onClose={() => {
+            if (!researchScheduleBusy) {
+              setResearchScheduleModal(null);
+              setResearchScheduleError(null);
+            }
+          }}
+          onValidationError={setResearchScheduleError}
+          onSubmit={submitResearchBulkSchedule}
+        />
           </section>
         </div>
       </main>
