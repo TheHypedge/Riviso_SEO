@@ -301,6 +301,7 @@ def _to_public(a: dict) -> ArticlePublic:
         wp_link=(a.get("wp_link") or "").strip() or None,
         gsc_status=(a.get("gsc_status") or "").strip() or None,
         hasBody=bool(a.get("hasBody")) if "hasBody" in a else None,
+        image_url=(a.get("image_url") or "").strip() or None,
     )
 
 

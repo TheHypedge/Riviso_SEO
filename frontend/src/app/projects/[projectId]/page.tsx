@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
+import { ArticlesOverview } from "@/components/ArticlesOverview";
 import { BulkScheduleForm, type BulkScheduleFormValues } from "@/components/bulkSchedule/BulkScheduleForm";
 import { BulkScheduleModal } from "@/components/bulkSchedule/BulkScheduleModal";
 import {
@@ -28,7 +29,9 @@ import { scheduleMinFromNowMs } from "@/lib/scheduleTiming";
 import { ProjectTabIcon, SidebarBackIcon, type ProjectTabKey } from "@/components/ProjectTabIcon";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
+
 type TabKey =
+  | "overview"
   | "articles"
   | "research"
   | "scheduled_articles"
@@ -45,6 +48,7 @@ type ResearchSubTabKey = "cluster" | "curations";
 // inside the component) lets the lazy ``useState`` initializer read the URL
 // before the component body runs.
 const TAB_KEYS: ReadonlySet<TabKey> = new Set<TabKey>([
+  "overview",
   "articles",
   "research",
   "scheduled_articles",
@@ -54,6 +58,19 @@ const TAB_KEYS: ReadonlySet<TabKey> = new Set<TabKey>([
   "performance",
   "project_settings",
 ]);
+
+/** Sidebar section order — Overview appears directly above Articles. */
+const SIDEBAR_TAB_ORDER: TabKey[] = [
+  "overview",
+  "articles",
+  "research",
+  "scheduled_articles",
+  "prompts",
+  "context_links",
+  "tools",
+  "performance",
+  "project_settings",
+];
 
 const RESEARCH_SUBTAB_KEYS: ReadonlySet<ResearchSubTabKey> = new Set<ResearchSubTabKey>([
   "cluster",
@@ -490,6 +507,10 @@ export default function ProjectPage() {
   const [researchSubTab, setResearchSubTabState] = useState<ResearchSubTabKey>(
     defaultInitialResearchSubTab,
   );
+  const [overviewArticles, setOverviewArticles] = useState<ArticlePublic[]>([]);
+  const [overviewScheduledJobs, setOverviewScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
+  const [overviewGscSeries, setOverviewGscSeries] = useState<import("@/lib/api").GscAnalyticsSeriesPoint[] | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
 
   // Single helper that mutates ``window.location`` query params and asks the
   // App Router to replace the URL without scrolling. ``null``/empty values
@@ -523,6 +544,7 @@ export default function ProjectPage() {
       // into other sections via shared links.
       const updates: Record<string, string | null> = {
         tab: next === "articles" ? null : next,
+        view: null,
       };
       if (next !== "research") updates.subtab = null;
       updateUrlParams(updates);
@@ -542,7 +564,15 @@ export default function ProjectPage() {
   // another effect updates the query string (e.g. OAuth redirect handler).
   useEffect(() => {
     const rawTab = (searchParams?.get("tab") || "").toLowerCase();
-    const nextTab: TabKey = TAB_KEYS.has(rawTab as TabKey) ? (rawTab as TabKey) : "articles";
+    const rawView = (searchParams?.get("view") || "").toLowerCase();
+
+    let nextTab: TabKey = TAB_KEYS.has(rawTab as TabKey) ? (rawTab as TabKey) : "articles";
+    if (!rawTab && rawView === "overview") nextTab = "overview";
+    if (!rawTab && rawView && ["pending", "draft", "scheduled", "published"].includes(rawView)) {
+      nextTab = "articles";
+      setStatus(rawView as StatusFilter);
+    }
+
     setTabState((prev) => (prev === nextTab ? prev : nextTab));
 
     const rawSub = (searchParams?.get("subtab") || "").toLowerCase();
@@ -1101,7 +1131,7 @@ export default function ProjectPage() {
   }, [projectId, token]);
 
   useEffect(() => {
-    if (!token || !projectId) return;
+    if (!token || !projectId || tab !== "articles") return;
     let cancelled = false;
     (async () => {
       setArticlesListLoading(true);
@@ -1130,7 +1160,44 @@ export default function ProjectPage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, router, token, page, pageSize, debouncedQ, status, dateFrom, dateTo, dateOrder]);
+  }, [projectId, router, token, tab, page, pageSize, debouncedQ, status, dateFrom, dateTo, dateOrder]);
+
+  useEffect(() => {
+    if (!token || !projectId || tab !== "overview") return;
+    let cancelled = false;
+    (async () => {
+      setOverviewLoading(true);
+      try {
+        const [articles, jobs] = await Promise.all([
+          api.listArticlesAll(projectId),
+          api.listScheduledJobsBoard(projectId).catch(() => [] as import("@/lib/api").ScheduledJobPublic[]),
+        ]);
+        if (cancelled) return;
+        setOverviewArticles(articles || []);
+        setOverviewScheduledJobs(jobs || []);
+        if (gscStatus?.connected && gscStatus?.property_url) {
+          try {
+            const analytics = await api.gscProjectAnalytics(projectId, { days: 28 });
+            if (!cancelled) setOverviewGscSeries(analytics.series || []);
+          } catch {
+            if (!cancelled) setOverviewGscSeries(null);
+          }
+        } else if (!cancelled) {
+          setOverviewGscSeries(null);
+        }
+      } catch {
+        if (!cancelled) {
+          setOverviewArticles([]);
+          setOverviewScheduledJobs([]);
+        }
+      } finally {
+        if (!cancelled) setOverviewLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, token, tab, gscStatus?.connected, gscStatus?.property_url]);
 
   useEffect(() => {
     if (!token || !projectId || tab !== "tools") return;
@@ -3239,6 +3306,7 @@ export default function ProjectPage() {
   }
 
   const tabLabel: Record<TabKey, string> = {
+    overview: "Overview",
     articles: "Articles",
     research: "Research",
     scheduled_articles: "Scheduled Articles",
@@ -3258,6 +3326,14 @@ export default function ProjectPage() {
     if ((next === "tools" || next === "project_settings") && !confirmLoseChanges()) return;
     setTab(next);
     setMobileNavOpen(false);
+  }
+
+  function goToArticlesFromOverview(filterStatus?: string) {
+    if (filterStatus) {
+      setStatus(filterStatus as StatusFilter);
+      setPage(1);
+    }
+    goTab("articles");
   }
 
   /**
@@ -3283,7 +3359,7 @@ export default function ProjectPage() {
   const performanceTabAvailable = Boolean(
     gscStatus?.connected && gscStatus?.property_url && analytics && (analytics.series || []).length > 0,
   );
-  const visibleTabs: TabKey[] = (Object.keys(tabLabel) as TabKey[]).filter((k) => {
+  const visibleTabs: TabKey[] = SIDEBAR_TAB_ORDER.filter((k) => {
     if (k === "performance") return performanceTabAvailable;
     return true;
   });
@@ -4545,9 +4621,19 @@ export default function ProjectPage() {
 
           <section className={styles.contentCol}>
             <div className={styles.intro} style={{ paddingTop: 0 }}>
-              {tab === "articles" ? (
+              {tab === "overview" ? (
                 <>
-                  {/* Desktop header: Articles + live search + add */}
+                  <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
+                    <h1 style={{ margin: 0 }}>Overview</h1>
+                  </div>
+                  <div className={`${styles.mobileHeadRow} ${styles.showOnMobile}`}>
+                    <h1 className={styles.mobileTitle} style={{ margin: 0 }}>
+                      Overview
+                    </h1>
+                  </div>
+                </>
+              ) : tab === "articles" ? (
+                <>
                   <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
                     <h1 style={{ margin: 0 }}>Articles</h1>
                     <div className={styles.headSearchWrap} aria-label="Live search">
@@ -4589,7 +4675,6 @@ export default function ProjectPage() {
                     </button>
                   </div>
 
-                  {/* Mobile: live search full width under header */}
                   <div className={styles.showOnMobile} style={{ width: "100%" }}>
                     <input
                       className={`${styles.input} ${styles.headSearchInputMobile}`}
@@ -4598,7 +4683,6 @@ export default function ProjectPage() {
                       onChange={(e) => setQ(e.target.value)}
                     />
                   </div>
-                
 
                   <div className={styles.mobileActionChips}>
                     <button
@@ -4670,6 +4754,20 @@ export default function ProjectPage() {
                 </>
               )}
             </div>
+
+        {tab === "overview" ? (
+          <ArticlesOverview
+            projectId={projectId}
+            styles={styles as unknown as Record<string, string>}
+            articles={overviewArticles}
+            scheduledJobs={overviewScheduledJobs}
+            titleByArticleId={articleTitlesById}
+            selectedIds={selectedIds}
+            gscSeries={overviewGscSeries}
+            loading={overviewLoading}
+            onViewList={goToArticlesFromOverview}
+          />
+        ) : null}
 
         {tab === "articles" ? (
           <>
@@ -4855,7 +4953,11 @@ export default function ProjectPage() {
                       <select
                         className={styles.articlesFilterControl}
                         value={status}
-                        onChange={(e) => setStatus(e.target.value as StatusFilter)}
+                        onChange={(e) => {
+                          const next = e.target.value as StatusFilter;
+                          setStatus(next);
+                          setPage(1);
+                        }}
                       >
                         <option value="">All</option>
                         <option value="pending">Pending</option>
@@ -5423,7 +5525,8 @@ export default function ProjectPage() {
                         className={styles.input}
                         value={status}
                         onChange={(e) => {
-                          setStatus(e.target.value as StatusFilter);
+                          const next = e.target.value as StatusFilter;
+                          setStatus(next);
                           setPage(1);
                         }}
                       >

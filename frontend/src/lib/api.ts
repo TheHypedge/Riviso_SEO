@@ -526,6 +526,7 @@ export type ArticlePublic = {
   monitor_status?: string | null; // Feature 4: "fresh" | "stale" | "unknown" | ""
   monitor_last_checked_at?: string | null;
   internal_links_count?: number | null; // Feature 3
+  image_url?: string | null;
 };
 
 export type ArticleListPage = {

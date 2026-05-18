@@ -6601,3 +6601,577 @@ a.secondary {
     --button-secondary-border: var(--aa-hairline);
   }
 }
+
+/* ---- Articles overview dashboard (matte black / Riviso brand) ---- */
+.articlesViewNav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 20px;
+  padding: 0;
+}
+
+.articlesViewNavBtn {
+  appearance: none;
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
+  color: var(--aa-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 9px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.articlesViewNavBtn:hover {
+  color: var(--aa-ink);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 45%);
+  background: color-mix(in oklab, var(--aa-surface-soft), var(--aa-primary) 8%);
+}
+
+.articlesViewNavBtnActive {
+  background: var(--aa-primary);
+  border-color: color-mix(in oklab, var(--aa-primary), #000 18%);
+  color: #fff;
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--aa-primary), #000 22%);
+}
+
+.articlesOverviewShell {
+  width: 100%;
+  background: var(--aa-canvas);
+  border-radius: 4px;
+}
+
+.articlesOverview {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+
+.articlesOverviewLoading {
+  padding: 56px 20px;
+  text-align: center;
+  color: var(--aa-muted);
+  font-size: 14px;
+}
+
+.articlesOverviewStatGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 1200px) {
+  .articlesOverviewStatGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .articlesOverviewStatGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.articlesOverviewStatCard {
+  appearance: none;
+  text-align: left;
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card);
+  border-radius: 14px;
+  padding: 20px 16px 16px;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    transform 0.12s ease,
+    box-shadow 0.15s ease;
+  color: inherit;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+}
+
+.articlesOverviewStatCard:hover {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 35%);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.articlesOverviewStatValue {
+  display: block;
+  font-size: clamp(28px, 4vw, 38px);
+  font-weight: 800;
+  line-height: 1.05;
+  color: var(--aa-ink);
+  letter-spacing: -0.03em;
+}
+
+.articlesOverviewStatLabel {
+  display: block;
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--aa-muted);
+  font-weight: 600;
+}
+
+.articlesOverviewMainGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.75fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+@media (max-width: 1024px) {
+  .articlesOverviewMainGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.articlesOverviewChartCard,
+.articlesOverviewPanel {
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card);
+  border-radius: 16px;
+  padding: 18px 18px 14px;
+  min-width: 0;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.32);
+}
+
+.articlesOverviewChartHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.articlesOverviewChartTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--aa-ink);
+}
+
+.articlesOverviewChartSub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--aa-muted);
+}
+
+.articlesOverviewRangeTabs {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline-soft);
+}
+
+.articlesOverviewRangeBtn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--aa-muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.articlesOverviewRangeBtn:hover {
+  color: var(--aa-ink);
+}
+
+.articlesOverviewRangeBtnActive {
+  background: var(--aa-primary);
+  border-color: color-mix(in oklab, var(--aa-primary), #000 12%);
+  color: #fff;
+}
+
+.articlesOverviewChartWrap {
+  position: relative;
+  width: 100%;
+}
+
+.articlesOverviewChartLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--aa-muted);
+  letter-spacing: 0.02em;
+}
+
+.articlesOverviewChartLegend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.articlesOverviewChartLegendSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.articlesOverviewChartSvg {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+}
+
+.articlesOverviewChartBar {
+  transition: opacity 0.12s ease;
+}
+
+.articlesOverviewChartHit {
+  cursor: crosshair;
+  outline: none;
+}
+
+.articlesOverviewChartHit:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 40%);
+  outline-offset: -2px;
+}
+
+.articlesOverviewChartTooltip {
+  --tip-bg: #1a1a20;
+  --tip-ink: #ffffff;
+  --tip-label: #d8d8e0;
+  --tip-muted: #b4b4be;
+  --tip-border: rgba(255, 255, 255, 0.22);
+  position: absolute;
+  z-index: 12;
+  width: 252px;
+  pointer-events: none;
+  filter: drop-shadow(0 14px 36px rgba(0, 0, 0, 0.62));
+}
+
+.articlesOverviewChartTooltipPanel {
+  border-radius: 14px;
+  border: 1px solid var(--tip-border);
+  background: var(--tip-bg);
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.articlesOverviewChartTooltipHead {
+  padding: 12px 14px 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 100%);
+}
+
+.articlesOverviewChartTooltipKicker {
+  display: block;
+  margin: 0 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tip-muted);
+}
+
+.articlesOverviewChartTooltipDate {
+  display: block;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--tip-ink);
+  letter-spacing: 0.01em;
+}
+
+.articlesOverviewChartTooltipCaption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.articlesOverviewChartTooltipTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+}
+
+.articlesOverviewChartTooltipMetric {
+  padding: 9px 0 9px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--tip-label);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.articlesOverviewChartTooltipMetric span:last-child {
+  color: var(--tip-label);
+}
+
+.articlesOverviewChartTooltipValue {
+  padding: 9px 14px 9px 12px;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.2;
+  color: var(--tip-ink);
+  text-align: right;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.articlesOverviewChartTooltipTable tbody tr + tr .articlesOverviewChartTooltipMetric,
+.articlesOverviewChartTooltipTable tbody tr + tr .articlesOverviewChartTooltipValue {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.articlesOverviewChartTooltipSwatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 9px;
+  border-radius: 3px;
+  vertical-align: -1px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.articlesOverviewChartTooltipSwatchPublished {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--aa-primary), #000 28%);
+}
+
+.articlesOverviewChartTooltipSwatchPending {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.articlesOverviewChartTooltipSwatchScheduled {
+  box-shadow: 0 0 0 1px color-mix(in oklab, #f5c842, #000 35%);
+}
+
+.articlesOverviewChartTooltipFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 10px 14px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.articlesOverviewChartTooltipFooterLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tip-muted);
+}
+
+.articlesOverviewChartTooltipFooterValue {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--tip-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.articlesOverviewChartTooltipCaret {
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin: -7px auto 0;
+  background: var(--tip-bg);
+  border-right: 1px solid var(--tip-border);
+  border-bottom: 1px solid var(--tip-border);
+  transform: rotate(45deg);
+}
+
+.articlesOverviewChartEmpty {
+  padding: 56px 16px;
+  text-align: center;
+  color: var(--aa-muted);
+  font-size: 13px;
+}
+
+.articlesOverviewPanelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--aa-hairline-soft);
+}
+
+.articlesOverviewPanelTitle {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--aa-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.articlesOverviewPanelIcon {
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+.articlesOverviewPanelLink {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--aa-muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.12s ease;
+}
+
+.articlesOverviewPanelLink:hover {
+  color: var(--aa-primary);
+}
+
+.articlesOverviewList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.articlesOverviewListEmpty {
+  padding: 14px 4px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--aa-muted);
+}
+
+.articlesOverviewListRowFeatured,
+.articlesOverviewListRowPlain {
+  display: grid;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-radius: 10px;
+  transition: background 0.12s ease;
+}
+
+.articlesOverviewListRowFeatured {
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+}
+
+.articlesOverviewListRowPlain {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.articlesOverviewList > li {
+  border-radius: 10px;
+}
+
+.articlesOverviewList > li:hover {
+  background: var(--aa-surface-soft);
+}
+
+.articlesOverviewList > li + li {
+  border-top: 1px solid var(--aa-hairline-soft);
+}
+
+.articlesOverviewFeaturedWrap {
+  display: block;
+  width: 56px;
+  height: 40px;
+  border-radius: 8px;
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-dark-elevated);
+}
+
+.articlesOverviewFeaturedImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.articlesOverviewFeaturedFallback {
+  width: 56px;
+  height: 40px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--aa-primary), #000 22%),
+    color-mix(in oklab, var(--aa-primary), #fff 8%)
+  );
+  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 50%);
+}
+
+.articlesOverviewListTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: color-mix(in oklab, var(--aa-primary), #fff 12%);
+  text-decoration: none;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.articlesOverviewListTitle:hover {
+  color: color-mix(in oklab, var(--aa-primary), #fff 28%);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.articlesOverviewListDate {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--aa-muted-soft);
+  white-space: nowrap;
+}
+
+.articlesOverviewPanelsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 900px) {
+  .articlesOverviewPanelsGrid {
+    grid-template-columns: 1fr;
+  }
+}

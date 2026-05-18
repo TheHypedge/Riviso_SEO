@@ -100,6 +100,8 @@ export function useBulkScheduleForm({
 
   useEffect(() => {
     if (!active || !seedRows.length) return;
+    // Reset form when modal opens with new seed rows (external sync).
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional seed sync on open
     initFromSeeds(seedRows);
   }, [active, seedRows, initFromSeeds]);
 

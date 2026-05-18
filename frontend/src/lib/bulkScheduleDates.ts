@@ -78,7 +78,7 @@ export function preferredTimeFromDatetimeLocal(when: string): string {
 
 function timeForSameDaySlot(prefH: number, prefMin: number, sameDayIndex: number): { h: number; min: number } {
   if (sameDayIndex <= 0) return { h: prefH, min: prefMin };
-  let h = prefH + sameDayIndex * SAME_DAY_SPREAD_HOURS;
+  const h = prefH + sameDayIndex * SAME_DAY_SPREAD_HOURS;
   const min = prefMin;
   if (h > SAME_DAY_EVENING_CAP_H || (h === SAME_DAY_EVENING_CAP_H && min > SAME_DAY_EVENING_CAP_MIN)) {
     return { h: SAME_DAY_EVENING_CAP_H, min: SAME_DAY_EVENING_CAP_MIN };

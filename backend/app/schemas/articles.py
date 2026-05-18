@@ -52,6 +52,7 @@ class ArticlePublic(BaseModel):
     # Feature 3 — Internal Linking telemetry; 0 in v1 until the matcher lands.
     internal_links_count: int | None = None
     hasBody: bool | None = Field(default=None, description="Optional hint that body HTML exists without loading full text.")
+    image_url: str | None = Field(default=None, description="Featured image URL when generated or set.")
 
 
 class ArticleCreate(BaseModel):
