@@ -25,6 +25,7 @@ from app.api.routes import project_cluster_validation
 from app.api.routes import project_site_map
 from app.api.routes import project_topic_cluster
 from app.api.routes import research
+from app.api.routes import workspace
 
 api_router = APIRouter()
 
@@ -45,4 +46,5 @@ api_router.include_router(project_site_map.router)
 api_router.include_router(project_topic_cluster.router)
 api_router.include_router(project_cluster_validation.router)
 api_router.include_router(research.router)
+api_router.include_router(workspace.router)
 

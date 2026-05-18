@@ -5,6 +5,7 @@
 import type { ReactNode } from "react";
 
 export type DashboardNavKey =
+  | "overview"
   | "projects"
   | "users"
   | "limits"
@@ -30,6 +31,15 @@ function Svg({ className, children }: { className?: string; children: ReactNode 
 
 export function DashboardNavIcon({ nav, className }: { nav: DashboardNavKey; className?: string }) {
   switch (nav) {
+    case "overview":
+      return (
+        <Svg className={className}>
+          <rect x="3" y="3" width="8" height="8" rx="1.5" {...S} />
+          <rect x="13" y="3" width="8" height="5" rx="1.5" {...S} />
+          <rect x="13" y="11" width="8" height="10" rx="1.5" {...S} />
+          <rect x="3" y="14" width="8" height="7" rx="1.5" {...S} />
+        </Svg>
+      );
     case "projects":
       return (
         <Svg className={className}>

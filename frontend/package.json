@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:unit": "npx --yes tsx --test src/lib/overviewReadiness.test.ts src/lib/articlePaths.test.ts"
   },
   "dependencies": {
     "@tiptap/extension-link": "^3.22.5",

@@ -23,14 +23,21 @@ type TooltipState = {
   top: number;
 };
 
+function chartCls(styles: Record<string, string> | undefined, key: string): string {
+  return styles?.[key] ?? key;
+}
+
 export function ArticlesOverviewChart(props: {
   series: ArticlesOverviewDayPoint[];
   label?: string;
+  /** Maps default ``articlesOverviewChart*`` keys to themed class names (e.g. dashboard ``wsChart*``). */
+  styles?: Record<string, string>;
   tooltipClassName?: string;
   legendClassName?: string;
   wrapClassName?: string;
 }) {
-  const { series, label = "Article activity", tooltipClassName, legendClassName, wrapClassName } = props;
+  const { series, label = "Article activity", styles, tooltipClassName, legendClassName, wrapClassName } = props;
+  const cn = (key: string) => chartCls(styles, key);
   const gradId = useId().replace(/:/g, "");
   const wrapRef = useRef<HTMLDivElement>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
@@ -105,17 +112,17 @@ export function ArticlesOverviewChart(props: {
   const tooltipTotal = tooltip ? tooltip.published + tooltip.pending + tooltip.scheduled : 0;
 
   if (!series.length) {
-    return <div className="articlesOverviewChartEmpty">No activity in this period yet.</div>;
+    return <div className={cn("articlesOverviewChartEmpty")}>No activity in this period yet.</div>;
   }
 
   const labelEvery = Math.max(1, Math.floor(series.length / 7));
 
   return (
-    <div ref={wrapRef} className={wrapClassName || "articlesOverviewChartWrap"}>
-      <ul className={legendClassName || "articlesOverviewChartLegend"} aria-hidden="true">
+    <div ref={wrapRef} className={wrapClassName || cn("articlesOverviewChartWrap")}>
+      <ul className={legendClassName || cn("articlesOverviewChartLegend")} aria-hidden="true">
         {SERIES_META.map((meta) => (
           <li key={meta.key}>
-            <span className="articlesOverviewChartLegendSwatch" style={{ background: meta.color }} />
+            <span className={cn("articlesOverviewChartLegendSwatch")} style={{ background: meta.color }} />
             {meta.label}
           </li>
         ))}
@@ -128,7 +135,7 @@ export function ArticlesOverviewChart(props: {
         preserveAspectRatio="xMidYMid meet"
         role="img"
         aria-label={label}
-        className="articlesOverviewChartSvg"
+        className={cn("articlesOverviewChartSvg")}
         onMouseLeave={hideTooltip}
       >
         <defs>
@@ -167,7 +174,7 @@ export function ArticlesOverviewChart(props: {
               width={groupW}
               height={innerH}
               fill="transparent"
-              className="articlesOverviewChartHit"
+              className={cn("articlesOverviewChartHit")}
               onMouseMove={(e) => showTooltip(point, e.clientX, e.clientY)}
               onFocus={() => showTooltip(point, gx, padT)}
               onBlur={hideTooltip}
@@ -184,7 +191,7 @@ export function ArticlesOverviewChart(props: {
                   height={bar.h}
                   rx={3}
                   fill={`url(#${gradId}-${bar.key})`}
-                  className="articlesOverviewChartBar"
+                  className={cn("articlesOverviewChartBar")}
                 />
               ) : (
                 <rect
@@ -210,7 +217,7 @@ export function ArticlesOverviewChart(props: {
 
       {tooltip ? (
         <div
-          className={tooltipClassName || "articlesOverviewChartTooltip"}
+          className={tooltipClassName || cn("articlesOverviewChartTooltip")}
           style={{
             left: tooltip.left,
             top: tooltip.top,
@@ -219,38 +226,38 @@ export function ArticlesOverviewChart(props: {
           role="tooltip"
           id="articles-overview-chart-tooltip"
         >
-          <div className="articlesOverviewChartTooltipPanel">
-            <header className="articlesOverviewChartTooltipHead">
-              <time className="articlesOverviewChartTooltipDate" dateTime={tooltip.date}>
+          <div className={cn("articlesOverviewChartTooltipPanel")}>
+            <header className={cn("articlesOverviewChartTooltipHead")}>
+              <time className={cn("articlesOverviewChartTooltipDate")} dateTime={tooltip.date}>
                 {formatChartTooltipDate(tooltip.date)}
               </time>
             </header>
-            <table className="articlesOverviewChartTooltipTable">
-              <caption className="articlesOverviewChartTooltipCaption">
+            <table className={cn("articlesOverviewChartTooltipTable")}>
+              <caption className={cn("articlesOverviewChartTooltipCaption")}>
                 Article counts for selected day
               </caption>
               <tbody>
                 {SERIES_META.map((meta) => (
                   <tr key={meta.key}>
-                    <th scope="row" className="articlesOverviewChartTooltipMetric">
+                    <th scope="row" className={cn("articlesOverviewChartTooltipMetric")}>
                       <span
-                        className={`articlesOverviewChartTooltipSwatch ${meta.swatchClass}`}
+                        className={`${cn("articlesOverviewChartTooltipSwatch")} ${cn(meta.swatchClass)}`}
                         style={{ backgroundColor: meta.color }}
                         aria-hidden="true"
                       />
                       <span>{meta.label}</span>
                     </th>
-                    <td className="articlesOverviewChartTooltipValue">{tooltip[meta.key].toLocaleString()}</td>
+                    <td className={cn("articlesOverviewChartTooltipValue")}>{tooltip[meta.key].toLocaleString()}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            <footer className="articlesOverviewChartTooltipFooter">
-              <span className="articlesOverviewChartTooltipFooterLabel">Total</span>
-              <span className="articlesOverviewChartTooltipFooterValue">{tooltipTotal.toLocaleString()}</span>
+            <footer className={cn("articlesOverviewChartTooltipFooter")}>
+              <span className={cn("articlesOverviewChartTooltipFooterLabel")}>Total</span>
+              <span className={cn("articlesOverviewChartTooltipFooterValue")}>{tooltipTotal.toLocaleString()}</span>
             </footer>
           </div>
-          <span className="articlesOverviewChartTooltipCaret" aria-hidden="true" />
+          <span className={cn("articlesOverviewChartTooltipCaret")} aria-hidden="true" />
         </div>
       ) : null}
     </div>

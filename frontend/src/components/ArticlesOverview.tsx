@@ -4,7 +4,10 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { ArticlesOverviewChart } from "@/components/ArticlesOverviewChart";
+import { OverviewReadinessGate } from "@/components/OverviewReadinessGate";
 import type { ArticlePublic, GscAnalyticsSeriesPoint, ScheduledJobPublic } from "@/lib/api";
+import { articleEditorPath } from "@/lib/articlePaths";
+import { evaluateProjectOverviewReadiness } from "@/lib/overviewReadiness";
 import {
   buildArticleActivityBarSeries,
   cartItems,
@@ -99,13 +102,21 @@ function OverviewPanel(props: {
               {showFeaturedImage ? (
                 <FeaturedThumb imageUrl={item.imageUrl} title={item.title} styles={styles} />
               ) : null}
-              <Link
-                href={`/projects/${projectId}/articles/${item.articleId}`}
-                className={styles.articlesOverviewListTitle}
-                title={item.title}
-              >
-                {item.title}
-              </Link>
+              {(() => {
+                const href = articleEditorPath(projectId, item.articleId);
+                if (!href) {
+                  return (
+                    <span className={styles.articlesOverviewListTitleMuted} title={item.title}>
+                      {item.title}
+                    </span>
+                  );
+                }
+                return (
+                  <Link href={href} className={styles.articlesOverviewListTitle} title={item.title}>
+                    {item.title}
+                  </Link>
+                );
+              })()}
               <span className={styles.articlesOverviewListDate}>{item.dateLabel}</span>
             </li>
           ))
@@ -136,6 +147,11 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
 
   const chartSeries = useMemo(
     () => buildArticleActivityBarSeries(articles, scheduledJobs, chartRange),
+    [articles, scheduledJobs, chartRange],
+  );
+
+  const readiness = useMemo(
+    () => evaluateProjectOverviewReadiness(articles, scheduledJobs, chartRange),
     [articles, scheduledJobs, chartRange],
   );
 
@@ -201,6 +217,17 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
     );
   }
 
+  if (!readiness.isReady) {
+    return (
+      <OverviewReadinessGate
+        readiness={readiness}
+        styles={styles}
+        primaryAction={{ label: "Open articles", onClick: () => onViewList("") }}
+        secondaryAction={{ label: "View pending", onClick: () => onViewList("pending") }}
+      />
+    );
+  }
+
   return (
     <div className={styles.articlesOverviewShell}>
       <div className={styles.articlesOverview}>
@@ -251,9 +278,7 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
             <ArticlesOverviewChart
               series={chartSeries}
               label="Article published, pending, and scheduled by day"
-              wrapClassName={styles.articlesOverviewChartWrap}
-              legendClassName={styles.articlesOverviewChartLegend}
-              tooltipClassName={styles.articlesOverviewChartTooltip}
+              styles={styles}
             />
           </section>
 

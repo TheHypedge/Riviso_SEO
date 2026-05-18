@@ -1723,7 +1723,11 @@ def get_article(*, project_id: str, article_id: str) -> dict[str, Any] | None:
                 return _normalize_article_dict(a)
         return None
 
-    doc = get_db().articles.find_one({"_id": aid, "project_id": pid})
+    db = get_db()
+    # Listings and APIs use the logical ``id`` field; legacy rows may only match on ``_id``.
+    doc = db.articles.find_one({"project_id": pid, "id": aid})
+    if not isinstance(doc, dict):
+        doc = db.articles.find_one({"_id": aid, "project_id": pid})
     if not isinstance(doc, dict):
         return None
     return _mongo_doc_to_article(doc)
@@ -1935,7 +1939,13 @@ def load_articles_listing_for_project(
         {
             "$project": {
                 "_id": 0,
-                "id": 1,
+                "id": {
+                    "$cond": {
+                        "if": {"$gt": [{"$strLenCP": {"$ifNull": ["$id", ""]}}, 0]},
+                        "then": "$id",
+                        "else": {"$toString": "$_id"},
+                    }
+                },
                 "project_id": 1,
                 "title": 1,
                 "keywords": 1,
@@ -2299,7 +2309,13 @@ def load_recent_article_listings_for_projects(
         {
             "$project": {
                 "_id": 0,
-                "id": 1,
+                "id": {
+                    "$cond": {
+                        "if": {"$gt": [{"$strLenCP": {"$ifNull": ["$id", ""]}}, 0]},
+                        "then": "$id",
+                        "else": {"$toString": "$_id"},
+                    }
+                },
                 "project_id": 1,
                 "title": 1,
                 "keywords": 1,
@@ -2324,6 +2340,7 @@ def load_recent_article_listings_for_projects(
                 "gsc_status": 1,
                 "gsc_inspection_requested_at": 1,
                 "gsc_inspection_error": 1,
+                "image_url": 1,
                 "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
             }
         },
@@ -2331,8 +2348,10 @@ def load_recent_article_listings_for_projects(
         {"$limit": lim},
     ]
     out_list: list[dict[str, Any]] = []
-    for d in db.articles.aggregate(pipeline, allowDiskUse=False):
+    for d in db.articles.aggregate(pipeline, allowDiskUse=True):
         d["wp_scheduled_at"] = _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at"))
+        if not (d.get("id") or "").strip():
+            continue
         out_list.append(d)
     return out_list
 

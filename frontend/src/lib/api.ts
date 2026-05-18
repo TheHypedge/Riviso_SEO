@@ -508,6 +508,43 @@ export type ScheduledJobPublic = {
   wp_link?: string | null;
 };
 
+export type WorkspaceOverviewStats = {
+  project_count: number;
+  total_articles: number;
+  published: number;
+  pending: number;
+  draft: number;
+  scheduled: number;
+  upcoming_scheduled: number;
+};
+
+export type WorkspaceFeedItem = {
+  id: string;
+  article_id: string;
+  project_id: string;
+  project_name: string;
+  title: string;
+  status_tag: string;
+  sort_at?: string | null;
+  image_url?: string | null;
+};
+
+export type WorkspaceActivityDay = {
+  date: string;
+  published: number;
+  pending: number;
+  scheduled: number;
+};
+
+export type WorkspaceOverviewResponse = {
+  stats: WorkspaceOverviewStats;
+  activity_series: WorkspaceActivityDay[];
+  upcoming_scheduled: WorkspaceFeedItem[];
+  recently_published: WorkspaceFeedItem[];
+  pending: WorkspaceFeedItem[];
+  drafts: WorkspaceFeedItem[];
+};
+
 export type ArticlePublic = {
   id: string;
   project_id: string;
@@ -1020,6 +1057,9 @@ export const api = {
   },
   async listProjects() {
     return apiFetch<ProjectPublic[]>("/api/projects");
+  },
+  async workspaceOverview() {
+    return apiFetch<WorkspaceOverviewResponse>("/api/workspace/overview");
   },
   async createProject(name: string, website_url?: string) {
     return apiFetch<ProjectPublic>("/api/projects", {

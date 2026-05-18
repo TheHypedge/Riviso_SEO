@@ -55,6 +55,17 @@ export function formatOverviewDate(raw?: string | null): string {
   return `${day}${suffix} ${month} ${d.getUTCFullYear()}`;
 }
 
+/** Date + time for tables (user-local timezone). */
+export function formatOverviewDateTime(raw?: string | null): { date: string; time: string } {
+  const ms = parseMs(raw);
+  if (!ms) return { date: "—", time: "" };
+  const d = new Date(ms);
+  return {
+    date: d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }),
+    time: d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+  };
+}
+
 export function computeOverviewStats(
   articles: ArticlePublic[],
   scheduledJobs: ScheduledJobPublic[],

@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 
 import { DashboardNavIcon } from "@/components/DashboardNavIcon";
 import { TutorialStepperModal } from "@/components/TutorialStepperModal";
+import { WorkspaceProjectOverview } from "@/components/WorkspaceProjectOverview";
 import styles from "../page.module.css";
 import dashStyles from "./dashboard.module.css";
 import {
@@ -22,11 +23,12 @@ import {
   ProjectPublic,
   ProjectSettings,
   WordpressVerifyResponse,
+  WorkspaceOverviewResponse,
 } from "@/lib/api";
 
-type DashSection = "projects" | "users" | "limits" | "profile";
+type DashSection = "overview" | "projects" | "users" | "limits" | "profile";
 
-const DASH_SECTIONS = new Set<DashSection>(["projects", "users", "limits", "profile"]);
+const DASH_SECTIONS = new Set<DashSection>(["overview", "projects", "users", "limits", "profile"]);
 
 function planComparable(p: PlanPublic) {
   return {
@@ -64,18 +66,17 @@ export default function DashboardPage() {
   const [mePlan, setMePlan] = useState<string>("");
   const [meRole, setMeRole] = useState<string>("");
   const [projects, setProjects] = useState<ProjectPublic[]>([]);
+  const [workspaceOverview, setWorkspaceOverview] = useState<WorkspaceOverviewResponse | null>(null);
+  const [workspaceOverviewLoading, setWorkspaceOverviewLoading] = useState(false);
+  const [workspaceOverviewError, setWorkspaceOverviewError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [website, setWebsite] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState<string | null>(null);
-  const [section, setSection] = useState<DashSection>(() => {
-    if (typeof window === "undefined") return "projects";
-    const params = new URLSearchParams(window.location.search);
-    const raw = (params.get("section") || "projects") as DashSection;
-    return DASH_SECTIONS.has(raw) ? raw : "projects";
-  });
+  const [section, setSection] = useState<DashSection>("projects");
+  const [sectionReady, setSectionReady] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
   const [showWpConnect, setShowWpConnect] = useState(false);
@@ -153,6 +154,18 @@ export default function DashboardPage() {
   const token = useMemo(() => getAccessToken(), []);
   const isAdmin = (meRole || "").trim().toLowerCase() === "admin";
 
+  // Default section matches SSR; sync from ?section= after hydration (see project page tab pattern).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const raw = (params.get("section") || "projects") as DashSection;
+    let next: DashSection = DASH_SECTIONS.has(raw) ? raw : "projects";
+    if (!isAdmin && (next === "users" || next === "limits")) next = "projects";
+    /* eslint-disable react-hooks/set-state-in-effect -- one-time URL → section sync; avoids SSR window mismatch */
+    setSection((prev) => (prev === next ? prev : next));
+    setSectionReady(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [isAdmin]);
+
   function canAccessSection(next: DashSection) {
     if (next === "users" || next === "limits") return isAdmin;
     return true;
@@ -162,7 +175,9 @@ export default function DashboardPage() {
     const target = canAccessSection(next) ? next : "projects";
     setSection(target);
     setMobileNavOpen(false);
-    router.push(target === "projects" ? "/dashboard" : `/dashboard?section=${target}`);
+    router.push(
+      target === "projects" ? "/dashboard" : target === "overview" ? "/dashboard?section=overview" : `/dashboard?section=${target}`,
+    );
   }
 
   const Icon = {
@@ -210,6 +225,32 @@ export default function DashboardPage() {
       }
     })();
   }, [router, token]);
+
+  useEffect(() => {
+    if (!token || section !== "overview") return;
+    let cancelled = false;
+    (async () => {
+      setWorkspaceOverviewLoading(true);
+      setWorkspaceOverviewError(null);
+      try {
+        const data = await api.workspaceOverview();
+        if (!cancelled) {
+          setWorkspaceOverview(data);
+          setWorkspaceOverviewError(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setWorkspaceOverview(null);
+          setWorkspaceOverviewError(e instanceof Error ? e.message : "Failed to load workspace overview");
+        }
+      } finally {
+        if (!cancelled) setWorkspaceOverviewLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [section, token]);
 
   // Per-project GSC flow now redirects directly to /projects/{id}?tab=tools, so the
   // dashboard no longer needs to handle Search Console OAuth callbacks. If a stale
@@ -523,6 +564,14 @@ export default function DashboardPage() {
               <div className={styles.navGroup}>
                 <button
                   type="button"
+                  className={`${styles.navItem} ${section === "overview" ? styles.navItemActive : ""}`}
+                  onClick={() => goSection("overview")}
+                >
+                  <DashboardNavIcon nav="overview" className={styles.navItemIcon} />
+                  <span className={styles.navItemLabel}>Project overview</span>
+                </button>
+                <button
+                  type="button"
                   className={`${styles.navItem} ${section === "projects" ? styles.navItemActive : ""}`}
                   onClick={() => goSection("projects")}
                 >
@@ -606,6 +655,23 @@ export default function DashboardPage() {
 
           <section className={styles.contentCol}>
             {error ? <div className={styles.error}>{error}</div> : null}
+
+            {section === "overview" ? (
+              <>
+                <div className={styles.intro}>
+                  <h1>Project overview</h1>
+                  <p>Content operations across all projects — upcoming schedules, recent posts, and queues.</p>
+                </div>
+                <WorkspaceProjectOverview
+                  data={workspaceOverview}
+                  loading={workspaceOverviewLoading || loading || !sectionReady}
+                  error={workspaceOverviewError}
+                  styles={dashStyles as unknown as Record<string, string>}
+                  onGoProjects={() => goSection("projects")}
+                  onOpenTutorial={() => setShowTutorial(true)}
+                />
+              </>
+            ) : null}
 
             {section === "projects" ? (
               <>

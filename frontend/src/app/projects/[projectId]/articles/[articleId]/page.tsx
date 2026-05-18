@@ -16,6 +16,7 @@ import {
   PromptListResponse,
 } from "@/lib/api";
 import { ArticleReadonlyBody } from "@/components/ArticleReadonlyBody";
+import { articleEditorPath, formatArticleLoadError } from "@/lib/articlePaths";
 
 const ArticleRichEditor = dynamic(
   () => import("@/components/ArticleRichEditor").then((m) => m.ArticleRichEditor),
@@ -61,12 +62,18 @@ export default function ArticleEditPage() {
   const params = useParams<{ projectId: string; articleId: string }>();
   const router = useRouter();
   const token = useMemo(() => getAccessToken(), []);
+  const editorPath = useMemo(
+    () => articleEditorPath(params.projectId, params.articleId),
+    [params.projectId, params.articleId],
+  );
 
   // ``loading`` value isn't rendered directly — the global loading provider
   // shows the typewriter overlay instead — but ``setLoading`` is wired up so
   // we can re-enable a local skeleton later without touching call sites.
   const [, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [errorCanRetry, setErrorCanRetry] = useState(false);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
 
   const [article, setArticle] = useState<ArticleDetail | null>(null);
@@ -134,8 +141,10 @@ export default function ArticleEditPage() {
       router.replace("/login");
       return;
     }
+    if (!editorPath) return;
     (async () => {
       setError(null);
+      setErrorCanRetry(false);
       setNotice(null);
       setLoading(true);
       try {
@@ -179,12 +188,14 @@ export default function ArticleEditPage() {
           router.replace("/login");
           return;
         }
-        setError(e instanceof Error ? e.message : "Failed to load article");
+        const info = formatArticleLoadError(e);
+        setError(info.message);
+        setErrorCanRetry(info.canRetry);
       } finally {
         setLoading(false);
       }
     })();
-  }, [params.articleId, params.projectId, router, token]);
+  }, [editorPath, params.articleId, params.projectId, router, token, loadAttempt]);
 
   // Background prefetch (non-blocking) for better perceived performance.
   useEffect(() => {
@@ -446,6 +457,25 @@ export default function ArticleEditPage() {
     }
   }
 
+  if (!editorPath) {
+    return (
+      <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
+        <main className={`${styles.main} ${styles.mainWide}`}>
+          <section className={styles.contentCol}>
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <p className={styles.error}>
+                Invalid article link. Open the article from your project&apos;s Articles list.
+              </p>
+              <Link href={`/projects/${params.projectId}?tab=articles`} className={styles.button}>
+                Back to articles
+              </Link>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
@@ -466,6 +496,20 @@ export default function ArticleEditPage() {
           {error ? (
             <div className={`${styles.card} ${styles.cardWide}`}>
               <p className={styles.error}>{error}</p>
+              <div className={styles.row} style={{ marginTop: 12, gap: 10 }}>
+                <Link href={`/projects/${params.projectId}?tab=articles`} className={styles.button}>
+                  Back to articles
+                </Link>
+                {errorCanRetry ? (
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    onClick={() => setLoadAttempt((n) => n + 1)}
+                  >
+                    Retry
+                  </button>
+                ) : null}
+              </div>
             </div>
           ) : null}
           {notice ? (

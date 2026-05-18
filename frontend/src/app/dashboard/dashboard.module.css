@@ -227,3 +227,819 @@
   border: 1px solid var(--aa-hairline-soft);
 }
 
+/* ---- Workspace project overview (dashboard) ---- */
+
+.wsOverviewShell {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.wsOverviewLoading {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--aa-muted);
+  font-size: 14px;
+}
+
+.wsOverviewStatGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 1100px) {
+  .wsOverviewStatGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .wsOverviewStatGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.wsOverviewStatCard {
+  border: 1px solid var(--aa-hairline);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
+  border-radius: 14px;
+  padding: 14px 16px 12px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.32);
+}
+
+.wsOverviewStatValue {
+  display: block;
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--aa-ink);
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.wsOverviewStatLabel {
+  display: block;
+  margin-top: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--aa-ink);
+  line-height: 1.3;
+}
+
+.wsOverviewStatHint {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--aa-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.wsOverviewHero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.85fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+@media (max-width: 1100px) {
+  .wsOverviewHero {
+    grid-template-columns: 1fr;
+  }
+}
+
+.wsOverviewChartCard,
+.wsOverviewPipelineCard {
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card);
+  border-radius: 16px;
+  padding: 0 0 14px;
+  min-width: 0;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
+  overflow: hidden;
+}
+
+.wsOverviewChartCard {
+  border-top: 3px solid var(--aa-primary);
+}
+
+.wsOverviewPipelineCard {
+  border-top: 3px solid #8ba4ff;
+  display: flex;
+  flex-direction: column;
+}
+
+.wsOverviewChartCardHead {
+  padding: 16px 18px 8px;
+  border-bottom: 1px solid var(--aa-hairline-soft);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, transparent 100%);
+}
+
+.wsOverviewChartCardTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--aa-ink);
+}
+
+.wsOverviewChartCardSub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--aa-muted);
+}
+
+.wsPipelineChart {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 6px;
+  flex: 1;
+  justify-content: center;
+}
+
+.wsPipelineRowHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.wsPipelineLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-ink);
+}
+
+.wsPipelineDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.wsPipelineValue {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--aa-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.wsPipelineTrack {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.wsPipelineFill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  box-shadow: 0 0 12px rgba(0, 0, 0, 0.35);
+}
+
+.wsOverviewBoardGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1024px) {
+  .wsOverviewBoardGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.wsOverviewPanel {
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card);
+  border-radius: 16px;
+  padding: 0;
+  min-width: 0;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.wsOverviewPanel_scheduled {
+  border-top: 3px solid #f5c842;
+}
+
+.wsOverviewPanel_published {
+  border-top: 3px solid var(--aa-primary);
+}
+
+.wsOverviewPanel_pending {
+  border-top: 3px solid rgba(255, 255, 255, 0.45);
+}
+
+.wsOverviewPanel_draft {
+  border-top: 3px solid #8ba4ff;
+}
+
+.wsOverviewPanelHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--aa-hairline-soft);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.wsOverviewPanelHeadText {
+  min-width: 0;
+}
+
+.wsOverviewPanelTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--aa-ink);
+  letter-spacing: -0.01em;
+}
+
+.wsOverviewPanelSub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--aa-muted);
+  line-height: 1.4;
+}
+
+.wsOverviewPanelCount {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--aa-ink);
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--aa-hairline-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.wsOverviewTableWrap {
+  overflow-x: auto;
+}
+
+.wsOverviewTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.wsOverviewTable thead th {
+  padding: 10px 14px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--aa-muted);
+  text-align: left;
+  background: rgba(0, 0, 0, 0.18);
+  border-bottom: 1px solid var(--aa-hairline-soft);
+}
+
+.wsOverviewThThumb {
+  width: 52px;
+}
+
+.wsOverviewThProject {
+  width: 18%;
+  max-width: 168px;
+}
+
+.wsOverviewThArticle {
+  width: auto;
+}
+
+.wsOverviewThDate {
+  width: 124px;
+  text-align: right !important;
+}
+
+.wsOverviewTableRow {
+  transition: background 0.12s ease;
+}
+
+.wsOverviewTableRow:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.wsOverviewTableRow td {
+  padding: 11px 14px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--aa-hairline-soft);
+}
+
+.wsOverviewTableRow:last-child td {
+  border-bottom: none;
+}
+
+.wsOverviewTdThumb {
+  width: 52px;
+}
+
+.wsOverviewTdProject {
+  width: 18%;
+  max-width: 168px;
+  vertical-align: middle;
+}
+
+.wsOverviewTdDate {
+  text-align: right;
+  vertical-align: middle;
+}
+
+.wsOverviewDateTime {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.wsOverviewDateLine {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--aa-ink);
+  white-space: nowrap;
+}
+
+.wsOverviewTimeLine {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--aa-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wsProjectBadge {
+  display: inline-block;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+  color: color-mix(in oklab, var(--aa-primary), #fff 28%);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 72%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.wsOverviewListTitle {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aa-ink);
+  text-decoration: none;
+  line-height: 1.4;
+}
+
+.wsOverviewListTitle:hover {
+  color: color-mix(in oklab, var(--aa-primary), #fff 28%);
+}
+
+.wsOverviewListEmpty {
+  margin: 0;
+  padding: 28px 18px;
+  font-size: 13px;
+  color: var(--aa-muted);
+  line-height: 1.5;
+  text-align: center;
+}
+
+.wsOverviewMoreHint {
+  margin: 0;
+  padding: 10px 18px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--aa-muted);
+  text-align: center;
+  border-top: 1px solid var(--aa-hairline-soft);
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.wsOverviewFeaturedWrap {
+  display: block;
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--aa-hairline-soft);
+}
+
+.wsOverviewFeaturedImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Workspace activity chart (maps ArticlesOverviewChart class names) */
+.wsChartWrap {
+  position: relative;
+  padding: 4px 14px 0;
+}
+
+.wsChartLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin: 0 0 8px;
+  padding: 0 4px;
+  list-style: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--aa-muted);
+}
+
+.wsChartLegend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.wsChartLegendSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.wsChartSvg {
+  display: block;
+  width: 100%;
+  min-height: 200px;
+}
+
+.wsChartEmpty {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--aa-muted);
+  font-size: 13px;
+}
+
+.wsChartTooltip {
+  --tip-bg: #222228;
+  --tip-ink: #ffffff;
+  --tip-label: #e8e8ee;
+  --tip-muted: #c4c4cc;
+  --tip-border: rgba(255, 255, 255, 0.28);
+  position: absolute;
+  z-index: 12;
+  width: 252px;
+  pointer-events: none;
+  filter: drop-shadow(0 14px 36px rgba(0, 0, 0, 0.72));
+  color: var(--tip-ink);
+}
+
+.wsChartTooltipPanel {
+  border-radius: 14px;
+  border: 1px solid var(--tip-border);
+  background: var(--tip-bg);
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.wsChartTooltipHead {
+  padding: 12px 14px 11px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, transparent 100%);
+}
+
+.wsChartTooltipDate {
+  display: block;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--tip-ink) !important;
+  letter-spacing: 0.01em;
+}
+
+.wsChartTooltipCaption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.wsChartTooltipTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0;
+}
+
+.wsChartTooltipMetric {
+  padding: 9px 0 9px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  color: var(--tip-label) !important;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.wsChartTooltipMetric span:last-child {
+  color: var(--tip-label) !important;
+}
+
+.wsChartTooltipValue {
+  padding: 9px 14px 9px 12px;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.2;
+  color: var(--tip-ink) !important;
+  text-align: right;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.wsChartTooltipTable tbody tr + tr .wsChartTooltipMetric,
+.wsChartTooltipTable tbody tr + tr .wsChartTooltipValue {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.wsChartTooltipFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px 12px;
+  background: rgba(255, 255, 255, 0.07);
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.wsChartTooltipFooterLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tip-muted) !important;
+}
+
+.wsChartTooltipFooterValue {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--tip-ink) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.wsChartTooltipCaret {
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin: -7px auto 0;
+  background: var(--tip-bg);
+  border-right: 1px solid var(--tip-border);
+  border-bottom: 1px solid var(--tip-border);
+  transform: rotate(45deg);
+}
+
+.wsChartTooltipSwatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 9px;
+  border-radius: 3px;
+  vertical-align: -1px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.wsChartTooltipSwatchPublished {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--aa-primary), #000 28%);
+}
+
+.wsChartTooltipSwatchPending {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.wsChartTooltipSwatchScheduled {
+  box-shadow: 0 0 0 1px color-mix(in oklab, #f5c842, #000 35%);
+}
+
+/* Dashboard link color must not bleed into chart tooltips */
+.dashboardDark .wsChartTooltip,
+.dashboardDark .wsChartTooltip * {
+  text-decoration: none;
+}
+
+.dashboardDark .wsChartTooltip th,
+.dashboardDark .wsChartTooltip td,
+.dashboardDark .wsChartTooltip time,
+.dashboardDark .wsChartTooltip span,
+.dashboardDark .wsChartTooltip footer,
+.dashboardDark .wsChartTooltip caption {
+  color: inherit;
+}
+
+.dashboardDark .wsChartTooltip a {
+  color: var(--tip-ink) !important;
+}
+
+/* Overview readiness gate (maps page.module overviewReadiness* keys) */
+.overviewReadinessShell {
+  padding: 8px 0 24px;
+}
+
+.overviewReadinessCard {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 28px 28px 26px;
+  border-radius: 18px;
+  border: 1px solid var(--aa-hairline);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.overviewReadinessProgress {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+
+.overviewReadinessProgressFill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--aa-primary), color-mix(in oklab, var(--aa-primary), #fff 24%));
+  transition: width 0.35s ease;
+}
+
+.overviewReadinessKicker {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--aa-muted);
+}
+
+.overviewReadinessTitle {
+  margin: 0 0 10px;
+  font-family: var(--aa-font-display);
+  font-size: clamp(22px, 3vw, 28px);
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--aa-ink);
+}
+
+.overviewReadinessBody {
+  margin: 0 0 22px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--aa-muted);
+  max-width: 58ch;
+}
+
+.overviewReadinessChecklist {
+  list-style: none;
+  margin: 0 0 22px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.overviewReadinessCheckItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--aa-hairline-soft);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.overviewReadinessCheckItemDone {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 70%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 90%);
+}
+
+.overviewReadinessCheckIcon {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--aa-muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.overviewReadinessCheckItemDone .overviewReadinessCheckIcon {
+  color: #fff;
+  background: var(--aa-primary);
+}
+
+.overviewReadinessCheckText {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.overviewReadinessCheckLabel {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--aa-ink);
+}
+
+.overviewReadinessCheckDetail {
+  font-size: 12px;
+  color: var(--aa-muted);
+}
+
+.overviewReadinessActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.overviewReadinessPrimary,
+.overviewReadinessSecondary {
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.overviewReadinessPrimary {
+  border: none;
+  color: #fff;
+  background: var(--aa-primary);
+}
+
+.overviewReadinessPrimary:hover {
+  background: var(--aa-primary-active);
+}
+
+.overviewReadinessSecondary {
+  border: 1px solid var(--aa-hairline);
+  color: var(--aa-ink);
+  background: transparent;
+}
+
+.overviewReadinessSecondary:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wsOverviewModuleFallback {
+  max-width: 640px;
+  margin: 12px auto 24px;
+  padding: 22px 24px;
+  border-radius: 14px;
+  border: 1px solid var(--aa-hairline);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.wsOverviewModuleFallbackTitle {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--aa-ink);
+}
+
+.wsOverviewModuleFallbackMsg {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--aa-muted);
+}
+
+.wsOverviewListTitleMuted {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--aa-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
