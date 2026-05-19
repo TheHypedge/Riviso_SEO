@@ -21,6 +21,7 @@ For bulk upload, the API applies two phases:
 
 from __future__ import annotations
 
+import time
 import uuid
 import base64
 import unicodedata
@@ -64,6 +65,7 @@ from app.core.article_duplicates import sync_project_title_index as _sync_projec
 from app.schemas.articles import (
     ArticleCreate,
     ArticleDetailResponse,
+    ArticleFeaturedImageResponse,
     ArticleListPageResponse,
     ArticlePublic,
     ArticleTitleRef,
@@ -80,6 +82,38 @@ from app.schemas.articles import (
 )
 
 router = APIRouter(prefix="/projects/{project_id}/articles", tags=["articles"])
+
+# Inline data-URL images above this size are omitted from GET detail JSON (loaded via /featured-image).
+_INLINE_IMAGE_MAX_IN_DETAIL_JSON = 180_000
+
+_plans_cache_at: float = 0.0
+_plans_cache_data: dict | None = None
+_PLANS_CACHE_TTL_SEC = 120.0
+
+
+def _load_plans_cached(st) -> dict:
+    global _plans_cache_at, _plans_cache_data
+    now = time.monotonic()
+    if _plans_cache_data is not None and (now - _plans_cache_at) < _PLANS_CACHE_TTL_SEC:
+        return _plans_cache_data
+    try:
+        raw = st.load_plans() or {}
+        _plans_cache_data = raw if isinstance(raw, dict) else {}
+    except Exception:
+        _plans_cache_data = {}
+    _plans_cache_at = now
+    return _plans_cache_data
+
+
+def _detail_image_for_response(article: dict) -> tuple[str | None, bool]:
+    raw = (article.get("image_url") or "").strip()
+    if not raw:
+        return None, False
+    if raw.startswith("data:") and len(raw) > _INLINE_IMAGE_MAX_IN_DETAIL_JSON:
+        return None, True
+    if len(raw) > 2_500_000:
+        return None, True
+    return raw, False
 
 # ---------------------------------------------------------------------------
 # WordPress / listing helpers (normalize stored rows for API responses)
@@ -312,7 +346,11 @@ def _to_public(a: dict) -> ArticlePublic:
 
 def _require_project_access(*, st, user: dict, project_id: str) -> dict:
     pid = (project_id or "").strip()
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    proj = None
+    if hasattr(st, "get_project_by_id"):
+        proj = st.get_project_by_id(pid)
+    if not proj:
+        proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found")
     uid = (user.get("id") or "").strip()
@@ -337,13 +375,9 @@ def _require_verified_website(proj: dict) -> None:
 
 def _article_image_regeneration_usage(*, st, user: dict, article: dict) -> dict:
     plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
-    plan: dict = {}
-    try:
-        plans = st.load_plans() or {}
-        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
-        if not isinstance(plan, dict):
-            plan = {}
-    except Exception:
+    plans = _load_plans_cached(st)
+    plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+    if not isinstance(plan, dict):
         plan = {}
     return image_regeneration_limit_snapshot(
         used=int(article.get("featured_image_regeneration_count") or 0),
@@ -355,12 +389,18 @@ def _to_detail_response(*, st, user: dict, article: dict, view_article: dict | N
     a_view = view_article or article
     base = _to_public(a_view).model_dump()
     regen = _article_image_regeneration_usage(st=st, user=user, article=article)
+    image_url, has_featured_image = _detail_image_for_response(article)
+    if image_url:
+        base["image_url"] = image_url
+    elif has_featured_image:
+        base["image_url"] = None
     return ArticleDetailResponse(
         **base,
         article=(article.get("article") or ""),
         meta_title=(article.get("meta_title") or "").strip() or None,
         meta_description=(article.get("meta_description") or "").strip() or None,
-        image_url=(article.get("image_url") or "").strip() or None,
+        image_url=image_url,
+        has_featured_image=has_featured_image,
         featured_image_regeneration_count=regen["used"],
         featured_image_regeneration_limit=regen["limit"],
         featured_image_regeneration_remaining=regen["remaining"],
@@ -1004,11 +1044,30 @@ async def get_article_detail(
     """Full article body and meta for the editor UI."""
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
-    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     aid = (article_id or "").strip()
-    job = await run_sync(_fetch_posted_job_overlay_for_article, st, project_id, aid)
+
+    a, job = await asyncio.gather(
+        run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id),
+        run_sync(_fetch_posted_job_overlay_for_article, st, project_id, aid),
+    )
     a_view = _merge_posted_job_into_article_row(a, job)
     return _to_detail_response(st=st, user=user, article=a, view_article=a_view)
+
+
+@router.get("/{article_id}/featured-image", response_model=ArticleFeaturedImageResponse)
+async def get_article_featured_image(
+    project_id: str,
+    article_id: str,
+    user: dict = Depends(get_current_user),
+) -> ArticleFeaturedImageResponse:
+    """Return large inline featured images separately so the main editor payload stays small."""
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    raw = (a.get("image_url") or "").strip()
+    if not raw:
+        raise HTTPException(status_code=404, detail="No featured image for this article")
+    return ArticleFeaturedImageResponse(image_url=raw)
 
 
 @router.patch("/{article_id}", response_model=ArticleDetailResponse)

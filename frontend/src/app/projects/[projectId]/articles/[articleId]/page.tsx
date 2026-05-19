@@ -148,28 +148,9 @@ export default function ArticleEditPage() {
       setNotice(null);
       setLoading(true);
       try {
-        const [articleRes, wpRes, ipRes, settingsRes] = await Promise.allSettled([
-          api.getArticle(params.projectId, params.articleId),
-          api.listWritingPrompts(params.projectId),
-          api.listImagePrompts(params.projectId),
-          api.getProjectSettings(params.projectId),
-        ]);
-        if (articleRes.status !== "fulfilled") throw articleRes.reason;
-        const a = articleRes.value;
-        const wp = wpRes.status === "fulfilled" ? wpRes.value : null;
-        const ip = ipRes.status === "fulfilled" ? ipRes.value : null;
-        if (settingsRes.status === "fulfilled") setProjectSettings(settingsRes.value);
+        const a = await api.getArticle(params.projectId, params.articleId);
 
         setArticle(a);
-        if (wp) {
-          setWritingPrompts(wp);
-          setWritingPromptId(wp.default_id || "");
-        }
-        if (ip) {
-          setImagePrompts(ip);
-          setImagePromptId(ip.default_id || "");
-        }
-
         setTitle(a.title || "");
         setKeywords(kwToString(a.keywords));
         setFocus(a.focus_keyphrase || "");
@@ -178,10 +159,34 @@ export default function ArticleEditPage() {
         setMetaDesc(a.meta_description || "");
         setGeneratedImageUrl(a.image_url || "");
 
-        if (!wp) setWritingPromptId("");
-        if (!ip) setImagePromptId("");
+        if (a.has_featured_image && !a.image_url) {
+          void api
+            .getArticleFeaturedImage(params.projectId, params.articleId)
+            .then((img) => setGeneratedImageUrl(img.image_url || ""))
+            .catch(() => {
+              /* image optional for editing text */
+            });
+        }
 
-        // WordPress metadata is only required when the user publishes. Load on demand.
+        void Promise.allSettled([
+          api.listWritingPrompts(params.projectId),
+          api.listImagePrompts(params.projectId),
+          api.getProjectSettings(params.projectId),
+        ]).then(([wpRes, ipRes, settingsRes]) => {
+          const wp = wpRes.status === "fulfilled" ? wpRes.value : null;
+          const ip = ipRes.status === "fulfilled" ? ipRes.value : null;
+          if (settingsRes.status === "fulfilled") setProjectSettings(settingsRes.value);
+          if (wp) {
+            setWritingPrompts(wp);
+            setWritingPromptId(wp.default_id || "");
+          }
+          if (ip) {
+            setImagePrompts(ip);
+            setImagePromptId(ip.default_id || "");
+          }
+          if (!wp) setWritingPromptId("");
+          if (!ip) setImagePromptId("");
+        });
       } catch (e) {
         if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
           clearAuth();

@@ -121,10 +121,18 @@ class ArticleDetailResponse(ArticlePublic):
     meta_title: str | None = None
     meta_description: str | None = None
     image_url: str | None = None
+    has_featured_image: bool = Field(
+        default=False,
+        description="True when a featured image exists but was omitted from this payload (load /featured-image).",
+    )
     featured_image_regeneration_count: int = 0
     featured_image_regeneration_limit: int | None = None
     featured_image_regeneration_remaining: int | None = None
     featured_image_regeneration_unlimited: bool = True
+
+
+class ArticleFeaturedImageResponse(BaseModel):
+    image_url: str = Field(description="HTTP(S) URL or inline data URL for the featured image.")
 
 
 class ArticleUpdateRequest(BaseModel):

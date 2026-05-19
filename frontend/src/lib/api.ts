@@ -599,6 +599,7 @@ export type ArticleDetail = ArticlePublic & {
   meta_title?: string | null;
   meta_description?: string | null;
   image_url?: string | null;
+  has_featured_image?: boolean;
   featured_image_regeneration_count?: number;
   featured_image_regeneration_limit?: number | null;
   featured_image_regeneration_remaining?: number | null;
@@ -1294,6 +1295,12 @@ export const api = {
 
   async getArticle(projectId: string, articleId: string) {
     return apiFetch<ArticleDetail>(`/api/projects/${projectId}/articles/${articleId}`);
+  },
+
+  async getArticleFeaturedImage(projectId: string, articleId: string) {
+    return apiFetch<{ image_url: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/featured-image`,
+    );
   },
 
   async updateArticle(

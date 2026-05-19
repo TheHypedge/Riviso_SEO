@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -63,23 +64,19 @@ def _parse_cors_origins(raw: str) -> list[str]:
 
 def _effective_cors_origins() -> list[str]:
     """
-    Merge local dev origins with CORS_ORIGINS from env.
+    Merge local dev origins, env CORS_ORIGINS, and built-in production defaults.
 
-    Production-only CORS_ORIGINS (e.g. https://riviso.com) would otherwise block
-    http://localhost:3000 and the UI shows "Failed to fetch" / missing ACAO header.
+    If production sets CORS_ORIGINS to only one domain (e.g. riviso.cloud) while the
+    browser uses another (e.g. riviso.com → api.riviso.cloud), requests fail with
+    "No Access-Control-Allow-Origin" and the article editor shows "Failed to fetch".
     """
     user = _parse_cors_origins(settings.cors_origins or "")
     merged: list[str] = []
     seen: set[str] = set()
-    for o in list(_LOCAL_DEV_ORIGINS) + user:
+    for o in list(_LOCAL_DEV_ORIGINS) + user + _parse_cors_origins(_DEFAULT_CORS_ORIGINS):
         if o not in seen:
             seen.add(o)
             merged.append(o)
-    if not user:
-        for o in _parse_cors_origins(_DEFAULT_CORS_ORIGINS):
-            if o not in seen:
-                seen.add(o)
-                merged.append(o)
     return merged
 
 
@@ -203,12 +200,15 @@ def create_app() -> FastAPI:
         return payload
 
     origins = _effective_cors_origins()
+    _log.info("CORS allow_origins: %s", ", ".join(origins))
+    app.add_middleware(GZipMiddleware, minimum_size=1000)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["Content-Length", "Content-Type"],
     )
 
     app.include_router(api_router, prefix=settings.api_prefix)
