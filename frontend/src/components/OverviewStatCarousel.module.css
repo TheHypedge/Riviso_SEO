@@ -1,0 +1,102 @@
+/* Mobile: horizontal carousel — ~2 stat cards + peek of next, swipe + dots */
+.shell {
+  position: relative;
+  min-width: 0;
+}
+
+.dots {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .shell {
+    margin-inline: -12px;
+    padding-inline: 12px;
+  }
+
+  /* Fade hints more content is off-screen to the right */
+  .shell::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 32px;
+    height: calc(100% - 22px);
+    pointer-events: none;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in oklab, var(--aa-canvas, #0b0b0d) 55%, transparent) 55%,
+      var(--aa-canvas, #0b0b0d) 100%
+    );
+  }
+
+  .track {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    grid-template-columns: unset !important;
+    gap: 12px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 12px;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+    scrollbar-width: none;
+    cursor: grab;
+    padding-bottom: 2px;
+    padding-inline-end: 4px;
+  }
+
+  .track:active {
+    cursor: grabbing;
+  }
+
+  .track::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Slightly under 50% width so the next card peeks on the right */
+  .track > * {
+    flex: 0 0 calc(47.5% - 6px);
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    min-width: 0;
+  }
+
+  .dots {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 12px;
+    padding-bottom: 2px;
+  }
+
+  .dot {
+    width: 6px;
+    height: 6px;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.22);
+    cursor: pointer;
+    transition:
+      width 0.2s ease,
+      background 0.2s ease;
+  }
+
+  .dot:hover {
+    background: rgba(255, 255, 255, 0.38);
+  }
+
+  .dotActive {
+    width: 20px;
+    background: var(--aa-primary, #d97757);
+  }
+
+  .dotActive:hover {
+    background: color-mix(in oklab, var(--aa-primary, #d97757), #fff 12%);
+  }
+}

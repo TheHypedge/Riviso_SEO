@@ -350,11 +350,10 @@ function AnalyticsLineChart(props: {
     <svg
       viewBox={`0 0 ${W} ${H}`}
       width="100%"
-      height="auto"
       preserveAspectRatio="xMidYMid meet"
       role="img"
       aria-label="Search Console traffic over time with article publication markers"
-      style={{ display: "block", maxWidth: "100%", minHeight: 220 }}
+      style={{ display: "block", width: "100%", height: "auto", maxWidth: "100%", minHeight: 220 }}
     >
       <rect x={padL} y={padT} width={innerW} height={innerH} fill="transparent" stroke={plotOutline} strokeWidth={1} />
       {yTicks.map((v, i) => {

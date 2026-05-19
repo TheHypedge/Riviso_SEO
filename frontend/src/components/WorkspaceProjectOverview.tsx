@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo } from "react";
 
 import { ArticlesOverviewChart } from "@/components/ArticlesOverviewChart";
+import { OverviewStatCarousel } from "@/components/OverviewStatCarousel";
 import { OverviewReadinessGate } from "@/components/OverviewReadinessGate";
 import { articleEditorPath, isValidArticleRef } from "@/lib/articlePaths";
 import { formatOverviewDateTime } from "@/lib/articlesOverview";
@@ -262,15 +263,15 @@ export function WorkspaceProjectOverview(props: {
 
   return (
     <div className={styles.wsOverviewShell}>
-      <div className={styles.wsOverviewStatGrid}>
+      <OverviewStatCarousel trackClassName={styles.wsOverviewStatGrid} ariaLabel="Workspace overview statistics">
         {statCards.map((card) => (
-          <div key={card.label} className={styles.wsOverviewStatCard}>
+          <div key={card.label} className={styles.wsOverviewStatCard} role="listitem">
             <span className={styles.wsOverviewStatValue}>{card.value.toLocaleString()}</span>
             <span className={styles.wsOverviewStatLabel}>{card.label}</span>
             <span className={styles.wsOverviewStatHint}>{card.hint}</span>
           </div>
         ))}
-      </div>
+      </OverviewStatCarousel>
 
       <div className={styles.wsOverviewHero}>
         <section className={styles.wsOverviewChartCard}>

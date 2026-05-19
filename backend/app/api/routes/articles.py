@@ -351,6 +351,8 @@ def _to_public(a: dict) -> ArticlePublic:
         wp_scheduled_at=wp_sched or None,
         wp_schedule_error=(a.get("wp_schedule_error") or "").strip() or None,
         wp_link=(a.get("wp_link") or "").strip() or None,
+        wp_post_id=a.get("wp_post_id"),
+        wp_rest_base=(a.get("wp_rest_base") or "").strip() or None,
         gsc_status=(a.get("gsc_status") or "").strip() or None,
         hasBody=bool(a.get("hasBody")) if "hasBody" in a else None,
         image_url=(a.get("image_url") or "").strip() or None,
@@ -422,6 +424,8 @@ def _to_detail_response(*, st, user: dict, article: dict, view_article: dict | N
             wp_scheduled_at=pub.wp_scheduled_at,
             wp_schedule_error=pub.wp_schedule_error,
             wp_link=pub.wp_link,
+            wp_post_id=pub.wp_post_id,
+            wp_rest_base=pub.wp_rest_base,
             gsc_status=pub.gsc_status,
             gsc_inspection_requested_at=pub.gsc_inspection_requested_at,
             gsc_inspection_last_attempt_at=pub.gsc_inspection_last_attempt_at,
@@ -1222,7 +1226,10 @@ async def regenerate_article_featured_image(
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     _require_verified_website(proj)
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
-    ip_id = (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
+    custom_prompt = (payload.custom_image_prompt or "").strip() or None
+    if custom_prompt and len(custom_prompt) < 10:
+        raise HTTPException(status_code=400, detail="Custom image prompt must be at least 10 characters.")
+    ip_id = None if custom_prompt else (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
     async with generation_slot():
         return await execute_featured_image_regeneration(
             st=st,
@@ -1231,6 +1238,7 @@ async def regenerate_article_featured_image(
             article_id=(article_id or "").strip(),
             row=row,
             image_prompt_id=ip_id,
+            custom_image_prompt=custom_prompt,
         )
 
 
@@ -1579,6 +1587,60 @@ async def schedule_article(
     }
 
 
+def _article_markdown_to_html(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    return md.markdown(text, extensions=["extra", "sane_lists", "smarty"])
+
+
+def _parse_wp_category_ids(category_ids: str) -> list[int]:
+    cat_ids: list[int] = []
+    for part in (category_ids or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            cat_ids.append(int(part))
+        except (TypeError, ValueError):
+            continue
+    return list(dict.fromkeys([x for x in cat_ids if x > 0]))[:50]
+
+
+def _wp_post_id_int(a: dict) -> int | None:
+    raw = a.get("wp_post_id")
+    if raw is None or raw == "":
+        return None
+    try:
+        pid = int(raw)
+        return pid if pid > 0 else None
+    except (TypeError, ValueError):
+        s = str(raw).strip()
+        return int(s) if s.isdigit() and int(s) > 0 else None
+
+
+def _wp_post_id_from_link(link: str) -> int | None:
+    """Recover numeric post id from classic ``?p=123`` permalinks when the row missed ``wp_post_id``."""
+    from urllib.parse import parse_qs, urlparse
+
+    url = (link or "").strip()
+    if not url:
+        return None
+    try:
+        qs = parse_qs(urlparse(url).query)
+        raw = (qs.get("p") or [None])[0]
+        if raw is None:
+            return None
+        pid = int(str(raw).strip())
+        return pid if pid > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_wp_post_id(a: dict) -> int | None:
+    return _wp_post_id_int(a) or _wp_post_id_from_link((a.get("wp_link") or "").strip())
+
+
 @router.post("/{article_id}/publish", status_code=200)
 async def publish_to_live_site(
     project_id: str,
@@ -1691,32 +1753,14 @@ async def publish_to_live_site(
         raise HTTPException(status_code=400, detail="Invalid wp_status (must be draft or publish)")
     rest_base = (post_type or "").strip() or "posts"
 
-    # categories
-    cat_ids: list[int] = []
-    for part in (category_ids or "").split(","):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            cat_ids.append(int(part))
-        except (TypeError, ValueError):
-            continue
-    cat_ids = list(dict.fromkeys([x for x in cat_ids if x > 0]))[:50]
-
-    def _markdown_to_html(raw: str) -> str:
-        # Convert markdown to HTML for WordPress. This prevents raw ##/** showing up on WP.
-        # We avoid "unsafe" extensions; markdown library escapes HTML by default unless raw HTML is present.
-        text = (raw or "").strip()
-        if not text:
-            return ""
-        return md.markdown(text, extensions=["extra", "sane_lists", "smarty"])
+    cat_ids = _parse_wp_category_ids(category_ids)
 
     title = (a.get("title") or "").strip()
     article_md = (a.get("article") or "").strip()
     if not title or not article_md:
         raise HTTPException(status_code=400, detail="Article title/content is required before publishing")
 
-    content_html = _markdown_to_html(article_md)
+    content_html = _article_markdown_to_html(article_md)
     content_html = apply_context_links_html(content_html, links) if links else content_html
 
     wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
@@ -1864,6 +1908,135 @@ async def publish_to_live_site(
         "message": "Published to WordPress successfully." if created_wp_status == "publish" else "Created draft on WordPress successfully.",
         "wp_post_id": wp_post_id,
         "wp_link": wp_link,
+    }
+
+
+@router.post("/{article_id}/update-wordpress", status_code=200)
+async def update_wordpress_post(
+    project_id: str,
+    article_id: str,
+    image_file: UploadFile | None = File(default=None),
+    post_type: str = Form(default=""),
+    wp_status: str = Form(default=""),
+    category_ids: str = Form(default=""),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Push the current article row to an existing WordPress post (no new post created)."""
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    _require_verified_website(proj)
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+
+    wp_post_id = _resolve_wp_post_id(a)
+    if not wp_post_id:
+        raise HTTPException(
+            status_code=400,
+            detail="This article is not linked to a WordPress post yet. Publish it first.",
+        )
+    if not _wp_post_id_int(a):
+        await run_sync(st.update_article_fields, article_id, {"wp_post_id": wp_post_id})
+
+    links = []
+    for x in (proj.get("context_links") or []):
+        if isinstance(x, dict) and (x.get("label") or "").strip() and (x.get("url") or "").strip():
+            links.append({"label": (x.get("label") or "").strip(), "url": (x.get("url") or "").strip()})
+
+    wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
+    wp_username = (proj.get("wp_username") or "").strip()
+    wp_app_password = (proj.get("wp_app_password") or "").replace(" ", "").strip()
+    if not wp_site_url or not wp_username or not wp_app_password:
+        raise HTTPException(
+            status_code=400,
+            detail="WordPress is not connected for this project. Fill WP credentials in Project Settings.",
+        )
+
+    status_in = (wp_status or a.get("wp_last_wp_status") or "publish").strip().lower()
+    if status_in not in {"draft", "publish"}:
+        raise HTTPException(status_code=400, detail="Invalid wp_status (must be draft or publish)")
+    rest_base = (post_type or a.get("wp_rest_base") or "posts").strip() or "posts"
+    cat_ids = _parse_wp_category_ids(category_ids)
+
+    title = (a.get("title") or "").strip()
+    article_md = (a.get("article") or "").strip()
+    if not title or not article_md:
+        raise HTTPException(status_code=400, detail="Article title/content is required before updating WordPress")
+
+    content_html = _article_markdown_to_html(article_md)
+    content_html = apply_context_links_html(content_html, links) if links else content_html
+
+    wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
+
+    featured_media_id: int | None = None
+    if image_file is not None:
+        data = await image_file.read()
+        if data:
+            featured_media_id = await wp.upload_media_optional(
+                filename=image_file.filename or "upload.png",
+                content_type=image_file.content_type or "image/png",
+                data=data,
+            )
+    else:
+        featured_media_id = await resolve_featured_media_id(wp, a, timeout=90.0)
+
+    payload: dict = {
+        "title": title[:500],
+        "status": status_in,
+        "content": content_html,
+        "meta": {
+            "_yoast_wpseo_title": (a.get("meta_title") or "").strip()[:400],
+            "_yoast_wpseo_metadesc": (a.get("meta_description") or "").strip()[:600],
+            "_yoast_wpseo_focuskw": (a.get("focus_keyphrase") or "").strip()[:500],
+        },
+    }
+    if featured_media_id is not None:
+        payload["featured_media"] = featured_media_id
+    if cat_ids:
+        payload["categories"] = cat_ids
+
+    kw = [str(x).strip() for x in (a.get("keywords") or []) if str(x).strip()]
+    if kw:
+        try:
+            tag_ids = await wp.ensure_tag_ids(kw[:15], timeout=20.0)
+            if tag_ids:
+                payload["tags"] = tag_ids
+        except Exception:
+            pass
+
+    from app.services.wordpress_publish import update_post_on_wordpress
+
+    try:
+        updated = await update_post_on_wordpress(
+            wp,
+            post_type=rest_base,
+            wp_post_id=wp_post_id,
+            payload=payload,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"WordPress update failed: {e}") from e
+
+    wp_link = updated.get("link") if isinstance(updated, dict) else None
+    updated_wp_status = _normalize_wp_rest_status(updated.get("status")) if isinstance(updated, dict) else ""
+    if not updated_wp_status:
+        updated_wp_status = status_in
+
+    updates: dict = {
+        "wp_post_id": wp_post_id,
+        "wp_link": (wp_link or a.get("wp_link") or "").strip(),
+        "wp_rest_base": rest_base,
+        "wp_last_wp_status": updated_wp_status,
+        "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        if updated_wp_status == "publish"
+        else (a.get("posted_at") or ""),
+        "status": "published" if updated_wp_status == "publish" else (a.get("status") or "draft"),
+    }
+    await run_sync(st.update_article_fields, article_id, updates)
+
+    return {
+        "ok": True,
+        "status": "published" if updated_wp_status == "publish" else "draft",
+        "message": "WordPress post updated successfully.",
+        "wp_post_id": wp_post_id,
+        "wp_link": updates.get("wp_link"),
     }
 
 

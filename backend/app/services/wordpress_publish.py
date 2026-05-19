@@ -132,6 +132,56 @@ async def publish_post_to_wordpress(
     raise RuntimeError("WordPress publish failed")
 
 
+async def update_post_on_wordpress(
+    wp: WordpressClient,
+    *,
+    post_type: str,
+    wp_post_id: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Update an existing WordPress post via core REST ``PUT /wp/v2/{type}/{id}``."""
+    rest_base = _normalize_rest_base(post_type)
+    pid = int(wp_post_id)
+    if pid <= 0:
+        raise ValueError("Invalid WordPress post id")
+
+    attempts: list[tuple[str, dict[str, Any]]] = [
+        (f"core:{rest_base}", dict(payload)),
+        (f"core:{rest_base}:no-tags", {k: v for k, v in payload.items() if k != "tags"}),
+        (
+            f"core:{rest_base}:no-meta",
+            {k: v for k, v in payload.items() if k not in {"tags", "meta"}},
+        ),
+        (
+            f"core:{rest_base}:minimal",
+            {
+                k: payload[k]
+                for k in ("title", "content", "status", "categories", "featured_media")
+                if k in payload
+            },
+        ),
+    ]
+
+    last_err: Exception | None = None
+    for label, body in attempts:
+        try:
+            updated = await wp.put_json(f"/wp-json/wp/v2/{rest_base}/{pid}", body, timeout=90.0)
+            if not isinstance(updated, dict):
+                raise RuntimeError("Unexpected WordPress REST update response")
+            return updated
+        except Exception as e:
+            last_err = e
+            log.debug("WP update attempt %s failed: %s", label, _http_detail(e))
+            continue
+
+    if last_err is not None:
+        raise RuntimeError(
+            "WordPress update failed after all attempts. "
+            f"Last error: {_http_detail(last_err)}."
+        ) from last_err
+    raise RuntimeError("WordPress update failed")
+
+
 def _publish_validate_response_ok(data: Any) -> bool:
     return (
         isinstance(data, dict)

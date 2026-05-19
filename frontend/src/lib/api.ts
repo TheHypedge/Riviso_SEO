@@ -558,6 +558,8 @@ export type ArticlePublic = {
   wp_scheduled_at?: string | null;
   wp_schedule_error?: string | null;
   wp_link?: string | null;
+  wp_post_id?: number | string | null;
+  wp_rest_base?: string | null;
   gsc_status?: string | null;
   hasBody?: boolean | null;
   monitor_status?: string | null; // Feature 4: "fresh" | "stale" | "unknown" | ""
@@ -1491,7 +1493,7 @@ export const api = {
   async regenerateArticleImage(
     projectId: string,
     articleId: string,
-    payload: { image_prompt_id?: string | null },
+    payload: { image_prompt_id?: string | null; custom_image_prompt?: string | null },
   ) {
     return apiFetch<{
       ok: boolean;
@@ -1567,6 +1569,47 @@ export const api = {
     fd.set("category_ids", payload.category_ids.join(","));
     const res = await apiFetchRaw(
       `/api/projects/${projectId}/articles/${articleId}/publish`,
+      { method: "POST", body: fd },
+      { timeoutMs: LONG_API_TIMEOUT_MS },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      let msg = text || `${res.status} ${res.statusText}`;
+      try {
+        const parsed = JSON.parse(text) as { detail?: unknown };
+        if (parsed && typeof parsed === "object" && "detail" in parsed) {
+          const d = parsed.detail;
+          if (typeof d === "string") msg = d;
+          else if (d && typeof d === "object" && d !== null && "message" in d && typeof (d as { message?: unknown }).message === "string") {
+            msg = (d as { message: string }).message;
+          }
+        }
+      } catch {
+        // keep msg
+      }
+      throw new ApiError(msg, res.status);
+    }
+    return (await res.json()) as {
+      ok: boolean;
+      status: string;
+      message: string;
+      wp_post_id?: number;
+      wp_link?: string | null;
+    };
+  },
+
+  async updateArticleOnWordPress(
+    projectId: string,
+    articleId: string,
+    payload: { image_file?: File | null; post_type: string; wp_status: "draft" | "publish"; category_ids: number[] },
+  ) {
+    const fd = new FormData();
+    if (payload.image_file) fd.set("image_file", payload.image_file);
+    fd.set("post_type", payload.post_type);
+    fd.set("wp_status", payload.wp_status);
+    fd.set("category_ids", payload.category_ids.join(","));
+    const res = await apiFetchRaw(
+      `/api/projects/${projectId}/articles/${articleId}/update-wordpress`,
       { method: "POST", body: fd },
       { timeoutMs: LONG_API_TIMEOUT_MS },
     );

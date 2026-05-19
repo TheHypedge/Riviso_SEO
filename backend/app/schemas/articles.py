@@ -41,6 +41,14 @@ class ArticlePublic(BaseModel):
     wp_scheduled_at: str | None = None
     wp_schedule_error: str | None = None
     wp_link: str | None = None
+    wp_post_id: int | str | None = Field(
+        default=None,
+        description="WordPress post ID when this article has been published to the connected site.",
+    )
+    wp_rest_base: str | None = Field(
+        default=None,
+        description="WordPress REST collection used for this post (e.g. posts, pages).",
+    )
     gsc_status: str | None = None
     gsc_inspection_requested_at: str | None = None
     gsc_inspection_last_attempt_at: str | None = None
@@ -159,6 +167,11 @@ class RegenerateImageRequest(BaseModel):
     """Options for regenerating only the article featured image."""
 
     image_prompt_id: str | None = Field(default=None, max_length=100)
+    custom_image_prompt: str | None = Field(
+        default=None,
+        max_length=8000,
+        description="One-off prompt text for this regeneration only (not saved to project prompts).",
+    )
 
 
 class ScheduleRequest(BaseModel):

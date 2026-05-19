@@ -42,6 +42,13 @@ class WordpressClient:
         res.raise_for_status()
         return res.json()
 
+    async def put_json(self, path: str, payload: dict[str, Any], *, timeout: float = 30.0) -> Any:
+        headers = {**self._headers, "content-type": "application/json"}
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            res = await client.put(self._url(path), headers=headers, json=payload)
+        res.raise_for_status()
+        return res.json()
+
     async def upload_media(self, *, filename: str, content_type: str, data: bytes, timeout: float = 60.0) -> Any:
         headers = {
             **self._headers,

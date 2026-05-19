@@ -54,6 +54,7 @@ export function ArticleRichEditor({ value, onChange, placeholder }: ArticleRichE
       StarterKit.configure({
         /* Include H1 — markdown often uses `#`; omitting level 1 made TipTap drop content and appear empty */
         heading: { levels: [1, 2, 3, 4, 5, 6] },
+        link: false,
       }),
       Placeholder.configure({
         placeholder:

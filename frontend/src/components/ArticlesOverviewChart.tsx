@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import {
   formatChartAxisDate,
@@ -19,8 +20,10 @@ type TooltipState = {
   published: number;
   pending: number;
   scheduled: number;
-  left: number;
-  top: number;
+  clientX: number;
+  clientY: number;
+  /** CSS transform for placement above or below the cursor */
+  placementTransform: string;
 };
 
 function chartCls(styles: Record<string, string> | undefined, key: string): string {
@@ -83,33 +86,92 @@ export function ArticlesOverviewChart(props: {
     });
   }, [series, innerW, innerH, max]);
 
-  const showTooltip = useCallback(
-    (point: ArticlesOverviewDayPoint, clientX: number, clientY: number) => {
-      const el = wrapRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const tipW = 252;
-      const pad = 14;
-      const x = clientX - rect.left;
-      const y = clientY - rect.top;
-      const wrapW = rect.width;
-      const left = Math.min(Math.max(x, tipW / 2 + pad), wrapW - tipW / 2 - pad);
-      const top = Math.max(y - 18, 52);
-      setTooltip({
-        date: point.date,
-        published: point.published,
-        pending: point.pending,
-        scheduled: point.scheduled,
-        left,
-        top,
-      });
+  const showTooltip = useCallback((point: ArticlesOverviewDayPoint, clientX: number, clientY: number) => {
+    const tipW = 252;
+    const tipH = 220;
+    const pad = 14;
+    const clampedX =
+      typeof window !== "undefined"
+        ? Math.min(Math.max(clientX, tipW / 2 + pad), window.innerWidth - tipW / 2 - pad)
+        : clientX;
+    const placementTransform =
+      typeof window !== "undefined" && clientY < tipH + pad + 72
+        ? "translate(-50%, 14px)"
+        : "translate(-50%, calc(-100% - 14px))";
+    setTooltip({
+      date: point.date,
+      published: point.published,
+      pending: point.pending,
+      scheduled: point.scheduled,
+      clientX: clampedX,
+      clientY,
+      placementTransform,
+    });
+  }, []);
+
+  const showTooltipFromSvg = useCallback(
+    (point: ArticlesOverviewDayPoint, svgX: number, svgY: number) => {
+      const wrap = wrapRef.current;
+      if (!wrap) return;
+      const svg = wrap.querySelector("svg");
+      if (!svg) return;
+      const rect = svg.getBoundingClientRect();
+      const clientX = rect.left + (svgX / W) * rect.width;
+      const clientY = rect.top + (svgY / H) * rect.height;
+      showTooltip(point, clientX, clientY);
     },
-    [],
+    [showTooltip],
   );
 
   const hideTooltip = useCallback(() => setTooltip(null), []);
 
   const tooltipTotal = tooltip ? tooltip.published + tooltip.pending + tooltip.scheduled : 0;
+
+  const tooltipEl = tooltip ? (
+    <div
+      className={tooltipClassName || cn("articlesOverviewChartTooltip")}
+      style={{
+        position: "fixed",
+        left: tooltip.clientX,
+        top: tooltip.clientY,
+        transform: tooltip.placementTransform,
+        zIndex: 10000,
+      }}
+      role="tooltip"
+      id="articles-overview-chart-tooltip"
+    >
+      <div className={cn("articlesOverviewChartTooltipPanel")}>
+        <header className={cn("articlesOverviewChartTooltipHead")}>
+          <time className={cn("articlesOverviewChartTooltipDate")} dateTime={tooltip.date}>
+            {formatChartTooltipDate(tooltip.date)}
+          </time>
+        </header>
+        <table className={cn("articlesOverviewChartTooltipTable")}>
+          <caption className={cn("articlesOverviewChartTooltipCaption")}>Article counts for selected day</caption>
+          <tbody>
+            {SERIES_META.map((meta) => (
+              <tr key={meta.key}>
+                <th scope="row" className={cn("articlesOverviewChartTooltipMetric")}>
+                  <span
+                    className={`${cn("articlesOverviewChartTooltipSwatch")} ${cn(meta.swatchClass)}`}
+                    style={{ backgroundColor: meta.color }}
+                    aria-hidden="true"
+                  />
+                  <span>{meta.label}</span>
+                </th>
+                <td className={cn("articlesOverviewChartTooltipValue")}>{tooltip[meta.key].toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <footer className={cn("articlesOverviewChartTooltipFooter")}>
+          <span className={cn("articlesOverviewChartTooltipFooterLabel")}>Total</span>
+          <span className={cn("articlesOverviewChartTooltipFooterValue")}>{tooltipTotal.toLocaleString()}</span>
+        </footer>
+      </div>
+      <span className={cn("articlesOverviewChartTooltipCaret")} aria-hidden="true" />
+    </div>
+  ) : null;
 
   if (!series.length) {
     return <div className={cn("articlesOverviewChartEmpty")}>No activity in this period yet.</div>;
@@ -118,148 +180,104 @@ export function ArticlesOverviewChart(props: {
   const labelEvery = Math.max(1, Math.floor(series.length / 7));
 
   return (
-    <div ref={wrapRef} className={wrapClassName || cn("articlesOverviewChartWrap")}>
-      <ul className={legendClassName || cn("articlesOverviewChartLegend")} aria-hidden="true">
-        {SERIES_META.map((meta) => (
-          <li key={meta.key}>
-            <span className={cn("articlesOverviewChartLegendSwatch")} style={{ background: meta.color }} />
-            {meta.label}
-          </li>
-        ))}
-      </ul>
-
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        width="100%"
-        height="auto"
-        preserveAspectRatio="xMidYMid meet"
-        role="img"
-        aria-label={label}
-        className={cn("articlesOverviewChartSvg")}
-        onMouseLeave={hideTooltip}
-      >
-        <defs>
+    <>
+      <div ref={wrapRef} className={wrapClassName || cn("articlesOverviewChartWrap")}>
+        <ul className={legendClassName || cn("articlesOverviewChartLegend")} aria-hidden="true">
           {SERIES_META.map((meta) => (
-            <linearGradient key={meta.key} id={`${gradId}-${meta.key}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={meta.color} stopOpacity={meta.key === "published" ? 1 : 0.95} />
-              <stop offset="100%" stopColor={meta.color} stopOpacity={meta.key === "published" ? 0.55 : 0.35} />
-            </linearGradient>
+            <li key={meta.key}>
+              <span className={cn("articlesOverviewChartLegendSwatch")} style={{ background: meta.color }} />
+              {meta.label}
+            </li>
           ))}
-        </defs>
+        </ul>
 
-        {yTicks.map((tick, tickIndex) => {
-          const y = padT + innerH - (innerH * tick) / max;
-          return (
-            <g key={`y-${tickIndex}-${tick}`}>
-              <line
-                x1={padL}
-                y1={y}
-                x2={W - padR}
-                y2={y}
-                stroke="rgba(255,255,255,0.06)"
-                strokeDasharray="4 6"
-              />
-              <text x={padL - 10} y={y + 4} textAnchor="end" fontSize={11} fill="rgba(255,255,255,0.38)">
-                {tick}
-              </text>
-            </g>
-          );
-        })}
-
-        {layout.map(({ point, gx, groupW, bars }, i) => (
-          <g key={point.date}>
-            <rect
-              x={padL + groupW * i}
-              y={padT}
-              width={groupW}
-              height={innerH}
-              fill="transparent"
-              className={cn("articlesOverviewChartHit")}
-              onMouseMove={(e) => showTooltip(point, e.clientX, e.clientY)}
-              onFocus={() => showTooltip(point, gx, padT)}
-              onBlur={hideTooltip}
-              tabIndex={0}
-              role="presentation"
-            />
-            {bars.map((bar) =>
-              bar.h > 0.5 ? (
-                <rect
-                  key={bar.key}
-                  x={bar.x}
-                  y={bar.y}
-                  width={bar.w}
-                  height={bar.h}
-                  rx={3}
-                  fill={`url(#${gradId}-${bar.key})`}
-                  className={cn("articlesOverviewChartBar")}
-                />
-              ) : (
-                <rect
-                  key={bar.key}
-                  x={bar.x}
-                  y={padT + innerH - 2}
-                  width={bar.w}
-                  height={2}
-                  rx={1}
-                  fill={bar.color}
-                  fillOpacity={0.2}
-                />
-              ),
-            )}
-            {i % labelEvery === 0 || i === series.length - 1 ? (
-              <text x={gx} y={H - 10} textAnchor="middle" fontSize={11} fill="rgba(255,255,255,0.45)">
-                {formatChartAxisDate(point.date)}
-              </text>
-            ) : null}
-          </g>
-        ))}
-      </svg>
-
-      {tooltip ? (
-        <div
-          className={tooltipClassName || cn("articlesOverviewChartTooltip")}
-          style={{
-            left: tooltip.left,
-            top: tooltip.top,
-            transform: "translate(-50%, -100%)",
-          }}
-          role="tooltip"
-          id="articles-overview-chart-tooltip"
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          width="100%"
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          aria-label={label}
+          className={cn("articlesOverviewChartSvg")}
+          onMouseLeave={hideTooltip}
         >
-          <div className={cn("articlesOverviewChartTooltipPanel")}>
-            <header className={cn("articlesOverviewChartTooltipHead")}>
-              <time className={cn("articlesOverviewChartTooltipDate")} dateTime={tooltip.date}>
-                {formatChartTooltipDate(tooltip.date)}
-              </time>
-            </header>
-            <table className={cn("articlesOverviewChartTooltipTable")}>
-              <caption className={cn("articlesOverviewChartTooltipCaption")}>
-                Article counts for selected day
-              </caption>
-              <tbody>
-                {SERIES_META.map((meta) => (
-                  <tr key={meta.key}>
-                    <th scope="row" className={cn("articlesOverviewChartTooltipMetric")}>
-                      <span
-                        className={`${cn("articlesOverviewChartTooltipSwatch")} ${cn(meta.swatchClass)}`}
-                        style={{ backgroundColor: meta.color }}
-                        aria-hidden="true"
-                      />
-                      <span>{meta.label}</span>
-                    </th>
-                    <td className={cn("articlesOverviewChartTooltipValue")}>{tooltip[meta.key].toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <footer className={cn("articlesOverviewChartTooltipFooter")}>
-              <span className={cn("articlesOverviewChartTooltipFooterLabel")}>Total</span>
-              <span className={cn("articlesOverviewChartTooltipFooterValue")}>{tooltipTotal.toLocaleString()}</span>
-            </footer>
-          </div>
-          <span className={cn("articlesOverviewChartTooltipCaret")} aria-hidden="true" />
-        </div>
-      ) : null}
-    </div>
+          <defs>
+            {SERIES_META.map((meta) => (
+              <linearGradient key={meta.key} id={`${gradId}-${meta.key}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={meta.color} stopOpacity={meta.key === "published" ? 1 : 0.95} />
+                <stop offset="100%" stopColor={meta.color} stopOpacity={meta.key === "published" ? 0.55 : 0.35} />
+              </linearGradient>
+            ))}
+          </defs>
+
+          {yTicks.map((tick, tickIndex) => {
+            const y = padT + innerH - (innerH * tick) / max;
+            return (
+              <g key={`y-${tickIndex}-${tick}`}>
+                <line
+                  x1={padL}
+                  y1={y}
+                  x2={W - padR}
+                  y2={y}
+                  stroke="rgba(255,255,255,0.06)"
+                  strokeDasharray="4 6"
+                />
+                <text x={padL - 10} y={y + 4} textAnchor="end" fontSize={11} fill="rgba(255,255,255,0.38)">
+                  {tick}
+                </text>
+              </g>
+            );
+          })}
+
+          {layout.map(({ point, gx, groupW, bars }, i) => (
+            <g key={point.date}>
+              <rect
+                x={padL + groupW * i}
+                y={padT}
+                width={groupW}
+                height={innerH}
+                fill="transparent"
+                className={cn("articlesOverviewChartHit")}
+                onMouseMove={(e) => showTooltip(point, e.clientX, e.clientY)}
+                onFocus={() => showTooltipFromSvg(point, gx, padT + innerH / 2)}
+                onBlur={hideTooltip}
+                tabIndex={0}
+                role="presentation"
+              />
+              {bars.map((bar) =>
+                bar.h > 0.5 ? (
+                  <rect
+                    key={bar.key}
+                    x={bar.x}
+                    y={bar.y}
+                    width={bar.w}
+                    height={bar.h}
+                    rx={3}
+                    fill={`url(#${gradId}-${bar.key})`}
+                    className={cn("articlesOverviewChartBar")}
+                  />
+                ) : (
+                  <rect
+                    key={bar.key}
+                    x={bar.x}
+                    y={padT + innerH - 2}
+                    width={bar.w}
+                    height={2}
+                    rx={1}
+                    fill={bar.color}
+                    fillOpacity={0.2}
+                  />
+                ),
+              )}
+              {i % labelEvery === 0 || i === series.length - 1 ? (
+                <text x={gx} y={H - 10} textAnchor="middle" fontSize={11} fill="rgba(255,255,255,0.45)">
+                  {formatChartAxisDate(point.date)}
+                </text>
+              ) : null}
+            </g>
+          ))}
+        </svg>
+      </div>
+      {typeof document !== "undefined" && tooltipEl ? createPortal(tooltipEl, document.body) : null}
+    </>
   );
 }

@@ -254,11 +254,7 @@
   }
 }
 
-@media (max-width: 560px) {
-  .wsOverviewStatGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
+/* Mobile carousel: see OverviewStatCarousel.module.css (2 cards visible, swipe) */
 
 .wsOverviewStatCard {
   border: 1px solid var(--aa-hairline);
@@ -317,17 +313,18 @@
   padding: 0 0 14px;
   min-width: 0;
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
-  overflow: hidden;
 }
 
 .wsOverviewChartCard {
   border-top: 3px solid var(--aa-primary);
+  overflow: visible;
 }
 
 .wsOverviewPipelineCard {
   border-top: 3px solid #8ba4ff;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .wsOverviewChartCardHead {
@@ -652,6 +649,7 @@
 /* Workspace activity chart (maps ArticlesOverviewChart class names) */
 .wsChartWrap {
   position: relative;
+  z-index: 1;
   padding: 4px 14px 0;
 }
 
@@ -698,8 +696,8 @@
   --tip-label: #e8e8ee;
   --tip-muted: #c4c4cc;
   --tip-border: rgba(255, 255, 255, 0.28);
-  position: absolute;
-  z-index: 12;
+  position: fixed;
+  z-index: 10000;
   width: 252px;
   pointer-events: none;
   filter: drop-shadow(0 14px 36px rgba(0, 0, 0, 0.72));

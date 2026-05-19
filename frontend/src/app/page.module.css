@@ -6477,6 +6477,43 @@
   cursor: not-allowed;
 }
 
+.wpUpdateButtonActive {
+  box-shadow:
+    0 0 0 3px color-mix(in oklab, var(--aa-primary) 50%, transparent),
+    0 0 22px color-mix(in oklab, var(--aa-primary) 38%, transparent);
+  animation: aa-wp-update-pulse 2.2s ease-in-out infinite;
+}
+
+.wpUpdateButtonActive:hover {
+  background: var(--aa-primary-active);
+}
+
+@keyframes aa-wp-update-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--aa-primary) 48%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 5px color-mix(in oklab, var(--aa-primary) 62%, transparent),
+      0 0 26px color-mix(in oklab, var(--aa-primary) 42%, transparent);
+  }
+}
+
+.textLinkButton {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.textLinkButton:hover {
+  opacity: 0.85;
+}
+
 .error {
   color: var(--aa-error);
   font-size: 13px;
@@ -6675,11 +6712,7 @@ a.secondary {
   }
 }
 
-@media (max-width: 720px) {
-  .articlesOverviewStatGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
+/* Mobile carousel: see OverviewStatCarousel.module.css (2 cards visible, swipe) */
 
 .articlesOverviewStatCard {
   appearance: none;
@@ -6858,8 +6891,8 @@ a.secondary {
   --tip-label: #d8d8e0;
   --tip-muted: #b4b4be;
   --tip-border: rgba(255, 255, 255, 0.22);
-  position: absolute;
-  z-index: 12;
+  position: fixed;
+  z-index: 10000;
   width: 252px;
   pointer-events: none;
   color: var(--tip-ink);

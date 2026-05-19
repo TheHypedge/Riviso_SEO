@@ -221,6 +221,7 @@ async def execute_featured_image_regeneration(
     article_id: str,
     row: dict,
     image_prompt_id: str | None = None,
+    custom_image_prompt: str | None = None,
 ) -> dict:
     """Regenerate only the stored featured image and enforce the per-article plan cap."""
     uid = (user.get("id") or "").strip()
@@ -262,7 +263,13 @@ async def execute_featured_image_regeneration(
 
     keywords = [str(x).strip() for x in (row.get("keywords") or []) if str(x).strip()]
     focus = (row.get("focus_keyphrase") or title).strip()
-    resolved_image = _resolve_image_prompt(proj=proj, image_prompt_id=image_prompt_id)
+    custom_text = (custom_image_prompt or "").strip()
+    if custom_text:
+        resolved_image = {"id": "", "name": "Custom (one-time)", "text": custom_text}
+        image_prompt_text = custom_text
+    else:
+        resolved_image = _resolve_image_prompt(proj=proj, image_prompt_id=image_prompt_id)
+        image_prompt_text = (resolved_image or {}).get("text") or None
     try:
         gen = await generate_featured_image_only(
             title=title,
@@ -270,7 +277,7 @@ async def execute_featured_image_regeneration(
             focus_keyphrase=focus,
             brand_identity=(proj.get("brand_identity") or ""),
             niche_identifier=(proj.get("niche_identifier") or ""),
-            image_prompt_text=(resolved_image or {}).get("text") or None,
+            image_prompt_text=image_prompt_text,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -280,7 +287,7 @@ async def execute_featured_image_regeneration(
         "image_url": gen["image_url"],
         "featured_image_generated_at": gen["generated_at"],
         "featured_image_regeneration_count": used_after,
-        "featured_image_prompt_id": (resolved_image or {}).get("id") or "",
+        "featured_image_prompt_id": (resolved_image or {}).get("id") or "" if not custom_text else "",
         "featured_image_source": "regenerated",
         "featured_image_prompt_final": gen.get("image_prompt") or "",
         "featured_image_model": gen.get("model") or "",

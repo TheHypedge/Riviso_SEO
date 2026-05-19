@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { ArticlesOverviewChart } from "@/components/ArticlesOverviewChart";
+import { OverviewStatCarousel } from "@/components/OverviewStatCarousel";
 import { OverviewReadinessGate } from "@/components/OverviewReadinessGate";
 import type { ArticlePublic, GscAnalyticsSeriesPoint, ScheduledJobPublic } from "@/lib/api";
 import { articleEditorPath } from "@/lib/articlePaths";
@@ -231,19 +232,20 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
   return (
     <div className={styles.articlesOverviewShell}>
       <div className={styles.articlesOverview}>
-        <div className={styles.articlesOverviewStatGrid}>
+        <OverviewStatCarousel trackClassName={styles.articlesOverviewStatGrid} ariaLabel="Project overview statistics">
           {statCards.map((card) => (
             <button
               key={card.label}
               type="button"
               className={styles.articlesOverviewStatCard}
               onClick={card.onClick}
+              role="listitem"
             >
               <span className={styles.articlesOverviewStatValue}>{card.value.toLocaleString()}</span>
               <span className={styles.articlesOverviewStatLabel}>{card.label}</span>
             </button>
           ))}
-        </div>
+        </OverviewStatCarousel>
 
         <div className={styles.articlesOverviewMainGrid}>
           <section className={styles.articlesOverviewChartCard}>
