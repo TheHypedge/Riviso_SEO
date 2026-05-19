@@ -32,9 +32,11 @@ from datetime import datetime, timedelta, timezone
 import re
 import asyncio
 import hashlib
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
 import markdown as md
+from pydantic import ValidationError
 from pymongo.errors import PyMongoError
 
 from app.core.deps import get_current_user
@@ -83,8 +85,7 @@ from app.schemas.articles import (
 
 router = APIRouter(prefix="/projects/{project_id}/articles", tags=["articles"])
 
-# Inline data-URL images above this size are omitted from GET detail JSON (loaded via /featured-image).
-_INLINE_IMAGE_MAX_IN_DETAIL_JSON = 180_000
+_log = logging.getLogger(__name__)
 
 _plans_cache_at: float = 0.0
 _plans_cache_data: dict | None = None
@@ -106,14 +107,31 @@ def _load_plans_cached(st) -> dict:
 
 
 def _detail_image_for_response(article: dict) -> tuple[str | None, bool]:
+    """Omit inline data URLs from the editor JSON; load them via GET .../featured-image."""
     raw = (article.get("image_url") or "").strip()
     if not raw:
         return None, False
-    if raw.startswith("data:") and len(raw) > _INLINE_IMAGE_MAX_IN_DETAIL_JSON:
+    if raw.startswith("data:"):
         return None, True
-    if len(raw) > 2_500_000:
+    if len(raw) > 500_000:
         return None, True
     return raw, False
+
+
+def _coerce_keywords(raw: object) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return []
+        if "," in s:
+            return [p.strip() for p in s.split(",") if p.strip()]
+        return [s]
+    s = str(raw).strip()
+    return [s] if s else []
 
 # ---------------------------------------------------------------------------
 # WordPress / listing helpers (normalize stored rows for API responses)
@@ -328,7 +346,7 @@ def _to_public(a: dict) -> ArticlePublic:
         created_at=(a.get("created_at") or "").strip() or None,
         updated_at=(a.get("updated_at") or "").strip() or None,
         posted_at=posted or None,
-        keywords=[str(x).strip() for x in (a.get("keywords") or []) if str(x).strip()],
+        keywords=_coerce_keywords(a.get("keywords")),
         focus_keyphrase=(a.get("focus_keyphrase") or "").strip() or None,
         wp_scheduled_at=wp_sched or None,
         wp_schedule_error=(a.get("wp_schedule_error") or "").strip() or None,
@@ -387,25 +405,50 @@ def _article_image_regeneration_usage(*, st, user: dict, article: dict) -> dict:
 
 def _to_detail_response(*, st, user: dict, article: dict, view_article: dict | None = None) -> ArticleDetailResponse:
     a_view = view_article or article
-    base = _to_public(a_view).model_dump()
+    pub = _to_public(a_view)
     regen = _article_image_regeneration_usage(st=st, user=user, article=article)
     image_url, has_featured_image = _detail_image_for_response(article)
-    if image_url:
-        base["image_url"] = image_url
-    elif has_featured_image:
-        base["image_url"] = None
-    return ArticleDetailResponse(
-        **base,
-        article=(article.get("article") or ""),
-        meta_title=(article.get("meta_title") or "").strip() or None,
-        meta_description=(article.get("meta_description") or "").strip() or None,
-        image_url=image_url,
-        has_featured_image=has_featured_image,
-        featured_image_regeneration_count=regen["used"],
-        featured_image_regeneration_limit=regen["limit"],
-        featured_image_regeneration_remaining=regen["remaining"],
-        featured_image_regeneration_unlimited=regen["unlimited"],
-    )
+    try:
+        return ArticleDetailResponse(
+            id=pub.id,
+            project_id=pub.project_id,
+            title=pub.title,
+            status=pub.status,
+            created_at=pub.created_at,
+            updated_at=pub.updated_at,
+            posted_at=pub.posted_at,
+            keywords=pub.keywords,
+            focus_keyphrase=pub.focus_keyphrase,
+            wp_scheduled_at=pub.wp_scheduled_at,
+            wp_schedule_error=pub.wp_schedule_error,
+            wp_link=pub.wp_link,
+            gsc_status=pub.gsc_status,
+            gsc_inspection_requested_at=pub.gsc_inspection_requested_at,
+            gsc_inspection_last_attempt_at=pub.gsc_inspection_last_attempt_at,
+            gsc_inspection_error=pub.gsc_inspection_error,
+            gsc_inspection_url=pub.gsc_inspection_url,
+            monitor_status=pub.monitor_status,
+            monitor_last_checked_at=pub.monitor_last_checked_at,
+            internal_links_count=pub.internal_links_count,
+            hasBody=pub.hasBody,
+            image_url=image_url,
+            has_featured_image=has_featured_image,
+            article=(article.get("article") or ""),
+            meta_title=(article.get("meta_title") or "").strip() or None,
+            meta_description=(article.get("meta_description") or "").strip() or None,
+            featured_image_regeneration_count=regen["used"],
+            featured_image_regeneration_limit=regen["limit"],
+            featured_image_regeneration_remaining=regen["remaining"],
+            featured_image_regeneration_unlimited=regen["unlimited"],
+        )
+    except ValidationError as e:
+        _log.warning(
+            "Article detail validation failed project=%s article=%s: %s",
+            pub.project_id,
+            pub.id,
+            e,
+        )
+        raise HTTPException(status_code=500, detail="Article data could not be serialized") from e
 
 
 def _get_article_or_404(*, st, project_id: str, article_id: str) -> dict:
@@ -1046,12 +1089,20 @@ async def get_article_detail(
     _require_project_access(st=st, user=user, project_id=project_id)
     aid = (article_id or "").strip()
 
-    a, job = await asyncio.gather(
-        run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id),
-        run_sync(_fetch_posted_job_overlay_for_article, st, project_id, aid),
-    )
-    a_view = _merge_posted_job_into_article_row(a, job)
-    return _to_detail_response(st=st, user=user, article=a, view_article=a_view)
+    try:
+        a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+        job = await run_sync(_fetch_posted_job_overlay_for_article, st, project_id, aid)
+        a_view = _merge_posted_job_into_article_row(a, job)
+        return await run_sync(_to_detail_response, st=st, user=user, article=a, view_article=a_view)
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.exception(
+            "get_article_detail failed project=%s article=%s",
+            project_id,
+            aid,
+        )
+        raise HTTPException(status_code=500, detail="Could not load article") from e
 
 
 @router.get("/{article_id}/featured-image", response_model=ArticleFeaturedImageResponse)

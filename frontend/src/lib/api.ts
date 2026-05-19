@@ -625,12 +625,28 @@ export type ContextLinkItem = {
 
 const ENV_API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").trim().replace(/\/+$/, "");
 
+const RIVISO_APP_HOSTS = new Set([
+  "riviso.com",
+  "www.riviso.com",
+  "riviso.cloud",
+  "www.riviso.cloud",
+]);
+
 export function getApiBaseUrl(): string {
-  if (ENV_API_BASE_URL) return ENV_API_BASE_URL;
   // SSR / build-time fallback
-  if (typeof window === "undefined") return "http://127.0.0.1:8000";
+  if (typeof window === "undefined") {
+    return ENV_API_BASE_URL || "http://127.0.0.1:8000";
+  }
 
   const host = (window.location.hostname || "").trim() || "127.0.0.1";
+  // Production app hosts: always call same-origin /api (Next rewrites → api.riviso.cloud).
+  // Avoids cross-origin CORS failures when NEXT_PUBLIC_API_BASE_URL points at the API subdomain.
+  if (RIVISO_APP_HOSTS.has(host)) {
+    return `${window.location.protocol}//${window.location.host}`;
+  }
+
+  if (ENV_API_BASE_URL) return ENV_API_BASE_URL;
+
   const isLocal = host === "localhost" || host === "127.0.0.1";
 
   // Production browsers must not default to :8000 — that host/port is rarely reachable on the public

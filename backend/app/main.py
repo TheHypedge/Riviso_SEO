@@ -17,8 +17,9 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.responses import Response
@@ -210,6 +211,52 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         expose_headers=["Content-Length", "Content-Type"],
     )
+
+    # Outermost layer: some uncaught errors (e.g. ExceptionGroup from thread pools) bypass
+    # Starlette CORS; ensure allowed browser origins still receive ACAO on error responses.
+    allowed_origins = set(origins)
+
+    class EnsureCorsASGIMiddleware:
+        def __init__(self, inner: ASGIApp) -> None:
+            self.app = inner
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] != "http":
+                await self.app(scope, receive, send)
+                return
+
+            origin: str | None = None
+            for name, value in scope.get("headers", []):
+                if name == b"origin":
+                    origin = value.decode("latin-1")
+                    break
+            allow_origin = origin if origin in allowed_origins else None
+
+            async def send_wrapper(message: Message) -> None:
+                if allow_origin and message["type"] == "http.response.start":
+                    message.setdefault("headers", [])
+                    headers = MutableHeaders(scope=message)
+                    if "access-control-allow-origin" not in headers:
+                        headers["Access-Control-Allow-Origin"] = allow_origin
+                        headers["Access-Control-Allow-Credentials"] = "true"
+                        headers.append("Vary", "Origin")
+                await send(message)
+
+            await self.app(scope, receive, send_wrapper)
+
+    app.add_middleware(EnsureCorsASGIMiddleware)
+
+    @app.exception_handler(BaseExceptionGroup)
+    async def _exception_group_handler(request: Request, exc: BaseExceptionGroup) -> JSONResponse:
+        for sub in exc.exceptions:
+            if isinstance(sub, HTTPException):
+                return JSONResponse(
+                    status_code=sub.status_code,
+                    content={"detail": sub.detail},
+                    headers=dict(sub.headers or {}),
+                )
+        _log.exception("ExceptionGroup on %s %s", request.method, request.url.path, exc_info=exc)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     app.include_router(api_router, prefix=settings.api_prefix)
     return app

@@ -20,6 +20,26 @@ from database import get_db, init_db
 
 _log = logging.getLogger(__name__)
 
+
+def _coerce_str_list(val: object) -> list[str]:
+    """Normalize list fields from Mongo/JSON (avoids TypeError when value is a scalar)."""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return [str(x).strip() for x in val if str(x).strip()]
+    if isinstance(val, (tuple, set)):
+        return [str(x).strip() for x in val if str(x).strip()]
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return []
+        if "," in s:
+            return [p.strip() for p in s.split(",") if p.strip()]
+        return [s]
+    s = str(val).strip()
+    return [s] if s else []
+
+
 _db_write_lock = threading.Lock()
 _storage_mode: str = "mongo"  # "mongo" | "json"
 _storage_init_error: str | None = None
@@ -1359,7 +1379,7 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "id": aid,
         "project_id": pid,
         "title": (d.get("title") or "")[:500],
-        "keywords": list(d.get("keywords") or []),
+        "keywords": _coerce_str_list(d.get("keywords")),
         "status": (d.get("status") or "pending")[:32],
         "article": d.get("article") or "",
         "focus_keyphrase": (d.get("focus_keyphrase") or "")[:500],
@@ -1615,7 +1635,7 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
         "id": d.get("id") or "",
         "project_id": d.get("project_id") or "",
         "title": d.get("title") or "",
-        "keywords": list(d.get("keywords") or []),
+        "keywords": _coerce_str_list(d.get("keywords")),
         "status": d.get("status") or "pending",
         "article": d.get("article") or "",
         "focus_keyphrase": d.get("focus_keyphrase") or "",
