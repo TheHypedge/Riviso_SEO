@@ -20,11 +20,14 @@ from app.api.routes import projects
 from app.api.routes import wordpress
 from app.api.routes import scheduled_jobs
 from app.api.routes import gsc
+from app.api.routes import shopify
 from app.api.routes import project_gsc
+from app.api.routes import project_shopify
 from app.api.routes import project_cluster_validation
 from app.api.routes import project_site_map
 from app.api.routes import project_topic_cluster
 from app.api.routes import research
+from app.api.routes import user_subscription
 from app.api.routes import workspace
 
 api_router = APIRouter()
@@ -41,10 +44,14 @@ api_router.include_router(admin.router)
 api_router.include_router(wordpress.router)
 api_router.include_router(scheduled_jobs.router)
 api_router.include_router(gsc.router)
+api_router.include_router(shopify.router)
 api_router.include_router(project_gsc.router)
+api_router.include_router(project_shopify.connect_router)
+api_router.include_router(project_shopify.router)
 api_router.include_router(project_site_map.router)
 api_router.include_router(project_topic_cluster.router)
 api_router.include_router(project_cluster_validation.router)
 api_router.include_router(research.router)
+api_router.include_router(user_subscription.router)
 api_router.include_router(workspace.router)
 

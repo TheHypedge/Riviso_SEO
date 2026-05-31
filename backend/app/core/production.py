@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 
 from app.core.config import Settings
+from app.services import shopify_oauth
 
 log = logging.getLogger("app.production")
 
@@ -52,6 +53,12 @@ def run_startup_checks(settings: Settings) -> None:
             "Search Console connect will return 400 until both env vars are set and the backend "
             "service is restarted."
         )
+
+    shopify_issue = shopify_oauth.oauth_misconfiguration_reason()
+    if shopify_issue:
+        log.warning("Shopify OAuth misconfigured: %s", shopify_issue)
+    elif shopify_oauth.oauth_configured():
+        log.info("Shopify OAuth credentials present (Client ID and Client secret)")
 
     if env != "production":
         return

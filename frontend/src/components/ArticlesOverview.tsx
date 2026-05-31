@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { ArticlesOverviewChart } from "@/components/ArticlesOverviewChart";
 import { OverviewStatCarousel } from "@/components/OverviewStatCarousel";
 import { OverviewReadinessGate } from "@/components/OverviewReadinessGate";
+import { OverviewPageSkeleton } from "@/components/skeleton";
 import type { ArticlePublic, GscAnalyticsSeriesPoint, ScheduledJobPublic } from "@/lib/api";
 import { articleEditorPath } from "@/lib/articlePaths";
 import { evaluateProjectOverviewReadiness } from "@/lib/overviewReadiness";
@@ -213,7 +214,7 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
   if (loading) {
     return (
       <div className={styles.articlesOverviewShell}>
-        <div className={styles.articlesOverviewLoading}>Loading overview…</div>
+        <OverviewPageSkeleton label="Loading project overview" />
       </div>
     );
   }

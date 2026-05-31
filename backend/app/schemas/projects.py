@@ -8,6 +8,9 @@ class ProjectPublic(BaseModel):
     owner_user_id: str
     name: str
     website_url: str | None = None
+    platform: str = "wordpress"
+    shopify_connected: bool = False
+    shopify_sync_status: str | None = None
     # Legacy free-text representation. Always present (auto-derived from the
     # structured fields below when they are set) so the article generation
     # pipeline keeps working without changes.
@@ -36,11 +39,13 @@ class ProjectPublic(BaseModel):
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     website_url: str | None = Field(default=None, max_length=2048)
+    platform: str = Field(default="wordpress", max_length=32)
 
 
 class ProjectUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=200)
     website_url: str | None = Field(default=None, max_length=2048)
+    platform: str | None = Field(default=None, max_length=32)
     # Legacy fields — accepted for back-compat, but the new clients should
     # send the structured fields below and let the backend rebuild the
     # plain-text representation.

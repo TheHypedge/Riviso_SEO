@@ -4,6 +4,8 @@ import base64
 from datetime import datetime
 from typing import Any
 
+from urllib.parse import urlparse
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
 
@@ -11,7 +13,7 @@ from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.wordpress import WordpressCategory, WordpressPostType
-from app.services.wordpress_client import WordpressClient
+from app.services.wordpress_client import RIVISO_WP_USER_AGENT, WordpressClient
 from app.schemas.project_settings import (
     ProjectSettingsPublic,
     ProjectSettingsUpdate,
@@ -74,6 +76,67 @@ async def _wp_get_json(wp: WordpressClient, path: str) -> Any:
         raise HTTPException(status_code=503, detail=f"Could not reach WordPress: {e}") from None
 
 
+async def _wp_try_get_json(wp: WordpressClient, paths: tuple[str, ...]) -> Any | None:
+    """Try several REST paths; return first 200 JSON or ``None`` (no HTTPException)."""
+    for path in paths:
+        try:
+            return await wp.get_json(path, timeout=_WP_REST_TIMEOUT_S)
+        except httpx.HTTPStatusError:
+            continue
+        except httpx.TimeoutException:
+            continue
+        except httpx.RequestError:
+            continue
+    return None
+
+
+def _default_wp_post_types() -> list[WordpressPostType]:
+    return [
+        WordpressPostType(rest_base="posts", name="Posts", taxonomies=["category", "post_tag"]),
+        WordpressPostType(rest_base="pages", name="Pages", taxonomies=[]),
+    ]
+
+
+def _parse_wp_post_types(data: Any) -> list[WordpressPostType]:
+    out: list[WordpressPostType] = []
+    if not isinstance(data, dict):
+        return out
+    for _, t in data.items():
+        if not isinstance(t, dict):
+            continue
+        if t.get("show_in_rest") is False:
+            continue
+        rest_base = (t.get("rest_base") or "").strip()
+        if not rest_base:
+            continue
+        vis = t.get("visibility") or {}
+        public = None
+        if isinstance(vis, dict):
+            public = vis.get("public")
+        if rest_base not in {"posts", "pages"} and public is False:
+            continue
+        out.append(
+            WordpressPostType(
+                rest_base=rest_base,
+                name=(t.get("name") or "").strip(),
+                taxonomies=[str(x) for x in (t.get("taxonomies") or []) if str(x).strip()],
+            )
+        )
+    out.sort(key=lambda x: x.name.lower() or x.rest_base.lower())
+    return out
+
+
+def _parse_wp_categories(data: Any) -> list[WordpressCategory]:
+    out: list[WordpressCategory] = []
+    if not isinstance(data, list):
+        return out
+    for c in data:
+        if isinstance(c, dict) and isinstance(c.get("id"), int):
+            out.append(WordpressCategory(id=int(c["id"]), name=(c.get("name") or "").strip()))
+    out.sort(key=lambda x: x.name.lower())
+    return out
+
+
 def _normalize_url(raw: str | None) -> str:
     s = (raw or "").strip()
     if not s:
@@ -114,6 +177,8 @@ async def _verify_wp_rest_credentials(
     ``/users/me`` is blocked by security plugins.
     """
     probes = (
+        "/wp-json/riviso/v1/ping",
+        "/wp-json/auto-articles/v1/ping",
         "/wp-json/wp/v2/users/me?context=edit",
         "/wp-json/wp/v2/types?context=view",
         "/wp-json/wp/v2/posts?per_page=1&context=edit",
@@ -177,7 +242,7 @@ def _parse_riviso_ping_payload(raw: Any) -> dict[str, Any] | None:
     plugin = str(raw.get("plugin") or "").strip()
     plugin_l = plugin.lower()
     if not plugin or not any(
-        token in plugin_l for token in ("riviso", "auto-articles", "content-operations")
+        token in plugin_l for token in ("riviso", "rivisoseo", "auto-articles", "content-operations")
     ):
         return None
     connector_id = str(raw.get("connector_id") or "").strip()
@@ -192,12 +257,23 @@ def _parse_riviso_ping_payload(raw: Any) -> dict[str, Any] | None:
     }
 
 
+def _host_key(url: str) -> str:
+    """Normalize site host for comparison (ignore scheme, path, and leading www.)."""
+    try:
+        host = (urlparse(_normalize_url(url)).netloc or "").lower()
+    except Exception:
+        host = ""
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
 def _ping_site_matches_config(wp_site_url: str, ping_site_url: str) -> bool:
     """Reject ping responses that claim a different WordPress site (CDN/cache spoofing)."""
     if not ping_site_url:
         return True
-    a = _normalize_url(wp_site_url).rstrip("/")
-    b = _normalize_url(ping_site_url).rstrip("/")
+    a = _host_key(wp_site_url)
+    b = _host_key(ping_site_url)
     return bool(a and b and a == b)
 
 
@@ -218,8 +294,8 @@ async def _probe_publish_validate(
     wp_site_url: str,
     headers: dict[str, str],
     namespace: str,
-) -> bool:
-    """True when the connector exposes POST /publish (v0.2+)."""
+) -> str:
+    """``ok`` when /publish validate_only succeeds; ``no_cap`` when route works but user cannot publish."""
     try:
         res = await client.post(
             f"{wp_site_url}/wp-json/{namespace}/publish",
@@ -227,12 +303,16 @@ async def _probe_publish_validate(
             json={"validate_only": True},
             timeout=12.0,
         )
+        if res.status_code in (401, 403):
+            return "no_cap"
         if res.status_code != 200:
-            return False
+            return "missing"
         data = res.json()
-        return isinstance(data, dict) and data.get("ok") is True and data.get("can_publish") is True
+        if isinstance(data, dict) and data.get("ok") is True:
+            return "ok" if data.get("can_publish") is True else "no_cap"
+        return "missing"
     except Exception:
-        return False
+        return "missing"
 
 
 async def _discover_wp_namespaces(
@@ -302,17 +382,33 @@ async def _probe_riviso_plugin(
             tail = f", connector {ping_hit['connector_id'][:8]}…"
             yoast = "yes" if ping_hit.get("yoast_active") else "no"
 
-            publish_ok = await _probe_publish_validate(
-                client=client,
-                wp_site_url=wp_site_url,
-                headers=headers,
-                namespace=ping_ns,
-            )
-            if publish_ok:
+            publish_state = "missing"
+            for ns in dict.fromkeys((ping_ns, *_RIVISO_PLUGIN_NAMESPACES)):
+                state = await _probe_publish_validate(
+                    client=client,
+                    wp_site_url=wp_site_url,
+                    headers=headers,
+                    namespace=ns,
+                )
+                if state == "ok":
+                    publish_state = "ok"
+                    break
+                if state == "no_cap":
+                    publish_state = "no_cap"
+                elif publish_state == "missing":
+                    publish_state = state
+            if publish_state == "ok":
                 return (
                     "active",
                     f"Plugin: active and verified ({head}, Yoast: {yoast}{tail}). "
                     "Publish route is available.",
+                )
+
+            if publish_state == "no_cap":
+                return (
+                    "capability",
+                    f"Plugin: detected ({head}{tail}) but this WordPress user cannot publish posts. "
+                    "Use an Editor or Administrator account with publish_posts capability.",
                 )
 
             if version and _version_tuple(version) < _RIVISO_MIN_PUBLISH_VERSION:
@@ -347,10 +443,20 @@ async def _probe_riviso_plugin(
                 "Project Settings → Download plugin.",
             )
 
+        # Many hosts block GET /wp-json/ while namespace routes still work — if /ping
+        # returned 401/403 we know a connector route exists even without the index.
+        if last_auth_block:
+            return (
+                "capability",
+                "Plugin: connector routes are reachable but this WordPress user cannot "
+                "access them (HTTP 401/403). Use an Editor/Admin application password.",
+            )
+
         if not discovered:
             return (
                 "unknown",
-                "Plugin: could not be checked (/wp-json/ index unreachable).",
+                "Plugin: could not be checked (/wp-json/ index unreachable). "
+                "If RivisoSEO is active, try Verify again — direct /ping checks still run.",
             )
 
         return (
@@ -373,7 +479,19 @@ def _require_project_access(*, st, user: dict, project_id: str) -> dict:
     return proj
 
 
+def _is_shopify_project(proj: dict) -> bool:
+    return ((proj.get("platform") or "").strip().lower() == "shopify")
+
+
 def _get_wp_client_for_project(proj: dict) -> WordpressClient:
+    if _is_shopify_project(proj):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "platform_not_wordpress",
+                "message": "WordPress APIs are not available for Shopify projects.",
+            },
+        )
     wp_site_url = _normalize_url(proj.get("wp_site_url") or proj.get("website_url") or "")
     wp_username = (proj.get("wp_username") or "").strip()
     wp_app_password = (proj.get("wp_app_password") or "").replace(" ", "").strip()
@@ -390,15 +508,21 @@ def _get_wp_client_for_project(proj: dict) -> WordpressClient:
 @router.get("/wordpress/plugin/download")
 async def download_plugin() -> Response:
     """Download the Riviso WordPress connector as a WordPress-valid plugin ZIP."""
-    from app.services.wordpress_plugin_packager import build_plugin_zip_bytes
+    from app.services.wordpress_plugin_packager import build_plugin_zip_bytes, get_plugin_version
 
     try:
         data, filename = build_plugin_zip_bytes()
+        version = get_plugin_version()
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
     headers = {
         "content-disposition": f'attachment; filename="{filename}"',
-        "cache-control": "no-store",
+        "cache-control": "no-store, no-cache, must-revalidate",
+        "pragma": "no-cache",
+        "x-riviso-plugin-version": version,
+        "x-riviso-plugin-slug": "riviso-content-operations",
     }
     return Response(content=data, media_type="application/zip", headers=headers)
 
@@ -426,10 +550,35 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
     cats = list(dict.fromkeys([x for x in cats if x > 0]))[:50]
     gsc_prop = (proj.get("gsc_property_url") or "").strip() or None
     gsc_index = bool(proj.get("gsc_index_on_publish", True))
+    platform = ((proj.get("platform") or "wordpress").strip().lower() or "wordpress")
+    if platform != "shopify":
+        if (proj.get("shopify_access_token") or "").strip() or (proj.get("shopify_shop") or "").strip():
+            platform = "shopify"
+    shop = (proj.get("shopify_shop") or "").strip() or None
+    shop_token = (proj.get("shopify_access_token") or "").strip()
+    shop_client_id = (proj.get("shopify_client_id") or "").strip() or None
+    shop_client_secret = (proj.get("shopify_client_secret") or "").strip()
+    product_aware = bool(proj.get("shopify_product_aware_enabled", False))
+    wp_link_aware = bool(proj.get("wp_internal_link_aware_enabled", False))
     return ProjectSettingsPublic(
         id=pid,
         name=(proj.get("name") or "").strip(),
+        platform=platform,
         website_url=(proj.get("website_url") or "").strip() or None,
+        shopify_shop=shop,
+        shopify_connected=(
+            (proj.get("shopify_verified_status") or "").strip().lower() == "connected"
+            and bool((proj.get("shopify_verified_at") or "").strip())
+        ),
+        shopify_client_id=shop_client_id,
+        shopify_client_secret_set=bool(shop_client_secret),
+        shopify_access_token_set=bool(shop_token),
+        shopify_access_token=None,
+        shopify_verified_at=(proj.get("shopify_verified_at") or "").strip() or None,
+        shopify_verified_status=(proj.get("shopify_verified_status") or "").strip() or None,
+        shopify_verified_message=(proj.get("shopify_verified_message") or "").strip() or None,
+        shopify_product_aware_enabled=product_aware,
+        wp_internal_link_aware_enabled=wp_link_aware,
         wp_site_url=wp_site_url or None,
         wp_username=wp_user,
         wp_app_password_set=bool(app_pw),
@@ -465,16 +614,17 @@ async def update_project_settings(
     pid = (proj.get("id") or "").strip()
 
     updates: dict = {}
-    # If any of the WordPress credential fields are touched we have to
-    # invalidate the cached verification snapshot — what was verified
-    # 10 seconds ago may no longer be reachable with the new values.
+    platform = ((proj.get("platform") or "wordpress").strip().lower() or "wordpress")
+    # If any credential fields are touched we invalidate verification snapshots.
     creds_changed = False
+    shopify_creds_changed = False
     if payload.name is not None:
         updates["name"] = payload.name.strip()[:200]
     if payload.website_url is not None:
         url = _normalize_url(payload.website_url)
         updates["website_url"] = url
-        updates.setdefault("wp_site_url", url)
+        if platform != "shopify":
+            updates.setdefault("wp_site_url", url)
     if payload.wp_site_url is not None:
         new_url = _normalize_url(payload.wp_site_url)
         if new_url != _normalize_url(proj.get("wp_site_url") or proj.get("website_url") or ""):
@@ -530,6 +680,45 @@ async def update_project_settings(
                 pass
             updates["gsc_property_url"] = prop
 
+    if payload.shopify_product_aware_enabled is not None:
+        updates["shopify_product_aware_enabled"] = bool(payload.shopify_product_aware_enabled)
+
+    if payload.wp_internal_link_aware_enabled is not None:
+        updates["wp_internal_link_aware_enabled"] = bool(payload.wp_internal_link_aware_enabled)
+
+    if payload.shopify_shop is not None:
+        raw_shop = (payload.shopify_shop or "").strip()[:2048]
+        if raw_shop != (proj.get("shopify_shop") or "").strip():
+            shopify_creds_changed = True
+        updates["shopify_shop"] = raw_shop
+        if raw_shop:
+            updates["website_url"] = raw_shop
+
+    if payload.shopify_client_id is not None:
+        new_cid = (payload.shopify_client_id or "").strip()[:256]
+        if new_cid != (proj.get("shopify_client_id") or "").strip():
+            shopify_creds_changed = True
+        updates["shopify_client_id"] = new_cid
+
+    if payload.shopify_client_secret is not None:
+        new_secret = (payload.shopify_client_secret or "").strip()[:5000]
+        if new_secret:
+            if new_secret != (proj.get("shopify_client_secret") or "").strip():
+                shopify_creds_changed = True
+            updates["shopify_client_secret"] = new_secret
+
+    if payload.shopify_access_token is not None:
+        normalized_tok = (payload.shopify_access_token or "").strip()[:5000]
+        if normalized_tok and normalized_tok != (proj.get("shopify_access_token") or "").strip():
+            shopify_creds_changed = True
+        updates["shopify_access_token"] = normalized_tok
+
+    if platform == "shopify" and payload.website_url is not None:
+        url = _normalize_url(payload.website_url)
+        if url != _normalize_url(proj.get("shopify_shop") or proj.get("website_url") or ""):
+            shopify_creds_changed = True
+        updates["shopify_shop"] = url
+
     if creds_changed:
         # Drop the stale "verified" snapshot — the next /verify call will
         # repopulate it. UI will fall back to "Not verified yet".
@@ -540,6 +729,11 @@ async def update_project_settings(
         # don't show a stale "active" badge against a freshly-edited URL.
         updates["wp_plugin_status"] = ""
         updates["wp_plugin_message"] = ""
+
+    if shopify_creds_changed:
+        updates["shopify_verified_at"] = ""
+        updates["shopify_verified_status"] = ""
+        updates["shopify_verified_message"] = ""
 
     if updates:
         st.update_project_fields(pid, updates)
@@ -558,6 +752,11 @@ async def verify_wordpress_connection(
 ) -> WordpressVerifyResponse:
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
+    if ((proj.get("platform") or "wordpress").strip().lower() == "shopify"):
+        raise HTTPException(
+            status_code=400,
+            detail="This project uses Shopify. Verify the connection under Project Settings → Shopify.",
+        )
 
     wp_site_url = _normalize_url(payload.wp_site_url) or _normalize_url(proj.get("wp_site_url") or proj.get("website_url") or "")
     wp_username = (payload.wp_username or "").strip() or (proj.get("wp_username") or "").strip()
@@ -572,7 +771,7 @@ async def verify_wordpress_connection(
     headers = {
         "authorization": f"Basic {basic}",
         "accept": "application/json",
-        "user-agent": "Riviso/1.0 WordPress-Verify",
+        "user-agent": RIVISO_WP_USER_AGENT,
     }
 
     def _persist(
@@ -629,13 +828,25 @@ async def verify_wordpress_connection(
             can_publish, publish_hint = await probe_publish_permission(
                 wp_site_url=wp_site_url, headers=headers, client=client
             )
+            resolved_site_url = wp_site_url
+            try:
+                ping_res = await client.get(f"{wp_site_url}/wp-json/riviso/v1/ping", headers=headers)
+                if ping_res.status_code == 200:
+                    ping_data = ping_res.json()
+                    if isinstance(ping_data, dict):
+                        site = (ping_data.get("site_url") or "").strip().rstrip("/")
+                        if site:
+                            resolved_site_url = site
+            except Exception:
+                pass
             try:
                 st.update_project_fields(
                     project_id,
                     {
-                        "wp_site_url": wp_site_url,
+                        "wp_site_url": resolved_site_url,
                         "wp_username": wp_username,
                         "wp_app_password": wp_app_password,
+                        "wp_can_publish": bool(can_publish),
                     },
                 )
             except Exception:
@@ -675,49 +886,172 @@ async def verify_wordpress_connection(
 async def wordpress_post_types(project_id: str, user: dict = Depends(get_current_user)) -> list[WordpressPostType]:
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
+    if _is_shopify_project(proj):
+        return []
     wp = _get_wp_client_for_project(proj)
-    data = await _wp_get_json(wp, "/wp-json/wp/v2/types?context=edit")
-    out: list[WordpressPostType] = []
-    if isinstance(data, dict):
-        for _, t in data.items():
-            if not isinstance(t, dict):
-                continue
-            # Some WP sites return `show_in_rest: null` here even for valid types (posts/pages).
-            # Only exclude when it is explicitly False.
-            if t.get("show_in_rest") is False:
-                continue
-            rest_base = (t.get("rest_base") or "").strip()
-            if not rest_base:
-                continue
-            vis = t.get("visibility") or {}
-            public = None
-            if isinstance(vis, dict):
-                public = vis.get("public")
-            # Keep only public-facing types (and always keep posts/pages).
-            if rest_base not in {"posts", "pages"} and public is False:
-                continue
-            out.append(
-                WordpressPostType(
-                    rest_base=rest_base,
-                    name=(t.get("name") or "").strip(),
-                    taxonomies=[str(x) for x in (t.get("taxonomies") or []) if str(x).strip()],
-                )
-            )
-    out.sort(key=lambda x: x.name.lower() or x.rest_base.lower())
-    return out
+    # Many hosts block context=edit on /types even when the Riviso plugin publish route works.
+    data = await _wp_try_get_json(
+        wp,
+        (
+            "/wp-json/wp/v2/types?context=view",
+            "/wp-json/wp/v2/types?context=edit",
+            "/wp-json/wp/v2/types",
+        ),
+    )
+    parsed = _parse_wp_post_types(data)
+    return parsed if parsed else _default_wp_post_types()
 
 
 @router.get("/projects/{project_id}/wordpress/categories", response_model=list[WordpressCategory])
 async def wordpress_categories(project_id: str, user: dict = Depends(get_current_user)) -> list[WordpressCategory]:
     st = get_legacy_storage_module()
     proj = _require_project_access(st=st, user=user, project_id=project_id)
+    if _is_shopify_project(proj):
+        return []
     wp = _get_wp_client_for_project(proj)
-    data = await _wp_get_json(wp, "/wp-json/wp/v2/categories?per_page=100&context=edit")
-    out: list[WordpressCategory] = []
-    if isinstance(data, list):
-        for c in data:
-            if isinstance(c, dict) and isinstance(c.get("id"), int):
-                out.append(WordpressCategory(id=int(c["id"]), name=(c.get("name") or "").strip()))
-    out.sort(key=lambda x: x.name.lower())
-    return out
+    data = await _wp_try_get_json(
+        wp,
+        (
+            "/wp-json/wp/v2/categories?per_page=100&context=view",
+            "/wp-json/wp/v2/categories?per_page=100&context=edit",
+            "/wp-json/wp/v2/categories?per_page=100",
+        ),
+    )
+    return _parse_wp_categories(data)
+
+
+@router.post("/projects/{project_id}/wordpress/sync-linked-articles", status_code=200)
+async def sync_linked_articles_from_wordpress(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Pull WordPress state for every linked article in this project."""
+    from app.services.storage_db import call_storage
+    from app.services.storage_http import raise_storage_http
+    from app.services.to_thread import run_sync
+    from app.services.wordpress_sync import resolve_wp_post_id, sync_article_from_wordpress
+
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    if _is_shopify_project(proj):
+        raise HTTPException(status_code=400, detail="WordPress sync is not available for Shopify projects.")
+    if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
+        raise HTTPException(status_code=400, detail="WordPress is not verified for this project.")
+    wp = _get_wp_client_for_project(proj)
+    pid = (project_id or "").strip()
+
+    try:
+        if hasattr(st, "load_articles_listing_for_project"):
+            rows = await run_sync(st.load_articles_listing_for_project, pid, limit=5000)
+        else:
+            rows = [
+                a
+                for a in (await run_sync(st.load_articles) or [])
+                if isinstance(a, dict) and (a.get("project_id") or "").strip() == pid
+            ]
+    except Exception as e:
+        raise_storage_http(e)
+
+    linked = [a for a in rows if isinstance(a, dict) and resolve_wp_post_id(a)]
+    synced = 0
+    skipped = 0
+    errors: list[dict] = []
+
+    for row in linked:
+        aid = (row.get("id") or "").strip()
+        if not aid:
+            continue
+        try:
+            full = await run_sync(call_storage, st.get_article, project_id=pid, article_id=aid)
+            if not isinstance(full, dict):
+                skipped += 1
+                continue
+            result = await sync_article_from_wordpress(
+                wp=wp,
+                article=full,
+                rest_base=(full.get("wp_rest_base") or "").strip() or None,
+            )
+            updates = result.get("updates") or {}
+            if updates:
+                await run_sync(call_storage, st.update_article_fields, aid, updates)
+            synced += 1
+        except Exception as e:
+            errors.append({"article_id": aid, "message": str(e)[:300]})
+
+    return {
+        "ok": True,
+        "linked_count": len(linked),
+        "synced_count": synced,
+        "skipped_count": skipped,
+        "error_count": len(errors),
+        "errors": errors[:50],
+    }
+
+
+@router.post("/projects/{project_id}/wordpress/sync-linked-articles", status_code=200)
+async def sync_linked_articles_from_wordpress(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Pull WordPress state for every linked article in this project."""
+    from app.services.storage_db import call_storage
+    from app.services.storage_http import raise_storage_http
+    from app.services.to_thread import run_sync
+    from app.services.wordpress_sync import resolve_wp_post_id, sync_article_from_wordpress
+
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    if _is_shopify_project(proj):
+        raise HTTPException(status_code=400, detail="WordPress sync is not available for Shopify projects.")
+    if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
+        raise HTTPException(status_code=400, detail="WordPress is not verified for this project.")
+    wp = _get_wp_client_for_project(proj)
+    pid = (project_id or "").strip()
+
+    try:
+        if hasattr(st, "load_articles_listing_for_project"):
+            rows = await run_sync(st.load_articles_listing_for_project, pid, limit=5000)
+        else:
+            rows = [
+                a
+                for a in (await run_sync(st.load_articles) or [])
+                if isinstance(a, dict) and (a.get("project_id") or "").strip() == pid
+            ]
+    except Exception as e:
+        raise_storage_http(e)
+
+    linked = [a for a in rows if isinstance(a, dict) and resolve_wp_post_id(a)]
+    synced = 0
+    skipped = 0
+    errors: list[dict] = []
+
+    for row in linked:
+        aid = (row.get("id") or "").strip()
+        if not aid:
+            continue
+        try:
+            full = await run_sync(call_storage, st.get_article, project_id=pid, article_id=aid)
+            if not isinstance(full, dict):
+                skipped += 1
+                continue
+            result = await sync_article_from_wordpress(
+                wp=wp,
+                article=full,
+                rest_base=(full.get("wp_rest_base") or "").strip() or None,
+            )
+            updates = result.get("updates") or {}
+            if updates:
+                await run_sync(call_storage, st.update_article_fields, aid, updates)
+            synced += 1
+        except Exception as e:
+            errors.append({"article_id": aid, "message": str(e)[:300]})
+
+    return {
+        "ok": True,
+        "linked_count": len(linked),
+        "synced_count": synced,
+        "skipped_count": skipped,
+        "error_count": len(errors),
+        "errors": errors[:50],
+    }
 

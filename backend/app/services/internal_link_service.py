@@ -147,6 +147,11 @@ class InternalLinkService:
                     title_obj = p.get("title") if isinstance(p.get("title"), dict) else {}
                     title = _strip_html((title_obj or {}).get("rendered") or "")
                     focus = _extract_focus_keyphrase(p)
+                    featured_image_url = ""
+                    embedded = p.get("_embedded") if isinstance(p.get("_embedded"), dict) else {}
+                    media = embedded.get("wp:featuredmedia") if isinstance(embedded, dict) else None
+                    if isinstance(media, list) and media and isinstance(media[0], dict):
+                        featured_image_url = str(media[0].get("source_url") or "").strip()
                     out.append(
                         {
                             "post_url": (p.get("link") or "").strip(),
@@ -155,6 +160,7 @@ class InternalLinkService:
                             "focus_keywords": _build_keyword_set(p, focus),
                             "post_id": str(p.get("id") or ""),
                             "post_modified_at": str(p.get("modified_gmt") or ""),
+                            "featured_image_url": featured_image_url,
                         }
                     )
                 if len(posts) < _PER_PAGE:

@@ -98,11 +98,12 @@ async def update_user(user_id: str, payload: AdminUserUpdate, _: dict = Depends(
         raise HTTPException(status_code=400, detail="user_id is required")
 
     updates = payload.model_dump(exclude_unset=True)
+    prev = st.get_user_by_id(uid) if uid else None
     if "timezone" in updates and isinstance(updates.get("timezone"), str):
         updates["timezone"] = normalize_user_timezone(updates["timezone"])
     if "account_status" in updates and isinstance(updates.get("account_status"), str):
         status = updates["account_status"].strip().lower()
-        if status not in {"active", "deactivated", "deleted"}:
+        if status not in {"active", "pending", "deactivated", "deleted"}:
             raise HTTPException(status_code=400, detail="Invalid account_status")
         updates["account_status"] = status
         if status == "active":
@@ -114,6 +115,18 @@ async def update_user(user_id: str, payload: AdminUserUpdate, _: dict = Depends(
     u = st.get_user_by_id(uid)
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
+    if (
+        prev
+        and "subscription_type" in updates
+        and (updates.get("subscription_type") or "").strip().lower()
+        != (prev.get("subscription_type") or "").strip().lower()
+    ):
+        from app.services.email_dispatch import dispatch_plan_notification_email
+
+        plans = st.load_plans() or {}
+        plan_key = (updates.get("subscription_type") or u.get("subscription_type") or "").strip().lower()
+        plan_name = (plans.get(plan_key) or {}).get("name") if isinstance(plans.get(plan_key), dict) else plan_key
+        dispatch_plan_notification_email(to=(u.get("email") or "").strip(), plan_name=str(plan_name or plan_key))
     nproj = 0
     if hasattr(st, "project_ids_for_owner"):
         try:
@@ -273,6 +286,8 @@ def _plan_to_public(key: str, d: dict) -> PlanPublic:
         "max_custom_research_per_month": base.get("max_custom_research_per_month"),
         "max_context_links": base.get("max_context_links"),
         "max_article_image_regenerations": base.get("max_article_image_regenerations"),
+        "is_trial_plan": base.get("is_trial_plan"),
+        "trial_period_days": base.get("trial_period_days"),
     }
     extra = {k: v for k, v in base.items() if k not in known}
     return PlanPublic(**known, extra=extra or None)

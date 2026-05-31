@@ -3,23 +3,111 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.legacy.storage import get_legacy_storage_module
 from app.services.wordpress_client import WordpressClient, resolve_featured_media_id
 from app.services.context_links import apply_context_links_html
-from app.services.article_generation import (
-    estimate_bundle_tokens,
-    generate_article_bundle_safe,
-)
-from app.services.prompt_validation import assert_image_prompt_allowed, assert_writing_prompt_allowed
+from app.services.shopify_product_pipeline import is_shopify_project
+from app.services.wordpress_content_pipeline import is_wordpress_project
 from app.services.gsc_actions import maybe_request_url_inspection
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.to_thread import run_sync
+from app.services.pipeline_streamer import (
+    MSG_PUBLISH_COMPLETE,
+    MSG_PUBLISH_DISPATCH,
+    STAGE_COMPLETE,
+    STAGE_PUBLISH_DISPATCH,
+    publish_pipeline_error,
+    publish_pipeline_status,
+)
 from app.core.config import settings
 
 
 log = logging.getLogger(__name__)
+
+_STALE_POSTING_MINUTES = 3
+
+
+async def _storage(fn, /, *args, **kwargs):
+    """Run a blocking storage call with Mongo retries (safe after long OpenAI work)."""
+    from app.services.storage_db import call_storage
+
+    return await run_sync(call_storage, fn, *args, **kwargs)
+
+
+async def _patch_scheduled_job(st, jid: str, updates: dict) -> None:
+    fn = getattr(st, "patch_scheduled_job_fields", None) or st.update_scheduled_job_fields
+    u = dict(updates or {})
+    u.setdefault("updated_at", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+    await _storage(fn, jid, u)
+
+
+async def _owner_user_dict(st, proj: dict) -> dict:
+    owner_uid = (proj.get("owner_user_id") or "").strip()
+    if owner_uid and hasattr(st, "get_user_by_id"):
+        owner_row = await _storage(st.get_user_by_id, owner_uid)
+        if isinstance(owner_row, dict):
+            return owner_row
+    return {"id": owner_uid, "role": "user", "subscription_type": "beta"}
+
+
+def _http_detail_message(exc) -> str:
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail.get("code") or detail)
+    if detail is not None:
+        return str(detail)
+    return str(exc) or "Generation failed"
+
+
+async def _reload_project(st, project_id: str) -> dict | None:
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if hasattr(st, "get_project_by_id"):
+        proj = await _storage(st.get_project_by_id, pid)
+        if isinstance(proj, dict):
+            return proj
+    rows = await _storage(st.load_projects)
+    return next((p for p in (rows or []) if isinstance(p, dict) and (p.get("id") or "").strip() == pid), None)
+
+
+async def _ensure_project_prompt_defaults(st, project_id: str, proj: dict) -> dict:
+    try:
+        from app.api.routes.prompts import _ensure_default_prompt
+        from app.api.routes.image_prompts import _ensure_default_image_prompt
+
+        proj = _ensure_default_prompt(st=st, project_id=project_id, proj=proj)
+        proj = _ensure_default_image_prompt(st=st, project_id=project_id, proj=proj)
+    except Exception:
+        pass
+    return proj
+
+
+async def _reload_scheduled_job(st, project_id: str, job_id: str) -> dict | None:
+    jid = (job_id or "").strip()
+    pid = (project_id or "").strip()
+    if not jid or not pid:
+        return None
+    rows = await _storage(st.load_scheduled_jobs, project_id=pid)
+    return next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
+
+
+def _parse_job_timestamp(raw: str) -> datetime | None:
+    v = (raw or "").strip()
+    if not v:
+        return None
+    try:
+        if "T" in v:
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        else:
+            dt = datetime.strptime(v[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 def _normalize_wp_rest_status_local(val: object) -> str:
@@ -38,22 +126,6 @@ def _parse_run_at_utc(s: str) -> datetime | None:
         return dt_naive.replace(tzinfo=timezone.utc)
     except Exception:
         return None
-
-
-def _resolve_prompt_text(*, prompts: list, pid: str | None) -> str | None:
-    pid = (pid or "").strip()
-    if pid:
-        for p in prompts or []:
-            if isinstance(p, dict) and (p.get("id") or "").strip() == pid:
-                return (p.get("text") or "").strip() or None
-    return None
-
-
-def _fallback_first_prompt_text(prompts: list) -> str | None:
-    for p in prompts or []:
-        if isinstance(p, dict) and (p.get("text") or "").strip():
-            return (p.get("text") or "").strip()
-    return None
 
 
 def _is_generation_signature_mismatch_message(raw: str) -> bool:
@@ -79,6 +151,11 @@ def _friendly_scheduler_error(exc: Exception) -> str:
     if "OPENAI_API_KEY" in raw:
         return "OpenAI is not configured on the backend. Add OPENAI_API_KEY and retry this scheduled article."
     low = raw.lower()
+    if "timed out" in low or "timeout" in low:
+        return (
+            "The database connection timed out during a long operation. "
+            "Post Now runs in the background now — click Post Now again or use Retry preparation if the job stays failed."
+        )
     if "403" in low and "wp/v2/media" in low:
         return (
             "WordPress blocked the featured image upload (403). "
@@ -105,41 +182,24 @@ def _is_retryable_generation_mismatch(job: dict) -> bool:
     return False
 
 
-def _scheduled_generation_kwargs(
-    *,
-    title: str,
-    keywords: list[str],
-    focus_keyphrase: str,
-    writing_prompt_text: str,
-    brand_identity: str | None,
-    niche_identifier: str | None,
-    generate_image: bool,
-    image_prompt_text: str | None,
-) -> dict:
-    return {
-        "title": title,
-        "keywords": keywords,
-        "focus_keyphrase": focus_keyphrase,
-        "writing_prompt_text": writing_prompt_text,
-        "brand_identity": brand_identity,
-        "niche_identifier": niche_identifier,
-        "generate_image": generate_image,
-        "image_prompt_text": image_prompt_text,
-    }
-
-
 async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: dict, job: dict) -> dict:
     """
     Ensure article has generated content/meta and (optionally) image, saving results to storage.
-    This is used both:
-    - immediately after scheduling (background task)
-    - right before posting in the scheduler loop (safety net)
+    Uses the same generation pipeline as manual Generate (patch writes, integrity/humanization).
     """
+    from fastapi import HTTPException
+
+    from app.services.article_pipeline import execute_article_generation, execute_featured_image_regeneration
+
     aid = (art.get("id") or "").strip()
     if not aid:
         raise RuntimeError("Article not found")
     if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
         raise RuntimeError("Website is not connected for this project. Connect and verify WordPress before scheduled generation.")
+
+    pid = (proj.get("id") or job.get("project_id") or "").strip()
+    if pid:
+        proj = await _ensure_project_prompt_defaults(st, pid, proj)
 
     needs_content = not (str(art.get("article") or "").strip())
     needs_image = not (str(art.get("image_url") or "").strip())
@@ -147,100 +207,83 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
     if not (needs_content or (generate_image and needs_image)):
         return art
 
-    st.update_scheduled_job_fields(jid, {"state": "content_generating" if needs_content else "image_generating", "last_error": ""})
+    await _patch_scheduled_job(
+        st,
+        jid,
+        {"state": "content_generating" if needs_content else "image_generating", "last_error": ""},
+    )
 
-    # Resolve writing prompt: job override > project default > first prompt
-    writing_text = _resolve_prompt_text(
-        prompts=(proj.get("prompts") or []),
-        pid=(job.get("writing_prompt_id") or "") or (proj.get("default_prompt_id") or ""),
-    ) or _fallback_first_prompt_text(proj.get("prompts") or [])
-    if not writing_text:
-        raise RuntimeError("No writing prompt available for scheduled generation")
+    writing_prompt_id = (job.get("writing_prompt_id") or "") or (proj.get("default_prompt_id") or "") or None
+    image_prompt_id = (job.get("image_prompt_id") or "") or (proj.get("default_image_prompt_id") or "") or None
+    mapped_products = art.get("shopify_mapped_products") if is_shopify_project(proj) else None
+    mapped_pages = art.get("wp_mapped_pages") if is_wordpress_project(proj) else None
+    user = await _owner_user_dict(st, proj)
 
-    owner_uid = (proj.get("owner_user_id") or "").strip()
     try:
-        assert_writing_prompt_allowed(writing_text, user_id=owner_uid or None)
-    except ValueError as e:
-        err = str(e)
-        st.update_scheduled_job_fields(jid, {"state": "failed", "last_error": err})
+        if needs_content:
+            await execute_article_generation(
+                st=st,
+                user=user,
+                proj=proj,
+                project_id=pid,
+                article_id=aid,
+                row=art,
+                writing_prompt_id=writing_prompt_id,
+                generate_image=generate_image,
+                image_prompt_id=image_prompt_id,
+                focus_keyphrase_override=(art.get("focus_keyphrase") or "").strip() or None,
+                mapped_products=mapped_products if isinstance(mapped_products, list) else None,
+                mapped_pages=mapped_pages if isinstance(mapped_pages, list) else None,
+            )
+        elif generate_image and needs_image:
+            await execute_featured_image_regeneration(
+                st=st,
+                user=user,
+                proj=proj,
+                article_id=aid,
+                row=art,
+                image_prompt_id=image_prompt_id,
+            )
+    except HTTPException as e:
+        err = _http_detail_message(e)
+        await _patch_scheduled_job(st, jid, {"state": "failed", "last_error": err})
         raise RuntimeError(err) from e
 
-    generate_image = bool(job.get("generate_image", True))
-    image_text = None
-    if generate_image:
-        image_text = _resolve_prompt_text(
-            prompts=(proj.get("image_prompts") or []),
-            pid=(job.get("image_prompt_id") or "") or (proj.get("default_image_prompt_id") or ""),
-        ) or _fallback_first_prompt_text(proj.get("image_prompts") or [])
-        if image_text:
-            try:
-                assert_image_prompt_allowed(image_text)
-            except ValueError as e:
-                err = str(e)
-                st.update_scheduled_job_fields(jid, {"state": "failed", "last_error": err})
-                raise RuntimeError(err) from e
-    title = (art.get("title") or "").strip()
-    keywords = [str(x).strip() for x in (art.get("keywords") or []) if str(x).strip()]
-    focus = (art.get("focus_keyphrase") or "").strip()
-
-    gen_kwargs = _scheduled_generation_kwargs(
-        title=title,
-        keywords=keywords,
-        focus_keyphrase=focus,
-        writing_prompt_text=writing_text,
-        brand_identity=(proj.get("brand_identity") or ""),
-        niche_identifier=(proj.get("niche_identifier") or ""),
-        generate_image=generate_image,
-        image_prompt_text=image_text,
-    )
-    token_estimate = estimate_bundle_tokens(
-        title=title,
-        keywords=keywords,
-        focus_keyphrase=focus,
-        writing_prompt_text=writing_text,
-        brand_identity=(proj.get("brand_identity") or ""),
-        niche_identifier=(proj.get("niche_identifier") or ""),
-        generate_image=generate_image,
-        image_prompt_text=image_text,
-    )
-
-    owner_row = st.get_user_by_id(owner_uid) if owner_uid and hasattr(st, "get_user_by_id") else None
-    owner_role = ((owner_row or {}).get("role") or "").strip().lower()
-    if owner_uid and owner_role != "admin":
-        plan_key = ((owner_row or {}).get("subscription_type") or "beta").strip().lower() or "beta"
-        plan: dict = {}
-        try:
-            plans = st.load_plans() or {}
-            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
-            if not isinstance(plan, dict):
-                plan = {}
-        except Exception:
-            plan = {}
-        ok_t, msg_t = st.check_llm_token_budget(owner_uid, token_estimate, plan.get("max_llm_tokens_per_month"))
-        if not ok_t:
-            st.update_scheduled_job_fields(jid, {"state": "failed", "last_error": msg_t or "Token budget exceeded"})
-            raise RuntimeError(msg_t or "Token budget exceeded")
-
-    gen = await generate_article_bundle_safe(**gen_kwargs)
-
-    if owner_uid and owner_role != "admin":
-        st.consume_llm_generation_tokens(owner_uid, token_estimate)
-
-    st.update_article_fields(
-        aid,
-        {
-            "article": gen.get("article") or art.get("article") or "",
-            "meta_title": gen.get("meta_title") or art.get("meta_title") or "",
-            "meta_description": gen.get("meta_description") or art.get("meta_description") or "",
-            "image_url": gen.get("image_url") or art.get("image_url") or "",
-            "generated_at": gen.get("generated_at") or art.get("generated_at") or "",
-            "status": "draft" if (art.get("status") or "pending").lower() != "published" else (art.get("status") or "published"),
-        },
-    )
-
-    # Reload and return updated row (best effort)
-    art2 = next((a for a in (st.load_articles() or []) if isinstance(a, dict) and (a.get("id") or "") == aid), None)
+    art2 = await _load_article_row(st=st, project_id=pid, article_id=aid)
     return art2 if isinstance(art2, dict) else art
+
+
+def start_scheduled_job_post_now_task(*, st, jid: str, proj: dict, job: dict) -> None:
+    """Queue generate-and-publish for Post Now (never block the HTTP request)."""
+    job_id = (jid or "").strip()
+    pid = (proj.get("id") or job.get("project_id") or "").strip()
+    aid = (job.get("article_id") or "").strip()
+    if not job_id or not pid or not aid:
+        return
+
+    if settings.generation_queue_enabled:
+        from app.services.generation_worker import enqueue_scheduled_post_now
+
+        enqueue_scheduled_post_now(job_id=job_id, project_id=pid, article_id=aid)
+        return
+
+    async def _run() -> None:
+        try:
+            fresh_proj = await _reload_project(st, pid)
+            fresh_job = await _reload_scheduled_job(st, pid, job_id)
+            if not isinstance(fresh_proj, dict) or not isinstance(fresh_job, dict):
+                raise RuntimeError("Scheduled job or project not found")
+            fresh_proj = await _ensure_project_prompt_defaults(st, pid, fresh_proj)
+            await execute_scheduled_job_post_now(
+                st=st,
+                proj=fresh_proj,
+                job=fresh_job,
+                already_claimed=True,
+            )
+        except Exception:
+            log.exception("Post now background task failed job_id=%s", job_id)
+
+    asyncio.create_task(_run())
 
 
 def start_scheduled_job_preparation_task(
@@ -295,26 +338,10 @@ def start_scheduled_job_preparation_task(
         try:
             async with generation_slot():
                 await prepare_article_for_scheduled_job(st=st, jid=job_id, proj=proj, art=art, job=job)
-            await run_sync(
-                patch,
-                job_id,
-                {
-                    "state": "ready_to_post",
-                    "last_error": "",
-                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                },
-            )
+            await _patch_scheduled_job(st, job_id, {"state": "ready_to_post", "last_error": ""})
         except Exception as e:
             err = scheduler_error_message(e)
-            await run_sync(
-                patch,
-                job_id,
-                {
-                    "state": "failed",
-                    "last_error": err,
-                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                },
-            )
+            await _patch_scheduled_job(st, job_id, {"state": "failed", "last_error": err})
 
     asyncio.create_task(_prep())
 
@@ -386,6 +413,286 @@ async def publish_article_to_wordpress(*, proj: dict, article: dict, post_type: 
 
     created = await publish_post_to_wordpress(wp, post_type=post_type, payload=payload)
     return created
+
+
+def _parse_job_category_ids(job: dict) -> list[int]:
+    cats: list[int] = []
+    raw = (job.get("category_ids") or "").strip()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            cats.append(int(part))
+        except (TypeError, ValueError):
+            continue
+    return list(dict.fromkeys([x for x in cats if x > 0]))[:50]
+
+
+async def _load_scheduled_job_row(*, st, project_id: str, job_id: str) -> dict | None:
+    pid = (project_id or "").strip()
+    jid = (job_id or "").strip()
+    if not pid or not jid:
+        return None
+    rows = await run_sync(st.load_scheduled_jobs, project_id=pid) if hasattr(st, "load_scheduled_jobs") else []
+    return next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
+
+
+async def _wait_for_scheduled_job_prep(*, st, project_id: str, job_id: str, timeout_s: float = 300) -> dict:
+    """Block until background prep finishes (ready/scheduled) or fails."""
+    deadline = time.monotonic() + max(30.0, timeout_s)
+    last_state = ""
+    while time.monotonic() < deadline:
+        row = await _load_scheduled_job_row(st=st, project_id=project_id, job_id=job_id)
+        if not isinstance(row, dict):
+            raise RuntimeError("Scheduled job not found")
+        state = (row.get("state") or "").strip().lower()
+        last_state = state
+        if state in {"ready_to_post", "scheduled"}:
+            return row
+        if state == "failed":
+            err = (row.get("last_error") or "").strip() or "Article preparation failed"
+            raise RuntimeError(err)
+        if state == "posted":
+            return row
+        await asyncio.sleep(4)
+    raise RuntimeError(
+        f"Timed out waiting for article generation (last state: {last_state or 'unknown'}). Try again in a minute."
+    )
+
+
+async def _load_article_row(*, st, project_id: str, article_id: str) -> dict | None:
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        return None
+    if hasattr(st, "get_article"):
+        art = await _storage(st.get_article, project_id=pid, article_id=aid)
+        return art if isinstance(art, dict) else None
+    rows = await _storage(st.load_articles)
+    return next(
+        (
+            a
+            for a in (rows or [])
+            if isinstance(a, dict) and (a.get("id") or "").strip() == aid and (a.get("project_id") or "").strip() == pid
+        ),
+        None,
+    )
+
+
+async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_claimed: bool = False) -> dict:
+    """
+    Post a scheduled job immediately: generate content/image when missing, then publish to WordPress.
+    When ``already_claimed`` is True the job is already in ``posting``; skip re-claim.
+    """
+    from app.services.generation_queue import generation_slot
+
+    pid = (proj.get("id") or job.get("project_id") or "").strip()
+    jid = (job.get("id") or "").strip()
+    aid = (job.get("article_id") or "").strip()
+    if not jid or not pid or not aid:
+        raise RuntimeError("Invalid scheduled job")
+
+    proj = await _ensure_project_prompt_defaults(st, pid, proj)
+
+    state = (job.get("state") or "scheduled").strip().lower()
+    if state in {"posted", "cancelled"}:
+        raise RuntimeError(f"Cannot post a job in state '{state}'")
+    if not already_claimed and state == "posting":
+        updated_raw = str(job.get("updated_at") or job.get("last_attempt_at") or "")
+        ts = _parse_job_timestamp(updated_raw)
+        stale = ts is None or ts <= datetime.now(timezone.utc) - timedelta(minutes=_STALE_POSTING_MINUTES)
+        if not stale:
+            raise RuntimeError("This article is already being published. Wait a moment and refresh.")
+        await _storage(
+            st.update_scheduled_job_fields,
+            jid,
+            {
+                "state": "scheduled",
+                "last_error": "",
+                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+        state = "scheduled"
+        job = {**job, "state": "scheduled", "last_error": ""}
+
+    if state in {"content_generating", "image_generating"}:
+        job = await _wait_for_scheduled_job_prep(st=st, project_id=pid, job_id=jid)
+        state = (job.get("state") or "").strip().lower()
+
+    art = await _load_article_row(st=st, project_id=pid, article_id=aid)
+    if not art:
+        raise RuntimeError("Article not found")
+
+    existing_wp_post_id = str(art.get("wp_post_id") or "").strip()
+    if existing_wp_post_id:
+        wp_link = str(art.get("wp_link") or job.get("wp_link") or "")[:2000]
+        await _storage(
+            st.update_scheduled_job_fields,
+            jid,
+            {
+                "state": "posted",
+                "wp_post_id": existing_wp_post_id,
+                "wp_link": wp_link,
+                "last_error": "",
+                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+        return {
+            "ok": True,
+            "status": "posted",
+            "message": "Article is already on WordPress.",
+            "wp_post_id": int(existing_wp_post_id) if existing_wp_post_id.isdigit() else existing_wp_post_id,
+            "wp_link": wp_link or None,
+        }
+
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    if not already_claimed:
+        allowed_claim = ["scheduled", "ready_to_post", "failed"]
+        if hasattr(st, "claim_scheduled_job_for_posting"):
+            claimed = await _storage(
+                st.claim_scheduled_job_for_posting,
+                jid,
+                allowed_claim,
+                now_str=now_str,
+                target_state="posting",
+            )
+        else:
+            claimed = True
+            await _storage(
+                st.update_scheduled_job_fields,
+                jid,
+                {"state": "posting", "updated_at": now_str, "last_error": ""},
+            )
+        if not claimed:
+            raise RuntimeError("Could not claim this job for publishing — another process may be posting it now.")
+
+    try:
+        needs_generation = not (str(art.get("article") or "").strip())
+        if needs_generation or state == "failed":
+            async with generation_slot():
+                art = await prepare_article_for_scheduled_job(st=st, jid=jid, proj=proj, art=art, job=job)
+            reloaded = await _load_article_row(st=st, project_id=pid, article_id=aid)
+            if reloaded:
+                art = reloaded
+
+        post_prep_wp_post_id = str(art.get("wp_post_id") or "").strip()
+        if post_prep_wp_post_id:
+            wp_link = str(art.get("wp_link") or "")[:2000]
+            await _storage(
+                st.update_scheduled_job_fields,
+                jid,
+                {
+                    "state": "posted",
+                    "wp_post_id": post_prep_wp_post_id,
+                    "wp_link": wp_link,
+                    "last_error": "",
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+            return {
+                "ok": True,
+                "status": "posted",
+                "message": "Article is already on WordPress.",
+                "wp_post_id": int(post_prep_wp_post_id) if post_prep_wp_post_id.isdigit() else post_prep_wp_post_id,
+                "wp_link": wp_link or None,
+            }
+
+        title = (art.get("title") or "").strip()
+        body = (art.get("article") or "").strip()
+        if not title or not body:
+            raise RuntimeError("Article generation did not finish — title or content is still missing.")
+
+        await publish_pipeline_status(aid, MSG_PUBLISH_DISPATCH, STAGE_PUBLISH_DISPATCH)
+        cats = _parse_job_category_ids(job)
+        created = await publish_article_to_wordpress(
+            proj=proj,
+            article=art,
+            post_type=(job.get("post_type") or "posts"),
+            wp_status=(job.get("wp_status") or "draft"),
+            category_ids=cats,
+        )
+
+        wp_post_id = created.get("id")
+        wp_link = created.get("link") or ""
+        created_wp_status = _normalize_wp_rest_status_local(created.get("status")) or _normalize_wp_rest_status_local(
+            job.get("wp_status")
+        )
+        await _storage(
+            st.update_scheduled_job_fields,
+            jid,
+            {
+                "state": "posted",
+                "wp_post_id": wp_post_id,
+                "wp_link": wp_link,
+                "last_error": "",
+                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+        await _storage(
+            st.update_article_fields,
+            aid,
+            {
+                "wp_post_id": wp_post_id,
+                "wp_link": wp_link,
+                "wp_rest_base": (job.get("post_type") or "posts"),
+                "wp_last_wp_status": created_wp_status or "draft",
+                "wp_scheduled_at": "",
+                "wp_schedule_error": "",
+                "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                if created_wp_status == "publish"
+                else (art.get("posted_at") or ""),
+                "status": "published" if created_wp_status == "publish" else (art.get("status") or "draft"),
+            },
+        )
+
+        try:
+            await maybe_request_url_inspection(
+                st=st,
+                proj=proj,
+                live_url=str(wp_link or ""),
+                wp_status=created_wp_status or "",
+                article_id=aid,
+            )
+        except Exception:
+            pass
+        try:
+            if created_wp_status == "publish":
+                wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
+                asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
+        except Exception:
+            pass
+
+        msg = "Published to WordPress." if created_wp_status == "publish" else "Saved to WordPress as draft."
+        if needs_generation:
+            msg = f"Generated content and {msg[0].lower()}{msg[1:]}"
+        await publish_pipeline_status(aid, MSG_PUBLISH_COMPLETE, STAGE_COMPLETE)
+        return {
+            "ok": True,
+            "status": "posted",
+            "message": msg,
+            "wp_post_id": wp_post_id,
+            "wp_link": wp_link or None,
+        }
+    except Exception as e:
+        err = scheduler_error_message(e)
+        try:
+            await publish_pipeline_error(aid, f"Publish failed: {err[:400]}")
+        except Exception:
+            pass
+        try:
+            await _storage(
+                st.update_scheduled_job_fields,
+                jid,
+                {
+                    "state": "failed",
+                    "last_error": err,
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+        except Exception:
+            pass
+        raise RuntimeError(err) from e
 
 
 async def _heal_premature_generating_jobs(*, st, now: datetime) -> None:

@@ -471,6 +471,36 @@
   background: rgba(255, 255, 255, 0.1);
 }
 
+.authResendRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: -2px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.authResendButton {
+  border: none;
+  background: none;
+  padding: 0;
+  color: rgba(255, 255, 255, 0.9);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.authResendButton:hover:not(:disabled) {
+  color: #fff;
+}
+
+.authResendButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
 .authChecklist {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(255, 255, 255, 0.04);
@@ -2914,6 +2944,173 @@
   }
 }
 
+/* Integrity highlight view — flagged blocks in article body */
+.articleIntegrityBody {
+  min-width: 0;
+}
+
+.integrityHighlightPanel {
+  margin-top: 4px;
+  border-top: 1px solid var(--aa-hairline-soft);
+  padding-top: 4px;
+  max-height: min(42vh, 480px);
+  overflow-y: auto;
+}
+
+.integrityHighlightPanel .articleReadonlyArticleHtml {
+  max-height: none;
+  min-height: 0;
+  padding-top: 8px;
+}
+
+.integrityFlaggedBlock {
+  margin: 0.5em 0;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(220, 38, 38, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(248, 113, 113, 0.32);
+}
+
+.integrityFlaggedBlock > :first-child {
+  margin-top: 0;
+}
+
+.integrityFlaggedBlock > :last-child {
+  margin-bottom: 0;
+}
+
+.integrityHighlightBanner {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.82);
+  background: rgba(217, 119, 87, 0.12);
+  border: 1px solid rgba(217, 119, 87, 0.28);
+}
+
+/* Humanize comparison modal */
+.humanizeCompareRoot {
+  display: grid;
+  gap: 12px;
+}
+
+.humanizeCompareLegend {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.72);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.humanizeCompareLegendSwatch {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border-radius: 3px;
+  background: rgba(34, 197, 94, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.65);
+}
+
+.humanizeCompareGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  min-height: 0;
+}
+
+@media (max-width: 720px) {
+  .humanizeCompareGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.humanizeCompareCol {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.humanizeCompareColTitle {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.humanizeCompareScroll {
+  max-height: min(52vh, 520px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.humanizeCompareBlock {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.humanizeCompareBlock:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.humanizeCompareBlockChanged {
+  padding: 8px 10px;
+  margin-left: -6px;
+  margin-right: -6px;
+  border-radius: 8px;
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(74, 222, 128, 0.22);
+}
+
+.humanizeCompareBlockMuted {
+  opacity: 0.72;
+}
+
+.humanizeCompareProse {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--aa-body);
+  word-break: break-word;
+}
+
+.humanizeCompareProse p {
+  margin: 0.5em 0;
+}
+
+.humanizeCompareProse h2,
+.humanizeCompareProse h3,
+.humanizeCompareProse h4 {
+  margin: 0.75em 0 0.35em;
+  font-size: 1.05rem;
+  color: color-mix(in oklab, var(--aa-primary), var(--aa-ink) 8%);
+}
+
+.humanizeCompareProseDiff {
+  white-space: normal;
+}
+
+:global(.riviso-humanized-mark) {
+  background: rgba(34, 197, 94, 0.42);
+  color: #ecfdf5;
+  padding: 0.12em 0.2em;
+  border-radius: 4px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 /* Read-only HTML from markdown (no TipTap) — match .articleProseMirror typography */
 .articleReadonlyArticleHtml {
   flex: 1;
@@ -3117,6 +3314,45 @@
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.articleImageLazyWrap {
+  position: relative;
+  width: 100%;
+  min-height: 180px;
+  max-height: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.articleImageLazyWrap .articleImage {
+  position: relative;
+  z-index: 1;
+  max-height: 360px;
+}
+
+.articleImageSkeleton {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(
+    110deg,
+    color-mix(in oklab, var(--foreground), var(--background) 88%) 8%,
+    color-mix(in oklab, var(--foreground), var(--background) 94%) 18%,
+    color-mix(in oklab, var(--foreground), var(--background) 88%) 33%
+  );
+  background-size: 200% 100%;
+  animation: articleImageShimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes articleImageShimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
 }
 
 .pill {
@@ -3734,6 +3970,55 @@
   background: color-mix(in oklab, var(--aa-primary), transparent 84%);
   color: #fff;
   outline: none;
+}
+
+.projectPlatformRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 18%);
+  background: color-mix(in oklab, var(--aa-surface-card), #000 8%);
+  color: var(--aa-body-strong);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.projectPlatformLogo {
+  width: 18px;
+  height: 18px;
+  display: block;
+  flex: 0 0 auto;
+  color: color-mix(in oklab, var(--aa-body-strong), transparent 10%);
+}
+
+.projectPlatformLabel {
+  line-height: 1;
+}
+
+.projectConnectionPill {
+  margin-left: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
+  color: var(--aa-muted);
+}
+
+.projectConnectionPill[data-state="verified"] {
+  border-color: color-mix(in oklab, #96bf48, transparent 40%);
+  color: color-mix(in oklab, #96bf48, #fff 15%);
+  background: color-mix(in oklab, #96bf48 12%, transparent);
+}
+
+.projectConnectionPill[data-state="pending"] {
+  border-color: color-mix(in oklab, var(--aa-muted), transparent 50%);
 }
 
 /* Articles table list */
@@ -5069,6 +5354,34 @@
   font-variant-numeric: tabular-nums;
 }
 
+.shopifyProductStatusPill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.shopifyProductStatusPill[data-state="active"] {
+  color: #d6ffe6;
+  background: color-mix(in oklab, #18a957, transparent 78%);
+  border-color: color-mix(in oklab, #18a957, transparent 55%);
+}
+.shopifyProductStatusPill[data-state="draft"] {
+  color: #ffe6c2;
+  background: color-mix(in oklab, #c0822a, transparent 74%);
+  border-color: color-mix(in oklab, #c0822a, transparent 52%);
+}
+.shopifyProductStatusPill[data-state="unlisted"] {
+  color: #d9e7ff;
+  background: color-mix(in oklab, #2f6bff, transparent 78%);
+  border-color: color-mix(in oklab, #2f6bff, transparent 55%);
+}
+
 /* Stacks the credentials pill and the plugin pill in the header so they
  * read top-to-bottom on the right side of the WordPress connection card.
  * Falls into a single column on narrow screens (below tablet width). */
@@ -5330,6 +5643,32 @@
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 25%);
 }
 
+.toast {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 1200;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--aa-hairline);
+  background: color-mix(in oklab, var(--aa-canvas), #000 10%);
+  color: var(--aa-body-strong);
+  font-size: 13px;
+  font-weight: 800;
+  max-width: min(420px, calc(100vw - 36px));
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+}
+.toast[data-tone="success"] {
+  border-color: color-mix(in oklab, #18a957, transparent 55%);
+  background: color-mix(in oklab, #18a957, transparent 90%);
+  color: #d6ffe6;
+}
+.toast[data-tone="error"] {
+  border-color: color-mix(in oklab, #b53d29, transparent 45%);
+  background: color-mix(in oklab, #b53d29, transparent 88%);
+  color: #ffd7d2;
+}
+
 .settingsSectionCard {
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 8%);
   border-radius: var(--aa-r-lg);
@@ -5377,6 +5716,54 @@
 .settingsSectionDesc strong {
   color: var(--aa-body-strong);
   font-weight: 700;
+}
+
+.shopifyConnectGuide {
+  margin: 16px 0 18px;
+  padding: 14px 16px;
+  border-radius: var(--aa-r-md);
+  border: 1px solid color-mix(in oklab, #96bf48, transparent 55%);
+  background: color-mix(in oklab, #96bf48 8%, var(--aa-surface-card));
+}
+
+.shopifyConnectGuideSummary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--aa-body-strong);
+  list-style: none;
+}
+
+.shopifyConnectGuideSummary::-webkit-details-marker {
+  display: none;
+}
+
+.shopifyConnectGuideSummary::before {
+  content: "▸ ";
+  display: inline-block;
+  transition: transform 0.15s ease;
+  color: color-mix(in oklab, #96bf48, #fff 10%);
+}
+
+.shopifyConnectGuide[open] .shopifyConnectGuideSummary::before {
+  transform: rotate(90deg);
+}
+
+.shopifyConnectGuideList {
+  margin: 12px 0 0;
+  padding-left: 1.25rem;
+  font-size: 13px;
+  line-height: 1.55;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 18%);
+}
+
+.shopifyConnectGuideList li + li {
+  margin-top: 8px;
+}
+
+.shopifyConnectGuideList strong {
+  color: var(--aa-body-strong);
+  font-weight: 650;
 }
 
 .settingsFieldsGrid {

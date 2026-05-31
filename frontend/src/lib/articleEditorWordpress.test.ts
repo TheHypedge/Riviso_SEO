@@ -16,7 +16,7 @@ describe("articleEditorWordpress", () => {
     expect(parseWpPostId(0)).toBeNull();
   });
 
-  it("live only when published with wp id or link", () => {
+  it("live when wp id or link exists, even if listing status is draft", () => {
     expect(
       isArticleLiveOnWordPress({ articleStatus: "published", wpPostId: 1, wpLink: "" }),
     ).toBe(true);
@@ -28,29 +28,32 @@ describe("articleEditorWordpress", () => {
       }),
     ).toBe(true);
     expect(
-      isArticleLiveOnWordPress({ articleStatus: "draft", wpPostId: 1, wpLink: "https://x.com" }),
+      isArticleLiveOnWordPress({ articleStatus: "draft", wpPostId: 12, wpLink: "" }),
+    ).toBe(true);
+    expect(
+      isArticleLiveOnWordPress({ articleStatus: "draft", wpPostId: null, wpLink: "" }),
     ).toBe(false);
     expect(
       isArticleLiveOnWordPress({ articleStatus: "pending", wpPostId: 1, wpLink: "" }),
-    ).toBe(false);
-    expect(
-      isArticleLiveOnWordPress({ articleStatus: "scheduled", wpPostId: 1, wpLink: "" }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("update vs publish visibility", () => {
     const live = { articleStatus: "published", wpPostId: 10, wpLink: "" };
     const draft = { articleStatus: "draft", wpPostId: null, wpLink: "" };
+    const linkedDraft = { articleStatus: "draft", wpPostId: 10, wpLink: "" };
     expect(shouldShowWordPressUpdate(live)).toBe(true);
     expect(shouldShowWordPressPublish(live)).toBe(false);
     expect(shouldShowWordPressUpdate(draft)).toBe(false);
     expect(shouldShowWordPressPublish(draft)).toBe(true);
+    expect(shouldShowWordPressUpdate(linkedDraft)).toBe(true);
+    expect(shouldShowWordPressPublish(linkedDraft)).toBe(false);
     expect(shouldShowWordPressPublish({ articleStatus: "scheduled", wpPostId: null, wpLink: "" })).toBe(
       false,
     );
   });
 
-  it("canPushWordPressUpdate requires pending changes", () => {
+  it("canPushWordPressUpdate allows push when live on WordPress (with or without local edits)", () => {
     const ctx = { articleStatus: "published", wpPostId: 3, wpLink: "" };
     expect(
       canPushWordPressUpdate({
@@ -61,7 +64,7 @@ describe("articleEditorWordpress", () => {
         hasPendingChanges: false,
         busy: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       canPushWordPressUpdate({
         ctx,
@@ -72,5 +75,14 @@ describe("articleEditorWordpress", () => {
         busy: false,
       }),
     ).toBe(true);
+    expect(
+      canPushWordPressUpdate({
+        ctx,
+        websiteConnected: true,
+        hasTitle: true,
+        hasBody: true,
+        busy: true,
+      }),
+    ).toBe(false);
   });
 });

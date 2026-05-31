@@ -39,6 +39,13 @@ DEFAULT_GENERATION_BANNED_PHRASES: tuple[str, ...] = (
     "written for ai",
     "ai-optimized",
     "ai optimized",
+    "elevate your wardrobe",
+    "effortless charm",
+    "personality and flair",
+    "transform your look",
+    "in practice,",
+    "let's dive in",
+    "game-changer",
 )
 
 

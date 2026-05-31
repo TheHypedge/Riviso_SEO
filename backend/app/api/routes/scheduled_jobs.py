@@ -5,10 +5,10 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.deps import get_current_user
-from app.core.ids import user_ids_equal
+from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
-from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobUpdate
-from app.services.scheduler import start_scheduled_job_preparation_task
+from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobPostNow, ScheduledJobUpdate
+from app.services.scheduler import start_scheduled_job_preparation_task, start_scheduled_job_post_now_task
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.schedule_timing import SCHEDULE_TOO_SOON_MESSAGE, is_schedule_time_allowed, minimum_schedule_utc
 from app.services.to_thread import run_sync
@@ -16,20 +16,86 @@ from app.services.to_thread import run_sync
 
 router = APIRouter(prefix="/projects/{project_id}/scheduled-jobs", tags=["scheduled"])
 
+_STALE_POSTING_MINUTES = 3
+
+
+def _parse_job_timestamp(raw: str) -> datetime | None:
+    v = (raw or "").strip()
+    if not v:
+        return None
+    try:
+        if "T" in v:
+            dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+        else:
+            dt = datetime.strptime(v[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _heal_stale_posting_jobs(*, st, project_id: str, rows: list[dict]) -> list[dict]:
+    """
+    Reset jobs stuck in ``posting`` with no WordPress post id (crashed worker, tab closed, etc.).
+    """
+    if not rows or not hasattr(st, "update_scheduled_job_fields"):
+        return rows
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=_STALE_POSTING_MINUTES)
+    healed: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if (row.get("state") or "").strip().lower() != "posting":
+            healed.append(row)
+            continue
+        if str(row.get("wp_post_id") or "").strip():
+            healed.append(row)
+            continue
+        ts = _parse_job_timestamp(str(row.get("updated_at") or row.get("last_attempt_at") or ""))
+        if ts is not None and ts > cutoff:
+            healed.append(row)
+            continue
+        jid = (row.get("id") or "").strip()
+        aid = (row.get("article_id") or "").strip()
+        if not jid:
+            healed.append(row)
+            continue
+        next_state = "scheduled"
+        try:
+            art = _find_article_for_job(st=st, project_id=project_id, article_id=aid) if aid else None
+            if isinstance(art, dict) and (art.get("title") or "").strip() and (art.get("article") or "").strip():
+                next_state = "ready_to_post"
+        except Exception:
+            pass
+        patch = {
+            "state": next_state,
+            "last_error": "Previous publish attempt did not finish. You can use Post Now again.",
+            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        try:
+            st.update_scheduled_job_fields(jid, patch)
+            healed.append({**row, **patch})
+        except Exception:
+            healed.append(row)
+    return healed
+
 
 def _require_project_access(*, st, user: dict, project_id: str) -> dict:
-    pid = (project_id or "").strip()
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
-        raise HTTPException(status_code=404, detail="Project not found")
-    return proj
+    return require_project_access(st=st, user=user, project_id=project_id, full=False)
 
 
 def _require_verified_website(proj: dict) -> None:
+    plat = (proj.get("platform") or "").strip().lower()
+    if plat == "shopify" or bool(proj.get("shopify_connected")) or (proj.get("shopify_shop") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "website_not_connected",
+                "message": "Shopify projects can generate drafts, but scheduling/publishing is not enabled yet.",
+            },
+        )
     if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
         raise HTTPException(
             status_code=400,
@@ -196,6 +262,7 @@ async def list_scheduled(project_id: str, user: dict = Depends(get_current_user)
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    rows = _heal_stale_posting_jobs(st=st, project_id=project_id, rows=[r for r in (rows or []) if isinstance(r, dict)])
     out = [
         _to_public(r)
         for r in (rows or [])
@@ -215,6 +282,7 @@ async def list_scheduled_board(project_id: str, user: dict = Depends(get_current
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
     rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    rows = _heal_stale_posting_jobs(st=st, project_id=project_id, rows=[r for r in (rows or []) if isinstance(r, dict)])
     jobs = [
         _to_public(r)
         for r in (rows or [])
@@ -243,7 +311,7 @@ async def update_scheduled_job(
     row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
     if not row:
         raise HTTPException(status_code=404, detail="Scheduled job not found")
-    if (row.get("state") or "") in {"posted", "cancelled"}:
+    if (row.get("state") or "").strip().lower() in {"posted", "cancelled"}:
         raise HTTPException(status_code=400, detail="Cannot edit a completed/cancelled job")
 
     prev_state = (row.get("state") or "").strip().lower()
@@ -300,37 +368,48 @@ async def update_scheduled_job(
     if payload.generate_image is not None:
         updates["generate_image"] = bool(payload.generate_image)
 
-    # Failed jobs must return to the scheduled queue so preparation can run again.
-    if prev_state == "failed":
-        updates["state"] = "scheduled"
-        updates["last_error"] = ""
-        updates["attempts"] = 0
-        updates["last_attempt_at"] = ""
+    # Rescheduling always returns the job to the queue (including failed / stuck generating).
+    if prev_state in {"failed", "content_generating", "image_generating", "posting", "ready_to_post"}:
+        updates.setdefault("state", "scheduled")
+        updates.setdefault("last_error", "")
+        updates.setdefault("attempts", 0)
+        updates.setdefault("last_attempt_at", "")
 
-    await run_sync(st.update_scheduled_job_fields, jid, updates)
+    patch_job = getattr(st, "patch_scheduled_job_fields", None) or st.update_scheduled_job_fields
+    from app.services.storage_db import call_storage
+
+    ok = await run_sync(call_storage, patch_job, jid, updates)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Could not save schedule changes. Please try again.")
 
     # Keep the article row in sync so the Articles list can show the latest scheduled time.
     try:
         aid = (row.get("article_id") or "").strip()
-        if updated_run_at_utc and aid and hasattr(st, "update_article_fields"):
-            art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
-            if art:
-                await run_sync(
-                    st.update_article_fields,
-                    aid,
-                    {
-                        "wp_scheduled_at": updated_run_at_utc,
-                        "wp_schedule_error": "",
-                        "wp_schedule_wp_status": (updates.get("wp_status") or (row.get("wp_status") or "")).strip()[:16],
-                        "wp_rest_base": (updates.get("post_type") or (row.get("post_type") or "")).strip()[:200],
-                    },
-                )
+        art_patch = getattr(st, "patch_article_fields", None) or st.update_article_fields
+        if updated_run_at_utc and aid:
+            await run_sync(
+                call_storage,
+                art_patch,
+                aid,
+                {
+                    "wp_scheduled_at": updated_run_at_utc,
+                    "wp_schedule_error": "",
+                    "wp_schedule_wp_status": (updates.get("wp_status") or (row.get("wp_status") or "")).strip()[:16],
+                    "wp_rest_base": (updates.get("post_type") or (row.get("post_type") or "")).strip()[:200],
+                },
+            )
     except Exception:
         # Best-effort sync; scheduled job update succeeded already.
         pass
 
     # Re-run preparation after reschedule or when recovering a failed job.
-    reprep = prev_state == "failed" or payload.run_at is not None or payload.writing_prompt_id is not None or payload.image_prompt_id is not None
+    reprep = (
+        prev_state == "failed"
+        or payload.run_at is not None
+        or payload.writing_prompt_id is not None
+        or payload.image_prompt_id is not None
+        or payload.generate_image is not None
+    )
     if reprep:
         try:
             rows_after = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
@@ -338,11 +417,25 @@ async def update_scheduled_job(
             aid = (job_after.get("article_id") or "").strip() if isinstance(job_after, dict) else ""
             st_after = (job_after.get("state") or "").strip().lower() if isinstance(job_after, dict) else ""
             if isinstance(job_after, dict) and aid and st_after in {"scheduled", "failed"}:
-                prows = await run_sync(st.load_projects)
-                proj2 = next((p for p in (prows or []) if isinstance(p, dict) and (p.get("id") or "") == (project_id or "").strip()), None)
+                proj2 = await run_sync(st.get_project_by_id, project_id) if hasattr(st, "get_project_by_id") else None
+                if not isinstance(proj2, dict):
+                    prows = await run_sync(st.load_projects)
+                    proj2 = next((p for p in (prows or []) if isinstance(p, dict) and (p.get("id") or "") == (project_id or "").strip()), None)
                 art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
                 if proj2 and art:
-                    start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj2, art=art, job=job_after)
+                    prep_force = prev_state == "failed"
+                    if not prep_force and updated_run_at_utc:
+                        from app.services.schedule_timing import is_within_scheduled_prep_window
+
+                        prep_force = is_within_scheduled_prep_window(updated_run_at_utc)
+                    start_scheduled_job_preparation_task(
+                        st=st,
+                        jid=jid,
+                        proj=proj2,
+                        art=art,
+                        job=job_after,
+                        force=prep_force,
+                    )
         except Exception:
             pass
 
@@ -461,6 +554,142 @@ async def retry_scheduled_job_preparation(
         "ok": True,
         "message": "Preparation started. The job will move to Ready when content and image are generated.",
         "job": _to_public(job_after),
+    }
+
+
+@router.post("/{job_id}/post-now", status_code=200)
+async def post_scheduled_job_now(
+    project_id: str,
+    job_id: str,
+    payload: ScheduledJobPostNow | None = None,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Generate content when needed, then publish the scheduled job to WordPress immediately."""
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    _require_verified_website(proj)
+
+    from app.api.routes.prompts import _ensure_default_prompt
+    from app.api.routes.image_prompts import _ensure_default_image_prompt
+
+    try:
+        proj = _ensure_default_prompt(st=st, project_id=project_id, proj=proj)
+        proj = _ensure_default_image_prompt(st=st, project_id=project_id, proj=proj)
+    except Exception:
+        pass
+
+    jid = (job_id or "").strip()
+    if jid.startswith("pending_job_"):
+        aid = jid[len("pending_job_") :].strip()
+        rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+        alt = next(
+            (
+                r
+                for r in (rows or [])
+                if isinstance(r, dict)
+                and (r.get("article_id") or "").strip() == aid
+                and (r.get("state") or "").strip().lower() not in {"posted", "cancelled"}
+            ),
+            None,
+        )
+        if alt:
+            jid = (alt.get("id") or "").strip()
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="This schedule entry is not linked to a job yet. Use Re-Schedule to save it, then try Post Now.",
+            )
+
+    row = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    row = next((r for r in (row or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
+    if not isinstance(row, dict):
+        raise HTTPException(status_code=404, detail="Scheduled job not found")
+
+    body = payload or ScheduledJobPostNow()
+    patch: dict = {}
+    if body.writing_prompt_id is not None:
+        wp = (body.writing_prompt_id or "").strip()
+        patch["writing_prompt_id"] = wp or None
+    if body.image_prompt_id is not None:
+        ip = (body.image_prompt_id or "").strip()
+        patch["image_prompt_id"] = ip or None
+    if body.generate_image is not None:
+        patch["generate_image"] = bool(body.generate_image)
+    if patch and hasattr(st, "update_scheduled_job_fields"):
+        await run_sync(st.update_scheduled_job_fields, jid, patch)
+        row = {**row, **patch}
+
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    if role != "admin" and uid and hasattr(st, "consume_article_usage"):
+        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+        plan = {}
+        try:
+            plans = st.load_plans() or {}
+            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+            if not isinstance(plan, dict):
+                plan = {}
+        except Exception:
+            plan = {}
+        ok, msg = st.consume_article_usage(
+            uid,
+            day_limit=plan.get("max_articles_per_day"),
+            month_limit=plan.get("max_articles_per_month"),
+            amount=1,
+        )
+        if not ok:
+            raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
+
+    from app.services.storage_db import call_storage, is_transient_storage_error
+
+    state = (row.get("state") or "scheduled").strip().lower()
+    if state == "posting":
+        ts = _parse_job_timestamp(str(row.get("updated_at") or row.get("last_attempt_at") or ""))
+        stale = ts is None or ts <= datetime.now(timezone.utc) - timedelta(minutes=_STALE_POSTING_MINUTES)
+        if not stale:
+            return {
+                "ok": True,
+                "status": "posting",
+                "async": True,
+                "message": "Publish already in progress. The list refreshes automatically.",
+                "job": _to_public(row),
+            }
+
+    aid = (row.get("article_id") or "").strip()
+    art = _find_article_for_job(st=st, project_id=project_id, article_id=aid) if aid else None
+    needs_generation = not (isinstance(art, dict) and (str(art.get("article") or "").strip()))
+
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        await run_sync(
+            call_storage,
+            st.update_scheduled_job_fields,
+            jid,
+            {
+                "state": "posting",
+                "last_error": "",
+                "updated_at": now_str,
+            },
+        )
+    except Exception as e:
+        if is_transient_storage_error(e):
+            raise HTTPException(status_code=503, detail="Database temporarily unavailable. Try again in a moment.") from e
+        raise
+
+    row = {**row, "state": "posting", "last_error": "", "updated_at": now_str}
+    start_scheduled_job_post_now_task(st=st, jid=jid, proj=proj, job=row)
+
+    msg = (
+        "Generating content and publishing to WordPress. This usually takes 1–3 minutes — status updates automatically."
+        if needs_generation
+        else "Publishing to WordPress. Status updates automatically."
+    )
+    return {
+        "ok": True,
+        "status": "accepted",
+        "async": True,
+        "message": msg,
+        "job": _to_public(row),
     }
 
 

@@ -9,15 +9,13 @@ from fastapi import APIRouter, Depends
 
 from app.api.routes.articles import _derive_listing_status
 from app.core.deps import get_current_user
-from app.core.ids import user_ids_equal
-from app.legacy.storage import get_legacy_storage_module
 from app.schemas.workspace import (
     WorkspaceActivityDay,
     WorkspaceFeedItem,
     WorkspaceOverviewResponse,
     WorkspaceOverviewStats,
 )
-from app.services.to_thread import run_sync
+from app.services.mongo_listings_async import fetch_workspace_overview_bundle
 
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 log = logging.getLogger(__name__)
@@ -35,21 +33,6 @@ def _parse_ms(raw: str | None) -> float:
         return t if t > 0 else 0.0
     except Exception:
         return 0.0
-
-
-def _user_projects(st, user: dict) -> tuple[dict[str, dict], list[str]]:
-    uid = (user.get("id") or "").strip()
-    projs = [p for p in (st.load_projects(uid) or []) if isinstance(p, dict)]
-    by_id: dict[str, dict] = {}
-    for p in projs:
-        pid = (p.get("id") or "").strip()
-        owner = (p.get("owner_user_id") or "").strip()
-        if not pid:
-            continue
-        if not user_ids_equal(owner, uid):
-            continue
-        by_id[pid] = p
-    return by_id, sorted(by_id.keys())
 
 
 def _article_feed_item(a: dict, *, by_id: dict[str, dict], status_tag: str, sort_at: str | None) -> WorkspaceFeedItem | None:
@@ -70,28 +53,6 @@ def _article_feed_item(a: dict, *, by_id: dict[str, dict], status_tag: str, sort
         sort_at=(sort_at or "").strip() or None,
         image_url=img,
     )
-
-
-def _load_workspace_articles(st, pids: list[str], *, limit: int = 1500) -> list[dict]:
-    """Recent listing rows across projects; falls back to per-project loads on aggregate errors."""
-    if hasattr(st, "load_recent_article_listings_for_projects"):
-        try:
-            return list(st.load_recent_article_listings_for_projects(pids, limit=limit) or [])
-        except Exception:
-            log.exception("workspace overview: cross-project article listing failed; using per-project fallback")
-
-    out: list[dict] = []
-    per_project = max(80, limit // max(1, len(pids)))
-    if hasattr(st, "load_articles_listing_for_project"):
-        for pid in pids:
-            try:
-                rows = st.load_articles_listing_for_project(pid, limit=per_project) or []
-                if isinstance(rows, list):
-                    out.extend([r for r in rows if isinstance(r, dict)])
-            except Exception:
-                log.warning("workspace overview: skip articles for project %s", pid, exc_info=True)
-    out.sort(key=lambda r: (str(r.get("created_at") or "")), reverse=True)
-    return out[:limit]
 
 
 def _day_key_from_ms(ms: float) -> str | None:
@@ -152,12 +113,14 @@ def _build_activity_series(
 
 @router.get("/overview", response_model=WorkspaceOverviewResponse)
 async def workspace_overview(user: dict = Depends(get_current_user)) -> WorkspaceOverviewResponse:
-    st = get_legacy_storage_module()
-    by_id, pids = await run_sync(_user_projects, st, user)
+    uid = (user.get("id") or "").strip()
+    bundle = await fetch_workspace_overview_bundle(uid, article_limit=1500)
+    by_id: dict[str, dict] = bundle.get("projects_by_id") or {}
+    pids: list[str] = bundle.get("pids") or []
     if not pids:
         return WorkspaceOverviewResponse(stats=WorkspaceOverviewStats(), activity_series=[])
 
-    raw_articles: list[dict] = await run_sync(_load_workspace_articles, st, pids, limit=1500)
+    raw_articles: list[dict] = bundle.get("articles") or []
 
     title_by_id: dict[str, str] = {}
     published_rows: list[tuple[float, dict]] = []
@@ -193,45 +156,45 @@ async def workspace_overview(user: dict = Depends(get_current_user)) -> Workspac
     seen_job_article: set[tuple[str, str]] = set()
     scheduled_run_ats: list[str] = []
 
-    if hasattr(st, "load_scheduled_jobs"):
-        for pid in pids:
-            jobs = list(await run_sync(st.load_scheduled_jobs, project_id=pid) or [])
-            for j in jobs:
-                if not isinstance(j, dict):
-                    continue
-                st_state = (j.get("state") or "").strip().lower()
-                if st_state in {"cancelled", "completed", "failed", "posted"}:
-                    continue
-                run_at = (j.get("run_at") or "").strip()
-                if run_at:
-                    scheduled_run_ats.append(run_at)
-                run_ms = _parse_ms(run_at)
-                if run_ms and run_ms < now_ms - 86_400:
-                    continue
-                aid = (j.get("article_id") or "").strip()
-                if not aid:
-                    continue
-                jid = (j.get("id") or "").strip() or f"{pid}:{aid}:{run_at}"
-                key = (pid, aid)
-                if key in seen_job_article:
-                    continue
-                seen_job_article.add(key)
-                pname = str((by_id.get(pid) or {}).get("name") or "").strip() or pid
-                title = title_by_id.get(aid) or "(Scheduled article)"
-                upcoming.append(
-                    (
-                        run_ms or now_ms,
-                        WorkspaceFeedItem(
-                            id=jid,
-                            article_id=aid,
-                            project_id=pid,
-                            project_name=pname,
-                            title=title,
-                            status_tag="scheduled",
-                            sort_at=run_at or None,
-                        ),
-                    ),
-                )
+    for j in bundle.get("scheduled_jobs") or []:
+        if not isinstance(j, dict):
+            continue
+        pid = (j.get("project_id") or "").strip()
+        if pid not in by_id:
+            continue
+        st_state = (j.get("state") or "").strip().lower()
+        if st_state in {"cancelled", "completed", "failed", "posted"}:
+            continue
+        run_at = (j.get("run_at") or "").strip()
+        if run_at:
+            scheduled_run_ats.append(run_at)
+        run_ms = _parse_ms(run_at)
+        if run_ms and run_ms < now_ms - 86_400:
+            continue
+        aid = (j.get("article_id") or "").strip()
+        if not aid:
+            continue
+        jid = (j.get("id") or "").strip() or f"{pid}:{aid}:{run_at}"
+        key = (pid, aid)
+        if key in seen_job_article:
+            continue
+        seen_job_article.add(key)
+        pname = str((by_id.get(pid) or {}).get("name") or "").strip() or pid
+        title = title_by_id.get(aid) or "(Scheduled article)"
+        upcoming.append(
+            (
+                run_ms or now_ms,
+                WorkspaceFeedItem(
+                    id=jid,
+                    article_id=aid,
+                    project_id=pid,
+                    project_name=pname,
+                    title=title,
+                    status_tag="scheduled",
+                    sort_at=run_at or None,
+                ),
+            ),
+        )
 
     upcoming.sort(key=lambda x: (x[0], x[1].title.lower()))
     stats.upcoming_scheduled = len(upcoming)

@@ -28,8 +28,12 @@ DEDUP_TTL_SECONDS = 6 * 3600
 
 class GenerationJobKind(str, Enum):
     SCHEDULED_PREP = "scheduled_prep"
+    SCHEDULED_POST_NOW = "scheduled_post_now"
     ARTICLE_GENERATE = "article_generate"
     IMAGE_REGENERATE = "image_regenerate"
+    CLUSTER_GENERATE_ALL = "cluster_generate_all"
+    TOPIC_CLUSTER_PLAN = "topic_cluster_plan"
+    RESEARCH_IDEAS = "research_ideas"
 
 
 @dataclass
@@ -219,3 +223,8 @@ async def close_redis() -> None:
         except Exception:
             pass
         _redis_client = None
+
+
+def get_async_redis():
+    """Shared asyncio Redis client for queue + pipeline SSE pub/sub."""
+    return _redis()

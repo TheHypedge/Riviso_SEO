@@ -3805,41 +3805,31 @@ def download_wordpress_plugin(project_id: str):
         flash("Project not found.", "error")
         return redirect(url_for("home"))
 
-    plugin_slug = "riviso-content-operations"
-    plugin_root = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)),
-        "wordpress_plugin",
-        plugin_slug,
-    )
-    if not os.path.isdir(plugin_root):
-        backend_root = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "backend",
-            "wordpress_plugin",
-            plugin_slug,
-        )
-        if os.path.isdir(backend_root):
-            plugin_root = backend_root
-        else:
-            return Response("Plugin source not found on server.", status=500, mimetype="text/plain")
+    try:
+        import sys
+        backend_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backend")
+        if backend_root not in sys.path:
+            sys.path.insert(0, backend_root)
+        from app.services.wordpress_plugin_packager import build_plugin_zip_bytes, get_plugin_version
+    except ImportError as e:
+        return Response(f"Plugin packager unavailable: {e}", status=500, mimetype="text/plain")
 
-    filename = f"{plugin_slug}.zip"
-    mem = BytesIO()
-    bundle_files = (f"{plugin_slug}.php", "index.php", "readme.txt")
-    with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for fn in bundle_files:
-            full = os.path.join(plugin_root, fn)
-            if not os.path.isfile(full):
-                continue
-            with open(full, "rb") as fh:
-                data = fh.read().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
-            arcname = f"{plugin_slug}/{fn}".replace("\\", "/")
-            z.writestr(arcname, data)
-    mem.seek(0)
+    try:
+        data, filename = build_plugin_zip_bytes()
+        version = get_plugin_version()
+    except Exception as e:
+        return Response(f"Plugin bundle error: {e}", status=500, mimetype="text/plain")
+
     return Response(
-        mem.getvalue(),
+        data,
         mimetype="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+            "X-Riviso-Plugin-Version": version,
+            "X-Riviso-Plugin-Slug": "riviso-content-operations",
+        },
     )
 
 

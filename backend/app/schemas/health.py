@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 class HealthResponse(BaseModel):
     """Liveness metadata; does not perform deep dependency checks (keeps the endpoint fast)."""
 
-    status: str = Field(description="Always 'ok' when the process responds.")
+    status: str = Field(description="'ok' when healthy; 'degraded' when Mongo is configured but unreachable.")
     service: str = Field(description="Application name from settings.")
     environment: str = Field(description="ENVIRONMENT value, e.g. development or production.")
     openai_configured: bool = Field(default=False, description="True when OPENAI_API_KEY is non-empty.")
@@ -32,4 +32,21 @@ class HealthResponse(BaseModel):
             "Code revision for article generation/token estimation. After deploying scheduled-job "
             "fixes, production should show ``2026-05-15-image-prompt-param`` (not an older value or empty)."
         ),
+    )
+
+    storage_mode: str = Field(
+        default="",
+        description="Current storage backend: 'mongo' for live data, 'json' for local fallback.",
+    )
+    storage_init_error: str = Field(
+        default="",
+        description="Non-secret storage init error string when storage_mode != 'mongo'.",
+    )
+    database_ok: bool = Field(
+        default=False,
+        description="True when a live Mongo ping succeeded (readiness). False for json fallback or unreachable DB.",
+    )
+    database_error: str = Field(
+        default="",
+        description="Truncated ping error when database_ok is false and storage_mode is mongo.",
     )

@@ -10,13 +10,27 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class ArticleListItem(BaseModel):
+    """Minimal fields for the paginated Articles table (no body HTML or large assets)."""
+
+    id: str
+    project_id: str
+    title: str
+    status: str = Field(default="pending", description="Derived listing status.")
+    keywords: list[str] = Field(default_factory=list)
+    focus_keyphrase: str | None = None
+    gsc_status: str | None = Field(default=None, description="For indexing tooltip in the list UI.")
+    wp_link: str | None = Field(default=None, description="Live URL when published; enables indexing/monitor actions.")
+    monitor_status: str | None = Field(default=None, description="Rank monitor state for refresh actions.")
+
+
 class ArticleListPageResponse(BaseModel):
     """Paginated article list for the project Articles tab."""
 
-    items: list["ArticlePublic"] = Field(default_factory=list)
+    items: list[ArticleListItem] = Field(default_factory=list)
     total: int = Field(ge=0, description="Total rows matching filters (derived status included when status filter is set).")
     page: int = Field(ge=1)
-    per_page: int = Field(ge=1, le=5000)
+    per_page: int = Field(ge=1, le=100)
 
 
 class ArticleTitleRef(BaseModel):
@@ -61,6 +75,15 @@ class ArticlePublic(BaseModel):
     internal_links_count: int | None = None
     hasBody: bool | None = Field(default=None, description="Optional hint that body HTML exists without loading full text.")
     image_url: str | None = Field(default=None, description="Featured image URL when generated or set.")
+    shopify_blog_id: int | None = Field(default=None, description="Shopify blog id when published to Shopify.")
+    shopify_article_id: int | None = Field(default=None, description="Shopify article id when published to Shopify.")
+    shopify_link: str | None = Field(default=None, description="Public Shopify blog article URL when available.")
+    wp_last_wp_status: str | None = Field(
+        default=None,
+        description="Last known WordPress REST status (publish, draft, trash, etc.).",
+    )
+    wp_modified_at: str | None = Field(default=None, description="Last modified timestamp from WordPress.")
+    wp_synced_at: str | None = Field(default=None, description="When Riviso last pulled this post from WordPress.")
 
 
 class ArticleCreate(BaseModel):
@@ -137,10 +160,49 @@ class ArticleDetailResponse(ArticlePublic):
     featured_image_regeneration_limit: int | None = None
     featured_image_regeneration_remaining: int | None = None
     featured_image_regeneration_unlimited: bool = True
+    topic_cluster_id: str | None = Field(
+        default=None,
+        description="Topic cluster id when this article was imported from a pillar/cluster map.",
+    )
+    topic_slot_id: str | None = Field(default=None, description="Pillar or cluster slot id within the topic cluster.")
+    topic_role: str | None = Field(default=None, description="pillar | cluster when imported from a topic cluster.")
+    cluster_link_context: dict | None = Field(
+        default=None,
+        description="Sibling link targets with live-on-WordPress status for cluster-aware internal linking.",
+    )
+    integrity_ai_percentage: float | None = Field(
+        default=None,
+        description="Last integrity audit AI-risk percentage (0–100).",
+    )
+    integrity_flagged_paragraphs: list[dict] | None = Field(
+        default=None,
+        description="Flagged paragraph blocks from the last integrity audit.",
+    )
+    integrity_last_audited_at: str | None = Field(
+        default=None,
+        description="UTC timestamp of the last integrity audit.",
+    )
+
+
+class ArticleBodyResponse(BaseModel):
+    """Markdown/HTML body only — loaded after editor shell for faster first paint."""
+
+    article: str = ""
 
 
 class ArticleFeaturedImageResponse(BaseModel):
     image_url: str = Field(description="HTTP(S) URL or inline data URL for the featured image.")
+
+
+class ArticleGenerationStatusResponse(BaseModel):
+    """Minimal fields for polling async generation / image jobs without loading body or image bytes."""
+
+    id: str
+    status: str = "pending"
+    generated_at: str | None = None
+    has_body: bool = False
+    has_featured_image: bool = False
+    featured_image_regeneration_count: int = 0
 
 
 class ArticleUpdateRequest(BaseModel):
@@ -154,6 +216,31 @@ class ArticleUpdateRequest(BaseModel):
     meta_description: str | None = Field(default=None, max_length=600)
 
 
+class MappedShopifyProductInput(BaseModel):
+    """Optional Shopify products selected in the UI for mapped generation."""
+
+    title: str = Field(min_length=1, max_length=500)
+    handle: str = Field(min_length=1, max_length=256)
+    featured_image_url: str | None = Field(default=None, max_length=4000)
+    image_url: str | None = Field(
+        default=None,
+        max_length=4000,
+        description="Alias for featured_image_url when sent from the frontend.",
+    )
+
+
+class MappedWordPressPageInput(BaseModel):
+    """Optional WordPress pages/posts selected for internal-link mapped generation."""
+
+    title: str = Field(min_length=1, max_length=500)
+    post_url: str = Field(min_length=1, max_length=2048)
+    post_title: str | None = Field(default=None, max_length=500, description="Alias for title.")
+    url: str | None = Field(default=None, max_length=2048, description="Alias for post_url.")
+    featured_image_url: str | None = Field(default=None, max_length=4000)
+    image_url: str | None = Field(default=None, max_length=4000)
+    post_id: str | None = Field(default=None, max_length=64)
+
+
 class GenerateRequest(BaseModel):
     """Options for on-demand generation (writing + optional image)."""
 
@@ -161,6 +248,26 @@ class GenerateRequest(BaseModel):
     image_prompt_id: str | None = Field(default=None, max_length=100)
     focus_keyphrase: str | None = Field(default=None, max_length=500)
     generate_image: bool = True
+    mapped_products: list[MappedShopifyProductInput] | None = Field(
+        default=None,
+        max_length=12,
+        description="Shopify only: products to weave into the article and optional img2img reference.",
+    )
+    mapped_pages: list[MappedWordPressPageInput] | None = Field(
+        default=None,
+        max_length=12,
+        description="WordPress only: site pages/posts to link in the article and optional img2img reference.",
+    )
+
+
+class ShopifyPublishRequest(BaseModel):
+    """Publish an article to Shopify Blog (draft or live publish)."""
+
+    blog_id: int | None = Field(
+        default=None,
+        description="Target Shopify blog id. When omitted, the first blog from the synced catalog is used.",
+    )
+    publish: bool = Field(default=True, description="If true, publish immediately; otherwise create as draft.")
 
 
 class RegenerateImageRequest(BaseModel):

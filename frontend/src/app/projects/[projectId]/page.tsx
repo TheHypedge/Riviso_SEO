@@ -3,11 +3,12 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
 import { ArticlesOverview } from "@/components/ArticlesOverview";
+import { ArticlesTableSkeleton, FormFieldsSkeleton, InlineListSkeleton, TextLinesSkeleton } from "@/components/skeleton";
 import { BulkScheduleForm, type BulkScheduleFormValues } from "@/components/bulkSchedule/BulkScheduleForm";
 import { BulkScheduleModal } from "@/components/bulkSchedule/BulkScheduleModal";
 import {
@@ -15,7 +16,23 @@ import {
   buildClusterScheduleSeeds,
 } from "@/components/bulkSchedule/clusterScheduleUtils";
 import type { BulkScheduleSeedRow } from "@/components/bulkSchedule/useBulkScheduleForm";
-import { api, ApiError, ArticlePublic, BulkUploadRow, clearAuth, downloadWordpressPlugin, getAccessToken, PromptListResponse, ResearchIdeaRow as ApiResearchIdeaRow, TopicCluster } from "@/lib/api";
+import { connectionErrorMessage, isAuthError } from "@/lib/networkErrors";
+import {
+  api,
+  ApiError,
+  ArticleListItem,
+  ArticlePublic,
+  BulkUploadRow,
+  clearAuth,
+  downloadWordpressPlugin,
+  getAccessToken,
+  invalidateProjectSettingsCache,
+  mergeTopicClusterInList,
+  PromptListResponse,
+  ResearchIdeaRow as ApiResearchIdeaRow,
+  TOPIC_CLUSTER_BUSY_STATUSES,
+  TopicCluster,
+} from "@/lib/api";
 import { COUNTRIES, DEFAULT_COUNTRY_CODE } from "@/lib/countries";
 import {
   AUDIENCE_PRESETS,
@@ -27,12 +44,17 @@ import { useClusterValidation, type ValidatableTopic } from "@/hooks/useClusterV
 import { parseDatetimeLocal } from "@/lib/bulkScheduleDates";
 import { scheduleMinFromNowMs } from "@/lib/scheduleTiming";
 import { ProjectTabIcon, SidebarBackIcon, type ProjectTabKey } from "@/components/ProjectTabIcon";
+import { ShopifyProjectSettings } from "@/components/ShopifyProjectSettings";
+import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
+import { resolveProjectPlatform } from "@/lib/projectPlatform";
+import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 
 type TabKey =
   | "overview"
   | "articles"
+  | "products"
   | "research"
   | "scheduled_articles"
   | "prompts"
@@ -50,6 +72,7 @@ type ResearchSubTabKey = "cluster" | "curations";
 const TAB_KEYS: ReadonlySet<TabKey> = new Set<TabKey>([
   "overview",
   "articles",
+  "products",
   "research",
   "scheduled_articles",
   "prompts",
@@ -63,6 +86,7 @@ const TAB_KEYS: ReadonlySet<TabKey> = new Set<TabKey>([
 const SIDEBAR_TAB_ORDER: TabKey[] = [
   "overview",
   "articles",
+  "products",
   "research",
   "scheduled_articles",
   "prompts",
@@ -583,23 +607,41 @@ export default function ProjectPage() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settings, setSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
   const [projectMeta, setProjectMeta] = useState<import("@/lib/api").ProjectPublic | null>(null);
+  // List of every project the user owns. Powers the in-sidebar project
+  // switcher so users can hop between projects without bouncing through
+  // the dashboard. Loaded once per mount; refreshed silently when a
+  // rename happens (see ``saveSettings``).
+  const [projectsList, setProjectsList] = useState<import("@/lib/api").ProjectPublic[]>([]);
+  const listProject = useMemo(
+    () => projectsList.find((p) => p.id === projectId) ?? null,
+    [projectsList, projectId],
+  );
+  const platformUrlHint = (searchParams.get("platform") || "").trim().toLowerCase();
+  const projectPlatform = useMemo(
+    () =>
+      resolveProjectPlatform({
+        settings,
+        meta: projectMeta,
+        listItem: listProject,
+        urlHint: platformUrlHint,
+      }),
+    [settings, projectMeta, listProject, platformUrlHint],
+  );
+  const isShopifyProject = projectPlatform === "shopify";
   const [featureLimits, setFeatureLimits] = useState<import("@/lib/api").ProjectFeatureLimits | null>(null);
   const [articleQuota, setArticleQuota] = useState<import("@/lib/api").ArticleQuota | null>(null);
   const [websiteConnectionModal, setWebsiteConnectionModal] = useState<{
     title: string;
     message: string;
   } | null>(null);
-  // List of every project the user owns. Powers the in-sidebar project
-  // switcher so users can hop between projects without bouncing through
-  // the dashboard. Loaded once per mount; refreshed silently when a
-  // rename happens (see ``saveSettings``).
-  const [projectsList, setProjectsList] = useState<import("@/lib/api").ProjectPublic[]>([]);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsVerify, setSettingsVerify] = useState<import("@/lib/api").WordpressVerifyResponse | null>(null);
   const [settingsVerifying, setSettingsVerifying] = useState(false);
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
+  const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
 
   async function refreshFeatureLimits() {
     try {
@@ -622,7 +664,10 @@ export default function ProjectPage() {
   }
 
   const [sName, setSName] = useState("");
+  const [sShopifyClientId, setSShopifyClientId] = useState("");
   const [sUrl, setSUrl] = useState("");
+  const [sShopifyProductAware, setSShopifyProductAware] = useState(false);
+  const [sWpInternalLinkAware, setSWpInternalLinkAware] = useState(false);
   const [sWpUser, setSWpUser] = useState("");
   const [sWpPass, setSWpPass] = useState("");
   const [showWpAppPassword, setShowWpAppPassword] = useState(false);
@@ -750,12 +795,16 @@ export default function ProjectPage() {
     pendingCount: number;
     writingPromptId: string;
     imagePromptId: string;
+    mappedProducts: MappedShopifyProduct[];
+    step: "prompts" | "products";
     busy: boolean;
   } | null>(null);
   const [curationPromptModal, setCurationPromptModal] = useState<{
     ideaIds: string[];
     writingPromptId: string;
     imagePromptId: string;
+    mappedProducts: MappedShopifyProduct[];
+    step: "prompts" | "products";
     busy: boolean;
   } | null>(null);
 
@@ -796,19 +845,51 @@ export default function ProjectPage() {
   const clusterValidation = useClusterValidation(projectId, validatableTopics, {
     enabled: tab === "research" && researchSubTab === "cluster",
   });
+  const wpPassLoadedRef = useRef<string>("");
+  function normalizeUrlForDirtyCheck(raw: string) {
+    const s = (raw || "").trim();
+    if (!s) return "";
+    return s.replace(/\/+$/, "");
+  }
+  function normalizePasswordForDirtyCheck(raw: string) {
+    return (raw || "").replace(/\s+/g, "").trim();
+  }
   const settingsDirty = useMemo(() => {
     if (!settings) return false;
+    if (isShopifyProject) {
+      return (
+        sName.trim() !== (settings.name || "").trim() ||
+        normalizeUrlForDirtyCheck(sUrl || "") !== normalizeUrlForDirtyCheck(settings.website_url || "") ||
+        (sShopifyClientId || "").trim() !== (settings.shopify_client_id || "").trim() ||
+        Boolean(sShopifyProductAware) !== Boolean(settings.shopify_product_aware_enabled)
+      );
+    }
+    const baseUrl = settings.wp_site_url || settings.website_url || "";
     return (
       sName.trim() !== (settings.name || "").trim() ||
-      (sUrl || "") !== (settings.wp_site_url || settings.website_url || "") ||
+      normalizeUrlForDirtyCheck(sUrl || "") !== normalizeUrlForDirtyCheck(baseUrl) ||
       (sWpUser || "") !== (settings.wp_username || "") ||
       (sWpDefaultPostType || "") !== ((settings.default_wp_rest_base || "posts") as string) ||
       (sWpDefaultStatus || "") !== ((settings.default_wp_status || "draft") as string) ||
       JSON.stringify((sWpDefaultCategoryIds || []).slice().sort((a, b) => a - b)) !==
         JSON.stringify(((settings.default_wp_category_ids || []) as number[]).slice().sort((a, b) => a - b)) ||
-      !!sWpPass.trim()
+      normalizePasswordForDirtyCheck(sWpPass) !== wpPassLoadedRef.current ||
+      Boolean(sWpInternalLinkAware) !== Boolean(settings.wp_internal_link_aware_enabled)
     );
-  }, [sName, sUrl, sWpUser, sWpPass, settings, sWpDefaultPostType, sWpDefaultStatus, sWpDefaultCategoryIds]);
+  }, [
+    sName,
+    sUrl,
+    sShopifyClientId,
+    sShopifyProductAware,
+    sWpInternalLinkAware,
+    sWpUser,
+    sWpPass,
+    settings,
+    sWpDefaultPostType,
+    sWpDefaultStatus,
+    sWpDefaultCategoryIds,
+    isShopifyProject,
+  ]);
 
   const identityDirty = useMemo(() => {
     if (!projectMeta) return false;
@@ -839,7 +920,7 @@ export default function ProjectPage() {
     targetCities,
     targetCitiesAll,
   ]);
-  const [listItems, setListItems] = useState<ArticlePublic[]>([]);
+  const [listItems, setListItems] = useState<ArticleListItem[]>([]);
   const [listTotal, setListTotal] = useState(0);
   const [articlesListLoading, setArticlesListLoading] = useState(false);
   const [articleTitlesById, setArticleTitlesById] = useState<Record<string, string>>({});
@@ -851,10 +932,17 @@ export default function ProjectPage() {
   const [retryAllFailedBusy, setRetryAllFailedBusy] = useState(false);
   const [scheduledSearch, setScheduledSearch] = useState("");
   const [scheduledOrder, setScheduledOrder] = useState<"desc" | "asc">("desc");
+  const [shopifyCatalog, setShopifyCatalog] = useState<Awaited<ReturnType<typeof api.getShopifyCatalog>> | null>(null);
+  const [shopifyCatalogLoading, setShopifyCatalogLoading] = useState(false);
+  const [shopifyCatalogSyncing, setShopifyCatalogSyncing] = useState(false);
+  const [shopifyCatalogErr, setShopifyCatalogErr] = useState<string | null>(null);
+  const [shopifyCatalogNotice, setShopifyCatalogNotice] = useState<string | null>(null);
+  const [shopifyProductStatus, setShopifyProductStatus] = useState<"" | "active" | "draft" | "archived">("");
   const [title, setTitle] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [showBulkPopup, setShowBulkPopup] = useState(false);
   const [showAddArticle, setShowAddArticle] = useState(false);
   const [showExportArticles, setShowExportArticles] = useState(false);
@@ -987,9 +1075,14 @@ export default function ProjectPage() {
   const [editJobWritingPromptId, setEditJobWritingPromptId] = useState("");
   const [editJobImagePromptId, setEditJobImagePromptId] = useState("");
   const [editJobGenerateImage, setEditJobGenerateImage] = useState(true);
+  const [editRescheduleBusy, setEditRescheduleBusy] = useState(false);
   const [confirmCancelJob, setConfirmCancelJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
   const [confirmPostNowJob, setConfirmPostNowJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
+  const [postNowWritingPromptId, setPostNowWritingPromptId] = useState("");
+  const [postNowImagePromptId, setPostNowImagePromptId] = useState("");
+  const [postNowGenerateImage, setPostNowGenerateImage] = useState(true);
   const [postNowBusy, setPostNowBusy] = useState(false);
+  const [postNowPhase, setPostNowPhase] = useState<"idle" | "generating" | "publishing">("idle");
 
   const pageSize = 10;
 
@@ -1077,36 +1170,52 @@ export default function ProjectPage() {
 
   useEffect(() => {
     if (!token) {
-      router.replace("/login");
+      router.replace("/");
       return;
     }
     (async () => {
       setError(null);
       setLoading(true);
       try {
-        const [ps, prof, limits, quota] = await Promise.all([
-          api.getProjectSettings(projectId),
-          api.profileMe(),
-          api.projectFeatureLimits(projectId).catch(() => null),
-          api.articleQuota(projectId).catch(() => null),
+        const skipSettingsHere = tab === "project_settings";
+        const [ps, prof, limits, quota, pm] = await Promise.all([
+          skipSettingsHere
+            ? Promise.resolve(null)
+            : api.getProjectSettings(projectId, { skipGlobalLoading: true }),
+          api.profileMe({ skipGlobalLoading: true }),
+          api.projectFeatureLimits(projectId, { skipGlobalLoading: true }).catch(() => null),
+          api.articleQuota(projectId, { skipGlobalLoading: true }).catch(() => null),
+          api.getProject(projectId, { skipGlobalLoading: true }).catch(() => null),
         ]);
-        setSettings(ps);
+        if (ps) setSettings(ps);
+        if (pm) {
+          setProjectMeta(pm);
+          if ((pm.platform || "").toLowerCase() === "shopify") {
+            setSUrl((pm.website_url || "").trim());
+          }
+        }
         setFeatureLimits(limits);
         setArticleQuota(quota);
         setProfile(prof);
         setProfileTz((prof?.timezone || "").trim());
-        setWpDefaults({
-          post_type: (ps.default_wp_rest_base || "posts") as string,
-          wp_status: ((ps.default_wp_status || "draft") as "draft" | "publish"),
-        });
-      } catch {
-        clearAuth();
-        router.replace("/login");
+        if (ps) {
+          setWpDefaults({
+            post_type: (ps.default_wp_rest_base || "posts") as string,
+            wp_status: ((ps.default_wp_status || "draft") as "draft" | "publish"),
+          });
+        }
+      } catch (e) {
+        if (isAuthError(e)) {
+          clearAuth();
+          router.replace("/");
+          return;
+        }
+        setError(connectionErrorMessage(e));
       } finally {
         setLoading(false);
       }
     })();
-  }, [projectId, router, token]);
+  }, [projectId, router, token, tab]);
 
   useEffect(() => {
     if (!token || !projectId) return;
@@ -1147,10 +1256,14 @@ export default function ProjectPage() {
         if (cancelled) return;
         setListItems(res.items || []);
         setListTotal(res.total || 0);
-      } catch {
+      } catch (e) {
         if (!cancelled) {
-          clearAuth();
-          router.replace("/login");
+          if (isAuthError(e)) {
+            clearAuth();
+            router.replace("/");
+            return;
+          }
+          setError(connectionErrorMessage(e));
         }
       } finally {
         if (!cancelled) setArticlesListLoading(false);
@@ -1279,8 +1392,8 @@ export default function ProjectPage() {
     wpTypes: import("@/lib/api").WordpressPostType[];
     wpCats: import("@/lib/api").WordpressCategory[];
   }> {
-    const needWpTypes = wpTypesForSchedule.length === 0;
-    const needWpCats = wpCatsForSchedule.length === 0;
+    const needWpTypes = !isShopifyProject && wpTypesForSchedule.length === 0;
+    const needWpCats = !isShopifyProject && wpCatsForSchedule.length === 0;
     const needWritingPrompts = !scheduleWritingPrompts;
     const needImagePrompts = !scheduleImagePrompts;
 
@@ -1534,6 +1647,56 @@ export default function ProjectPage() {
     return (j.id || "").startsWith("pending_job_");
   }
 
+  function scheduledJobUpdatedMs(j: import("@/lib/api").ScheduledJobPublic): number | null {
+    const raw = (j.updated_at || j.last_attempt_at || "").trim();
+    if (!raw) return null;
+    const iso = raw.includes("T") ? raw : raw.replace(" ", "T") + "Z";
+    const ms = Date.parse(iso);
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  function isStalePostingJob(j: import("@/lib/api").ScheduledJobPublic): boolean {
+    if ((j.state || "").toLowerCase() !== "posting") return false;
+    if ((j.wp_post_id || "").trim()) return false;
+    const ms = scheduledJobUpdatedMs(j);
+    if (ms == null) return true;
+    return Date.now() - ms > 3 * 60 * 1000;
+  }
+
+  function canPostNowScheduledJob(j: import("@/lib/api").ScheduledJobPublic): boolean {
+    const jobState = (j.state || "").toLowerCase();
+    if (["posted", "cancelled"].includes(jobState)) return false;
+    if (isOrphanScheduledJob(j)) return false;
+    if (jobState === "posting") return isStalePostingJob(j);
+    return true;
+  }
+
+  async function openPostNowConfirm(j: import("@/lib/api").ScheduledJobPublic) {
+    setError(null);
+    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before publishing scheduled articles.")) {
+      return;
+    }
+    if (!canPostNowScheduledJob(j)) {
+      if ((j.state || "").toLowerCase() === "posting") {
+        setNotice("This article is being published. The list refreshes automatically — try again in a minute if it stays stuck.");
+      }
+      return;
+    }
+    const meta = await ensureScheduleMetaLoaded();
+    setPostNowWritingPromptId((j.writing_prompt_id || meta.writingPrompts?.default_id || "").trim());
+    setPostNowImagePromptId((j.image_prompt_id || meta.imagePrompts?.default_id || "").trim());
+    setPostNowGenerateImage(Boolean(j.generate_image ?? true));
+    setConfirmPostNowJob(j);
+  }
+
+  function closePostNowConfirm() {
+    if (postNowBusy) return;
+    setConfirmPostNowJob(null);
+    setPostNowWritingPromptId("");
+    setPostNowImagePromptId("");
+    setPostNowGenerateImage(true);
+  }
+
   function buildScheduledJobsView(
     jobs: import("@/lib/api").ScheduledJobPublic[],
     articles: ArticlePublic[],
@@ -1597,6 +1760,20 @@ export default function ProjectPage() {
     void reloadScheduledJobs();
   }, [projectId, tab, token, reloadScheduledJobs]);
 
+  // Poll while jobs are generating or publishing so status badges stay accurate.
+  useEffect(() => {
+    if (tab !== "scheduled_articles") return;
+    const needsPoll = scheduledJobs.some((j) => {
+      const st = (j.state || "").toLowerCase();
+      return st === "posting" || st === "content_generating" || st === "image_generating";
+    });
+    if (!needsPoll) return;
+    const id = window.setInterval(() => {
+      void reloadScheduledJobs({ quiet: true });
+    }, 6000);
+    return () => window.clearInterval(id);
+  }, [tab, scheduledJobs, reloadScheduledJobs]);
+
   useEffect(() => {
     if (!token) return;
     if (tab !== "project_settings") return;
@@ -1608,10 +1785,28 @@ export default function ProjectPage() {
       try {
       // Use ``allSettled`` so a stale backend (404 on the per-project GSC route) does not
       // wipe the rest of the settings tab — we surface the deployment-lag hint instead.
+      const ensureShopify =
+        (searchParams.get("ensure_platform") || "").trim().toLowerCase() === "shopify";
+      if (ensureShopify) {
+        try {
+          const cur = await api.getProject(projectId);
+          if ((cur.platform || "").toLowerCase() !== "shopify") {
+            await api.updateProject(projectId, { platform: "shopify" });
+          }
+        } catch {
+          // non-fatal
+        }
+        if (typeof window !== "undefined") {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("ensure_platform");
+          window.history.replaceState({}, "", url.toString());
+        }
+      }
+
       const [sRes, gsRes, pmRes] = await Promise.allSettled([
-        api.getProjectSettings(projectId),
+        api.getProjectSettings(projectId, { fresh: true, skipGlobalLoading: true }),
         api.gscProjectStatus(projectId),
-        api.getProject(projectId),
+        api.getProject(projectId, { skipGlobalLoading: true }),
       ]);
       if (sRes.status !== "fulfilled") throw sRes.reason;
       if (pmRes.status !== "fulfilled") throw pmRes.reason;
@@ -1620,9 +1815,34 @@ export default function ProjectPage() {
       setSettings(s);
       setProjectMeta(pm);
       setSName(s.name || "");
-      setSUrl(s.wp_site_url || s.website_url || "");
+      setSShopifyClientId(s.shopify_client_id || "");
+      setSShopifyProductAware(Boolean(s.shopify_product_aware_enabled));
+      setSWpInternalLinkAware(Boolean(s.wp_internal_link_aware_enabled));
+      const plat = resolveProjectPlatform({
+        settings: s,
+        meta: pm,
+        listItem: listProject,
+        urlHint: platformUrlHint,
+      });
+      if (plat === "shopify" && (pm?.platform || s.platform || "").toLowerCase() !== "shopify") {
+        try {
+          const fixed = await api.updateProject(projectId, { platform: "shopify" }, { skipGlobalLoading: true });
+          setProjectMeta(fixed);
+        } catch {
+          // non-fatal
+        }
+      }
+      setSUrl(
+        plat === "shopify"
+          ? (s.website_url || pm?.website_url || "")
+          : (s.wp_site_url || s.website_url || ""),
+      );
       setSWpUser(s.wp_username || "");
-      setSWpPass(s.wp_app_password || "");
+      {
+        const nextPass = s.wp_app_password || "";
+        wpPassLoadedRef.current = normalizePasswordForDirtyCheck(nextPass);
+        setSWpPass(nextPass);
+      }
       setBrandVoice((pm?.brand_voice || "") as string);
       setBrandTones(((pm?.brand_tones || []) as string[]).slice());
       setBrandRules((pm?.brand_rules || "") as string);
@@ -1653,17 +1873,18 @@ export default function ProjectPage() {
       }
       setSettingsVerify(null);
 
-      // Load WP options for defaults if connected
-      try {
-        const [types, cats] = await Promise.all([
-          api.wordpressPostTypes(projectId),
-          api.wordpressCategories(projectId),
-        ]);
-        setSettingsPostTypes(types);
-        setSettingsCategories(cats);
-      } catch {
-        setSettingsPostTypes([]);
-        setSettingsCategories([]);
+      if (plat !== "shopify") {
+        try {
+          const [types, cats] = await Promise.all([
+            api.wordpressPostTypes(projectId),
+            api.wordpressCategories(projectId),
+          ]);
+          setSettingsPostTypes(types);
+          setSettingsCategories(cats);
+        } catch {
+          setSettingsPostTypes([]);
+          setSettingsCategories([]);
+        }
       }
 
       try {
@@ -1683,7 +1904,7 @@ export default function ProjectPage() {
         setGscLoading(false);
       }
     })();
-  }, [projectId, tab, token]);
+  }, [projectId, tab, token, searchParams, platformUrlHint]);
 
   async function saveSettings() {
     if (!settings) return;
@@ -1691,19 +1912,32 @@ export default function ProjectPage() {
     setGscSaveMsg(null);
     setSettingsSaving(true);
     try {
-      const saved = await api.updateProjectSettings(projectId, {
-        name: sName,
-        wp_site_url: sUrl,
-        wp_username: sWpUser,
-        default_wp_rest_base: sWpDefaultPostType,
-        default_wp_status: sWpDefaultStatus,
-        default_wp_category_ids: sWpDefaultCategoryIds,
-        ...(sWpPass.replace(/\s+/g, "").trim()
-          ? { wp_app_password: sWpPass.replace(/\s+/g, "").trim() }
-          : {}),
-      });
+      const saved = await api.updateProjectSettings(
+        projectId,
+        isShopifyProject
+          ? {
+              name: sName.trim(),
+              website_url: sUrl.trim(),
+              shopify_shop: sUrl.trim(),
+              shopify_client_id: sShopifyClientId.trim(),
+              shopify_product_aware_enabled: Boolean(sShopifyProductAware),
+            }
+          : {
+              name: sName,
+              wp_site_url: sUrl,
+              wp_username: sWpUser,
+              default_wp_rest_base: sWpDefaultPostType,
+              default_wp_status: sWpDefaultStatus,
+              default_wp_category_ids: sWpDefaultCategoryIds,
+              wp_internal_link_aware_enabled: Boolean(sWpInternalLinkAware),
+              ...(sWpPass.replace(/\s+/g, "").trim()
+                ? { wp_app_password: sWpPass.replace(/\s+/g, "").trim() }
+                : {}),
+            },
+      );
       setSettings(saved);
       if (saved.wp_app_password) setSWpPass(saved.wp_app_password);
+      setToast({ message: "Saved", tone: "success" });
       // Keep the sidebar project switcher in sync with project renames
       // without forcing a refetch of the entire list.
       setProjectsList((prev) =>
@@ -1728,10 +1962,76 @@ export default function ProjectPage() {
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save settings");
+      setToast({ message: e instanceof Error ? e.message : "Save failed", tone: "error" });
     } finally {
       setSettingsSaving(false);
     }
   }
+
+  // Auto-hide toast
+  useEffect(() => {
+    if (!toast) return;
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2400);
+    return () => {
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    };
+  }, [toast]);
+
+  // Auto-save the Shopify product-aware toggle (debounced).
+  const autoSaveToggleTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!token) return;
+    if (tab !== "project_settings") return;
+    if (!isShopifyProject) return;
+    if (!settings) return;
+    const next = Boolean(sShopifyProductAware);
+    const cur = Boolean(settings.shopify_product_aware_enabled);
+    if (next === cur) return;
+    if (autoSaveToggleTimerRef.current) window.clearTimeout(autoSaveToggleTimerRef.current);
+    autoSaveToggleTimerRef.current = window.setTimeout(() => {
+      void api
+        .updateProjectSettings(projectId, { shopify_product_aware_enabled: next })
+        .then((saved) => {
+          setSettings(saved);
+          setToast({ message: "Saved", tone: "success" });
+        })
+        .catch((e) => {
+          setToast({ message: e instanceof Error ? e.message : "Save failed", tone: "error" });
+        });
+    }, 450);
+    return () => {
+      if (autoSaveToggleTimerRef.current) window.clearTimeout(autoSaveToggleTimerRef.current);
+      autoSaveToggleTimerRef.current = null;
+    };
+  }, [projectId, tab, token, isShopifyProject, settings, sShopifyProductAware]);
+
+  // Auto-save Shopify project display name (debounced) so sidebar + switcher stay in sync.
+  const shopifyNameSaveTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!token || tab !== "project_settings" || !isShopifyProject || !settings) return;
+    const next = sName.trim();
+    const cur = (settings.name || "").trim();
+    if (!next || next === cur) return;
+    if (shopifyNameSaveTimerRef.current) window.clearTimeout(shopifyNameSaveTimerRef.current);
+    shopifyNameSaveTimerRef.current = window.setTimeout(() => {
+      void api
+        .updateProjectSettings(projectId, { name: next })
+        .then((saved) => {
+          setSettings(saved);
+          setProjectsList((prev) =>
+            prev.map((p) => (p.id === projectId ? { ...p, name: saved.name || next } : p)),
+          );
+          setProjectMeta((pm) => (pm ? { ...pm, name: saved.name || next } : pm));
+        })
+        .catch(() => undefined);
+    }, 700);
+    return () => {
+      if (shopifyNameSaveTimerRef.current) window.clearTimeout(shopifyNameSaveTimerRef.current);
+      shopifyNameSaveTimerRef.current = null;
+    };
+  }, [projectId, tab, token, isShopifyProject, settings, sName]);
 
   /**
    * Verify the WordPress connection from the Project Settings tab.
@@ -2237,6 +2537,69 @@ export default function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, token]);
 
+  useEffect(() => {
+    if (!token) return;
+    if (tab !== "products") return;
+    if (!isShopifyProject) return;
+    (async () => {
+      setShopifyCatalogErr(null);
+      setShopifyCatalogLoading(true);
+      try {
+        const cat = await api.getShopifyCatalog(projectId);
+        setShopifyCatalog(cat);
+      } catch (e) {
+        setShopifyCatalog(null);
+        setShopifyCatalogErr(e instanceof Error ? e.message : "Failed to load Shopify products");
+      } finally {
+        setShopifyCatalogLoading(false);
+      }
+    })();
+  }, [projectId, tab, token, isShopifyProject]);
+
+  async function loadShopifyCatalogIfNeeded() {
+    if (!projectId || !isShopifyProject) return;
+    if (shopifyCatalogLoading) return;
+    if ((shopifyCatalog?.products || []).length > 0) return;
+    setShopifyCatalogErr(null);
+    setShopifyCatalogLoading(true);
+    try {
+      const cat = await api.getShopifyCatalog(projectId);
+      setShopifyCatalog(cat);
+    } catch (e) {
+      setShopifyCatalog(null);
+      setShopifyCatalogErr(e instanceof Error ? e.message : "Failed to load Shopify products");
+    } finally {
+      setShopifyCatalogLoading(false);
+    }
+  }
+
+  async function runShopifyProductSync() {
+    if (!projectId || !isShopifyProject) return;
+    setShopifyCatalogErr(null);
+    setShopifyCatalogNotice(null);
+    setShopifyCatalogSyncing(true);
+    try {
+      const status = await api.syncShopifyCatalog(projectId);
+      const cat = await api.getShopifyCatalog(projectId);
+      setShopifyCatalog(cat);
+      const msg = (status.sync_message || cat.sync_message || "").trim();
+      if (msg) {
+        setShopifyCatalogNotice(msg);
+      }
+      const productCount = status.counts?.products ?? cat.counts?.products ?? 0;
+      if ((status.sync_status || "").toLowerCase() === "partial" && productCount === 0) {
+        setShopifyCatalogErr(
+          msg ||
+            "Products could not be synced. Enable read_products on your Shopify app version, release it, then reconnect in Project Settings.",
+        );
+      }
+    } catch (e) {
+      setShopifyCatalogErr(e instanceof Error ? e.message : "Shopify sync failed");
+    } finally {
+      setShopifyCatalogSyncing(false);
+    }
+  }
+
   // Handle the OAuth redirect (URL contains ?tab=tools#gsc=connected|error&msg=...)
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -2247,7 +2610,28 @@ export default function ProjectPage() {
       const hashParams = new URLSearchParams(rawHash);
       const flag = (hashParams.get("gsc") || "").trim();
       const msg = (hashParams.get("msg") || "").trim();
-      if (flag === "connected" || flag === "error") {
+      const shopifyFlag = (hashParams.get("shopify") || "").trim();
+      if (shopifyFlag === "connected" || shopifyFlag === "error") {
+        setTab("project_settings");
+        if (shopifyFlag === "error") {
+          setError(msg || "Shopify connect failed. Please try again.");
+        } else {
+          invalidateProjectSettingsCache(projectId);
+          void Promise.all([
+            api.getProject(projectId).then(setProjectMeta),
+            api.getProjectSettings(projectId, { fresh: true }).then(setSettings),
+          ])
+            .then(() => api.syncShopifyCatalog(projectId))
+            .then(() => {
+              setToast({ message: "Shopify permissions updated — catalog synced", tone: "success" });
+            })
+            .catch(() => undefined);
+        }
+        if (url.hash) {
+          url.hash = "";
+          window.history.replaceState({}, "", url.toString());
+        }
+      } else if (flag === "connected" || flag === "error") {
         setTab("tools");
         if (flag === "connected") {
           setGscOpenedFromOAuth(true);
@@ -2256,10 +2640,6 @@ export default function ProjectPage() {
         } else {
           setGscMsg(msg || "Google connect failed. Please try again.");
         }
-        // Strip only the OAuth hash artefacts. ``setTab("tools")`` already
-        // wrote ``?tab=tools`` into the URL via ``router.replace``, and we
-        // intentionally keep that param so a refresh leaves the user on the
-        // Tools tab where the connection result is shown.
         if (url.hash) {
           url.hash = "";
           window.history.replaceState({}, "", url.toString());
@@ -2713,25 +3093,72 @@ export default function ProjectPage() {
     }
   }
 
+  async function pollPostNowUntilSettled(jobId: string) {
+    const delays = [2000, 3000, 5000, 8000, 10000, 15000, 20000, 30000, 45000, 60000, 90000, 120000];
+    for (const delayMs of delays) {
+      await new Promise((r) => setTimeout(r, delayMs));
+      const rows = await fetchScheduledJobsView();
+      setScheduledJobs(rows);
+      const row = rows.find((j) => j.id === jobId);
+      if (!row) return;
+      const st = (row.state || "").toLowerCase();
+      if (st === "posted") {
+        setError(null);
+        setNotice(
+          row.wp_link
+            ? `Published to WordPress: ${row.wp_link}`
+            : "Published to WordPress.",
+        );
+        await refreshArticlesList();
+        return;
+      }
+      if (st === "failed") {
+        setError((row.last_error || "").trim() || "Post now failed");
+        return;
+      }
+    }
+    setNotice("Post now is still running. Scheduled Articles will keep updating — refresh in a minute if needed.");
+  }
+
   async function postNowFromScheduledJob() {
     const j = confirmPostNowJob;
     if (!j) return;
     if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before publishing scheduled articles.")) return;
     setError(null);
     setPostNowBusy(true);
+    const jobNeedsContent = !["ready_to_post", "posted"].includes((j.state || "").toLowerCase());
+    setPostNowPhase(jobNeedsContent ? "generating" : "publishing");
     try {
-      await api.publishArticleToLiveSite(projectId, j.article_id, {
-        post_type: (j.post_type || "posts").trim() || "posts",
-        wp_status: (String(j.wp_status || "draft").toLowerCase() === "publish" ? "publish" : "draft") as "draft" | "publish",
-        category_ids: j.category_ids || [],
+      const res = await api.postScheduledJobNow(projectId, j.id, {
+        writing_prompt_id: postNowWritingPromptId || null,
+        image_prompt_id: postNowGenerateImage ? postNowImagePromptId || null : null,
+        generate_image: postNowGenerateImage,
       });
+      const jobId = res.job?.id || j.id;
+      if (res.job) {
+        setScheduledJobs((prev) => prev.map((row) => (row.id === jobId ? { ...row, ...res.job! } : row)));
+      } else {
+        setScheduledJobs((prev) =>
+          prev.map((row) =>
+            row.id === jobId ? { ...row, state: res.status === "posting" ? "posting" : "posting", last_error: null } : row,
+          ),
+        );
+      }
+      closePostNowConfirm();
+      if (res.async || res.status === "accepted" || res.status === "posting") {
+        setNotice(res.message || "Publishing…");
+        void pollPostNowUntilSettled(jobId);
+        return;
+      }
       await refreshArticlesList();
       await reloadScheduledJobs({ quiet: true });
-      setConfirmPostNowJob(null);
+      setNotice(res.message || "Published to WordPress.");
     } catch (e) {
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
       setError(e instanceof Error ? e.message : "Post now failed");
     } finally {
       setPostNowBusy(false);
+      setPostNowPhase("idle");
     }
   }
 
@@ -2814,6 +3241,7 @@ export default function ProjectPage() {
 
   async function openEditScheduledJob(j: import("@/lib/api").ScheduledJobPublic) {
     setError(null);
+    setNotice(null);
     const min = new Date(Date.now() + 10 * 60 * 1000);
     setEditJobMin(toDatetimeLocalFromDateInProfileTz(min));
 
@@ -2839,6 +3267,64 @@ export default function ProjectPage() {
     setEditJobWritingPromptId((j.writing_prompt_id || meta.writingPrompts?.default_id || "").trim());
     setEditJobImagePromptId((j.image_prompt_id || meta.imagePrompts?.default_id || "").trim());
     setEditJobGenerateImage(Boolean(j.generate_image ?? true));
+  }
+
+  async function saveRescheduleChanges() {
+    if (!editJob || editRescheduleBusy) return;
+    setError(null);
+    setNotice(null);
+    if (
+      !requireWebsiteConnectedForAction(
+        "Website is not connected for this project. Connect and verify WordPress before editing scheduled articles.",
+      )
+    ) {
+      return;
+    }
+    const when = editJobWhen.trim();
+    if (!when) {
+      setError("Please choose a schedule time.");
+      return;
+    }
+
+    setEditRescheduleBusy(true);
+    let savedJobId = editJob.id;
+    try {
+      if (isOrphanScheduledJob(editJob)) {
+        await api.scheduleArticle(projectId, editJob.article_id, {
+          wp_scheduled_at: when,
+          wp_status: editJobStatus,
+          post_type: editJobPostType,
+          writing_prompt_id: editJobWritingPromptId || null,
+          image_prompt_id: editJobImagePromptId || null,
+          generate_image: editJobGenerateImage,
+        });
+      } else {
+        const updated = await api.updateScheduledJob(projectId, savedJobId, {
+          run_at: when,
+          post_type: editJobPostType,
+          wp_status: editJobStatus,
+          category_ids: editJobCats,
+          writing_prompt_id: editJobWritingPromptId || null,
+          image_prompt_id: editJobImagePromptId || null,
+          generate_image: editJobGenerateImage,
+        });
+        savedJobId = updated.id || savedJobId;
+        setScheduledJobs((prev) => {
+          const next = prev.map((row) => (row.id === editJob.id ? { ...row, ...updated } : row));
+          return next.some((row) => row.id === savedJobId) ? next : [updated, ...next];
+        });
+      }
+
+      setEditJob(null);
+      setNotice("Schedule updated. Content preparation will run automatically when due.");
+      void refreshScheduledJobsList();
+      void pollScheduledJobsUntilSettled([savedJobId]);
+    } catch (e) {
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
+      setError(e instanceof Error ? e.message : "Failed to update schedule");
+    } finally {
+      setEditRescheduleBusy(false);
+    }
   }
 
   async function bulkChangeStatus(newStatus: "pending" | "draft" | "published") {
@@ -3204,7 +3690,7 @@ export default function ProjectPage() {
     return parts.length ? parts.join(", ") : "—";
   }
 
-  function renderArticleActions(a: ArticlePublic, title: string, iconBtnClass: string) {
+  function renderArticleActions(a: ArticleListItem, title: string, iconBtnClass: string) {
     return (
       <>
         <Link
@@ -3212,6 +3698,7 @@ export default function ProjectPage() {
           className={iconBtnClass}
           aria-label={`Edit ${title}`}
           data-tooltip="Edit article"
+          onMouseEnter={() => api.prefetchArticle(projectId, a.id)}
         >
           <Icon.Edit />
         </Link>
@@ -3307,6 +3794,7 @@ export default function ProjectPage() {
   const tabLabel: Record<TabKey, string> = {
     overview: "Overview",
     articles: "Articles",
+    products: "Products",
     research: "Research",
     scheduled_articles: "Scheduled Articles",
     prompts: "Prompts",
@@ -3359,6 +3847,7 @@ export default function ProjectPage() {
     gscStatus?.connected && gscStatus?.property_url && analytics && (analytics.series || []).length > 0,
   );
   const visibleTabs: TabKey[] = SIDEBAR_TAB_ORDER.filter((k) => {
+    if (k === "products") return isShopifyProject;
     if (k === "performance") return performanceTabAvailable;
     return true;
   });
@@ -3380,13 +3869,36 @@ export default function ProjectPage() {
   // Topic cluster planner (Research tab)
   // ---------------------------------------------------------------------------
 
+  async function resumePollingForBusyClusters(rows: TopicCluster[]) {
+    const busy = rows.filter((c) =>
+      TOPIC_CLUSTER_BUSY_STATUSES.has((c.status || "").toLowerCase()),
+    );
+    for (const cl of busy) {
+      const clusterId = (cl.id || "").trim();
+      if (!clusterId) continue;
+      try {
+        const row = await api.waitForTopicClusterReady(projectId, clusterId, {
+          skipGlobalLoading: true,
+          onProgress: (progress) => {
+            setTopicClusters((prev) => prev.map((c) => (c.id === progress.id ? progress : c)));
+          },
+        });
+        setTopicClusters((prev) => prev.map((c) => (c.id === row.id ? row : c)));
+      } catch {
+        // Stale busy rows or worker errors — user can reload or retry manually.
+      }
+    }
+  }
+
   async function reloadTopicClusters() {
     if (!projectId) return;
     setTopicClustersLoading(true);
     setTopicClustersErr(null);
     try {
       const res = await api.topicClusterList(projectId);
-      setTopicClusters(res.clusters || []);
+      const rows = res.clusters || [];
+      setTopicClusters(rows);
+      void resumePollingForBusyClusters(rows);
     } catch (e) {
       const msg =
         e instanceof ApiError && e.status === 404
@@ -3417,13 +3929,30 @@ export default function ProjectPage() {
     setClusterPlanBusy(true);
     setClusterPlanMsg(null);
     try {
-      const row = await api.topicClusterPlan(projectId, {
-        seed_intent: seed,
-        country_code: researchCountry,
-        tone: researchTone,
-        language: researchLanguage,
-      });
-      setTopicClusters((prev) => [row, ...prev.filter((c) => c.id !== row.id)]);
+      const row = await api.topicClusterPlan(
+        projectId,
+        {
+          seed_intent: seed,
+          country_code: researchCountry,
+          tone: researchTone,
+          language: researchLanguage,
+        },
+        {
+          skipGlobalLoading: true,
+          onProgress: (progress) => {
+            setTopicClusters((prev) => mergeTopicClusterInList(prev, progress));
+            const status = (progress.status || "").toLowerCase();
+            if (TOPIC_CLUSTER_BUSY_STATUSES.has(status)) {
+              setClusterPlanMsg(
+                status === "planning"
+                  ? "Planning cluster map…"
+                  : "Generating cluster articles…",
+              );
+            }
+          },
+        },
+      );
+      setTopicClusters((prev) => mergeTopicClusterInList(prev, row));
       void refreshFeatureLimits();
       setClusterPlanMsg("Cluster map saved. Review below, then run Generate all for drafts + content.");
     } catch (e) {
@@ -3488,6 +4017,7 @@ export default function ProjectPage() {
     if (!cluster) return { topicIds: null, pendingCount: 0 };
     const pillarSlot = (cluster.pillar?.id || "pillar").trim() || "pillar";
     const pillarPending =
+      !!(cluster.pillar?.title || "").trim() &&
       !(cluster.pillar?.imported_article_id || "").trim() &&
       !isClusterSlotDuplicate(clusterId, pillarSlot);
     const pendingClusterIds = (cluster.clusters || [])
@@ -3620,9 +4150,23 @@ export default function ProjectPage() {
    */
   async function generateForCluster(
     clusterId: string,
-    opts?: { topicIds?: string[] | null; writingPromptId?: string | null; imagePromptId?: string | null },
+    opts?: {
+      topicIds?: string[] | null;
+      writingPromptId?: string | null;
+      imagePromptId?: string | null;
+      mappedProducts?: MappedShopifyProduct[] | null;
+    },
   ) {
-    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before generating articles.")) return;
+    // Shopify projects can generate drafts without the store being connected yet.
+    // WordPress projects still require a verified connection for generation.
+    if (!isShopifyProject) {
+      if (
+        !requireWebsiteConnectedForAction(
+          "Website is not connected for this project. Connect and verify WordPress before generating articles.",
+        )
+      )
+        return;
+    }
     const effective = effectiveSelectionForCluster(clusterId);
     const topicIds = opts?.topicIds === undefined ? effective.topicIds : opts.topicIds;
     const pendingCount = topicIds ? topicIds.length : effective.pendingCount;
@@ -3664,12 +4208,25 @@ export default function ProjectPage() {
         // generate endpoint enforce the same limit server-side.
       }
 
-      const res = await api.topicClusterGenerateAll(projectId, clusterId, {
-        generate_image: true,
-        writing_prompt_id: opts?.writingPromptId || null,
-        image_prompt_id: opts?.imagePromptId || null,
-        topic_ids: topicIds,
-      });
+      const mapped =
+        isShopifyProject && opts?.mappedProducts?.length ? opts.mappedProducts : undefined;
+      const res = await api.topicClusterGenerateAll(
+        projectId,
+        clusterId,
+        {
+          generate_image: true,
+          writing_prompt_id: opts?.writingPromptId || null,
+          image_prompt_id: opts?.imagePromptId || null,
+          topic_ids: topicIds,
+          mapped_products: mapped,
+        },
+        {
+          skipGlobalLoading: true,
+          onProgress: (progress) => {
+            setTopicClusters((prev) => prev.map((c) => (c.id === progress.id ? progress : c)));
+          },
+        },
+      );
       setTopicClusters((prev) => prev.map((c) => (c.id === res.cluster.id ? res.cluster : c)));
       void refreshArticleQuota();
       clearClusterSelection(clusterId);
@@ -3690,7 +4247,14 @@ export default function ProjectPage() {
   }
 
   async function openGenerateForCluster(clusterId: string) {
-    if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before generating articles.")) return;
+    if (!isShopifyProject) {
+      if (
+        !requireWebsiteConnectedForAction(
+          "Website is not connected for this project. Connect and verify WordPress before generating articles.",
+        )
+      )
+        return;
+    }
     const { topicIds, pendingCount } = effectiveSelectionForCluster(clusterId);
     if (pendingCount === 0) {
       setClusterErrorModal({
@@ -3700,12 +4264,17 @@ export default function ProjectPage() {
       return;
     }
     const prompts = await ensureScheduleMetaLoaded();
+    if (isShopifyProject) {
+      void loadShopifyCatalogIfNeeded();
+    }
     setClusterGeneratePromptModal({
       clusterId,
       topicIds,
       pendingCount,
       writingPromptId: prompts.writingPrompts?.default_id || "",
       imagePromptId: prompts.imagePrompts?.default_id || "",
+      mappedProducts: [],
+      step: "prompts",
       busy: false,
     });
   }
@@ -4040,11 +4609,21 @@ export default function ProjectPage() {
   }
 
   async function openCurationPromptModal(action: "generate" | "schedule") {
-    if (!requireWebsiteConnectedForAction(
-      action === "generate"
-        ? "Website is not connected for this project. Connect and verify WordPress before generating articles."
-        : "Website is not connected for this project. Connect and verify WordPress before scheduling articles.",
-    )) {
+    if (!isShopifyProject) {
+      if (
+        !requireWebsiteConnectedForAction(
+          action === "generate"
+            ? "Website is not connected for this project. Connect and verify WordPress before generating articles."
+            : "Website is not connected for this project. Connect and verify WordPress before scheduling articles.",
+        )
+      ) {
+        return;
+      }
+    } else if (action === "schedule") {
+      // Shopify scheduling/publishing is not supported yet; keep guardrail explicit.
+      openWebsiteConnectionPopup(
+        "Shopify projects can generate drafts, but scheduling/publishing is not enabled yet. Export the content or connect WordPress for scheduling.",
+      );
       return;
     }
     const selected = researchResults.filter((r) => researchSelected.has(r.id) && !r.imported);
@@ -4063,10 +4642,15 @@ export default function ProjectPage() {
       return;
     }
     const prompts = await ensureScheduleMetaLoaded();
+    if (isShopifyProject) {
+      void loadShopifyCatalogIfNeeded();
+    }
     setCurationPromptModal({
       ideaIds: selected.map((r) => r.id),
       writingPromptId: prompts.writingPrompts?.default_id || "",
       imagePromptId: prompts.imagePrompts?.default_id || "",
+      mappedProducts: [],
+      step: "prompts",
       busy: false,
     });
   }
@@ -4091,12 +4675,14 @@ export default function ProjectPage() {
       });
       if (!imported?.articleIds.length) return;
 
+      const mapped = isShopifyProject && m.mappedProducts.length ? m.mappedProducts : undefined;
       let generated = 0;
       for (const articleId of imported.articleIds) {
         await api.generateArticle(projectId, articleId, {
           writing_prompt_id: m.writingPromptId || null,
           image_prompt_id: m.imagePromptId || null,
           generate_image: true,
+          mapped_products: mapped,
         });
         generated += 1;
       }
@@ -4334,7 +4920,11 @@ export default function ProjectPage() {
   );
   const sidebarEmail = (profile?.email || "").trim();
   const sidebarPlan = (profile?.subscription_type || "beta").trim() || "beta";
-  const websiteConnected = (settings?.wp_verified_status || "").trim().toLowerCase() === "connected";
+  const websiteConnected = isShopifyProject
+    ? (settings?.shopify_verified_status || "").trim().toLowerCase() === "connected" &&
+      !!(settings?.shopify_verified_at || "").trim()
+    : (settings?.wp_verified_status || "").trim().toLowerCase() === "connected" ||
+      wpCatsForSchedule.length > 0;
   const showWebsiteRequiredOverlay = tab === "articles" && !loading && !websiteConnected;
 
   function formatRenewalDate(raw?: string | null) {
@@ -4362,7 +4952,9 @@ export default function ProjectPage() {
       title: "Website not connected",
       message:
         message ||
-        "Website is not connected for this project. Connect and verify WordPress in Project Settings to generate, schedule, or publish articles.",
+        (isShopifyProject
+          ? "Connect your Shopify store in Project Settings to generate and schedule product-aware articles."
+          : "Website is not connected for this project. Connect and verify WordPress in Project Settings to generate, schedule, or publish articles."),
     });
   }
 
@@ -4512,6 +5104,11 @@ export default function ProjectPage() {
         ) : null}
 
         <div className={styles.shell}>
+          {toast ? (
+            <div className={styles.toast} data-tone={toast.tone} role="status" aria-live="polite">
+              {toast.message}
+            </div>
+          ) : null}
           <aside className={styles.sidebar} aria-label="Project navigation">
             <Link href="/dashboard" className={styles.sidebarBrand} aria-label="Riviso — go to dashboard">
               <Image
@@ -4732,6 +5329,38 @@ export default function ProjectPage() {
                     ) : null}
                   </div>
                 </>
+              ) : tab === "products" ? (
+                <>
+                  <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
+                    <h1 style={{ margin: 0 }}>Products</h1>
+                    <button
+                      className={styles.btnSecondary}
+                      type="button"
+                      onClick={() => void runShopifyProductSync()}
+                      disabled={!isShopifyProject || shopifyCatalogSyncing}
+                      title="Sync products from Shopify"
+                    >
+                      {shopifyCatalogSyncing ? "Syncing…" : "Sync from Shopify"}
+                    </button>
+                  </div>
+                  <div className={`${styles.mobileHeadRow} ${styles.showOnMobile}`}>
+                    <h1 className={styles.mobileTitle} style={{ margin: 0 }}>
+                      Products
+                    </h1>
+                    <button
+                      className={styles.btnSecondary}
+                      type="button"
+                      onClick={() => void runShopifyProductSync()}
+                      disabled={!isShopifyProject || shopifyCatalogSyncing}
+                      title="Sync products from Shopify"
+                    >
+                      {shopifyCatalogSyncing ? "Syncing…" : "Sync"}
+                    </button>
+                  </div>
+                  <p className={styles.muted} style={{ margin: "8px 0 0", lineHeight: 1.55 }}>
+                    All products fetched from Shopify for this project. This table uses the latest synced snapshot.
+                  </p>
+                </>
               ) : (
                 <>
                   <h1 style={{ margin: 0 }}>{tabLabel[tab]}</h1>
@@ -4742,7 +5371,9 @@ export default function ProjectPage() {
                   ) : null}
                   {tab === "project_settings" ? (
                     <p className={styles.settingsPageLead}>
-                      Connect WordPress, define how the AI writes, and set publishing defaults for this project.
+                      {isShopifyProject
+                        ? "Connect your Shopify store, define how the AI writes, and sync your catalog for product-aware articles."
+                        : "Connect WordPress, define how the AI writes, and set publishing defaults for this project."}
                     </p>
                   ) : null}
                   {tab === "prompts" ? (
@@ -4766,6 +5397,244 @@ export default function ProjectPage() {
             loading={overviewLoading}
             onViewList={goToArticlesFromOverview}
           />
+        ) : tab === "products" ? (
+          <>
+            {shopifyCatalogErr ? <p className={styles.error}>{shopifyCatalogErr}</p> : null}
+            {shopifyCatalogNotice && !shopifyCatalogErr ? (
+              <p className={styles.muted} style={{ marginTop: 8, lineHeight: 1.5, color: "rgba(150,191,72,0.92)" }}>
+                {shopifyCatalogNotice}
+              </p>
+            ) : null}
+            {(shopifyCatalog?.granted_scopes?.length || shopifyCatalog?.recommended_scopes?.length) ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1px solid color-mix(in oklab, var(--border, #333), transparent 40%)",
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>Token scopes (from last connect/sync)</strong>
+                <p className={styles.muted} style={{ margin: "6px 0 0" }}>
+                  Riviso only receives scopes Shopify issues on the token — not every scope listed on your app page
+                  unless they are on the <strong>active released version</strong> and you reconnected after release.
+                </p>
+                <p style={{ margin: "8px 0 0" }}>
+                  <span className={styles.muted}>On token: </span>
+                  {(shopifyCatalog?.granted_scopes || []).length > 0 ? (
+                    (shopifyCatalog?.granted_scopes || []).map((s) => (
+                      <code key={s} style={{ marginRight: 6 }}>
+                        {s}
+                      </code>
+                    ))
+                  ) : (
+                    <span className={styles.muted}>unknown — reconnect in Project Settings</span>
+                  )}
+                </p>
+                <p style={{ margin: "8px 0 0" }}>
+                  <span className={styles.muted}>Required on token (Shopify Admin API): </span>
+                  {(shopifyCatalog?.required_scopes || ["read_products", "read_content"]).map((s) => {
+                    const has = (shopifyCatalog?.granted_scopes || []).includes(s);
+                    return (
+                      <code
+                        key={s}
+                        style={{
+                          marginRight: 6,
+                          color: has ? "rgba(150,191,72,0.95)" : "rgba(230,120,80,0.95)",
+                        }}
+                      >
+                        {s}
+                        {has ? " ✓" : " (missing on token)"}
+                      </code>
+                    );
+                  })}
+                </p>
+                {(shopifyCatalog?.recommended_scopes || []).length > 0 ? (
+                  <p className={styles.muted} style={{ margin: "8px 0 0", fontSize: 11 }}>
+                    Optional: {(shopifyCatalog?.recommended_scopes || [])
+                      .filter((s) => !(shopifyCatalog?.required_scopes || []).includes(s))
+                      .join(", ")}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            {(shopifyCatalog?.warnings || []).length > 0 ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: "12px 14px",
+                  borderRadius: 10,
+                  border: "1px solid color-mix(in oklab, #e6b422, transparent 50%)",
+                  background: "color-mix(in oklab, #e6b422 12%, transparent)",
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                }}
+              >
+                <strong>Sync notes</strong>
+                <ul style={{ margin: "8px 0 0", paddingLeft: "1.2rem" }}>
+                  {(shopifyCatalog?.warnings || []).map((w, i) => (
+                    <li key={`${w.resource}-${i}`}>{w.message}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {shopifyCatalogLoading ? <InlineListSkeleton rows={6} /> : null}
+            {!shopifyCatalogLoading ? (
+              <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
+                <div className={styles.sectionHead}>
+                  <div>
+                    <h2 style={{ margin: 0, color: "#fff" }}>Shopify products</h2>
+                    <div className={styles.muted} style={{ marginTop: 6 }}>
+                      {shopifyCatalog?.synced_at
+                        ? `Last synced: ${shopifyCatalog.synced_at}`
+                        : "Not synced yet. Click “Sync from Shopify” above."}
+                      {shopifyCatalog?.sync_message && shopifyCatalog.sync_status === "partial" ? (
+                        <span style={{ display: "block", marginTop: 6, color: "rgba(230,180,60,0.95)" }}>
+                          {shopifyCatalog.sync_message}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className={styles.row} style={{ justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+                    <label className={styles.muted} style={{ fontSize: 12, fontWeight: 800 }}>
+                      Status{" "}
+                      <select
+                        className={styles.select}
+                        value={shopifyProductStatus}
+                        onChange={(e) => setShopifyProductStatus((e.target.value || "") as "" | "active" | "draft" | "archived")}
+                        style={{ marginLeft: 8, minWidth: 190 }}
+                      >
+                        <option value="">All products</option>
+                        <option value="active">Active</option>
+                        <option value="draft">Draft</option>
+                        <option value="archived">Unlisted / Archived</option>
+                      </select>
+                    </label>
+                    <div className={styles.muted} style={{ fontSize: 12, alignSelf: "center" }}>
+                      {(() => {
+                        const items = (shopifyCatalog?.products || []).filter((p) => {
+                          const st = String((p as { status?: string }).status || "").trim().toLowerCase();
+                          if (!shopifyProductStatus) return true;
+                          return st === shopifyProductStatus;
+                        });
+                        return `${items.length} items`;
+                      })()}
+                    </div>
+                  </div>
+                </div>
+
+                {(() => {
+                  const products = (shopifyCatalog?.products || []).filter((p) => {
+                    const st = String((p as { status?: string }).status || "").trim().toLowerCase();
+                    if (!shopifyProductStatus) return true;
+                    return st === shopifyProductStatus;
+                  });
+                  return products.length;
+                })() === 0 ? (
+                  <p className={styles.muted} style={{ marginTop: 8 }}>
+                    No products found in the catalog snapshot.
+                  </p>
+                ) : (
+                  <div style={{ width: "100%", overflowX: "auto" }}>
+                    <table className={styles.table} style={{ marginTop: 10 }}>
+                      <thead>
+                        <tr>
+                          <th className={styles.th} style={{ width: 64 }}>
+                            Image
+                          </th>
+                          <th className={styles.th}>Title</th>
+                          <th className={styles.th} style={{ width: 140 }}>
+                            Status
+                          </th>
+                          <th className={styles.th} style={{ width: 140, textAlign: "right" }}>
+                            Cost
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(shopifyCatalog?.products || [])
+                          .filter((p) => {
+                            const st = String((p as { status?: string }).status || "").trim().toLowerCase();
+                            if (!shopifyProductStatus) return true;
+                            return st === shopifyProductStatus;
+                          })
+                          .map((p) => {
+                          const price = (p as { price?: string }).price || "";
+                          const rawStatus = String((p as { status?: string }).status || "").trim().toLowerCase();
+                          const statusState =
+                            rawStatus === "active" ? ("active" as const) : rawStatus === "draft" ? ("draft" as const) : ("unlisted" as const);
+                          const statusLabel =
+                            statusState === "active" ? "Active" : statusState === "draft" ? "Draft" : "Unlisted";
+                          return (
+                            <tr key={String(p.id || p.handle)}>
+                              <td className={styles.td}>
+                                {p.image_url ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={p.image_url}
+                                    alt=""
+                                    width={44}
+                                    height={44}
+                                    style={{
+                                      width: 44,
+                                      height: 44,
+                                      borderRadius: 10,
+                                      objectFit: "cover",
+                                      border: "1px solid var(--button-secondary-border)",
+                                      background: "rgba(255,255,255,0.03)",
+                                      display: "block",
+                                    }}
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <div
+                                    style={{
+                                      width: 44,
+                                      height: 44,
+                                      borderRadius: 10,
+                                      border: "1px solid var(--button-secondary-border)",
+                                      background: "rgba(255,255,255,0.03)",
+                                    }}
+                                  />
+                                )}
+                              </td>
+                              <td className={styles.td}>
+                                <div style={{ fontWeight: 800 }}>{p.title || "—"}</div>
+                                <div className={styles.muted} style={{ fontSize: 12, marginTop: 4 }}>
+                                  {p.handle ? <span>/{p.handle}</span> : null}
+                                </div>
+                              </td>
+                              <td className={styles.td}>
+                                <span className={styles.shopifyProductStatusPill} data-state={statusState}>
+                                  {statusLabel}
+                                </span>
+                              </td>
+                              <td className={styles.td} style={{ textAlign: "right", fontWeight: 850 }}>
+                                {price ? (
+                                  <>
+                                    {shopifyCatalog?.shop?.currency ? (
+                                      <span className={styles.muted} style={{ marginRight: 6 }}>
+                                        {shopifyCatalog.shop.currency}
+                                      </span>
+                                    ) : null}
+                                    {price}
+                                  </>
+                                ) : (
+                                  <span className={styles.muted}>—</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </>
         ) : null}
 
         {tab === "articles" ? (
@@ -5080,7 +5949,7 @@ export default function ProjectPage() {
                   </div>
 
                   {loading || articlesListLoading ? (
-                    <div className={styles.articlesTableMessage}>Loading…</div>
+                    <ArticlesTableSkeleton variant="desktop" />
                   ) : null}
                   {!loading && !articlesListLoading && listTotal === 0 ? (
                     <div className={styles.articlesTableMessage}>No articles match the current filters.</div>
@@ -5166,7 +6035,7 @@ export default function ProjectPage() {
                   </div>
 
                   {loading || articlesListLoading ? (
-                    <p className={styles.articlesMobileMessage}>Loading…</p>
+                    <ArticlesTableSkeleton variant="mobile" />
                   ) : null}
                   {!loading && !articlesListLoading && listTotal === 0 ? (
                     <p className={styles.articlesMobileMessage}>No articles match the current filters.</p>
@@ -6107,7 +6976,7 @@ export default function ProjectPage() {
                 </div>
               </div>
               {topicClustersLoading ? (
-                <p className={styles.researchStatusLine}>Loading clusters…</p>
+                <TextLinesSkeleton lines={4} />
               ) : null}
               <div className={styles.researchClustersStack}>
               {topicClusters.map((cl) => {
@@ -6141,16 +7010,21 @@ export default function ProjectPage() {
                 // promise "Import 6" when 1 of those 6 already exists on
                 // the site.
                 const pillarActionable =
-                  !pillarDone && !(pillarValidation?.status === "duplicate");
+                  !pillarDone &&
+                  !!(cl.pillar?.title || "").trim() &&
+                  !(pillarValidation?.status === "duplicate");
                 const clusterActionable = clusterRows.filter((c) => {
                   if ((c.imported_article_id || "").trim()) return false;
+                  if (!(c.title || "").trim()) return false;
                   const v = clusterValidation.results[`${cl.id}::${c.id}`];
                   return v?.status !== "duplicate";
                 }).length;
                 const actionablePending =
                   (pillarActionable ? 1 : 0) + clusterActionable;
+                const clusterRowKey = cl.id || `cluster-${cl.seed_intent}`;
+                const isClusterBusy = TOPIC_CLUSTER_BUSY_STATUSES.has(statusKey);
                 return (
-                  <div key={cl.id} className={styles.clusterRow}>
+                  <div key={clusterRowKey} className={styles.clusterRow}>
                     <div className={styles.clusterRowHead}>
                       <div className={styles.clusterRowTitleBlock}>
                         <h3 className={styles.clusterRowSeed}>{cl.seed_intent}</h3>
@@ -6195,7 +7069,8 @@ export default function ProjectPage() {
                           // disable bulk import/schedule whenever every remaining
                           // pending row already exists in the project / on site.
                           const noActionable = actionablePending === 0 && selN === 0;
-                          const generateDisabled = anyBusy || allDuplicates || noPending || noActionable;
+                          const generateDisabled =
+                            anyBusy || isClusterBusy || allDuplicates || noPending || noActionable;
                           return (
                             <>
                               <button
@@ -6204,15 +7079,19 @@ export default function ProjectPage() {
                                 disabled={generateDisabled}
                                 onClick={() => void openGenerateForCluster(cl.id)}
                                 title={
-                                  allDuplicates
+                                  isClusterBusy
+                                    ? "Wait for cluster planning or generation to finish."
+                                    : allDuplicates
                                     ? "Every remaining topic already exists on your site or in this project."
                                     : noPending
                                       ? "Every topic in this cluster is already generated."
                                       : `Generate ${target} — uses one credit per article.`
                                 }
                               >
-                                {generateBusy
-                                  ? "Generating…"
+                                {generateBusy || isClusterBusy
+                                  ? statusKey === "planning"
+                                    ? "Planning…"
+                                    : "Generating…"
                                   : allDone
                                     ? "All generated"
                                     : allDuplicates
@@ -6337,7 +7216,8 @@ export default function ProjectPage() {
                               ) : null}
                               <div className={styles.clusterTopicHeadBody}>
                                 <h5 className={styles.clusterTopicTitle}>
-                                  {cl.pillar?.title || "(no pillar title)"}
+                                  {cl.pillar?.title ||
+                                    (statusKey === "planning" ? cl.seed_intent : "(no pillar title)")}
                                 </h5>
                                 {cl.pillar?.intent ? (
                                   <p className={styles.clusterTopicIntent}>{cl.pillar.intent}</p>
@@ -6378,7 +7258,7 @@ export default function ProjectPage() {
                         Cluster articles ({clusterSlots})
                       </h4>
                       <ul className={styles.clusterTopicList}>
-                        {clusterRows.map((c) => {
+                        {clusterRows.map((c, topicIdx) => {
                           const done = !!(c.imported_article_id || "").trim();
                           const v = clusterValidation.results[`${cl.id}::${c.id}`];
                           const slotId = (c.id || "").trim() || "cluster";
@@ -6390,7 +7270,7 @@ export default function ProjectPage() {
                           // the engine confirmed already exist elsewhere.
                           const isDup = !done && v?.status === "duplicate";
                           return (
-                            <li key={c.id} className={styles.clusterTopicItem}>
+                            <li key={`${clusterRowKey}::${slotId || topicIdx}`} className={styles.clusterTopicItem}>
                               <div
                                 className={styles.clusterTopicHead}
                                 data-duplicate={isDup ? "true" : undefined}
@@ -6925,6 +7805,12 @@ export default function ProjectPage() {
           <>
             <div className={`${styles.card} ${styles.cardWide} ${styles.articlesToolbar}`}>
               {renderLimitStrip([monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles)])}
+              {notice ? (
+                <p className={styles.muted} style={{ margin: "8px 0 0", color: "var(--aa-success, #16a34a)" }}>
+                  {notice}
+                </p>
+              ) : null}
+              {error && tab === "scheduled_articles" && !editJob ? <p className={styles.error}>{error}</p> : null}
 
               <div className={styles.articlesToolbarMain}>
                 <div className={styles.articlesToolbarFilters} role="group" aria-label="Scheduled article filters">
@@ -6976,7 +7862,7 @@ export default function ProjectPage() {
                 </div>
               </div>
 
-              {scheduledLoading ? <p className={styles.listToolbarStatus}>Loading scheduled articles…</p> : null}
+              {scheduledLoading ? <TextLinesSkeleton lines={3} /> : null}
               {error ? <p className={styles.error} style={{ margin: 0 }}>{error}</p> : null}
             </div>
 
@@ -6992,7 +7878,7 @@ export default function ProjectPage() {
                   </div>
                   {scheduledVisible.map((j) => {
                     const jobState = (j.state || "").toLowerCase();
-                    const canPostNow = !["posted", "cancelled", "posting"].includes(jobState);
+                    const postNowAllowed = canPostNowScheduledJob(j);
                     const isFailed = jobState === "failed";
                     const when = formatScheduledRunAt(j.run_at);
                     const wpStatus = (j.wp_status || "draft").toLowerCase() === "publish" ? "Publish" : "Draft";
@@ -7009,15 +7895,22 @@ export default function ProjectPage() {
                             <button
                               type="button"
                               className={styles.miniBtn}
-                              onClick={() => {
-                                setError(null);
-                                setConfirmPostNowJob(j);
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                void openPostNowConfirm(j);
                               }}
-                              disabled={!canPostNow}
+                              disabled={
+                                postNowBusy ||
+                                ["posted", "cancelled"].includes(jobState) ||
+                                isOrphanScheduledJob(j)
+                              }
                               title={
-                                canPostNow
+                                postNowAllowed
                                   ? "Publish to WordPress now"
-                                  : "Not available while posting or after posted/cancelled"
+                                  : jobState === "posting"
+                                    ? "Publishing in progress — click for status"
+                                    : "Not available after posted/cancelled"
                               }
                             >
                               Post Now
@@ -7221,83 +8114,10 @@ export default function ProjectPage() {
                     <button
                       type="button"
                       className={styles.button}
-                      onClick={async () => {
-                        try {
-                          setError(null);
-                          if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before editing scheduled articles.")) return;
-                          if (!editJobWhen.trim()) throw new Error("Invalid schedule time");
-                          let savedJobId = editJob.id;
-                          if (isOrphanScheduledJob(editJob)) {
-                            await api.scheduleArticle(projectId, editJob.article_id, {
-                              wp_scheduled_at: editJobWhen,
-                              wp_status: editJobStatus,
-                              post_type: editJobPostType,
-                              writing_prompt_id: editJobWritingPromptId || null,
-                              image_prompt_id: editJobImagePromptId || null,
-                              generate_image: editJobGenerateImage,
-                            });
-                          } else {
-                            await api.updateScheduledJob(projectId, savedJobId, {
-                              // Backend interprets this as local time in the user's profile timezone and stores UTC.
-                              run_at: editJobWhen,
-                              post_type: editJobPostType,
-                              wp_status: editJobStatus,
-                              category_ids: editJobCats,
-                              writing_prompt_id: editJobWritingPromptId || null,
-                              image_prompt_id: editJobImagePromptId || null,
-                              generate_image: editJobGenerateImage,
-                            });
-                          }
-                          setEditJob(null);
-                          await refreshScheduledJobsList();
-                          for (const delayMs of [2500, 5000, 10000, 20000]) {
-                            await new Promise((r) => setTimeout(r, delayMs));
-                            const rows = await fetchScheduledJobsView();
-                            setScheduledJobs(rows);
-                            const row =
-                              rows.find((x) => x.id === savedJobId) ||
-                              rows.find((x) => x.article_id === editJob.article_id);
-                            if (row) savedJobId = row.id;
-                            const st = (row?.state || "").toLowerCase();
-                            if (!row || st === "ready_to_post" || st === "posted" || st === "failed") break;
-                          }
-                        } catch (e) {
-                          if (showWebsiteConnectionErrorIfNeeded(e)) return;
-                          setError(e instanceof Error ? e.message : "Failed to update schedule");
-                        }
-                      }}
+                      disabled={editRescheduleBusy}
+                      onClick={() => void saveRescheduleChanges()}
                     >
-                      Save changes
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            {confirmPostNowJob ? (
-              <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Post now">
-                <div className={styles.modalPanel}>
-                  <div className={styles.modalHead}>
-                    <h3 className={styles.modalTitle}>Post now</h3>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmPostNowJob(null)} disabled={postNowBusy}>
-                      Close
-                    </button>
-                  </div>
-                  <div className={styles.modalBody}>
-                    <p style={{ marginTop: 0 }}>
-                      Are you sure you want to post it now? With this, the post will be published to the website now.
-                    </p>
-                    <div className={styles.muted} style={{ fontSize: 12 }}>
-                      {articleTitleFor(confirmPostNowJob.article_id)}
-                    </div>
-                    {error ? <p className={styles.error} style={{ marginTop: 10 }}>{error}</p> : null}
-                  </div>
-                  <div className={styles.modalFooter}>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmPostNowJob(null)} disabled={postNowBusy}>
-                      No
-                    </button>
-                    <button type="button" className={styles.button} onClick={postNowFromScheduledJob} disabled={postNowBusy}>
-                      {postNowBusy ? "Publishing…" : "Yes, post now"}
+                      {editRescheduleBusy ? "Saving…" : "Save changes"}
                     </button>
                   </div>
                 </div>
@@ -7376,7 +8196,7 @@ export default function ProjectPage() {
                 {promptsSaving ? "Saving…" : "Save changes"}
               </button>
             </div>
-            {promptsLoading ? <p className={styles.settingsStatusLine}>Loading prompts…</p> : null}
+            {promptsLoading ? <FormFieldsSkeleton fields={4} /> : null}
             {error ? <p className={styles.error}>{error}</p> : null}
 
             <div className={styles.promptsPageGrid}>
@@ -7707,7 +8527,7 @@ export default function ProjectPage() {
                   </button>
                 </div>
               </div>
-              {linksLoading ? <div className={styles.muted}>Loading links…</div> : null}
+              {linksLoading ? <InlineListSkeleton rows={5} /> : null}
               {renderLimitStrip([contextLinksLimitStatus()])}
               {error ? <p className={styles.error}>{error}</p> : null}
             </div>
@@ -8047,10 +8867,23 @@ export default function ProjectPage() {
                   </div>
                   <div className={styles.muted} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
                     Riviso pulls every published post from your WordPress REST API and stores
-                    <code> URL · title · focus keyphrase</code>. New articles will use this list to auto-insert
-                    contextual <code>&lt;a&gt;</code> tags before posting (matching engine ships in the next iteration —
-                    today this card mirrors the data so you can verify nothing&apos;s stale).
+                    <code> URL · title · focus keyphrase · featured image</code>. When{" "}
+                    <strong>Internal-link aware articles</strong> is on, generation can weave these URLs into new drafts
+                    and use a page featured image as a hero-image style reference.
                   </div>
+                  {!isShopifyProject ? (
+                    <label
+                      className={styles.label}
+                      style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, marginBottom: 0 }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={sWpInternalLinkAware}
+                        onChange={(e) => setSWpInternalLinkAware(e.target.checked)}
+                      />
+                      <span style={{ fontSize: 13 }}>Internal-link aware articles</span>
+                    </label>
+                  ) : null}
                   {siteMapMsg ? (
                     <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }}>{siteMapMsg}</div>
                   ) : null}
@@ -8219,11 +9052,7 @@ export default function ProjectPage() {
                 </div>
               ) : (() => {
                 if (indexingArticlesLoading) {
-                  return (
-                    <div className={styles.muted} style={{ fontSize: 13 }}>
-                      Loading published articles…
-                    </div>
-                  );
+                  return <TextLinesSkeleton lines={3} />;
                 }
                 const allPublished = indexingArticles;
                 if (!allPublished.length) {
@@ -8712,11 +9541,15 @@ export default function ProjectPage() {
         {tab === "project_settings" ? (
           <div className={styles.settingsPage}>
             {(() => {
-              const wpOkForSave =
-                !!settings &&
-                (settings.wp_verified_status || "").toLowerCase() === "connected" &&
-                !!(settings.wp_verified_at || "").trim();
-              const showSave = settings ? settingsDirty || (wpOkForSave && identityDirty) : settingsDirty || identityDirty;
+              const connectionOkForSave = isShopifyProject
+                ? (settings?.shopify_verified_status || "").toLowerCase() === "connected" &&
+                  !!(settings?.shopify_verified_at || "").trim()
+                : !!settings &&
+                  (settings.wp_verified_status || "").toLowerCase() === "connected" &&
+                  !!(settings.wp_verified_at || "").trim();
+              const showSave = settings
+                ? settingsDirty || (connectionOkForSave && identityDirty)
+                : settingsDirty || identityDirty;
               if (!showSave) return null;
               return (
                 <div className={styles.settingsActionBar}>
@@ -8732,11 +9565,45 @@ export default function ProjectPage() {
                 </div>
               );
             })()}
-            {settingsLoading ? <p className={styles.settingsStatusLine}>Loading settings…</p> : null}
+            {settingsLoading ? <FormFieldsSkeleton fields={5} /> : null}
             {error ? <p className={styles.error}>{error}</p> : null}
 
-            {settings ? (
+            {!settingsLoading && settings ? (
               <>
+              {isShopifyProject ? (
+                <ShopifyProjectSettings
+                  projectId={projectId}
+                  name={sName}
+                  storeUrl={sUrl}
+                  clientId={sShopifyClientId}
+                  settings={settings}
+                  productAwareEnabled={Boolean(sShopifyProductAware)}
+                  onProductAwareEnabledChange={(value) => {
+                    setSShopifyProductAware(value);
+                  }}
+                  onNameChange={setSName}
+                  onStoreUrlChange={setSUrl}
+                  onClientIdChange={setSShopifyClientId}
+                  onSettingsSaved={(saved) => {
+                    setSettings(saved);
+                    setSShopifyClientId(saved.shopify_client_id || "");
+                    setSName(saved.name || sName);
+                    setProjectsList((prev) =>
+                      prev.map((p) => (p.id === projectId ? { ...p, name: saved.name || p.name } : p)),
+                    );
+                  }}
+                  onConnectionChange={() => {
+                    invalidateProjectSettingsCache(projectId);
+                    void api.getProject(projectId).then(setProjectMeta).catch(() => undefined);
+                    void api.getProjectSettings(projectId, { fresh: true }).then((fresh) => {
+                      setSettings(fresh);
+                      setSName(fresh.name || "");
+                      setSShopifyClientId(fresh.shopify_client_id || "");
+                    }).catch(() => undefined);
+                  }}
+                />
+              ) : null}
+              {!isShopifyProject ? (
               <section className={styles.settingsSectionCard}>
                 {/*
                   WordPress connection block: header + clear status pill so a user
@@ -8908,7 +9775,7 @@ export default function ProjectPage() {
                     type="button"
                     onClick={async () => {
                       try {
-                        await downloadWordpressPlugin();
+                      await downloadWordpressPlugin(settings?.plugin_download_url);
                       } catch (e) {
                         const msg = e instanceof Error ? e.message : "Could not download plugin.";
                         window.alert(msg);
@@ -8947,18 +9814,30 @@ export default function ProjectPage() {
                 ) : null}
 
                 </section>
+              ) : null}
 
                 {(() => {
                   if (!settings) return null;
-                  const wpVerifiedOk =
-                    (settings.wp_verified_status || "").toLowerCase() === "connected" &&
-                    !!(settings.wp_verified_at || "").trim();
+                  const wpVerifiedOk = isShopifyProject
+                    ? (settings.shopify_verified_status || "").toLowerCase() === "connected" &&
+                      !!(settings.shopify_verified_at || "").trim()
+                    : (settings.wp_verified_status || "").toLowerCase() === "connected" &&
+                      !!(settings.wp_verified_at || "").trim();
                   if (!wpVerifiedOk) {
                     return (
                       <div className={styles.settingsLockedBanner}>
-                        <strong>Brand identity</strong>, <strong>niche</strong>, and <strong>WordPress defaults</strong> unlock
-                        after WordPress returns a successful verify (green &quot;Verified&quot; pill above). Finish connecting your
-                        site, then click <strong>Verify connection</strong> again if credentials changed.
+                        <strong>Brand identity</strong>, <strong>niche</strong>, and{" "}
+                        {isShopifyProject ? <strong>catalog tools</strong> : <strong>WordPress defaults</strong>} unlock
+                        after {isShopifyProject ? "Shopify is connected" : "WordPress returns a successful verify (green Verified pill above)"}.
+                        {isShopifyProject ? (
+                          <>
+                            {" "}
+                            Enter your shop URL, Client ID, and Client secret above, then click{" "}
+                            <strong>Verify connection</strong> or <strong>Refresh connection</strong>.
+                          </>
+                        ) : (
+                          <> Finish connecting your site, then click <strong>Verify connection</strong> again if credentials changed.</>
+                        )}
                       </div>
                     );
                   }
@@ -9443,6 +10322,7 @@ export default function ProjectPage() {
                       </div>
                       </section>
 
+                      {!isShopifyProject ? (
                       <section className={styles.settingsSectionCard}>
                         <p className={styles.settingsSectionKicker}>Publishing</p>
                         <h3 className={styles.settingsSectionTitle}>WordPress defaults</h3>
@@ -9498,6 +10378,7 @@ export default function ProjectPage() {
                           </div>
                         </label>
                       </section>
+                      ) : null}
                     </>
                   );
                 })()}
@@ -9604,6 +10485,132 @@ export default function ProjectPage() {
           </div>
         ) : null}
 
+        {confirmPostNowJob ? (
+          <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Post now">
+            <div className={styles.modalPanel}>
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>Post now</h3>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={closePostNowConfirm}
+                  disabled={postNowBusy}
+                >
+                  Close
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                <p style={{ marginTop: 0 }}>
+                  Are you sure you want to post it now? With this, the post will be published to the website now.
+                </p>
+                {!["ready_to_post", "posted"].includes((confirmPostNowJob.state || "").toLowerCase()) ? (
+                  <>
+                    <p className={styles.muted} style={{ fontSize: 12, marginBottom: 12 }}>
+                      Content is not generated yet — Riviso will create the article and featured image first, then publish.
+                    </p>
+                    <label className={styles.label}>
+                      Writing prompt
+                      <select
+                        className={styles.input}
+                        value={postNowWritingPromptId}
+                        onChange={(e) => setPostNowWritingPromptId(e.target.value)}
+                        disabled={postNowBusy}
+                      >
+                        <option value="">Project default (system prompt)</option>
+                        {postNowWritingPromptId &&
+                        !scheduleWritingPrompts?.items.some((p) => p.id === postNowWritingPromptId) ? (
+                          <option value={postNowWritingPromptId}>{postNowWritingPromptId}</option>
+                        ) : null}
+                        {(scheduleWritingPrompts?.items || []).map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name || p.id}
+                          </option>
+                        ))}
+                      </select>
+                      {scheduleWritingPrompts?.default_id ? (
+                        <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                          Default:{" "}
+                          <strong>
+                            {scheduleWritingPrompts.items.find((x) => x.id === scheduleWritingPrompts.default_id)?.name ||
+                              scheduleWritingPrompts.default_id}
+                          </strong>
+                        </div>
+                      ) : null}
+                    </label>
+                    <label className={styles.label}>
+                      Generate image
+                      <select
+                        className={styles.input}
+                        value={postNowGenerateImage ? "yes" : "no"}
+                        onChange={(e) => setPostNowGenerateImage(e.target.value === "yes")}
+                        disabled={postNowBusy}
+                      >
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                      </select>
+                    </label>
+                    <label className={styles.label}>
+                      Image prompt
+                      <select
+                        className={styles.input}
+                        value={postNowImagePromptId}
+                        onChange={(e) => setPostNowImagePromptId(e.target.value)}
+                        disabled={postNowBusy || !postNowGenerateImage}
+                      >
+                        <option value="">Project default (system prompt)</option>
+                        {postNowImagePromptId &&
+                        !scheduleImagePrompts?.items.some((p) => p.id === postNowImagePromptId) ? (
+                          <option value={postNowImagePromptId}>{postNowImagePromptId}</option>
+                        ) : null}
+                        {(scheduleImagePrompts?.items || []).map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name || p.id}
+                          </option>
+                        ))}
+                      </select>
+                      {postNowGenerateImage && scheduleImagePrompts?.default_id ? (
+                        <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                          Default:{" "}
+                          <strong>
+                            {scheduleImagePrompts.items.find((x) => x.id === scheduleImagePrompts.default_id)?.name ||
+                              scheduleImagePrompts.default_id}
+                          </strong>
+                        </div>
+                      ) : null}
+                    </label>
+                  </>
+                ) : null}
+                <div className={styles.muted} style={{ fontSize: 12, marginTop: 10 }}>
+                  {articleTitleFor(confirmPostNowJob.article_id)}
+                </div>
+                {error ? <p className={styles.error} style={{ marginTop: 10 }}>{error}</p> : null}
+              </div>
+              <div className={styles.modalFooter}>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={closePostNowConfirm}
+                  disabled={postNowBusy}
+                >
+                  No
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={() => void postNowFromScheduledJob()}
+                  disabled={postNowBusy}
+                >
+                  {postNowBusy
+                    ? postNowPhase === "generating"
+                      ? "Generating & publishing…"
+                      : "Publishing…"
+                    : "Yes, post now"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {websiteConnectionModal ? (
           <div
             className={styles.modalBackdrop}
@@ -9675,57 +10682,119 @@ export default function ProjectPage() {
                 </button>
               </div>
               <div className={styles.modalBody}>
-                <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
-                  Selected ideas will be imported, then generated with article content and featured images.
-                </p>
-                <label className={styles.label}>
-                  Writing prompt
-                  <select
-                    className={styles.input}
-                    value={curationPromptModal.writingPromptId}
-                    onChange={(e) =>
-                      setCurationPromptModal((m) => (m ? { ...m, writingPromptId: e.target.value } : m))
-                    }
-                  >
-                    <option value="">Project default</option>
-                    {(scheduleWritingPrompts?.items || []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className={styles.label}>
-                  Image prompt
-                  <select
-                    className={styles.input}
-                    value={curationPromptModal.imagePromptId}
-                    onChange={(e) =>
-                      setCurationPromptModal((m) => (m ? { ...m, imagePromptId: e.target.value } : m))
-                    }
-                  >
-                    <option value="">Project default</option>
-                    {(scheduleImagePrompts?.items || []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
-                    ))}
-                  </select>
-                </label>
+                {curationPromptModal.step === "prompts" ? (
+                  <>
+                    <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
+                      Selected ideas will be imported, then generated with article content and featured images.
+                    </p>
+                    <label className={styles.label}>
+                      Writing prompt
+                      <select
+                        className={styles.input}
+                        value={curationPromptModal.writingPromptId}
+                        onChange={(e) =>
+                          setCurationPromptModal((m) => (m ? { ...m, writingPromptId: e.target.value } : m))
+                        }
+                      >
+                        <option value="">Project default</option>
+                        {(scheduleWritingPrompts?.items || []).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.label}>
+                      Image prompt
+                      <select
+                        className={styles.input}
+                        value={curationPromptModal.imagePromptId}
+                        onChange={(e) =>
+                          setCurationPromptModal((m) => (m ? { ...m, imagePromptId: e.target.value } : m))
+                        }
+                      >
+                        <option value="">Project default</option>
+                        {(scheduleImagePrompts?.items || []).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
+                      Map <strong>active</strong> store products for this batch. Content will link to{" "}
+                      <code>/products/&#123;handle&#125;</code> and the featured image can use the first product photo as a
+                      style reference.
+                    </p>
+                    <ShopifyProductMapPicker
+                      products={shopifyCatalog?.products || []}
+                      value={curationPromptModal.mappedProducts}
+                      onChange={(mappedProducts) =>
+                        setCurationPromptModal((m) => (m ? { ...m, mappedProducts } : m))
+                      }
+                      loading={shopifyCatalogLoading}
+                      grantedScopes={shopifyCatalog?.granted_scopes || []}
+                    />
+                  </>
+                )}
               </div>
               <div className={styles.modalFooter}>
-                <button
-                  type="button"
-                  className={styles.btnSecondary}
-                  onClick={() => setCurationPromptModal(null)}
-                  disabled={curationPromptModal.busy}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className={styles.button}
-                  disabled={curationPromptModal.busy}
-                  onClick={() => void confirmCurationPromptAction()}
-                >
-                  {curationPromptModal.busy ? "Generating…" : "Generate articles + images"}
-                </button>
+                {curationPromptModal.step === "products" ? (
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    onClick={() =>
+                      setCurationPromptModal((m) => (m ? { ...m, step: "prompts" } : m))
+                    }
+                    disabled={curationPromptModal.busy}
+                  >
+                    Back
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    onClick={() => setCurationPromptModal(null)}
+                    disabled={curationPromptModal.busy}
+                  >
+                    Cancel
+                  </button>
+                )}
+                {curationPromptModal.step === "prompts" ? (
+                  <button
+                    type="button"
+                    className={styles.button}
+                    disabled={curationPromptModal.busy}
+                    onClick={() => {
+                      if (isShopifyProject) {
+                        void loadShopifyCatalogIfNeeded();
+                        setCurationPromptModal((m) => (m ? { ...m, step: "products" } : m));
+                      } else {
+                        void confirmCurationPromptAction();
+                      }
+                    }}
+                  >
+                    {isShopifyProject ? "Next: Map products" : curationPromptModal.busy ? "Generating…" : "Generate articles + images"}
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      disabled={curationPromptModal.busy}
+                      onClick={() => void confirmCurationPromptAction()}
+                    >
+                      Skip — generate without products
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      disabled={curationPromptModal.busy || !curationPromptModal.mappedProducts.length}
+                      onClick={() => void confirmCurationPromptAction()}
+                    >
+                      {curationPromptModal.busy ? "Generating…" : "Generate with mapped products"}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -9741,7 +10810,9 @@ export default function ProjectPage() {
             <div className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>
-                  Generate {clusterGeneratePromptModal.pendingCount} article{clusterGeneratePromptModal.pendingCount === 1 ? "" : "s"} + images
+                  {clusterGeneratePromptModal.step === "products"
+                    ? "Map products for generation"
+                    : `Generate ${clusterGeneratePromptModal.pendingCount} article${clusterGeneratePromptModal.pendingCount === 1 ? "" : "s"} + images`}
                 </h3>
                 <button
                   type="button"
@@ -9754,67 +10825,150 @@ export default function ProjectPage() {
                 </button>
               </div>
               <div className={styles.modalBody}>
-                <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
-                  Choose the writing and image prompts to use. Riviso will generate article content and a featured image for every selected topic.
-                </p>
-                <label className={styles.label}>
-                  Writing prompt
-                  <select
-                    className={styles.input}
-                    value={clusterGeneratePromptModal.writingPromptId}
-                    onChange={(e) =>
-                      setClusterGeneratePromptModal((m) => (m ? { ...m, writingPromptId: e.target.value } : m))
-                    }
-                  >
-                    <option value="">Project default</option>
-                    {(scheduleWritingPrompts?.items || []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
-                    ))}
-                  </select>
-                </label>
-                <label className={styles.label}>
-                  Image prompt
-                  <select
-                    className={styles.input}
-                    value={clusterGeneratePromptModal.imagePromptId}
-                    onChange={(e) =>
-                      setClusterGeneratePromptModal((m) => (m ? { ...m, imagePromptId: e.target.value } : m))
-                    }
-                  >
-                    <option value="">Project default</option>
-                    {(scheduleImagePrompts?.items || []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name || p.id}</option>
-                    ))}
-                  </select>
-                </label>
+                {clusterGeneratePromptModal.step === "prompts" ? (
+                  <>
+                    <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
+                      Choose prompts for this batch. On the next step you can map active Shopify products into every
+                      generated article.
+                    </p>
+                    <label className={styles.label}>
+                      Writing prompt
+                      <select
+                        className={styles.input}
+                        value={clusterGeneratePromptModal.writingPromptId}
+                        onChange={(e) =>
+                          setClusterGeneratePromptModal((m) => (m ? { ...m, writingPromptId: e.target.value } : m))
+                        }
+                      >
+                        <option value="">Project default</option>
+                        {(scheduleWritingPrompts?.items || []).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className={styles.label}>
+                      Image prompt
+                      <select
+                        className={styles.input}
+                        value={clusterGeneratePromptModal.imagePromptId}
+                        onChange={(e) =>
+                          setClusterGeneratePromptModal((m) => (m ? { ...m, imagePromptId: e.target.value } : m))
+                        }
+                      >
+                        <option value="">Project default</option>
+                        {(scheduleImagePrompts?.items || []).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
+                ) : (
+                  <>
+                    <p className={styles.muted} style={{ marginTop: 0, lineHeight: 1.55 }}>
+                      Select up to 3 <strong>active</strong> products for pillar + cluster articles in this batch.
+                    </p>
+                    <ShopifyProductMapPicker
+                      products={shopifyCatalog?.products || []}
+                      value={clusterGeneratePromptModal.mappedProducts}
+                      onChange={(mappedProducts) =>
+                        setClusterGeneratePromptModal((m) => (m ? { ...m, mappedProducts } : m))
+                      }
+                      loading={shopifyCatalogLoading}
+                      grantedScopes={shopifyCatalog?.granted_scopes || []}
+                    />
+                  </>
+                )}
               </div>
               <div className={styles.modalFooter}>
-                <button
-                  type="button"
-                  className={styles.btnSecondary}
-                  onClick={() => setClusterGeneratePromptModal(null)}
-                  disabled={clusterGeneratePromptModal.busy}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className={styles.button}
-                  disabled={clusterGeneratePromptModal.busy}
-                  onClick={async () => {
-                    const m = clusterGeneratePromptModal;
-                    if (!m) return;
-                    setClusterGeneratePromptModal({ ...m, busy: true });
-                    await generateForCluster(m.clusterId, {
-                      topicIds: m.topicIds,
-                      writingPromptId: m.writingPromptId || null,
-                      imagePromptId: m.imagePromptId || null,
-                    });
-                    setClusterGeneratePromptModal(null);
-                  }}
-                >
-                  {clusterGeneratePromptModal.busy ? "Generating…" : "Generate articles + images"}
-                </button>
+                {clusterGeneratePromptModal.step === "products" ? (
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    onClick={() =>
+                      setClusterGeneratePromptModal((m) => (m ? { ...m, step: "prompts" } : m))
+                    }
+                    disabled={clusterGeneratePromptModal.busy}
+                  >
+                    Back
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    onClick={() => setClusterGeneratePromptModal(null)}
+                    disabled={clusterGeneratePromptModal.busy}
+                  >
+                    Cancel
+                  </button>
+                )}
+                {clusterGeneratePromptModal.step === "prompts" ? (
+                  <button
+                    type="button"
+                    className={styles.button}
+                    disabled={clusterGeneratePromptModal.busy}
+                    onClick={() => {
+                      if (isShopifyProject) {
+                        void loadShopifyCatalogIfNeeded();
+                        setClusterGeneratePromptModal((m) => (m ? { ...m, step: "products" } : m));
+                      } else {
+                        void (async () => {
+                          const m = clusterGeneratePromptModal;
+                          if (!m) return;
+                          setClusterGeneratePromptModal({ ...m, busy: true });
+                          await generateForCluster(m.clusterId, {
+                            topicIds: m.topicIds,
+                            writingPromptId: m.writingPromptId || null,
+                            imagePromptId: m.imagePromptId || null,
+                          });
+                          setClusterGeneratePromptModal(null);
+                        })();
+                      }
+                    }}
+                  >
+                    {isShopifyProject ? "Next: Map products" : clusterGeneratePromptModal.busy ? "Generating…" : "Generate articles + images"}
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      disabled={clusterGeneratePromptModal.busy}
+                      onClick={async () => {
+                        const m = clusterGeneratePromptModal;
+                        if (!m) return;
+                        setClusterGeneratePromptModal({ ...m, busy: true });
+                        await generateForCluster(m.clusterId, {
+                          topicIds: m.topicIds,
+                          writingPromptId: m.writingPromptId || null,
+                          imagePromptId: m.imagePromptId || null,
+                          mappedProducts: [],
+                        });
+                        setClusterGeneratePromptModal(null);
+                      }}
+                    >
+                      Skip — generate without products
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      disabled={clusterGeneratePromptModal.busy || !clusterGeneratePromptModal.mappedProducts.length}
+                      onClick={async () => {
+                        const m = clusterGeneratePromptModal;
+                        if (!m) return;
+                        setClusterGeneratePromptModal({ ...m, busy: true });
+                        await generateForCluster(m.clusterId, {
+                          topicIds: m.topicIds,
+                          writingPromptId: m.writingPromptId || null,
+                          imagePromptId: m.imagePromptId || null,
+                          mappedProducts: m.mappedProducts,
+                        });
+                        setClusterGeneratePromptModal(null);
+                      }}
+                    >
+                      {clusterGeneratePromptModal.busy ? "Generating…" : "Generate with mapped products"}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>

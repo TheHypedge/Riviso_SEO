@@ -15,9 +15,13 @@ from app.services.content_sanitizer import (
 )
 from app.services.openai_client import OpenAIClient
 from app.services.generation_blocklist import format_banned_phrases_for_prompt
+from app.services.human_writing_guardrail import (
+    HUMAN_FIRST_SYSTEM_ANCHOR,
+    format_ai_detector_banned_phrases_for_prompt,
+    format_human_writing_guardrail_for_system_prompt,
+)
 from app.services.prompt_validation import assert_image_prompt_allowed
 from app.services.seo_guardrails import (
-    ANCHOR_SYSTEM_PREFIX,
     build_programmatic_image_prompt,
     enforce_strict_article_json,
     estimate_generation_token_budget,
@@ -26,7 +30,7 @@ from app.services.seo_guardrails import (
 log = logging.getLogger(__name__)
 
 # Bump when generation/token-estimate signatures change; surfaced on /api/health for deploy checks.
-GENERATION_REVISION = "2026-05-15-image-prompt-param"
+GENERATION_REVISION = "2026-05-29-zero-ai-detector-guardrail"
 
 @lru_cache(maxsize=16)
 def _callable_param_names(fn: Callable[..., Any]) -> frozenset[str]:
@@ -57,6 +61,7 @@ def estimate_bundle_tokens(
     writing_prompt_text: str,
     brand_identity: str | None = None,
     niche_identifier: str | None = None,
+    product_context: str | None = None,
     generate_image: bool,
     image_prompt_text: str | None = None,
     max_completion_tokens: int = 6_000,
@@ -74,6 +79,9 @@ def estimate_bundle_tokens(
         writing_prompt_text=writing_prompt_text,
         brand_identity=brand_identity,
         niche_identifier=niche_identifier,
+        product_context=product_context,
+        shopify_product_mapping="Shopify product context" in (product_context or ""),
+        wordpress_content_mapping="WordPress internal page" in (product_context or ""),
     )
     estimate = estimate_generation_token_budget(
         system_prompt=sys,
@@ -132,6 +140,9 @@ def build_generation_messages(
     writing_prompt_text: str,
     brand_identity: str | None = None,
     niche_identifier: str | None = None,
+    product_context: str | None = None,
+    shopify_product_mapping: bool = False,
+    wordpress_content_mapping: bool = False,
 ) -> tuple[str, str]:
     """Build (system, user) chat payloads — single source of truth for token estimation and generation."""
     bi = (brand_identity or "").strip()
@@ -143,14 +154,43 @@ def build_generation_messages(
             f"- Brand identity: {bi or '(not set)'}\n"
             f"- Niche identifier: {ni or '(not set)'}\n"
         )
+    human_guardrail = format_human_writing_guardrail_for_system_prompt(
+        title=title,
+        focus_keyphrase=focus_keyphrase,
+        keywords=keywords,
+    )
+
+    platform_mapping = shopify_product_mapping or wordpress_content_mapping
+    pc = (product_context or "").strip() if platform_mapping else ""
+    product_rules = ""
+    if shopify_product_mapping and pc:
+        product_rules = (
+            "\n\nShopify product rules (required when context is provided):\n"
+            "- Use ONLY the products listed in the product context.\n"
+            "- Link products with markdown using the exact relative paths given "
+            "(e.g. [Product name](/products/handle)).\n"
+            "- Include at least one natural inline product link in the article body.\n"
+            "- Do not fabricate pricing, availability, SKU details, or extra products.\n"
+            "- Do not use absolute storefront URLs unless explicitly provided.\n"
+        )
+    elif wordpress_content_mapping and pc:
+        product_rules = (
+            "\n\nWordPress internal linking rules (required when context is provided):\n"
+            "- Use ONLY the pages listed in the page context.\n"
+            "- Link with markdown using the exact post URLs given "
+            "(e.g. [Page title](https://yoursite.com/post-slug/)).\n"
+            "- Include at least one natural inline internal link in the article body.\n"
+            "- Do not invent posts, slugs, or URLs that are not in the context.\n"
+        )
 
     sys = (
-        ANCHOR_SYSTEM_PREFIX
-        + "You are an expert SEO content writer.\n"
-        "Return ONLY a JSON object with exactly these keys and no others: "
+        HUMAN_FIRST_SYSTEM_ANCHOR
+        + human_guardrail
+        + "Return ONLY a JSON object with exactly these keys and no others: "
         '"article_markdown", "meta_title", "meta_description".\n'
         "Do not add commentary, explanations, or keys such as title, body, keywords, or choices.\n"
-        "Write in clear, human-friendly tone. Use headings and lists where helpful.\n"
+        "article_markdown must sound human-written first; SEO formatting second.\n"
+        "Use headings and lists only where a human editor naturally would.\n"
         "Meta title must be <= 60 chars if possible. Meta description <= 155 chars if possible.\n"
         "STRICT OUTPUT RULES — article_markdown MUST contain ONLY the article body:\n"
         "- Do NOT include 'Meta Title:', 'Meta Description:', 'SEO Title:' or any meta block inside article_markdown.\n"
@@ -159,8 +199,10 @@ def build_generation_messages(
         "- Do NOT wrap article_markdown in code fences. Output it as plain markdown.\n"
         "- meta_title and meta_description must be plain text only — no quotes, no 'Meta Title:' prefix, no markdown.\n"
         "- Do NOT output code, poetry, scripts, or conversational text outside the JSON object."
+        f"{format_ai_detector_banned_phrases_for_prompt()}"
         f"{format_banned_phrases_for_prompt()}"
         f"{flavor}"
+        f"{product_rules}"
     )
 
     up = _apply_placeholders(
@@ -174,8 +216,12 @@ def build_generation_messages(
         f"Article title: {title}\n"
         f"Target keywords: {', '.join(keywords)}\n"
         f"Focus keyphrase: {focus_keyphrase}\n\n"
-        f"Prompt:\n{up}\n"
+        f"Prompt:\n{up}\n\n"
+        "Final check before JSON: every paragraph must pass as human on an AI detector—"
+        "uneven rhythm, concrete details, no template closers or hype phrases.\n"
     )
+    if platform_mapping and pc:
+        user = f"{user}\n\n{pc}\n"
     return sys, user
 
 
@@ -187,6 +233,7 @@ def estimate_tokens_for_generation_bundle(
     writing_prompt_text: str,
     brand_identity: str | None = None,
     niche_identifier: str | None = None,
+    product_context: str | None = None,
     generate_image: bool,
     image_prompt_text: str | None = None,
     max_completion_tokens: int = 6_000,
@@ -211,6 +258,7 @@ def estimate_tokens_for_generation_bundle(
         writing_prompt_text=writing_prompt_text,
         brand_identity=brand_identity,
         niche_identifier=niche_identifier,
+        product_context=product_context,
         generate_image=generate_image,
         image_prompt_text=image_prompt_text,
         max_completion_tokens=max_completion_tokens,
@@ -225,8 +273,12 @@ async def generate_article_bundle(
     writing_prompt_text: str,
     brand_identity: str | None = None,
     niche_identifier: str | None = None,
+    product_context: str | None = None,
     generate_image: bool,
     image_prompt_text: str | None = None,
+    reference_image_url: str | None = None,
+    shopify_mapped_products: list[dict[str, str]] | None = None,
+    wordpress_mapped_pages: list[dict[str, str]] | None = None,
     **extra_kwargs: Any,
 ) -> dict:
     """
@@ -243,7 +295,37 @@ async def generate_article_bundle(
     image_prompt_text = (str(image_prompt_text).strip() if image_prompt_text is not None else "") or None
     if extra_kwargs:
         log.debug("generate_article_bundle ignored keys: %s", sorted(extra_kwargs.keys()))
+    shopify_for_injection: list[Any] = []
+    if shopify_mapped_products:
+        try:
+            from app.services.shopify_product_pipeline import (
+                ensure_shopify_product_injection,
+                normalize_mapped_products,
+            )
+
+            shopify_for_injection = normalize_mapped_products(shopify_mapped_products)
+        except Exception:
+            log.debug("Shopify mapped product normalization skipped", exc_info=True)
+            shopify_for_injection = []
+
+    wp_for_injection: list[Any] = []
+    if wordpress_mapped_pages:
+        try:
+            from app.services.wordpress_content_pipeline import (
+                ensure_wordpress_page_injection,
+                normalize_mapped_pages,
+            )
+
+            wp_for_injection = normalize_mapped_pages(wordpress_mapped_pages)
+        except Exception:
+            log.debug("WordPress mapped page normalization skipped", exc_info=True)
+            wp_for_injection = []
+
     client = OpenAIClient()
+
+    pc_raw = product_context or ""
+    shopify_mapping = bool(shopify_for_injection) or "Shopify product context" in pc_raw
+    wp_mapping = bool(wp_for_injection) or "WordPress internal page" in pc_raw
 
     sys, user = build_generation_messages(
         title=title,
@@ -252,6 +334,9 @@ async def generate_article_bundle(
         writing_prompt_text=writing_prompt_text,
         brand_identity=brand_identity,
         niche_identifier=niche_identifier,
+        product_context=product_context,
+        shopify_product_mapping=shopify_mapping or bool(shopify_for_injection),
+        wordpress_content_mapping=wp_mapping or bool(wp_for_injection),
     )
 
     obj = await client.chat_json(model=settings.openai_text_model, system=sys, user=user)
@@ -264,7 +349,24 @@ async def generate_article_bundle(
     if not article_md:
         raise RuntimeError("Generated article is empty")
 
+    if shopify_for_injection:
+        try:
+            from app.services.shopify_product_pipeline import ensure_shopify_product_injection
+
+            article_md = ensure_shopify_product_injection(article_md, shopify_for_injection)
+        except Exception:
+            log.exception("Shopify post-generation product injection failed")
+
+    if wp_for_injection:
+        try:
+            from app.services.wordpress_content_pipeline import ensure_wordpress_page_injection
+
+            article_md = ensure_wordpress_page_injection(article_md, wp_for_injection)
+        except Exception:
+            log.exception("WordPress post-generation page injection failed")
+
     image_url: str | None = None
+    image_error: str | None = None
     if generate_image:
         if image_prompt_text:
             assert_image_prompt_allowed(image_prompt_text)
@@ -276,22 +378,36 @@ async def generate_article_bundle(
             niche_identifier=niche_identifier,
             image_prompt_text=image_prompt_text,
         )
+        ref_url = (reference_image_url or "").strip() or None
         try:
             image_url = await asyncio.wait_for(
-                client.generate_image_url(model=settings.openai_image_model, prompt=image_prompt),
+                client.generate_image_url(
+                    model=settings.openai_image_model,
+                    prompt=image_prompt,
+                    reference_image_url=ref_url,
+                ),
                 timeout=300.0,
             )
-        except Exception:
+            if not image_url:
+                image_error = "Image model returned no image (empty response)."
+        except Exception as e:
             log.exception("Image generation failed (returning without image_url)")
-            image_url = None
+            image_error = str(e)[:500] or "Image generation failed"
 
     return {
         "article": article_md,
         "meta_title": meta_title,
         "meta_description": meta_desc,
         "image_url": image_url,
+        "image_error": image_error,
         "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         "models": {"text": settings.openai_text_model, "image": settings.openai_image_model},
+        "shopify_mapped_products": [
+            p.as_dict() if hasattr(p, "as_dict") else dict(p) for p in (shopify_for_injection or [])
+        ],
+        "wp_mapped_pages": [
+            p.as_dict() if hasattr(p, "as_dict") else dict(p) for p in (wp_for_injection or [])
+        ],
     }
 
 
@@ -303,6 +419,7 @@ async def generate_featured_image_only(
     brand_identity: str | None = None,
     niche_identifier: str | None = None,
     image_prompt_text: str | None = None,
+    reference_image_url: str | None = None,
 ) -> dict:
     """Generate only the featured image for an existing article."""
     if image_prompt_text:
@@ -316,12 +433,21 @@ async def generate_featured_image_only(
         image_prompt_text=image_prompt_text,
     )
     client = OpenAIClient()
-    image_url = await asyncio.wait_for(
-        client.generate_image_url(model=settings.openai_image_model, prompt=image_prompt),
-        timeout=300.0,
-    )
+    ref_url = (reference_image_url or "").strip() or None
+    try:
+        image_url = await asyncio.wait_for(
+            client.generate_image_url(
+                model=settings.openai_image_model,
+                prompt=image_prompt,
+                reference_image_url=ref_url,
+            ),
+            timeout=300.0,
+        )
+    except Exception as e:
+        log.exception("Featured image generation failed")
+        raise RuntimeError(f"OpenAI image request failed: {e}") from e
     if not image_url:
-        raise RuntimeError("Image generation did not return an image.")
+        raise RuntimeError("Image generation did not return an image (empty response from model).")
     return {
         "image_url": image_url,
         "image_prompt": image_prompt,

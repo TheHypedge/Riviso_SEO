@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 export type ProjectTabKey =
   | "overview"
   | "articles"
+  | "products"
   | "research"
   | "scheduled_articles"
   | "prompts"
@@ -49,6 +50,14 @@ export function ProjectTabIcon({ tab, className }: { tab: ProjectTabKey; classNa
         <Svg className={className}>
           <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" {...S} />
           <path d="M14 2v6h6M9 13h6M9 17h4" {...S} />
+        </Svg>
+      );
+    case "products":
+      return (
+        <Svg className={className}>
+          <path d="M7 7l5-3 5 3-5 3-5-3z" {...S} />
+          <path d="M7 7v10l5 3 5-3V7" {...S} />
+          <path d="M12 10v10" {...S} />
         </Svg>
       );
     case "research":

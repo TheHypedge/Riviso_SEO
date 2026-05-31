@@ -81,6 +81,9 @@ class Settings(BaseSettings):
     google_oauth_client_id: str = Field(default="", validation_alias="GOOGLE_OAUTH_CLIENT_ID")
     google_oauth_client_secret: str = Field(default="", validation_alias="GOOGLE_OAUTH_CLIENT_SECRET")
 
+    shopify_api_key: str = Field(default="", validation_alias="SHOPIFY_API_KEY")
+    shopify_api_secret: str = Field(default="", validation_alias="SHOPIFY_API_SECRET")
+
     # Google Indexing API (service account JSON; raw JSON or base64 JSON)
     google_indexing_service_account_json: str = Field(default="", validation_alias="GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON")
 
@@ -138,6 +141,8 @@ class Settings(BaseSettings):
         "secret_key",
         "google_oauth_client_id",
         "google_oauth_client_secret",
+        "shopify_api_key",
+        "shopify_api_secret",
         "openai_api_key",
         mode="before",
     )
@@ -160,6 +165,11 @@ class Settings(BaseSettings):
     def google_oauth_configured(self) -> bool:
         """True when both Google OAuth client envs are present (post-strip)."""
         return bool((self.google_oauth_client_id or "").strip() and (self.google_oauth_client_secret or "").strip())
+
+    @property
+    @property
+    def shopify_oauth_configured(self) -> bool:
+        return bool((self.shopify_api_key or "").strip() and (self.shopify_api_secret or "").strip())
 
     @property
     def google_oauth_client_id_fingerprint(self) -> str:

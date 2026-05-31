@@ -242,6 +242,162 @@
   font-size: 14px;
 }
 
+@keyframes wsOverviewSkeletonShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.wsOverviewSkeletonBone {
+  display: block;
+  border-radius: 8px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.1) 45%,
+    rgba(255, 255, 255, 0.04) 90%
+  );
+  background-size: 200% 100%;
+  animation: wsOverviewSkeletonShimmer 1.35s ease-in-out infinite;
+}
+
+.wsOverviewSkeletonBoneLg {
+  width: 56%;
+  height: 28px;
+  margin-bottom: 10px;
+}
+
+.wsOverviewSkeletonBoneMd {
+  width: 42%;
+  height: 14px;
+  margin-bottom: 8px;
+}
+
+.wsOverviewSkeletonBoneSm {
+  width: 68%;
+  height: 11px;
+}
+
+.wsOverviewSkeletonBoneXs {
+  width: 38%;
+  height: 9px;
+  margin-top: 8px;
+}
+
+.wsOverviewSkeletonStatCard {
+  border: 1px solid var(--aa-hairline);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 14px;
+  padding: 14px 16px 12px;
+  min-height: 88px;
+}
+
+.wsOverviewSkeletonCard {
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.wsOverviewSkeletonChartArea {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 20px 18px 18px;
+  min-height: 220px;
+}
+
+.wsOverviewSkeletonBar {
+  flex: 1;
+  min-height: 28%;
+  border-radius: 6px 6px 2px 2px;
+  align-self: flex-end;
+}
+
+.wsOverviewSkeletonBar:nth-child(1) { height: 42%; }
+.wsOverviewSkeletonBar:nth-child(2) { height: 58%; }
+.wsOverviewSkeletonBar:nth-child(3) { height: 36%; }
+.wsOverviewSkeletonBar:nth-child(4) { height: 72%; }
+.wsOverviewSkeletonBar:nth-child(5) { height: 48%; }
+.wsOverviewSkeletonBar:nth-child(6) { height: 64%; }
+.wsOverviewSkeletonBar:nth-child(7) { height: 40%; }
+.wsOverviewSkeletonBar:nth-child(8) { height: 52%; }
+
+.wsOverviewSkeletonPipeline {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 18px 20px;
+  flex: 1;
+}
+
+.wsOverviewSkeletonPipelineRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wsOverviewSkeletonTrack {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.wsOverviewSkeletonPanel {
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.wsOverviewSkeletonPanelHead {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--aa-hairline-soft);
+}
+
+.wsOverviewSkeletonFeed {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px 18px;
+}
+
+.wsOverviewSkeletonFeedRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.wsOverviewSkeletonThumb {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.1) 45%,
+    rgba(255, 255, 255, 0.04) 90%
+  );
+  background-size: 200% 100%;
+  animation: wsOverviewSkeletonShimmer 1.35s ease-in-out infinite;
+}
+
+.wsOverviewSkeletonFeedText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wsOverviewSkeletonBone,
+  .wsOverviewSkeletonThumb {
+    animation: none;
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
 .wsOverviewStatGrid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));

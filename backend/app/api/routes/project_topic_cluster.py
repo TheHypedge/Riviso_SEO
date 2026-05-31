@@ -9,31 +9,32 @@ Topic-cluster routes — Feature 2 (Topical Authority Cluster Mapping).
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.deps import get_current_user
-from app.core.ids import user_ids_equal
+from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
+from app.schemas.articles import MappedShopifyProductInput
+from app.services.async_operation_dispatch import (
+    enqueue_cluster_generate_all_job,
+    enqueue_topic_cluster_plan_job,
+    new_cluster_plan_id,
+    should_use_async_queue,
+)
+from app.services.plan_gatekeeper import PlanAction, require_plan_action
 from app.services.topic_cluster_service import TopicClusterService
 
 
 router = APIRouter(prefix="/projects/{project_id}/topic-clusters", tags=["topic-clusters"])
 
 
-def _require_project(*, st, user: dict, project_id: str) -> dict:
-    pid = (project_id or "").strip()
-    if not pid:
-        raise HTTPException(status_code=404, detail="Project not found")
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
-    if not isinstance(proj, dict):
-        raise HTTPException(status_code=404, detail="Project not found")
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
-        raise HTTPException(status_code=404, detail="Project not found")
-    return proj
+def _require_project(*, st, user: dict, project_id: str, full: bool = False) -> dict:
+    return require_project_access(st=st, user=user, project_id=project_id, full=full)
 
 
 def _plan_for_user(*, st, user: dict) -> tuple[str, dict]:
@@ -74,7 +75,7 @@ def _enforce_cluster_plan_quota(*, st, user: dict) -> None:
 @router.get("")
 async def list_clusters(project_id: str, user: dict = Depends(get_current_user)) -> dict:
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, full=False)
     svc = TopicClusterService(project=proj, owner_user_id=(user.get("id") or "").strip())
     return {"clusters": svc.list_for_project()}
 
@@ -88,22 +89,66 @@ class TopicClusterPlanPayload(BaseModel):
     language: str = Field(default="en", min_length=2, max_length=8)
 
 
-@router.post("/plan")
+@router.post("/plan", response_model=None)
 async def plan_cluster(
     project_id: str,
     payload: TopicClusterPlanPayload,
-    user: dict = Depends(get_current_user),
-) -> dict:
+    user: dict = Depends(require_plan_action(PlanAction.CLUSTER_PLAN, consume=False)),
+) -> dict | JSONResponse:
     """SERP snapshot + LLM topical map → saved cluster (draft)."""
     if not (settings.openai_api_key or "").strip():
         raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, full=True)
     _enforce_cluster_plan_quota(st=st, user=user)
-    svc = TopicClusterService(project=proj, owner_user_id=(user.get("id") or "").strip())
+    uid = (user.get("id") or "").strip()
+    raw = (payload.seed_intent or "").strip()
+
+    plan_payload = {
+        "seed_intent": raw,
+        "country_code": payload.country_code,
+        "tone": payload.tone,
+        "language": payload.language,
+    }
+
+    if should_use_async_queue() and hasattr(st, "save_topic_cluster"):
+        cluster_id = new_cluster_plan_id()
+        now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        st.save_topic_cluster(
+            {
+                "id": cluster_id,
+                "project_id": project_id,
+                "owner_user_id": uid,
+                "seed_intent": raw[:500],
+                "country_code": (payload.country_code or "IN").strip().upper()[:8],
+                "tone": (payload.tone or "informative").strip()[:32],
+                "status": "planning",
+                "pillar": {"id": "pillar", "title": raw[:300], "intent": "informational", "keywords": []},
+                "clusters": [],
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        job_id = enqueue_topic_cluster_plan_job(
+            project_id=project_id,
+            cluster_id=cluster_id,
+            user_id=uid,
+            payload=plan_payload,
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "queued",
+                "job_id": job_id,
+                "cluster_id": cluster_id,
+                "message": "Cluster planning queued.",
+            },
+        )
+
+    svc = TopicClusterService(project=proj, owner_user_id=uid)
     try:
         return await svc.plan_and_persist(
-            seed_intent=payload.seed_intent,
+            seed_intent=raw,
             country_code=payload.country_code,
             tone=payload.tone,
             language=payload.language,
@@ -119,7 +164,7 @@ async def plan_cluster(
 @router.get("/{cluster_id}")
 async def get_cluster(project_id: str, cluster_id: str, user: dict = Depends(get_current_user)) -> dict:
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, full=False)
     svc = TopicClusterService(project=proj, owner_user_id=(user.get("id") or "").strip())
     row = svc.get(cluster_id)
     if not row:
@@ -129,39 +174,72 @@ async def get_cluster(project_id: str, cluster_id: str, user: dict = Depends(get
 
 class TopicClusterGenerateAllPayload(BaseModel):
     generate_image: bool = Field(
-        default=False,
+        default=True,
         description="Whether to generate a featured image per article (slower).",
     )
     writing_prompt_id: str | None = Field(default=None, max_length=64)
     image_prompt_id: str | None = Field(default=None, max_length=64)
-    # ``None`` (omitted) means "every pending topic in the cluster". When
-    # provided, only the pillar (slot id = pillar id) and cluster topic ids
-    # listed here are generated; the rest stay pending.
     topic_ids: list[str] | None = Field(default=None, max_length=20)
+    mapped_products: list[MappedShopifyProductInput] | None = Field(
+        default=None,
+        max_length=12,
+        description="Shopify only: products to weave into each generated article in this batch.",
+    )
 
 
-@router.post("/{cluster_id}/generate-all")
+@router.post("/{cluster_id}/generate-all", response_model=None)
 async def generate_all(
     project_id: str,
     cluster_id: str,
     payload: TopicClusterGenerateAllPayload | None = Body(default=None),
     user: dict = Depends(get_current_user),
-) -> dict:
+) -> dict | JSONResponse:
     """Create + generate articles for pillar and clusters missing ``imported_article_id``."""
     if not (settings.openai_api_key or "").strip():
         raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
-    svc = TopicClusterService(project=proj, owner_user_id=(user.get("id") or "").strip())
+    proj = _require_project(st=st, user=user, project_id=project_id, full=True)
     body = payload or TopicClusterGenerateAllPayload()
+    cid = (cluster_id or "").strip()
+    uid = (user.get("id") or "").strip()
+
+    gen_payload = {
+        "generate_image": bool(body.generate_image),
+        "writing_prompt_id": (body.writing_prompt_id or "").strip() or None,
+        "image_prompt_id": (body.image_prompt_id or "").strip() or None,
+        "topic_ids": body.topic_ids,
+        "mapped_products": [p.model_dump() for p in body.mapped_products] if body.mapped_products else None,
+    }
+
+    if should_use_async_queue():
+        if hasattr(st, "update_topic_cluster_fields"):
+            st.update_topic_cluster_fields(cid, {"status": "generating"})
+        job_id = enqueue_cluster_generate_all_job(
+            project_id=project_id,
+            cluster_id=cid,
+            user_id=uid,
+            payload=gen_payload,
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "queued",
+                "job_id": job_id,
+                "cluster_id": cid,
+                "message": "Cluster batch generation queued.",
+            },
+        )
+
+    svc = TopicClusterService(project=proj, owner_user_id=uid)
     try:
         return await svc.generate_all(
             user=user,
-            cluster_id=(cluster_id or "").strip(),
+            cluster_id=cid,
             generate_image=bool(body.generate_image),
             writing_prompt_id=(body.writing_prompt_id or "").strip() or None,
             image_prompt_id=(body.image_prompt_id or "").strip() or None,
             topic_ids=body.topic_ids,
+            mapped_products=gen_payload["mapped_products"],
         )
     except HTTPException:
         raise
@@ -177,9 +255,6 @@ class TopicClusterImportPayload(BaseModel):
         max_length=20,
         description="Pillar+cluster slot ids to import. ``null`` = every pending topic.",
     )
-    # When set, the imported articles are also added to the scheduler so the
-    # backend will generate + publish them at this UTC instant. Subsequent
-    # imports in the batch are staggered 5 minutes apart.
     schedule_at: str | None = Field(default=None, max_length=64)
     post_type: str | None = Field(default=None, max_length=64)
     wp_status: str = Field(default="draft", max_length=16)
@@ -199,14 +274,9 @@ async def import_topics(
     Insert *pending* article rows for the selected (or all-pending) topics in
     the cluster. Optionally schedule them via ``schedule_at`` (UTC ISO or a
     ``YYYY-MM-DDTHH:mm`` value in the user's timezone).
-
-    Cheap and **quota-free** when not scheduled (no LLM invocation), so users
-    can stage drafts without burning generation credits. Scheduling each
-    imported topic consumes the user's monthly schedule quota when their plan
-    enforces one.
     """
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, full=True)
     svc = TopicClusterService(project=proj, owner_user_id=(user.get("id") or "").strip())
     body = payload or TopicClusterImportPayload()
     try:

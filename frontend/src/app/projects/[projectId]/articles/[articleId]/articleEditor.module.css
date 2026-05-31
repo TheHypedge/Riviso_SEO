@@ -124,6 +124,12 @@
   color: #ffd666;
 }
 
+.statusTrash {
+  background: rgba(255, 77, 79, 0.12);
+  border-color: rgba(255, 77, 79, 0.35);
+  color: #ff7875;
+}
+
 .liveUrlCard {
   display: flex;
   flex-wrap: wrap;
@@ -133,6 +139,27 @@
   border-radius: 12px;
   border: 1px solid rgba(82, 196, 26, 0.28);
   background: rgba(82, 196, 26, 0.08);
+}
+
+.liveUrlCardTrashed {
+  border-color: rgba(255, 77, 79, 0.32);
+  background: rgba(255, 77, 79, 0.08);
+}
+
+.liveUrlCardTrashed .liveUrlLabel {
+  color: #ff7875;
+}
+
+.liveUrlCardTrashed .liveUrlLink {
+  color: color-mix(in oklab, #ff7875, #fff 20%);
+}
+
+.liveUrlHint {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--aa-muted, rgba(255, 255, 255, 0.55));
 }
 
 .liveUrlLabel {
@@ -339,10 +366,194 @@
   line-height: 1.5;
 }
 
+.imageSkeleton {
+  position: relative;
+  overflow: hidden;
+  min-height: 240px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--aa-accent) 35%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--aa-surface-2, #141414) 92%, var(--aa-accent) 8%) 0%,
+    color-mix(in srgb, var(--aa-surface-2, #1a1a1a) 85%, var(--aa-accent) 15%) 50%,
+    color-mix(in srgb, var(--aa-surface-2, #141414) 92%, var(--aa-accent) 8%) 100%
+  );
+  background-size: 200% 200%;
+  animation: imageSkeletonBg 2.4s ease-in-out infinite;
+}
+
+.imageSkeletonPulse {
+  position: absolute;
+  inset: 8px;
+  border-radius: 10px;
+  border: 2px solid color-mix(in srgb, var(--aa-accent) 45%, transparent);
+  animation: imageSkeletonPulse 1.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.imageSkeletonBars {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  height: 36px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.imageSkeletonBars span {
+  display: block;
+  width: 8px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--aa-accent) 70%, #fff 30%);
+  animation: imageSkeletonBar 1.1s ease-in-out infinite;
+}
+
+.imageSkeletonBars span:nth-child(1) {
+  height: 18px;
+  animation-delay: 0s;
+}
+
+.imageSkeletonBars span:nth-child(2) {
+  height: 32px;
+  animation-delay: 0.15s;
+}
+
+.imageSkeletonBars span:nth-child(3) {
+  height: 22px;
+  animation-delay: 0.3s;
+}
+
+.imageSkeletonShimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    transparent 35%,
+    color-mix(in srgb, var(--aa-accent) 28%, transparent) 50%,
+    transparent 65%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  animation: imageSkeletonSweep 1.4s linear infinite;
+}
+
+.imageSkeletonContent {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 240px;
+  padding: 28px 16px;
+  text-align: center;
+}
+
+@keyframes imageSkeletonBg {
+  0%,
+  100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+@keyframes imageSkeletonPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.01);
+  }
+}
+
+@keyframes imageSkeletonBar {
+  0%,
+  100% {
+    transform: scaleY(0.55);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+@keyframes imageSkeletonSweep {
+  0% {
+    background-position: 220% 0;
+  }
+  100% {
+    background-position: -220% 0;
+  }
+}
+
+.imageGenerating {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 16px;
+  min-height: 180px;
+  text-align: center;
+  border: 1px dashed color-mix(in srgb, var(--aa-accent) 35%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--aa-accent) 6%, transparent);
+}
+
+.imageGeneratingTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--aa-fg);
+}
+
+.imageGeneratingHint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--aa-muted);
+  max-width: 28ch;
+}
+
+.imageSpinner {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid color-mix(in srgb, var(--aa-accent) 18%, transparent);
+  border-top-color: var(--aa-accent);
+  border-right-color: color-mix(in srgb, var(--aa-accent) 55%, transparent);
+  animation: imageSpin 0.75s linear infinite;
+}
+
+@keyframes imageSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .imageMeta {
   font-size: 12px;
   color: var(--aa-muted);
   margin-top: 10px;
+}
+
+.wpMetaLoading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--aa-muted);
+  padding: 10px 0;
 }
 
 .fieldActions {
@@ -430,4 +641,76 @@
   .wpActions :global(.button) {
     flex: 1 1 auto;
   }
+}
+
+/* Skeleton placeholders while editor shell/body load */
+@keyframes editorSkeletonPulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+.skeletonBlock {
+  display: grid;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.skeletonLine {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.06) 0%,
+    rgba(255, 255, 255, 0.14) 50%,
+    rgba(255, 255, 255, 0.06) 100%
+  );
+  background-size: 200% 100%;
+  animation: editorSkeletonPulse 1.4s ease-in-out infinite;
+}
+
+.skeletonLineLg {
+  height: 18px;
+  width: 72%;
+}
+
+.skeletonLineMd {
+  width: 55%;
+}
+
+.skeletonLineSm {
+  width: 38%;
+  height: 10px;
+}
+
+.skeletonEditor {
+  display: grid;
+  gap: 12px;
+  min-height: min(52vh, 420px);
+  padding: 16px 4px;
+}
+
+.skeletonRingRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.skeletonRing {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.08);
+  animation: editorSkeletonPulse 1.4s ease-in-out infinite;
+}
+
+.skeletonRingMeta {
+  flex: 1;
+  display: grid;
+  gap: 8px;
 }

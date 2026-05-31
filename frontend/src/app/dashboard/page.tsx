@@ -6,8 +6,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { DashboardNavIcon } from "@/components/DashboardNavIcon";
+import { ShopifyManualConnectGuide } from "@/components/shopify/ShopifyManualConnectGuide";
 import { TutorialStepperModal } from "@/components/TutorialStepperModal";
 import { WorkspaceProjectOverview } from "@/components/WorkspaceProjectOverview";
+import { DashboardProjectsSkeleton, DetailPanelSkeleton, FormFieldsSkeleton } from "@/components/skeleton";
 import styles from "../page.module.css";
 import dashStyles from "./dashboard.module.css";
 import {
@@ -18,13 +20,17 @@ import {
   clearAuth,
   downloadWordpressPlugin,
   getAccessToken,
+  invalidateProjectSettingsCache,
   PlanPublic,
   ProfilePublic,
+  ProjectPlatform,
   ProjectPublic,
   ProjectSettings,
   WordpressVerifyResponse,
   WorkspaceOverviewResponse,
 } from "@/lib/api";
+import { cachedProjectsAgeMs, loadCachedProjects, saveCachedProjects } from "@/lib/projectsCache";
+import { connectionErrorMessage, isAuthError, isNetworkError } from "@/lib/networkErrors";
 
 type DashSection = "overview" | "projects" | "users" | "limits" | "profile";
 
@@ -48,6 +54,8 @@ function planComparable(p: PlanPublic) {
     max_custom_research_per_month: Number(p.max_custom_research_per_month ?? 0),
     max_context_links: Number(p.max_context_links ?? 0),
     max_article_image_regenerations: Number(p.max_article_image_regenerations ?? 0),
+    is_trial_plan: Boolean(p.is_trial_plan),
+    trial_period_days: Number(p.trial_period_days ?? 0),
   };
 }
 
@@ -73,12 +81,17 @@ export default function DashboardPage() {
   const [website, setWebsite] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
+  const [dataMayBeStale, setDataMayBeStale] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState<string | null>(null);
   const [section, setSection] = useState<DashSection>("projects");
   const [sectionReady, setSectionReady] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showAddProject, setShowAddProject] = useState(false);
+  const [addProjectStep, setAddProjectStep] = useState<"form" | "platform">("form");
   const [showWpConnect, setShowWpConnect] = useState(false);
   const [wpProject, setWpProject] = useState<ProjectPublic | null>(null);
   const [wpSettings, setWpSettings] = useState<ProjectSettings | null>(null);
@@ -86,6 +99,13 @@ export default function DashboardPage() {
   const [wpAppPassword, setWpAppPassword] = useState("");
   const [wpVerify, setWpVerify] = useState<WordpressVerifyResponse | null>(null);
   const [wpVerifying, setWpVerifying] = useState(false);
+  const [showShopifyConnect, setShowShopifyConnect] = useState(false);
+  const [shopifyProject, setShopifyProject] = useState<ProjectPublic | null>(null);
+  const [shopifyShopUrl, setShopifyShopUrl] = useState("");
+  const [shopifyClientId, setShopifyClientId] = useState("");
+  const [shopifyClientSecret, setShopifyClientSecret] = useState("");
+  const [shopifyVerify, setShopifyVerify] = useState<{ ok: boolean; message: string } | null>(null);
+  const [shopifyConnecting, setShopifyConnecting] = useState(false);
 
   // Admin modules
   const [users, setUsers] = useState<AdminUserPublic[]>([]);
@@ -150,9 +170,47 @@ export default function DashboardPage() {
   const [newPlanMaxArticleImageRegenerations, setNewPlanMaxArticleImageRegenerations] = useState<number>(3);
   const [newPlanCostMonthly, setNewPlanCostMonthly] = useState<number>(0);
   const [newPlanIsDefault, setNewPlanIsDefault] = useState<boolean>(false);
+  const [newPlanIsTrialPlan, setNewPlanIsTrialPlan] = useState<boolean>(false);
+  const [newPlanTrialPeriodDays, setNewPlanTrialPeriodDays] = useState<number>(14);
 
   const token = useMemo(() => getAccessToken(), []);
   const isAdmin = (meRole || "").trim().toLowerCase() === "admin";
+
+  function normalizePlatform(p: ProjectPublic | null | undefined): ProjectPlatform {
+    const raw = ((p?.platform || "") as string).trim().toLowerCase();
+    return raw === "shopify" ? "shopify" : "wordpress";
+  }
+
+  const PlatformIcon = {
+    WordPress: (props: { className?: string }) => (
+      <svg viewBox="0 0 32 32" aria-hidden="true" className={props.className}>
+        <circle cx="16" cy="16" r="15" fill="currentColor" opacity="0.16" />
+        <path
+          d="M16 6.3c-5.36 0-9.7 4.34-9.7 9.7 0 4.28 2.76 7.9 6.6 9.18L8.9 14.6c-.37-.9.29-1.88 1.25-1.88h.7l3.25 8.95 2-6.03-1.38-3.8c-.28-.77.3-1.6 1.12-1.6h.28c.76 0 1.34.74 1.12 1.46l-.65 2.02 2.22 6.06 2.05-6.4c.26-.81.07-1.55-.16-2.04-.19-.38-.6-.98-.6-1.48 0-.58.44-1.12 1.07-1.12.05 0 .1.01.15.01A9.67 9.67 0 0 0 16 6.3Zm0 19.4c-1.06 0-2.07-.18-3.01-.5l3.2-9.29 3.16 9.18c.01.03.03.06.04.09-.98.33-2.03.52-3.39.52Zm4.73-1.07-2.6-7.1 2.38-7.09c.22-.69.9-1.12 1.62-1.03.44.91.7 1.94.7 3.03 0 4.14-2.6 7.66-6.24 9.19.05.02.1.04.14.06Z"
+          fill="currentColor"
+        />
+        <circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" opacity="0.28" />
+      </svg>
+    ),
+    Shopify: (props: { className?: string }) => (
+      <svg viewBox="0 0 32 32" aria-hidden="true" className={props.className}>
+        <path
+          d="M8.8 10.9 16 8.6l7.2 2.3c.4.1.7.5.7.9l-1.3 15.3c0 .5-.5.9-1 .9H10.4c-.5 0-.9-.4-1-.9L8.1 11.8c0-.4.3-.8.7-.9Z"
+          fill="currentColor"
+          opacity="0.16"
+        />
+        <path
+          d="M20.3 12.6c-.2-1.3-1-2.3-2-2.7.1-.2.1-.5.1-.7 0-1.5-.8-2.4-1.7-2.4-.7 0-1.2.6-1.5 1.3-.3-.1-.6-.1-.9 0-.7.3-1.1 1.2-1.3 2.4-.6.2-1.2.4-1.8.6l-.3 3.1c.6-.2 1.2-.4 1.8-.6 0 .2 0 .4 0 .6 0 2.3 1.5 3.7 3.8 3.7 1.4 0 2.6-.4 3.5-.9l.3-3.1c-.8.6-2 1.1-3.2 1.1-1.1 0-1.8-.5-1.8-1.6 0-.3 0-.6.1-.9 1.7-.5 3.2-1 4.8-1.4Zm-4.2-1.1c.1-.6.2-1 .3-1.4.2-.6.4-.8.6-.9.2.2.4.6.4 1.2 0 .1 0 .2 0 .3-.4.1-.9.3-1.3.4Z"
+          fill="currentColor"
+        />
+        <path
+          d="M23.4 10.2 16 7.8l-7.4 2.4c-.9.3-1.5 1.1-1.4 2l1.3 15.3c.1 1.1 1 2 2.1 2h11.2c1.1 0 2-.9 2.1-2L24.8 12c.1-.9-.5-1.7-1.4-2Zm-.6 17.2c0 .6-.5 1.1-1.1 1.1H10.3c-.6 0-1.1-.5-1.1-1.1L7.9 12.1c0-.5.3-.9.7-1.1L16 8.7l7.4 2.3c.4.1.7.6.7 1.1l-1.3 15.3Z"
+          fill="currentColor"
+          opacity="0.28"
+        />
+      </svg>
+    ),
+  };
 
   // Default section matches SSR; sync from ?section= after hydration (see project page tab pattern).
   useEffect(() => {
@@ -194,15 +252,40 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    setIsOnline(navigator.onLine);
+    const onOnline = () => {
+      setIsOnline(true);
+      setError(null);
+      void reloadProjects({ silent: true, fresh: true });
+      if (section === "overview") void reloadWorkspaceOverview();
+    };
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, section]);
+
+  useEffect(() => {
     if (!token) {
-      router.replace("/login");
+      router.replace("/");
       return;
+    }
+    const cached = loadCachedProjects();
+    if (cached?.length) {
+      setProjects(cached);
+      const age = cachedProjectsAgeMs();
+      if (age) setLastSyncedAt(age);
     }
     (async () => {
       setError(null);
       setLoading(true);
       try {
-        const me = await api.me();
+        const me = await api.me({ fresh: true, skipGlobalLoading: true });
         setMeEmail(me.email);
         setMePlan(me.subscription_type || "beta");
         const role = me.role || "user";
@@ -215,41 +298,107 @@ export default function DashboardPage() {
             router.replace("/dashboard");
           }
         }
-        const items = await api.listProjects();
+        const items = await api.listProjects({ fresh: true, skipGlobalLoading: true });
         setProjects(items);
-      } catch {
-        clearAuth();
-        router.replace("/login");
+        saveCachedProjects(items);
+        setLastSyncedAt(Date.now());
+        setDataMayBeStale(false);
+      } catch (e) {
+        if (isAuthError(e)) {
+          clearAuth();
+          router.replace("/");
+          return;
+        }
+        setDataMayBeStale(true);
+        setError(connectionErrorMessage(e));
+        if (!cached?.length) {
+          setProjects([]);
+        }
       } finally {
         setLoading(false);
       }
     })();
   }, [router, token]);
 
+  async function reloadProjects(opts?: { silent?: boolean; fresh?: boolean }) {
+    if (!token) return;
+    if (!navigator.onLine) {
+      setDataMayBeStale(true);
+      setError("You are offline. Reconnect to Wi‑Fi, then refresh.");
+      return;
+    }
+    if (opts?.silent) setRefreshing(true);
+    else setLoading(true);
+    try {
+      const items = await api.listProjects({
+        fresh: opts?.fresh !== false,
+        skipGlobalLoading: true,
+      });
+      setProjects(items);
+      saveCachedProjects(items);
+      setLastSyncedAt(Date.now());
+      setDataMayBeStale(false);
+      setError(null);
+    } catch (e) {
+      if (isAuthError(e)) {
+        clearAuth();
+        router.replace("/");
+        return;
+      }
+      setDataMayBeStale(true);
+      setError(connectionErrorMessage(e));
+    } finally {
+      if (opts?.silent) setRefreshing(false);
+      else setLoading(false);
+    }
+  }
+
+  async function reloadWorkspaceOverview() {
+    if (!token || !navigator.onLine) return;
+    setWorkspaceOverviewLoading(true);
+    setWorkspaceOverviewError(null);
+    try {
+      const data = await api.workspaceOverview({ fresh: true, skipGlobalLoading: true });
+      setWorkspaceOverview(data);
+    } catch (e) {
+      setWorkspaceOverview(null);
+      setWorkspaceOverviewError(connectionErrorMessage(e));
+    } finally {
+      setWorkspaceOverviewLoading(false);
+    }
+  }
+
+  // If a project is renamed inside `/projects/[id]`, Next may keep this page mounted.
+  // Refresh the list on focus/visibility so the dashboard always shows the latest name.
+  useEffect(() => {
+    if (!token) return;
+    const onFocus = () => void reloadProjects({ silent: true, fresh: true });
+    const onVis = () => {
+      if (document.visibilityState === "visible") void reloadProjects({ silent: true, fresh: true });
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      void reloadProjects({ silent: true, fresh: true });
+    }, 90_000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
   useEffect(() => {
     if (!token || section !== "overview") return;
-    let cancelled = false;
-    (async () => {
-      setWorkspaceOverviewLoading(true);
-      setWorkspaceOverviewError(null);
-      try {
-        const data = await api.workspaceOverview();
-        if (!cancelled) {
-          setWorkspaceOverview(data);
-          setWorkspaceOverviewError(null);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setWorkspaceOverview(null);
-          setWorkspaceOverviewError(e instanceof Error ? e.message : "Failed to load workspace overview");
-        }
-      } finally {
-        if (!cancelled) setWorkspaceOverviewLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    void reloadWorkspaceOverview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [section, token]);
 
   // Per-project GSC flow now redirects directly to /projects/{id}?tab=tools, so the
@@ -330,16 +479,64 @@ export default function DashboardPage() {
     }
   }
 
-  async function createProject() {
+  function openAddProject() {
+    setError(null);
+    setAddProjectStep("form");
+    setShowAddProject(true);
+  }
+
+  function closeAddProject() {
+    setShowAddProject(false);
+    setAddProjectStep("form");
+  }
+
+  function openShopifyConnect(project: ProjectPublic) {
+    setShopifyProject(project);
+    setShopifyShopUrl((project.website_url || "").trim());
+    setShopifyVerify(null);
+    setShopifyClientId("");
+    setShopifyClientSecret("");
+    setShowShopifyConnect(true);
+  }
+
+  function closeShopifyConnect() {
+    setShowShopifyConnect(false);
+    setShopifyProject(null);
+    setShopifyShopUrl("");
+    setShopifyClientId("");
+    setShopifyClientSecret("");
+    setShopifyVerify(null);
+  }
+
+  async function refreshProjectInList(projectId: string) {
+    try {
+      const fresh = await api.getProject(projectId, { skipGlobalLoading: true });
+      setProjects((prev) => prev.map((x) => (x.id === projectId ? { ...x, ...fresh } : x)));
+    } catch {
+      /* keep prior list state */
+    }
+  }
+
+  async function createProjectWithPlatform(platform: ProjectPlatform) {
     setError(null);
     setCreating(true);
     try {
-      const p = await api.createProject(name, website);
-      setProjects((prev) => [p, ...prev]);
+      let p = await api.createProject(name, platform, website);
+      const plat = (platform || "wordpress").trim().toLowerCase();
+      if ((p.platform || "").toLowerCase() !== plat) {
+        p = await api.updateProject(p.id, { platform: plat }, { skipGlobalLoading: true });
+      }
+      setProjects((prev) => [{ ...p, platform: plat }, ...prev]);
       setName("");
       setWebsite("");
-      setShowAddProject(false);
-      // Immediately begin WordPress connect flow for the new project.
+      closeAddProject();
+
+      if (plat === "shopify") {
+        invalidateProjectSettingsCache(p.id);
+        openShopifyConnect({ ...p, platform: "shopify" });
+        return;
+      }
+
       setWpProject(p);
       setWpVerify(null);
       setWpUsername("");
@@ -360,7 +557,7 @@ export default function DashboardPage() {
 
   function logout() {
     clearAuth();
-    router.replace("/login");
+    router.replace("/");
   }
 
   async function saveUser(u: AdminUserPublic) {
@@ -477,6 +674,18 @@ export default function DashboardPage() {
     );
   }
 
+  function updateTrialPlanDraft(key: string, checked: boolean) {
+    setPlans((prev) =>
+      prev.map((p) =>
+        p.key === key
+          ? { ...p, is_trial_plan: checked, trial_period_days: checked ? p.trial_period_days || 14 : 0 }
+          : checked
+            ? { ...p, is_trial_plan: false }
+            : p,
+      ),
+    );
+  }
+
   async function createPlan() {
     const key = newPlanKey.trim().toLowerCase();
     if (!key) return;
@@ -496,6 +705,8 @@ export default function DashboardPage() {
       max_custom_research_per_month: newPlanMaxCustomResearchPerMonth,
       max_context_links: newPlanMaxContextLinks,
       max_article_image_regenerations: newPlanMaxArticleImageRegenerations,
+      is_trial_plan: newPlanIsTrialPlan,
+      trial_period_days: newPlanIsTrialPlan ? newPlanTrialPeriodDays : 0,
     });
     setNewPlanKey("");
     setNewPlanName("");
@@ -512,6 +723,8 @@ export default function DashboardPage() {
     setNewPlanMaxArticleImageRegenerations(3);
     setNewPlanCostMonthly(0);
     setNewPlanIsDefault(false);
+    setNewPlanIsTrialPlan(false);
+    setNewPlanTrialPeriodDays(14);
   }
 
   async function saveProfile() {
@@ -655,6 +868,28 @@ export default function DashboardPage() {
 
           <section className={styles.contentCol}>
             {error ? <div className={styles.error}>{error}</div> : null}
+            {!isOnline ? (
+              <div className={styles.error} style={{ marginBottom: 12 }}>
+                You are offline. Data below may be outdated until Wi‑Fi is restored.
+              </div>
+            ) : null}
+            {dataMayBeStale && isOnline && !error ? (
+              <div className={styles.muted} style={{ marginBottom: 12, fontSize: 13, lineHeight: 1.5 }}>
+                Showing last known project list
+                {lastSyncedAt
+                  ? ` from ${new Date(lastSyncedAt).toLocaleString()}`
+                  : ""}
+                .{" "}
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  style={{ marginLeft: 6, padding: "2px 10px", fontSize: 12 }}
+                  onClick={() => void reloadProjects({ fresh: true })}
+                >
+                  Refresh now
+                </button>
+              </div>
+            ) : null}
 
             {section === "overview" ? (
               <>
@@ -664,7 +899,7 @@ export default function DashboardPage() {
                 </div>
                 <WorkspaceProjectOverview
                   data={workspaceOverview}
-                  loading={workspaceOverviewLoading || loading || !sectionReady}
+                  loading={!sectionReady || (workspaceOverviewLoading && !workspaceOverview)}
                   error={workspaceOverviewError}
                   styles={dashStyles as unknown as Record<string, string>}
                   onGoProjects={() => goSection("projects")}
@@ -689,17 +924,37 @@ export default function DashboardPage() {
                         type="button"
                         onClick={() => {
                           setError(null);
-                          setShowAddProject(true);
+                          openAddProject();
                         }}
                       >
                         + Add project
                       </button>
-                      <div className={dashStyles.mutedCount}>{loading ? "Loading…" : `${projects.length} total`}</div>
+                      <button
+                        type="button"
+                        className={styles.btnSecondary}
+                        disabled={loading || refreshing}
+                        onClick={() => void reloadProjects({ fresh: true })}
+                        title="Fetch latest projects from the server"
+                      >
+                        {loading || refreshing ? "Refreshing…" : "Refresh"}
+                      </button>
+                      <div className={dashStyles.mutedCount}>
+                        {loading
+                          ? "Loading…"
+                          : `${projects.length} total${
+                              lastSyncedAt && !dataMayBeStale
+                                ? ` · synced ${new Date(lastSyncedAt).toLocaleTimeString()}`
+                                : ""
+                            }`}
+                      </div>
                     </div>
                   </div>
 
                   {!loading && projects.length === 0 ? <p className={styles.muted}>No projects yet.</p> : null}
 
+                  {loading && projects.length === 0 ? (
+                    <DashboardProjectsSkeleton />
+                  ) : (
                   <div className={styles.grid}>
                     {projects.map((p) => (
                       <div
@@ -760,14 +1015,47 @@ export default function DashboardPage() {
                                 >
                                   Project settings
                                 </button>
+                                {normalizePlatform(p) === "shopify" ? (
+                                  <button
+                                    type="button"
+                                    className={styles.projectMenuItem}
+                                    role="menuitem"
+                                    onClick={() => {
+                                      setProjectMenuOpen(null);
+                                      openShopifyConnect(p);
+                                    }}
+                                  >
+                                    {p.shopify_connected ? "Shopify connection" : "Connect Shopify store"}
+                                  </button>
+                                ) : null}
                               </div>
                             ) : null}
                           </div>
                         </div>
                         <div className={styles.muted}>{p.website_url || "—"}</div>
+                        <div className={styles.projectPlatformRow} aria-label={`Platform ${normalizePlatform(p)}`}>
+                          {normalizePlatform(p) === "shopify" ? (
+                            <>
+                              <PlatformIcon.Shopify className={styles.projectPlatformLogo} />
+                              <span className={styles.projectPlatformLabel}>Shopify</span>
+                              <span
+                                className={styles.projectConnectionPill}
+                                data-state={p.shopify_connected ? "verified" : "pending"}
+                              >
+                                {p.shopify_connected ? "Connected" : "Not connected"}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <PlatformIcon.WordPress className={styles.projectPlatformLogo} />
+                              <span className={styles.projectPlatformLabel}>WordPress</span>
+                            </>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
+                  )}
                 </div>
               </>
             ) : null}
@@ -780,7 +1068,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
-                  {usersLoading ? <div className={styles.muted}>Loading users…</div> : null}
+                  {usersLoading ? <DetailPanelSkeleton /> : null}
                   {!usersLoading ? (
                     <table className={styles.table}>
                       <thead>
@@ -935,6 +1223,31 @@ export default function DashboardPage() {
                       </div>
                     </label>
                     <label className={styles.label}>
+                      Trial Period
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        <input
+                          type="checkbox"
+                          checked={newPlanIsTrialPlan}
+                          onChange={(e) => setNewPlanIsTrialPlan(e.target.checked)}
+                        />
+                        <span className={styles.muted} style={{ fontSize: 12 }}>
+                          Trial period time (in days):
+                        </span>
+                        <input
+                          className={styles.input}
+                          style={{ width: 140 }}
+                          type="number"
+                          min={1}
+                          value={newPlanTrialPeriodDays}
+                          onChange={(e) => setNewPlanTrialPeriodDays(Number(e.target.value || 1))}
+                          disabled={!newPlanIsTrialPlan}
+                        />
+                      </div>
+                      <span className={styles.muted} style={{ fontSize: 12 }}>
+                        Only one plan can be the self-expiring trial plan. Trial starts at account creation.
+                      </span>
+                    </label>
+                    <label className={styles.label}>
                       Enable Export Articles
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                         <input type="checkbox" checked={newPlanAllowExport} onChange={(e) => setNewPlanAllowExport(e.target.checked)} />
@@ -1017,7 +1330,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
-                  {plansLoading ? <div className={styles.muted}>Loading plans…</div> : null}
+                  {plansLoading ? <FormFieldsSkeleton fields={5} /> : null}
                   {!plansLoading ? (
                     <div className={dashStyles.stackGrid}>
                       {plans.map((p) => (
@@ -1054,6 +1367,30 @@ export default function DashboardPage() {
                                 <span className={styles.muted} style={{ fontSize: 12 }}>
                                   One default at a time.
                                 </span>
+                              </div>
+                            </label>
+                            <label className={styles.label}>
+                              Trial Period
+                              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(p.is_trial_plan)}
+                                  onChange={(e) => updateTrialPlanDraft(p.key, e.target.checked)}
+                                />
+                                <span className={styles.muted} style={{ fontSize: 12 }}>
+                                  Trial period time (in days):
+                                </span>
+                                <input
+                                  className={styles.input}
+                                  style={{ width: 140 }}
+                                  type="number"
+                                  min={1}
+                                  value={Number(p.trial_period_days ?? 14)}
+                                  onChange={(e) =>
+                                    updatePlanDraft(p.key, { trial_period_days: Number(e.target.value || 1) })
+                                  }
+                                  disabled={!p.is_trial_plan}
+                                />
                               </div>
                             </label>
                             <label className={styles.label}>
@@ -1221,7 +1558,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
-                  {profileLoading ? <div className={styles.muted}>Loading profile…</div> : null}
+                  {profileLoading ? <FormFieldsSkeleton fields={4} /> : null}
                   {profile ? (
                     <div className={dashStyles.profileGrid}>
                       <label className={styles.label}>
@@ -1295,38 +1632,229 @@ export default function DashboardPage() {
 
       {showAddProject ? (
         <>
-          <button
-            type="button"
-            className={styles.modalBackdrop}
-            aria-label="Close"
-            onClick={() => setShowAddProject(false)}
-          />
+          <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={closeAddProject} />
           <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Add project">
             <div className={styles.modalHead}>
-              <h3 className={styles.modalTitle}>Add project</h3>
-              <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowAddProject(false)}>
+              <h3 className={styles.modalTitle}>
+                {addProjectStep === "form" ? "Add project" : "Which platform is your site on?"}
+              </h3>
+              <button type="button" className={styles.iconButton} aria-label="Close" onClick={closeAddProject}>
                 <Icon.X className={styles.icon20} />
               </button>
             </div>
 
             <div className={styles.modalBody}>
-              <label className={styles.label}>
-                Project name
-                <input className={styles.input} value={name} onChange={(e) => setName(e.target.value)} />
-              </label>
-              <label className={styles.label}>
-                Website URL
-                <input className={styles.input} value={website} onChange={(e) => setWebsite(e.target.value)} />
-              </label>
-              {error ? <p className={styles.error}>{error}</p> : null}
+              {addProjectStep === "form" ? (
+                <>
+                  <label className={styles.label}>
+                    Project name
+                    <input className={styles.input} value={name} onChange={(e) => setName(e.target.value)} />
+                  </label>
+                  <label className={styles.label}>
+                    Website URL
+                    <input
+                      className={styles.input}
+                      value={website}
+                      onChange={(e) => setWebsite(e.target.value)}
+                      placeholder="https://example.com or my-store.myshopify.com"
+                    />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <p className={styles.muted} style={{ fontSize: 13, lineHeight: 1.5, margin: "0 0 16px" }}>
+                    Choose how this project connects. Shopify projects only show Shopify settings; WordPress
+                    projects only show WordPress settings.
+                  </p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <div
+                      style={{
+                        padding: 16,
+                        border: "1px solid var(--button-secondary-border)",
+                        borderRadius: 10,
+                        textAlign: "left",
+                      }}
+                    >
+                      <div style={{ fontWeight: 800, fontSize: 15, color: "#21759b", marginBottom: 6 }}>WordPress</div>
+                      <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45 }}>
+                        Plugin + application password. Use the button below: Create WordPress project.
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        padding: 16,
+                        border: "1px solid rgba(150, 191, 72, 0.5)",
+                        borderRadius: 10,
+                        textAlign: "left",
+                        background: "color-mix(in oklab, #96bf48 10%, transparent)",
+                      }}
+                    >
+                      <div style={{ fontWeight: 800, fontSize: 15, color: "#5f7f1a", marginBottom: 6 }}>Shopify</div>
+                      <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45 }}>
+                        Connect with your shop URL + Admin API token (custom app). Use the button below: Create Shopify
+                        project.
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+              {error ? <p className={styles.error} style={{ marginTop: 12 }}>{error}</p> : null}
             </div>
 
             <div className={styles.modalFooter}>
-              <button type="button" className={styles.btnSecondary} onClick={() => setShowAddProject(false)}>
+              {addProjectStep === "platform" ? (
+                <button type="button" className={styles.btnSecondary} onClick={() => setAddProjectStep("form")}>
+                  Back
+                </button>
+              ) : (
+                <button type="button" className={styles.btnSecondary} onClick={closeAddProject}>
+                  Cancel
+                </button>
+              )}
+              {addProjectStep === "form" ? (
+                <button
+                  className={styles.button}
+                  type="button"
+                  onClick={() => {
+                    if (!name.trim()) return;
+                    setAddProjectStep("platform");
+                  }}
+                  disabled={!name.trim()}
+                >
+                  Next
+                </button>
+              ) : (
+                <>
+                  <button
+                    className={styles.btnSecondary}
+                    type="button"
+                    disabled={creating}
+                    onClick={() => void createProjectWithPlatform("wordpress")}
+                  >
+                    {creating ? "Creating…" : "Create WordPress project"}
+                  </button>
+                  <button
+                    className={styles.button}
+                    type="button"
+                    disabled={creating}
+                    onClick={() => void createProjectWithPlatform("shopify")}
+                  >
+                    {creating ? "Creating…" : "Create Shopify project"}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {showShopifyConnect && shopifyProject ? (
+        <>
+          <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={closeShopifyConnect} />
+          <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Connect Shopify store">
+            <div className={styles.modalHead}>
+              <h3 className={styles.modalTitle}>Connect Shopify — {shopifyProject.name}</h3>
+              <button type="button" className={styles.iconButton} aria-label="Close" onClick={closeShopifyConnect}>
+                <Icon.X className={styles.icon20} />
+              </button>
+            </div>
+            <div className={styles.modalBody}>
+              <div className={styles.muted} style={{ fontSize: 13, lineHeight: 1.5, marginBottom: 12 }}>
+                Enter your store URL and Developer Dashboard <strong>Client ID</strong> + <strong>Client secret</strong> (
+                <code>shpss_…</code>). Riviso exchanges them for an API token automatically.
+              </div>
+              <ShopifyManualConnectGuide defaultOpen />
+              <label className={styles.label} style={{ marginTop: 14 }}>
+                Shopify store URL
+                <input
+                  className={styles.input}
+                  value={shopifyShopUrl}
+                  onChange={(e) => setShopifyShopUrl(e.target.value)}
+                  placeholder="brandname.myshopify.com"
+                />
+              </label>
+              <label className={styles.label}>
+                Client ID
+                <input
+                  className={styles.input}
+                  value={shopifyClientId}
+                  onChange={(e) => setShopifyClientId(e.target.value)}
+                  placeholder="Developer Dashboard → Settings"
+                  autoComplete="off"
+                />
+              </label>
+              <label className={styles.label}>
+                Client secret
+                <input
+                  className={styles.input}
+                  type="password"
+                  value={shopifyClientSecret}
+                  onChange={(e) => setShopifyClientSecret(e.target.value)}
+                  placeholder="shpss_…"
+                  autoComplete="off"
+                />
+              </label>
+              <div className={styles.row} style={{ marginTop: 14 }}>
+                <button
+                  className={styles.button}
+                  type="button"
+                  disabled={
+                    shopifyConnecting ||
+                    !shopifyShopUrl.trim() ||
+                    !shopifyClientId.trim() ||
+                    !shopifyClientSecret.trim()
+                  }
+                  onClick={async () => {
+                    setShopifyVerify(null);
+                    setShopifyConnecting(true);
+                    try {
+                      const shop = shopifyShopUrl.trim();
+                      const res = await api.connectShopify(shopifyProject.id, {
+                        shop,
+                        client_id: shopifyClientId.trim(),
+                        client_secret: shopifyClientSecret.trim(),
+                      });
+                      setShopifyVerify({ ok: res.ok, message: res.message });
+                      if (res.ok) {
+                        setShopifyClientSecret("");
+                        await refreshProjectInList(shopifyProject.id);
+                      }
+                    } catch (e) {
+                      setShopifyVerify({
+                        ok: false,
+                        message: e instanceof Error ? e.message : "Connection failed",
+                      });
+                    } finally {
+                      setShopifyConnecting(false);
+                    }
+                  }}
+                >
+                  {shopifyConnecting ? "Connecting…" : "Connect store"}
+                </button>
+              </div>
+              {shopifyVerify ? (
+                <div
+                  className={shopifyVerify.ok ? styles.muted : styles.error}
+                  style={{ fontSize: 13, marginTop: 12, whiteSpace: "pre-wrap" }}
+                >
+                  {shopifyVerify.message}
+                </div>
+              ) : null}
+            </div>
+            <div className={styles.modalFooter}>
+              <button type="button" className={styles.btnSecondary} onClick={closeShopifyConnect}>
                 Cancel
               </button>
-              <button className={styles.button} type="button" onClick={createProject} disabled={creating || !name.trim()}>
-                {creating ? "Creating…" : "Create"}
+              <button
+                className={styles.button}
+                type="button"
+                disabled={!shopifyVerify?.ok}
+                onClick={() => {
+                  closeShopifyConnect();
+                  router.push(`/projects/${shopifyProject.id}?tab=project_settings`);
+                }}
+              >
+                Continue
               </button>
             </div>
           </div>
@@ -1370,7 +1898,7 @@ export default function DashboardPage() {
                   type="button"
                   onClick={async () => {
                     try {
-                      await downloadWordpressPlugin();
+                      await downloadWordpressPlugin(wpSettings?.plugin_download_url);
                     } catch (e) {
                       const msg = e instanceof Error ? e.message : "Could not download plugin.";
                       window.alert(msg);
@@ -1461,7 +1989,7 @@ export default function DashboardPage() {
             </div>
 
             <div className={styles.modalBody}>
-              {userDetailsLoading ? <div className={styles.muted}>Loading…</div> : null}
+              {userDetailsLoading ? <DetailPanelSkeleton /> : null}
               {userDetails ? (
                 <>
                   <div className={styles.subtleCard}>
@@ -1542,7 +2070,7 @@ export default function DashboardPage() {
               </button>
             </div>
             <div className={`${styles.modalBody} ${dashStyles.workspaceModalBody}`}>
-              {userWorkspaceLoading ? <div className={styles.muted}>Loading projects and articles…</div> : null}
+              {userWorkspaceLoading ? <DetailPanelSkeleton /> : null}
               {userWorkspace ? (
                 <>
                   <div className={dashStyles.workspaceSection}>

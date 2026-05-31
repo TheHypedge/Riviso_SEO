@@ -13,6 +13,10 @@ from typing import Any
 
 from app.core.config import settings
 from app.services.openai_client import OpenAIClient
+from app.services.title_humanization_guardrail import (
+    apply_cluster_map_title_guardrails,
+    format_cluster_planning_title_guardrail_system_appendix,
+)
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +55,7 @@ async def derive_topical_cluster_map(
         "rules": {
             "pillar": "One broad pillar page that could anchor the whole cluster in search.",
             "clusters": "4 to 6 supporting articles that interlink with the pillar; each must be distinct.",
-            "titles": "Clear, non-clickbait, <= 90 chars.",
+            "titles": "Human-curated, non-formulaic, <= 90 chars. Follow pillar vs cluster title guardrails.",
             "keywords": "5-10 supporting terms per topic, no duplicates within that topic.",
         },
         "output_schema": {
@@ -76,6 +80,7 @@ async def derive_topical_cluster_map(
         + "\nDerive a topical authority map from the seed intent and SERP competitors.\n"
         "If SERP results are empty, infer realistic competitor themes from the seed alone.\n"
         "Clusters array must have length 4, 5, or 6.\n"
+        + format_cluster_planning_title_guardrail_system_appendix(serp_results=serp_results)
     )
 
     obj = await client.chat_json(
@@ -151,4 +156,7 @@ async def derive_topical_cluster_map(
         raise RuntimeError(f"Model returned only {len(clusters_out)} clusters; need at least 4")
     clusters_out = clusters_out[:6]
 
-    return {"pillar": pillar, "clusters": clusters_out}
+    return apply_cluster_map_title_guardrails(
+        {"pillar": pillar, "clusters": clusters_out},
+        seed_intent=seed_intent,
+    )

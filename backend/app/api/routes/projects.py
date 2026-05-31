@@ -9,6 +9,8 @@ from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.projects import ProjectCreate, ProjectPublic, ProjectUpdate
+from app.services.mongo_listings_async import fetch_projects_listing
+from app.services.plan_gatekeeper import PlanAction, require_plan_action
 
 
 # ISO-3166 alpha-2 → display name. Tiny lookup so the auto-derived
@@ -191,11 +193,21 @@ def _normalize_url(raw: str | None) -> str:
 
 
 def _to_public(p: dict) -> ProjectPublic:
+    platform = ((p.get("platform") or "wordpress").strip().lower() or "wordpress")
+    if platform != "shopify":
+        if (p.get("shopify_access_token") or "").strip() or (p.get("shopify_shop") or "").strip():
+            platform = "shopify"
     return ProjectPublic(
         id=(p.get("id") or "").strip(),
         owner_user_id=(p.get("owner_user_id") or "").strip(),
         name=(p.get("name") or "").strip(),
         website_url=(p.get("website_url") or "").strip() or None,
+        platform=platform,
+        shopify_connected=(
+            (p.get("shopify_verified_status") or "").strip().lower() == "connected"
+            and bool((p.get("shopify_verified_at") or "").strip())
+        ),
+        shopify_sync_status=(p.get("shopify_sync_status") or "").strip() or None,
         brand_identity=(p.get("brand_identity") or "").strip() or None,
         niche_identifier=(p.get("niche_identifier") or "").strip() or None,
         brand_voice=(p.get("brand_voice") or "").strip() or None,
@@ -216,11 +228,10 @@ def _to_public(p: dict) -> ProjectPublic:
 
 @router.get("", response_model=list[ProjectPublic])
 async def list_projects(user: dict = Depends(get_current_user)) -> list[ProjectPublic]:
-    st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
     # Workspace project list is always scoped to the signed-in account (including admins).
     # Admins browse other accounts' projects via Manage users → workspace view.
-    projects = st.load_projects(uid) or []
+    projects = await fetch_projects_listing(uid)
     out: list[ProjectPublic] = []
     for p in projects:
         if not isinstance(p, dict):
@@ -234,7 +245,10 @@ async def list_projects(user: dict = Depends(get_current_user)) -> list[ProjectP
 
 
 @router.post("", response_model=ProjectPublic, status_code=201)
-async def create_project(payload: ProjectCreate, user: dict = Depends(get_current_user)) -> ProjectPublic:
+async def create_project(
+    payload: ProjectCreate,
+    user: dict = Depends(require_plan_action(PlanAction.CREATE_PROJECT, consume=False)),
+) -> ProjectPublic:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
@@ -268,14 +282,38 @@ async def create_project(payload: ProjectCreate, user: dict = Depends(get_curren
     pid = str(uuid.uuid4())
     default_writing_id = str(uuid.uuid4())
     default_image_id = str(uuid.uuid4())
+    platform = ((payload.platform or "wordpress").strip().lower() or "wordpress")
+    if platform not in ("wordpress", "shopify"):
+        platform = "wordpress"
     url = _normalize_url(payload.website_url)
+    shop = ""
+    if platform == "shopify":
+        from app.services.shopify_oauth import resolve_shop_domain
+
+        raw_site = url or payload.website_url or ""
+        shop, public_url, _err = await resolve_shop_domain(raw_site)
+        if shop:
+            url = public_url or f"https://{shop}"
+        elif url:
+            shop = ""
+        else:
+            url = ""
     st.insert_project(
         {
             "id": pid,
             "owner_user_id": uid,
             "name": payload.name.strip()[:200],
+            "platform": platform,
             "website_url": url,
-            "wp_site_url": url,
+            "wp_site_url": url if platform == "wordpress" else "",
+            "shopify_shop": shop,
+            "shopify_access_token": "",
+            "shopify_scope": "",
+            "shopify_connected_at": "",
+            "shopify_sync_at": "",
+            "shopify_sync_status": "",
+            "shopify_sync_message": "",
+            "shopify_catalog": {},
             "wp_username": "",
             "wp_app_password": "",
             "wp_category_ids": "",
@@ -292,6 +330,8 @@ async def create_project(payload: ProjectCreate, user: dict = Depends(get_curren
         }
     )
     proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    if not proj and hasattr(st, "get_project_access_row"):
+        proj = st.get_project_access_row(pid)
     if not proj:
         raise HTTPException(status_code=500, detail="Project creation failed")
     return _to_public(proj)
@@ -303,10 +343,17 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user)) -
     pid = (project_id or "").strip()
     if not pid:
         raise HTTPException(status_code=404, detail="Not found")
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    uid = (user.get("id") or "").strip()
+    proj = st.get_project_listing_by_id(pid) if hasattr(st, "get_project_listing_by_id") else None
+    if not proj:
+        projects = (
+            st.load_projects_listing(uid)
+            if hasattr(st, "load_projects_listing")
+            else st.load_projects() or []
+        )
+        proj = next((p for p in projects if isinstance(p, dict) and (p.get("id") or "") == pid), None)
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
-    uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
     if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
         raise HTTPException(status_code=404, detail="Not found")
@@ -317,7 +364,12 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user)) -
 async def update_project(project_id: str, payload: ProjectUpdate, user: dict = Depends(get_current_user)) -> ProjectPublic:
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    if hasattr(st, "get_project_listing_by_id"):
+        proj = st.get_project_listing_by_id(pid)
+    else:
+        proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    if not proj and hasattr(st, "get_project_access_row"):
+        proj = st.get_project_access_row(pid)
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
@@ -326,12 +378,19 @@ async def update_project(project_id: str, payload: ProjectUpdate, user: dict = D
         raise HTTPException(status_code=404, detail="Not found")
 
     updates: dict = {}
+    current_platform = ((proj.get("platform") or "wordpress").strip().lower() or "wordpress")
+    if payload.platform is not None:
+        plat = (payload.platform or "").strip().lower()
+        if plat in ("wordpress", "shopify") and plat != current_platform:
+            updates["platform"] = plat
+            current_platform = plat
     if payload.name is not None:
         updates["name"] = payload.name.strip()[:200]
     if payload.website_url is not None:
         url = _normalize_url(payload.website_url)
         updates["website_url"] = url
-        updates.setdefault("wp_site_url", url)
+        if current_platform != "shopify":
+            updates.setdefault("wp_site_url", url)
 
     # Legacy text fields. Accepted for back-compat, but if structured
     # fields are also present below we will overwrite these with the
@@ -433,7 +492,9 @@ async def update_project(project_id: str, payload: ProjectUpdate, user: dict = D
 
     if updates:
         st.update_project_fields(pid, updates)
-    proj2 = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    proj2 = st.get_project_listing_by_id(pid) if hasattr(st, "get_project_listing_by_id") else None
+    if not proj2:
+        proj2 = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
     if not proj2:
         raise HTTPException(status_code=404, detail="Not found")
     return _to_public(proj2)
@@ -453,6 +514,8 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
     proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    if not proj and hasattr(st, "get_project_access_row"):
+        proj = st.get_project_access_row(pid)
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
@@ -529,6 +592,8 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
     proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    if not proj and hasattr(st, "get_project_access_row"):
+        proj = st.get_project_access_row(pid)
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
@@ -663,6 +728,8 @@ async def delete_project(project_id: str, user: dict = Depends(get_current_user)
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
     proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    if not proj and hasattr(st, "get_project_access_row"):
+        proj = st.get_project_access_row(pid)
     if not proj:
         return Response(status_code=204)
     uid = (user.get("id") or "").strip()

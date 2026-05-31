@@ -4,6 +4,28 @@ export type TokenPair = {
   token_type: "bearer";
 };
 
+export type RegisterPendingResponse = {
+  ok: boolean;
+  requires_verification: boolean;
+  message: string;
+  email: string;
+  retry_after_seconds?: number;
+};
+
+export type ResendVerificationResponse = {
+  ok: boolean;
+  message: string;
+  retry_after_seconds: number;
+};
+
+export type VerifyEmailResponse = {
+  ok: boolean;
+  message: string;
+  access_token?: string | null;
+  refresh_token?: string | null;
+  token_type?: string;
+};
+
 export type UserPublic = {
   id: string;
   email: string;
@@ -102,6 +124,36 @@ export type PlanPublic = {
   max_custom_research_per_month?: number | null;
   max_context_links?: number | null;
   max_article_image_regenerations?: number | null;
+  is_trial_plan?: boolean | null;
+  trial_period_days?: number | null;
+};
+
+export type SubscriptionStatusPublic = {
+  status: "active" | "trial_expired" | "no_trial" | string;
+  plan_key: string;
+  plan_name?: string | null;
+  trial_start_date?: string | null;
+  trial_end_date?: string | null;
+  remaining_days: number;
+  remaining_hours: number;
+  remaining_minutes: number;
+  is_trial_plan: boolean;
+  usage: {
+    articlesGeneratedToday: number;
+    articlesGeneratedThisMonth: number;
+    regenerationsThisMonth: number;
+    schedulesThisMonth: number;
+    exportsThisMonth: number;
+  };
+  features: {
+    projectsMax?: number | null;
+    articlesPerMonth?: number | null;
+    articlesPerDay?: number | null;
+    regenerationsPerMonth?: number | null;
+    schedulesMax?: number | null;
+    allowBulkUpload: boolean;
+    allowBulkExport: boolean;
+  };
 };
 
 export type MonthlyFeatureLimit = {
@@ -161,11 +213,16 @@ export type ProfilePublic = {
   created_at?: string | null;
 };
 
+export type ProjectPlatform = "wordpress" | "shopify";
+
 export type ProjectPublic = {
   id: string;
   owner_user_id: string;
   name: string;
   website_url?: string | null;
+  platform?: ProjectPlatform | string;
+  shopify_connected?: boolean;
+  shopify_sync_status?: string | null;
   /**
    * Legacy plain-text representations. Always populated by the backend —
    * if the structured fields below are set the backend rebuilds these from
@@ -192,7 +249,19 @@ export type ProjectPublic = {
 export type ProjectSettings = {
   id: string;
   name: string;
+  platform?: ProjectPlatform | string;
   website_url?: string | null;
+  shopify_shop?: string | null;
+  shopify_connected?: boolean;
+  shopify_client_id?: string | null;
+  shopify_client_secret_set?: boolean;
+  shopify_access_token_set?: boolean;
+  shopify_access_token?: string | null;
+  shopify_verified_at?: string | null;
+  shopify_verified_status?: string | null;
+  shopify_verified_message?: string | null;
+  shopify_product_aware_enabled?: boolean;
+  wp_internal_link_aware_enabled?: boolean;
   wp_site_url?: string | null;
   wp_username?: string | null;
   wp_app_password_set: boolean;
@@ -356,6 +425,41 @@ export type TopicClusterGenerateAllResponse = {
   cluster: TopicCluster;
   errors: TopicClusterGenError[];
 };
+
+export type TopicClusterQueuedResponse = {
+  status: "queued";
+  job_id: string;
+  cluster_id: string;
+  message: string;
+};
+
+export type TopicClusterWaitOptions = {
+  onProgress?: (cluster: TopicCluster) => void;
+  intervalMs?: number;
+  maxWaitMs?: number;
+  skipGlobalLoading?: boolean;
+};
+
+export function isTopicClusterQueuedResponse(value: unknown): value is TopicClusterQueuedResponse {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    (value as TopicClusterQueuedResponse).status === "queued" &&
+    typeof (value as TopicClusterQueuedResponse).cluster_id === "string"
+  );
+}
+
+async function sleepMs(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export const TOPIC_CLUSTER_BUSY_STATUSES = new Set(["planning", "generating"]);
+
+export function mergeTopicClusterInList(clusters: TopicCluster[], row: TopicCluster): TopicCluster[] {
+  const id = (row.id || "").trim();
+  if (!id) return clusters;
+  return [row, ...clusters.filter((c) => c.id !== id)];
+}
 
 export type TopicClusterImportResponse = {
   ok: boolean;
@@ -545,6 +649,19 @@ export type WorkspaceOverviewResponse = {
   drafts: WorkspaceFeedItem[];
 };
 
+/** Paginated Articles tab row — no body HTML (see GET .../articles). */
+export type ArticleListItem = {
+  id: string;
+  project_id: string;
+  title: string;
+  status: string;
+  keywords?: string[];
+  focus_keyphrase?: string | null;
+  gsc_status?: string | null;
+  wp_link?: string | null;
+  monitor_status?: string | null;
+};
+
 export type ArticlePublic = {
   id: string;
   project_id: string;
@@ -560,16 +677,22 @@ export type ArticlePublic = {
   wp_link?: string | null;
   wp_post_id?: number | string | null;
   wp_rest_base?: string | null;
+  wp_last_wp_status?: string | null;
+  wp_modified_at?: string | null;
+  wp_synced_at?: string | null;
   gsc_status?: string | null;
   hasBody?: boolean | null;
   monitor_status?: string | null; // Feature 4: "fresh" | "stale" | "unknown" | ""
   monitor_last_checked_at?: string | null;
   internal_links_count?: number | null; // Feature 3
   image_url?: string | null;
+  shopify_blog_id?: number | null;
+  shopify_article_id?: number | null;
+  shopify_link?: string | null;
 };
 
 export type ArticleListPage = {
-  items: ArticlePublic[];
+  items: ArticleListItem[];
   total: number;
   page: number;
   per_page: number;
@@ -596,16 +719,207 @@ export type BulkUploadRow = {
   keywords?: string[];
 };
 
+export type ClusterLinkSibling = {
+  slot_id: string;
+  role: "pillar" | "cluster" | string;
+  title: string;
+  article_id?: string | null;
+  post_url?: string | null;
+  is_live: boolean;
+};
+
+export type ClusterLinkContext = {
+  cluster_id: string;
+  role: "pillar" | "cluster" | string;
+  slot_id: string;
+  auto_link_ready: boolean;
+  live_sibling_count: number;
+  siblings: ClusterLinkSibling[];
+};
+
 export type ArticleDetail = ArticlePublic & {
   article: string;
   meta_title?: string | null;
   meta_description?: string | null;
   image_url?: string | null;
+  generated_at?: string | null;
   has_featured_image?: boolean;
   featured_image_regeneration_count?: number;
   featured_image_regeneration_limit?: number | null;
   featured_image_regeneration_remaining?: number | null;
   featured_image_regeneration_unlimited?: boolean;
+  integrity_ai_percentage?: number | null;
+  integrity_flagged_paragraphs?: { index: number; text: string; reason: string }[] | null;
+  integrity_last_audited_at?: string | null;
+  topic_cluster_id?: string | null;
+  topic_slot_id?: string | null;
+  topic_role?: string | null;
+  cluster_link_context?: ClusterLinkContext | null;
+};
+
+export type ArticleOperationQueuedResponse = {
+  status: "queued";
+  job_id: string;
+  article_id: string;
+  message: string;
+};
+
+export type ArticleGenerationStatus = {
+  id: string;
+  status: string;
+  generated_at?: string | null;
+  has_body: boolean;
+  has_featured_image: boolean;
+  featured_image_regeneration_count: number;
+};
+
+export type ArticleGenerationWaitOptions = {
+  previousGeneratedAt?: string | null;
+  expectImage?: boolean;
+  intervalMs?: number;
+  maxWaitMs?: number;
+  skipGlobalLoading?: boolean;
+};
+
+/** Poll generation-status while a worker runs (Mongo + queue can be slow). */
+const GENERATION_STATUS_TIMEOUT_MS = 45_000;
+/** Default max wait for queued article generation (matches long-running backend work). */
+const GENERATION_POLL_MAX_WAIT_MS = 600_000;
+const POLL_INITIAL_INTERVAL_MS = 4000;
+const POLL_MAX_INTERVAL_MS = 12000;
+const POLL_BACKOFF_FACTOR = 1.35;
+const FEATURED_IMAGE_FETCH_MAX_ATTEMPTS = 4;
+const FEATURED_IMAGE_FETCH_RETRY_MS = 1500;
+
+async function fetchArticleFeaturedImageResolved(
+  projectId: string,
+  articleId: string,
+  opts?: ApiFetchOptions & { fresh?: boolean; maxAttempts?: number },
+): Promise<string> {
+  const maxAttempts = opts?.maxAttempts ?? FEATURED_IMAGE_FETCH_MAX_ATTEMPTS;
+  const { maxAttempts: _drop, ...fetchOpts } = opts ?? {};
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const img = await api.getArticleFeaturedImage(projectId, articleId, fetchOpts);
+      const url = (img.image_url || "").trim();
+      if (url) return url;
+      if (attempt + 1 < maxAttempts) {
+        await sleepMs(FEATURED_IMAGE_FETCH_RETRY_MS * (attempt + 1));
+      }
+    } catch (e) {
+      lastError = e;
+      if (e instanceof ApiError && e.status === 404 && attempt + 1 < maxAttempts) {
+        await sleepMs(FEATURED_IMAGE_FETCH_RETRY_MS * (attempt + 1));
+        continue;
+      }
+      throw e;
+    }
+  }
+  if (lastError instanceof ApiError) throw lastError;
+  return "";
+}
+
+async function pollWithBackoff<T>(
+  fn: () => Promise<T>,
+  isDone: (value: T) => boolean,
+  opts?: { intervalMs?: number; maxIntervalMs?: number; maxWaitMs?: number; backoffFactor?: number },
+): Promise<T> {
+  let intervalMs = opts?.intervalMs ?? POLL_INITIAL_INTERVAL_MS;
+  const maxIntervalMs = opts?.maxIntervalMs ?? POLL_MAX_INTERVAL_MS;
+  const maxWaitMs = opts?.maxWaitMs ?? 300_000;
+  const backoffFactor = opts?.backoffFactor ?? POLL_BACKOFF_FACTOR;
+  const deadline = Date.now() + maxWaitMs;
+  let last: T | undefined;
+  while (Date.now() < deadline) {
+    last = await fn();
+    if (isDone(last)) return last;
+    await sleepMs(intervalMs);
+    intervalMs = Math.min(maxIntervalMs, Math.round(intervalMs * backoffFactor));
+  }
+  throw new ApiError(
+    "Generation is taking longer than expected. Refresh the page in a minute — your article may still be generating in the background.",
+    408,
+  );
+}
+
+export function isArticleOperationQueuedResponse(value: unknown): value is ArticleOperationQueuedResponse {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    (value as ArticleOperationQueuedResponse).status === "queued" &&
+    typeof (value as ArticleOperationQueuedResponse).article_id === "string"
+  );
+}
+
+export type WordPressArticleSyncResponse = {
+  ok: boolean;
+  message: string;
+  changes: string[];
+  wp_link?: string | null;
+  wp_status?: string | null;
+  wp_modified_at?: string | null;
+  wp_synced_at?: string | null;
+  article: ArticleDetail;
+};
+
+export type WordPressBulkSyncResponse = {
+  ok: boolean;
+  linked_count: number;
+  synced_count: number;
+  skipped_count: number;
+  error_count: number;
+  errors: { article_id: string; message: string }[];
+};
+
+export type ShopifyStatus = {
+  configured: boolean;
+  connect_ready?: boolean;
+  setup_hint?: string | null;
+  connected: boolean;
+  shop?: string | null;
+  connected_at?: string | null;
+  sync_at?: string | null;
+  sync_status?: string | null;
+  sync_message?: string | null;
+  counts: Record<string, number>;
+  granted_scopes?: string[];
+  required_scopes?: string[];
+  recommended_scopes?: string[];
+  needs_reauthorize?: boolean;
+  can_publish?: boolean;
+  missing_publish_scopes?: string[];
+  has_product_catalog_scope?: boolean;
+  warnings?: Array<{ resource: string; message: string }>;
+};
+
+export type ShopifyCatalog = {
+  synced_at?: string | null;
+  sync_status?: string | null;
+  sync_message?: string | null;
+  counts: Record<string, number>;
+  shop: Record<string, string>;
+  warnings?: Array<{
+    resource: string;
+    code: string;
+    required_scope: string;
+    message: string;
+  }>;
+  granted_scopes?: string[];
+  required_scopes?: string[];
+  recommended_scopes?: string[];
+  products: Array<{
+    id: number;
+    title: string;
+    handle: string;
+    product_type?: string;
+    image_url?: string;
+    price?: string;
+    status?: string;
+  }>;
+  collections: Array<{ id: number; title: string; handle: string }>;
+  blogs: Array<{ id: number; title: string; handle: string; articles_count?: number }>;
+  pages: Array<{ id: number; title: string; handle: string }>;
 };
 
 export type PromptItem = {
@@ -664,17 +978,25 @@ export function getApiBaseUrl(): string {
   return `${proto}//${targetHost}:8000`;
 }
 
-/** Same-origin path for the WordPress connector ZIP (proxied to the API in Next.js). */
+/** API path for the WordPress connector ZIP (built on demand from backend source). */
 export function getWordpressPluginDownloadPath(): string {
   return "/api/wordpress/plugin/download";
 }
 
 /** Download the Riviso WordPress connector ZIP (valid package for Plugins → Upload). */
-export async function downloadWordpressPlugin(): Promise<void> {
+export async function downloadWordpressPlugin(downloadPath?: string): Promise<void> {
   if (typeof window === "undefined") {
     throw new Error("Plugin download is only available in the browser.");
   }
-  const res = await fetch(getWordpressPluginDownloadPath(), { method: "GET", cache: "no-store" });
+  const base = (downloadPath || getWordpressPluginDownloadPath()).trim();
+  const url = base.startsWith("http")
+    ? base
+    : `${getApiBaseUrl()}${base.startsWith("/") ? base : `/${base}`}`;
+  const res = await fetch(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`, {
+    method: "GET",
+    cache: "no-store",
+    credentials: "include",
+  });
   if (!res.ok) {
     let detail = `Plugin download failed (${res.status})`;
     try {
@@ -824,6 +1146,8 @@ export const LONG_API_TIMEOUT_MS = 600_000;
 const AUTH_REFRESH_TIMEOUT_MS = 45_000;
 /** Non-critical metadata (prompts/WP types/categories) should not block UX for long. */
 const META_API_TIMEOUT_MS = 15_000;
+/** Editor shell/body: fail before Next.js navigation timeouts when Mongo is unreachable. */
+export const ARTICLE_EDITOR_FETCH_TIMEOUT_MS = 45_000;
 
 type CacheEntry<T> = { at: number; value: T } | { at: number; inflight: Promise<T> };
 function cacheGet<T>(m: Map<string, CacheEntry<T>>, key: string, ttlMs: number): T | Promise<T> | null {
@@ -847,6 +1171,32 @@ const _cacheImagePrompts = new Map<string, CacheEntry<PromptListResponse>>();
 const _cacheWpTypes = new Map<string, CacheEntry<WordpressPostType[]>>();
 const _cacheWpCats = new Map<string, CacheEntry<WordpressCategory[]>>();
 const _cacheProjectSettings = new Map<string, CacheEntry<ProjectSettings>>();
+const _cacheArticleDetail = new Map<string, CacheEntry<ArticleDetail>>();
+const _cacheArticleShell = new Map<string, CacheEntry<ArticleDetail>>();
+const _cacheArticleBody = new Map<string, CacheEntry<{ article: string }>>();
+const _cacheFeaturedImage = new Map<string, CacheEntry<{ image_url: string }>>();
+
+function articleDetailCacheKey(projectId: string, articleId: string) {
+  return `${projectId}:${articleId}`;
+}
+
+export function invalidateArticleDetailCache(projectId: string, articleId: string) {
+  const key = articleDetailCacheKey(projectId, articleId);
+  _cacheArticleDetail.delete(key);
+  _cacheArticleShell.delete(key);
+  _cacheArticleBody.delete(key);
+  _cacheFeaturedImage.delete(key);
+}
+
+/** Bust cached settings (includes legacy keys without platform / shopify fields). */
+export function invalidateProjectSettingsCache(projectId: string) {
+  const pid = (projectId || "").trim();
+  if (!pid) return;
+  _cacheProjectSettings.delete(pid);
+  _cacheProjectSettings.delete(`${pid}:v2`);
+  _cacheWpTypes.delete(pid);
+  _cacheWpCats.delete(pid);
+}
 
 function createTimeoutSignal(ms: number): AbortSignal {
   const AT = AbortSignal as unknown as { timeout?: (n: number) => AbortSignal };
@@ -874,13 +1224,38 @@ function mergeAbortSignals(a: AbortSignal, b: AbortSignal | null | undefined): A
 
 function isAbortError(e: unknown): boolean {
   if (!e || typeof e !== "object") return false;
-  return (e as Error).name === "AbortError";
+  const name = (e as Error).name;
+  if (name === "AbortError" || name === "TimeoutError") return true;
+  const msg = String((e as Error).message || "").toLowerCase();
+  return msg.includes("signal timed out") || msg.includes("aborted") || msg.includes("timeout");
+}
+
+function clientTimeoutError(timeoutMs: number): ApiError {
+  return new ApiError(
+    `Request timed out after ${Math.round(timeoutMs / 1000)}s. The server may still be working — wait a moment and refresh, or check your connection.`,
+    408,
+    { code: "client_timeout", timeoutMs },
+  );
 }
 
 export type ApiFetchOptions = {
   /** Override default (see DEFAULT_API_TIMEOUT_MS). */
   timeoutMs?: number;
+  /** @deprecated Global overlay removed — use page skeletons. Kept for API compatibility. */
+  skipGlobalLoading?: boolean;
+  /** Bypass browser/proxy caches (recommended after reconnecting from offline). */
+  fresh?: boolean;
+  /** Always hit the network without client-side response cache or cache-bust query params. */
+  bypassClientCache?: boolean;
+  /** Abort in-flight fetch when the caller unmounts or starts a new load. */
+  signal?: AbortSignal;
 };
+
+function withFreshQuery(path: string, fresh?: boolean): string {
+  if (!fresh) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}_=${Date.now()}`;
+}
 
 async function parseOkJson<T>(res: Response): Promise<T> {
   if (res.status === 204 || res.status === 205) {
@@ -894,32 +1269,52 @@ async function parseOkJson<T>(res: Response): Promise<T> {
 }
 
 /**
- * Authenticated JSON fetch with timeout, optional 401 refresh, and global loading counter.
- * Long-running routes should pass ``timeoutMs: LONG_API_TIMEOUT_MS`` via the third argument.
+ * Authenticated JSON fetch with timeout and optional 401 refresh.
+ * Loading UX is handled per-page via skeleton components (not a global overlay).
  */
 async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOptions): Promise<T> {
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
+  const urlPath = opts?.bypassClientCache ? path : withFreshQuery(path, opts?.fresh);
   const headers = new Headers(init?.headers);
   headers.set("content-type", "application/json");
+  headers.set("cache-control", "no-cache");
+  headers.set("pragma", "no-cache");
   const token = getAccessToken();
   if (token) headers.set("authorization", `Bearer ${token}`);
 
-  emitGlobalLoading(+1);
-  try {
-    const doFetch = async (h: Headers) => {
-      const signal = mergeAbortSignals(createTimeoutSignal(timeoutMs), init?.signal);
-      return fetch(apiUrl(path), { ...init, headers: h, credentials: "include", signal });
+  const doFetch = async (h: Headers) => {
+      const signal = mergeAbortSignals(createTimeoutSignal(timeoutMs), opts?.signal ?? init?.signal);
+      return fetch(apiUrl(urlPath), {
+        ...init,
+        headers: h,
+        credentials: "include",
+        signal,
+        cache: "no-store",
+      });
     };
 
     let res: Response;
+    let retried503 = false;
     try {
       res = await doFetch(headers);
     } catch (e) {
       if (isAbortError(e)) {
+        if (opts?.signal?.aborted) {
+          throw new ApiError("Request cancelled", 0, { code: "aborted" });
+        }
+        throw clientTimeoutError(timeoutMs);
+      }
+      const msg = e instanceof Error ? e.message.toLowerCase() : "";
+      if (
+        e instanceof TypeError ||
+        msg.includes("failed to fetch") ||
+        msg.includes("networkerror") ||
+        msg.includes("load failed")
+      ) {
         throw new ApiError(
-          `Request timed out after ${Math.round(timeoutMs / 1000)}s. Check your connection, or increase proxy timeouts (nginx) for long tasks.`,
-          408,
-          { code: "client_timeout", timeoutMs },
+          "Could not reach the server. Check your Wi‑Fi connection and that the Riviso API is running.",
+          0,
+          { code: "network_error" },
         );
       }
       throw e;
@@ -929,6 +1324,9 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
       res.status === 401 &&
       path !== "/api/auth/login" &&
       path !== "/api/auth/register" &&
+      path !== "/api/auth/verify-email" &&
+      path !== "/api/auth/resend-verification" &&
+      path !== "/api/auth/forgot-password" &&
       path !== "/api/auth/reactivate" &&
       path !== "/api/auth/refresh"
     ) {
@@ -955,11 +1353,7 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
               res = await doFetch(headers2);
             } catch (e) {
               if (isAbortError(e)) {
-                throw new ApiError(
-                  `Request timed out after ${Math.round(timeoutMs / 1000)}s. Check your connection, or increase proxy timeouts (nginx) for long tasks.`,
-                  408,
-                  { code: "client_timeout", timeoutMs },
-                );
+                throw clientTimeoutError(timeoutMs);
               }
               throw e;
             }
@@ -967,6 +1361,21 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
         } catch (e) {
           if (e instanceof ApiError) throw e;
           // Fall through to normal error handling
+        }
+      }
+    }
+
+    if (!res.ok) {
+      if (res.status === 503 && !retried503) {
+        retried503 = true;
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        try {
+          res = await doFetch(headers);
+        } catch (e) {
+          if (isAbortError(e)) {
+            throw clientTimeoutError(timeoutMs);
+          }
+          throw e;
         }
       }
     }
@@ -999,44 +1408,42 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
       throw new ApiError(msg, res.status, detail);
     }
     return parseOkJson<T>(res);
-  } finally {
-    emitGlobalLoading(-1);
-  }
 }
 
-/** Form upload or non-JSON body: same timeout and loading behavior as apiFetch. */
+/** Form upload or non-JSON body: same timeout behavior as apiFetch. */
 async function apiFetchRaw(path: string, init: RequestInit, opts?: ApiFetchOptions): Promise<Response> {
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
   const token = getAccessToken();
   const headers = new Headers(init.headers);
   if (token) headers.set("authorization", `Bearer ${token}`);
-  const signal = mergeAbortSignals(createTimeoutSignal(timeoutMs), init.signal);
+  const signal = mergeAbortSignals(createTimeoutSignal(timeoutMs), opts?.signal ?? init.signal);
 
-  emitGlobalLoading(+1);
   try {
-    try {
-      return await fetch(apiUrl(path), { ...init, headers, credentials: "include", signal });
-    } catch (e) {
-      if (isAbortError(e)) {
-        throw new ApiError(
-          `Request timed out after ${Math.round(timeoutMs / 1000)}s. Try again or increase proxy read timeouts for large uploads.`,
-          408,
-          { code: "client_timeout", timeoutMs },
-        );
-      }
-      throw e;
+    return await fetch(apiUrl(withFreshQuery(path, opts?.fresh)), {
+      ...init,
+      headers,
+      credentials: "include",
+      signal,
+      cache: "no-store",
+    });
+  } catch (e) {
+    if (isAbortError(e)) {
+      throw clientTimeoutError(timeoutMs);
     }
-  } finally {
-    emitGlobalLoading(-1);
+    throw e;
   }
 }
 
 export const api = {
   async login(email: string, password: string) {
-    return apiFetch<TokenPair>("/api/auth/login", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    });
+    return apiFetch<TokenPair>(
+      "/api/auth/login",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      },
+      { skipGlobalLoading: true },
+    );
   },
   async refresh(refresh_token: string) {
     return apiFetch<TokenPair>("/api/auth/refresh", {
@@ -1045,22 +1452,67 @@ export const api = {
     });
   },
   async register(email: string, password: string) {
-    return apiFetch<TokenPair>("/api/auth/register", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
-    });
+    return apiFetch<RegisterPendingResponse>(
+      "/api/auth/register",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      },
+      { skipGlobalLoading: true },
+    );
+  },
+  async verifyEmail(email: string, token: string) {
+    return apiFetch<VerifyEmailResponse>(
+      "/api/auth/verify-email",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, token }),
+      },
+      { skipGlobalLoading: true },
+    );
+  },
+  async resendVerificationEmail(email: string) {
+    return apiFetch<ResendVerificationResponse>(
+      "/api/auth/resend-verification",
+      {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      },
+      { skipGlobalLoading: true },
+    );
+  },
+  async forgotPassword(email: string) {
+    return apiFetch<{ ok: boolean; message: string }>(
+      "/api/auth/forgot-password",
+      {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      },
+      { skipGlobalLoading: true },
+    );
   },
   async reactivateAccount(email: string, password: string) {
-    return apiFetch<TokenPair>("/api/auth/reactivate", {
-      method: "POST",
-      body: JSON.stringify({ email, password }),
+    return apiFetch<TokenPair>(
+      "/api/auth/reactivate",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      },
+      { skipGlobalLoading: true },
+    );
+  },
+  async me(opts?: ApiFetchOptions) {
+    return apiFetch<UserPublic>("/api/auth/me", undefined, opts);
+  },
+  async profileMe(opts?: ApiFetchOptions) {
+    return apiFetch<ProfilePublic>("/api/profile/me", undefined, opts);
+  },
+  async getSubscriptionStatus(opts?: ApiFetchOptions) {
+    return apiFetch<SubscriptionStatusPublic>("/api/user/subscription-status", undefined, {
+      skipGlobalLoading: true,
+      timeoutMs: META_API_TIMEOUT_MS,
+      ...opts,
     });
-  },
-  async me() {
-    return apiFetch<UserPublic>("/api/auth/me");
-  },
-  async profileMe() {
-    return apiFetch<ProfilePublic>("/api/profile/me");
   },
   async updateProfileMe(patch: Partial<{ full_name: string; phone: string; timezone: string }>) {
     return apiFetch<ProfilePublic>("/api/profile/me", { method: "PATCH", body: JSON.stringify(patch) });
@@ -1074,26 +1526,220 @@ export const api = {
   async gscListSites() {
     return apiFetch<GscSite[]>("/api/gsc/sites");
   },
-  async listProjects() {
-    return apiFetch<ProjectPublic[]>("/api/projects");
+  async listProjects(opts?: ApiFetchOptions) {
+    return apiFetch<ProjectPublic[]>("/api/projects", undefined, opts);
   },
-  async workspaceOverview() {
-    return apiFetch<WorkspaceOverviewResponse>("/api/workspace/overview");
+  async workspaceOverview(opts?: ApiFetchOptions) {
+    return apiFetch<WorkspaceOverviewResponse>("/api/workspace/overview", undefined, opts);
   },
-  async createProject(name: string, website_url?: string) {
+  async createProject(name: string, platform: ProjectPlatform, website_url?: string) {
     return apiFetch<ProjectPublic>("/api/projects", {
       method: "POST",
-      body: JSON.stringify({ name, website_url: website_url || null }),
+      body: JSON.stringify({ name, website_url: website_url || null, platform }),
     });
   },
-  async getProject(projectId: string) {
-    return apiFetch<ProjectPublic>(`/api/projects/${projectId}`);
+
+  async verifyShopifyConnection(
+    projectId: string,
+    payload?: { shop?: string; client_id?: string; client_secret?: string; access_token?: string },
+  ) {
+    return apiFetch<{
+      ok: boolean;
+      status: string;
+      message: string;
+      needs_oauth?: boolean;
+      needs_reauthorize?: boolean;
+      reauthorize_url?: string | null;
+      granted_scopes?: string[];
+      missing_scopes?: string[];
+      shop?: string | null;
+    }>(`/api/projects/${projectId}/shopify/verify`, {
+      method: "POST",
+      body: JSON.stringify({
+        shop: payload?.shop || null,
+        client_id: payload?.client_id || null,
+        client_secret: payload?.client_secret || null,
+        access_token: payload?.access_token || null,
+      }),
+    });
+  },
+
+  async resolveShopifyShop(projectId: string, shop: string) {
+    return apiFetch<{
+      ok: boolean;
+      myshopify_domain?: string | null;
+      public_url?: string | null;
+      message?: string | null;
+    }>(`/api/projects/${projectId}/shopify/resolve-shop`, {
+      method: "POST",
+      body: JSON.stringify({ shop }),
+    });
+  },
+
+  async getShopifyStatus(projectId: string, opts?: ApiFetchOptions) {
+    return apiFetch<{
+      configured: boolean;
+      connect_ready?: boolean;
+      setup_hint?: string | null;
+      connected: boolean;
+      shop?: string | null;
+      connected_at?: string | null;
+      sync_at?: string | null;
+      sync_status?: string | null;
+      sync_message?: string | null;
+      counts: Record<string, number>;
+      granted_scopes?: string[];
+      required_scopes?: string[];
+      recommended_scopes?: string[];
+      needs_reauthorize?: boolean;
+      can_publish?: boolean;
+      missing_publish_scopes?: string[];
+      has_product_catalog_scope?: boolean;
+      warnings?: Array<{ resource: string; message: string }>;
+    }>(`/api/projects/${projectId}/shopify/status`, undefined, {
+      timeoutMs: META_API_TIMEOUT_MS,
+      skipGlobalLoading: true,
+      ...opts,
+    });
+  },
+
+  async getShopifyConnectUrl(projectId: string, shop?: string, opts?: ApiFetchOptions) {
+    const return_origin =
+      typeof window !== "undefined" ? window.location.origin : undefined;
+    return apiFetch<{ url: string; shop: string }>(
+      `/api/projects/${projectId}/shopify/connect-url`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...(shop ? { shop } : {}),
+          ...(return_origin ? { return_origin } : {}),
+        }),
+      },
+      { skipGlobalLoading: true, ...opts },
+    );
+  },
+
+  async connectShopify(
+    projectId: string,
+    payload: { shop: string; client_id: string; client_secret: string },
+  ) {
+    return apiFetch<{
+      ok: boolean;
+      status: string;
+      message: string;
+      shop?: string | null;
+      needs_reauthorize?: boolean;
+      reauthorize_url?: string | null;
+      granted_scopes?: string[];
+      missing_scopes?: string[];
+    }>(`/api/projects/${projectId}/connect-shopify`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getShopifyReauthorizeUrl(
+    projectId: string,
+    payload?: { shop?: string; return_origin?: string },
+  ) {
+    const return_origin =
+      payload?.return_origin ||
+      (typeof window !== "undefined" ? window.location.origin : undefined);
+    return apiFetch<{
+      ok: boolean;
+      url?: string | null;
+      shop?: string | null;
+      message?: string | null;
+    }>(`/api/projects/${projectId}/shopify/reauthorize-url`, {
+      method: "POST",
+      body: JSON.stringify({
+        ...(payload?.shop ? { shop: payload.shop } : {}),
+        ...(return_origin ? { return_origin } : {}),
+      }),
+    });
+  },
+
+  /** @deprecated Use connectShopify with Client ID + Secret */
+  async manualConnectShopify(projectId: string, payload: { shop: string; access_token: string }) {
+    return apiFetch<{
+      ok: boolean;
+      status: string;
+      message: string;
+      shop?: string | null;
+    }>(`/api/projects/${projectId}/shopify/manual-connect`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async syncShopifyCatalog(projectId: string) {
+    return apiFetch<{
+      configured: boolean;
+      connected: boolean;
+      shop?: string | null;
+      sync_at?: string | null;
+      sync_status?: string | null;
+      sync_message?: string | null;
+      counts: Record<string, number>;
+      warnings?: Array<{
+        resource: string;
+        code: string;
+        required_scope: string;
+        message: string;
+      }>;
+      granted_scopes?: string[];
+      required_scopes?: string[];
+      recommended_scopes?: string[];
+    }>(`/api/projects/${projectId}/shopify/sync`, { method: "POST" }, { timeoutMs: 120_000 });
+  },
+
+  async getShopifyCatalog(projectId: string) {
+    return apiFetch<{
+      synced_at?: string | null;
+      sync_status?: string | null;
+      sync_message?: string | null;
+      counts: Record<string, number>;
+      shop: Record<string, string>;
+      warnings?: Array<{
+        resource: string;
+        code: string;
+        required_scope: string;
+        message: string;
+      }>;
+      granted_scopes?: string[];
+      required_scopes?: string[];
+      recommended_scopes?: string[];
+      products: Array<{
+        id: number;
+        title: string;
+        handle: string;
+        product_type?: string;
+        image_url?: string;
+        price?: string;
+        status?: string;
+      }>;
+      collections: Array<{ id: number; title: string; handle: string }>;
+      blogs: Array<{ id: number; title: string; handle: string; articles_count?: number }>;
+      pages: Array<{ id: number; title: string; handle: string }>;
+    }>(`/api/projects/${projectId}/shopify/catalog`);
+  },
+
+  async disconnectShopify(projectId: string) {
+    return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/shopify/disconnect`, { method: "POST" });
+  },
+  async getProject(projectId: string, opts?: ApiFetchOptions) {
+    return apiFetch<ProjectPublic>(`/api/projects/${projectId}`, undefined, {
+      timeoutMs: META_API_TIMEOUT_MS,
+      skipGlobalLoading: true,
+      ...opts,
+    });
   },
   async updateProject(
     projectId: string,
     patch: Partial<{
       name: string;
       website_url: string | null;
+      platform: ProjectPlatform | string;
       brand_identity: string | null;
       niche_identifier: string | null;
       brand_voice: string | null;
@@ -1106,18 +1752,33 @@ export const api = {
       target_cities: string[];
       target_cities_all: boolean;
     }>,
+    opts?: ApiFetchOptions,
   ) {
-    return apiFetch<ProjectPublic>(`/api/projects/${projectId}`, { method: "PATCH", body: JSON.stringify(patch) });
+    const updated = await apiFetch<ProjectPublic>(`/api/projects/${projectId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }, { skipGlobalLoading: true, ...opts });
+    invalidateProjectSettingsCache(projectId);
+    return updated;
   },
   async deleteProject(projectId: string) {
     await apiFetch<unknown>(`/api/projects/${projectId}`, { method: "DELETE" });
     return { ok: true as const };
   },
-  async getProjectSettings(projectId: string) {
-    const key = projectId;
-    const cached = cacheGet(_cacheProjectSettings, key, 30_000);
-    if (cached) return await cached;
-    const p = apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, undefined, { timeoutMs: META_API_TIMEOUT_MS });
+  async getProjectSettings(projectId: string, opts?: { fresh?: boolean } & ApiFetchOptions) {
+    const key = `${projectId}:v2`;
+    const { fresh, ...fetchOpts } = opts || {};
+    if (!fresh) {
+      const cached = cacheGet(_cacheProjectSettings, key, 30_000);
+      if (cached) return await cached;
+    } else {
+      invalidateProjectSettingsCache(projectId);
+    }
+    const p = apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, undefined, {
+      timeoutMs: META_API_TIMEOUT_MS,
+      skipGlobalLoading: true,
+      ...fetchOpts,
+    });
     cacheSetInflight(_cacheProjectSettings, key, p);
     try {
       const v = await p;
@@ -1144,6 +1805,12 @@ export const api = {
       default_wp_category_ids: number[];
       gsc_property_url: string;
       gsc_index_on_publish: boolean;
+      shopify_product_aware_enabled: boolean;
+      wp_internal_link_aware_enabled: boolean;
+      shopify_shop: string;
+      shopify_client_id: string;
+      shopify_client_secret: string;
+      shopify_access_token: string;
     }>,
   ) {
     return apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, { method: "PATCH", body: JSON.stringify(patch) });
@@ -1227,23 +1894,67 @@ export const api = {
       { method: "POST" },
     );
   },
+
+  async postScheduledJobNow(
+    projectId: string,
+    jobId: string,
+    body?: {
+      writing_prompt_id?: string | null;
+      image_prompt_id?: string | null;
+      generate_image?: boolean;
+    },
+    opts?: ApiFetchOptions,
+  ) {
+    return apiFetch<{
+      ok: boolean;
+      status: string;
+      async?: boolean;
+      message: string;
+      job?: ScheduledJobPublic;
+      wp_post_id?: number | string | null;
+      wp_link?: string | null;
+    }>(
+      `/api/projects/${projectId}/scheduled-jobs/${jobId}/post-now`,
+      {
+        method: "POST",
+        body: body ? JSON.stringify(body) : undefined,
+      },
+      {
+        timeoutMs: LONG_API_TIMEOUT_MS,
+        skipGlobalLoading: true,
+        ...opts,
+      },
+    );
+  },
   async retryAllFailedScheduledPreparations(projectId: string) {
     return apiFetch<{ ok: boolean; retried: number; message: string }>(
       `/api/projects/${projectId}/scheduled-jobs/retry-failed-preparations`,
       { method: "POST" },
     );
   },
-  async listArticlesPage(projectId: string, query: ArticleListQuery = {}) {
+  async listArticlesPage(projectId: string, query: ArticleListQuery = {}, opts?: ApiFetchOptions) {
     const sp = new URLSearchParams();
     if (query.page != null) sp.set("page", String(query.page));
-    if (query.per_page != null) sp.set("per_page", String(query.per_page));
+    sp.set("per_page", String(Math.min(query.per_page ?? 10, 100)));
     if (query.q) sp.set("q", query.q);
     if (query.status) sp.set("status", query.status);
     if (query.date_from) sp.set("date_from", query.date_from);
     if (query.date_to) sp.set("date_to", query.date_to);
     if (query.sort) sp.set("sort", query.sort);
     const qs = sp.toString();
-    return apiFetch<ArticleListPage>(`/api/projects/${projectId}/articles${qs ? `?${qs}` : ""}`);
+    return apiFetch<ArticleListPage>(`/api/projects/${projectId}/articles${qs ? `?${qs}` : ""}`, undefined, {
+      skipGlobalLoading: true,
+      ...opts,
+    });
+  },
+  /** Warm editor shell (and body) on hover — never throws to the UI. */
+  prefetchArticle(projectId: string, articleId: string) {
+    void api
+      .getArticleEditorShell(projectId, articleId, { skipGlobalLoading: true })
+      .then(() => api.getArticleBody(projectId, articleId, { skipGlobalLoading: true }))
+      .catch(() => {
+        /* optional */
+      });
   },
   async listArticleTitles(projectId: string) {
     return apiFetch<ArticleTitleRef[]>(`/api/projects/${projectId}/articles/titles`);
@@ -1311,14 +2022,158 @@ export const api = {
     );
   },
 
-  async getArticle(projectId: string, articleId: string) {
-    return apiFetch<ArticleDetail>(`/api/projects/${projectId}/articles/${articleId}`);
+  async getArticleEditorShell(projectId: string, articleId: string, opts?: ApiFetchOptions & { fresh?: boolean }) {
+    const key = articleDetailCacheKey(projectId, articleId);
+    if (!opts?.fresh) {
+      const cached = cacheGet(_cacheArticleShell, key, 60_000);
+      if (cached) return await cached;
+    }
+    const p = apiFetch<ArticleDetail>(
+      `/api/projects/${projectId}/articles/${articleId}/editor-shell`,
+      undefined,
+      {
+        skipGlobalLoading: true,
+        timeoutMs: ARTICLE_EDITOR_FETCH_TIMEOUT_MS,
+        ...opts,
+      },
+    );
+    if (!opts?.fresh) cacheSetInflight(_cacheArticleShell, key, p);
+    try {
+      const v = await p;
+      if (!opts?.fresh) cacheSetValue(_cacheArticleShell, key, v);
+      return v;
+    } catch (e) {
+      if (!opts?.fresh) _cacheArticleShell.delete(key);
+      throw e;
+    }
   },
 
-  async getArticleFeaturedImage(projectId: string, articleId: string) {
-    return apiFetch<{ image_url: string }>(
-      `/api/projects/${projectId}/articles/${articleId}/featured-image`,
+  async getArticleBody(projectId: string, articleId: string, opts?: ApiFetchOptions & { fresh?: boolean }) {
+    const key = articleDetailCacheKey(projectId, articleId);
+    if (!opts?.fresh) {
+      const cached = cacheGet(_cacheArticleBody, key, 60_000);
+      if (cached) return await cached;
+    }
+    const p = apiFetch<{ article: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/body`,
+      undefined,
+      {
+        skipGlobalLoading: true,
+        timeoutMs: ARTICLE_EDITOR_FETCH_TIMEOUT_MS,
+        ...opts,
+      },
     );
+    if (!opts?.fresh) cacheSetInflight(_cacheArticleBody, key, p);
+    try {
+      const v = await p;
+      if (!opts?.fresh) cacheSetValue(_cacheArticleBody, key, v);
+      return v;
+    } catch (e) {
+      if (!opts?.fresh) _cacheArticleBody.delete(key);
+      throw e;
+    }
+  },
+
+  async getArticle(projectId: string, articleId: string, opts?: ApiFetchOptions & { fresh?: boolean }) {
+    const key = articleDetailCacheKey(projectId, articleId);
+    if (!opts?.fresh) {
+      const cached = cacheGet(_cacheArticleDetail, key, 60_000);
+      if (cached) return await cached;
+    }
+    const p = apiFetch<ArticleDetail>(
+      `/api/projects/${projectId}/articles/${articleId}`,
+      undefined,
+      {
+        skipGlobalLoading: true,
+        timeoutMs: ARTICLE_EDITOR_FETCH_TIMEOUT_MS,
+        ...opts,
+      },
+    );
+    if (!opts?.fresh) cacheSetInflight(_cacheArticleDetail, key, p);
+    try {
+      const v = await p;
+      if (!opts?.fresh) {
+        cacheSetValue(_cacheArticleDetail, key, v);
+        cacheSetValue(_cacheArticleShell, key, { ...v, article: "" });
+        cacheSetValue(_cacheArticleBody, key, { article: v.article || "" });
+      }
+      return v;
+    } catch (e) {
+      if (!opts?.fresh) _cacheArticleDetail.delete(key);
+      throw e;
+    }
+  },
+
+  async resolveArticleFeaturedImageUrl(
+    projectId: string,
+    articleId: string,
+    opts?: ApiFetchOptions & { fresh?: boolean; maxAttempts?: number },
+  ) {
+    return fetchArticleFeaturedImageResolved(projectId, articleId, opts);
+  },
+
+  async getArticleFeaturedImage(projectId: string, articleId: string, opts?: ApiFetchOptions & { fresh?: boolean }) {
+    const key = articleDetailCacheKey(projectId, articleId);
+    if (!opts?.fresh && !opts?.bypassClientCache) {
+      const cached = cacheGet(_cacheFeaturedImage, key, 120_000);
+      if (cached) return await cached;
+    }
+    const p = apiFetch<{ image_url: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/featured-image`,
+      undefined,
+      opts,
+    );
+    if (!opts?.fresh && !opts?.bypassClientCache) cacheSetInflight(_cacheFeaturedImage, key, p);
+    try {
+      const v = await p;
+      if (!opts?.fresh && !opts?.bypassClientCache) cacheSetValue(_cacheFeaturedImage, key, v);
+      return v;
+    } catch (e) {
+      if (!opts?.fresh && !opts?.bypassClientCache) _cacheFeaturedImage.delete(key);
+      throw e;
+    }
+  },
+
+  async getArticleGenerationStatus(projectId: string, articleId: string, opts?: ApiFetchOptions) {
+    return apiFetch<ArticleGenerationStatus>(
+      `/api/projects/${projectId}/articles/${articleId}/generation-status`,
+      undefined,
+      { skipGlobalLoading: true, bypassClientCache: true, timeoutMs: GENERATION_STATUS_TIMEOUT_MS, ...opts },
+    );
+  },
+
+  async getArticleClusterLinkContext(projectId: string, articleId: string, opts?: ApiFetchOptions) {
+    return apiFetch<{ cluster_link_context: ClusterLinkContext | null }>(
+      `/api/projects/${projectId}/articles/${articleId}/cluster-link-context`,
+      undefined,
+      { skipGlobalLoading: true, timeoutMs: META_API_TIMEOUT_MS, ...opts },
+    );
+  },
+
+  async refreshArticleEditorPayload(
+    projectId: string,
+    articleId: string,
+    opts?: ApiFetchOptions & { fresh?: boolean },
+  ): Promise<ArticleDetail> {
+    const fetchOpts = { skipGlobalLoading: true, fresh: true, ...opts };
+    const [shell, body] = await Promise.all([
+      api.getArticleEditorShell(projectId, articleId, fetchOpts),
+      api.getArticleBody(projectId, articleId, fetchOpts),
+    ]);
+    let imageUrl = (shell.image_url || "").trim();
+    if (!imageUrl && shell.has_featured_image) {
+      try {
+        imageUrl = await fetchArticleFeaturedImageResolved(projectId, articleId, fetchOpts);
+      } catch {
+        /* optional */
+      }
+    }
+    const merged: ArticleDetail = { ...shell, article: body.article || "", image_url: imageUrl || shell.image_url };
+    cacheSetValue(_cacheArticleDetail, articleDetailCacheKey(projectId, articleId), merged);
+    cacheSetValue(_cacheArticleShell, articleDetailCacheKey(projectId, articleId), { ...shell, article: "" });
+    cacheSetValue(_cacheArticleBody, articleDetailCacheKey(projectId, articleId), { article: body.article || "" });
+    if (imageUrl) cacheSetValue(_cacheFeaturedImage, articleDetailCacheKey(projectId, articleId), { image_url: imageUrl });
+    return merged;
   },
 
   async updateArticle(
@@ -1332,11 +2187,65 @@ export const api = {
       meta_title: string;
       meta_description: string;
     }>,
+    opts?: ApiFetchOptions,
   ) {
-    return apiFetch<ArticleDetail>(`/api/projects/${projectId}/articles/${articleId}`, {
-      method: "PATCH",
-      body: JSON.stringify(patch),
-    });
+    const v = await apiFetch<ArticleDetail>(
+      `/api/projects/${projectId}/articles/${articleId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      },
+      opts,
+    );
+    cacheSetValue(_cacheArticleDetail, articleDetailCacheKey(projectId, articleId), v);
+    return v;
+  },
+
+  async auditArticleIntegrity(
+    projectId: string,
+    articleId: string,
+    markdown?: string,
+    opts?: ApiFetchOptions,
+  ) {
+    return apiFetch<{
+      ai_percentage: number;
+      flagged_paragraphs: { index: number; text: string; reason: string }[];
+      metrics?: Record<string, unknown>;
+    }>(
+      `/api/projects/${projectId}/articles/${articleId}/integrity/audit`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(markdown != null ? { markdown } : {}),
+      },
+      opts,
+    );
+  },
+
+  async humanizeArticleIntegrity(
+    projectId: string,
+    articleId: string,
+    markdown?: string,
+    opts?: ApiFetchOptions,
+  ) {
+    const result = await apiFetch<{
+      ok: true;
+      original_markdown: string;
+      humanized_markdown: string;
+      rewritten: { index: number; before: string; after: string }[];
+      before: { ai_percentage: number; flagged_paragraphs: { index: number; text: string; reason: string }[] };
+      after: { ai_percentage: number; flagged_paragraphs: { index: number; text: string; reason: string }[] };
+    }>(
+      `/api/projects/${projectId}/articles/${articleId}/integrity/humanize`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(markdown != null ? { markdown } : {}),
+      },
+      opts,
+    );
+    invalidateArticleDetailCache(projectId, articleId);
+    return result;
   },
 
   async listWritingPrompts(projectId: string, opts?: ApiFetchOptions) {
@@ -1458,6 +2367,78 @@ export const api = {
     return { ok: true as const };
   },
 
+  async waitForArticleGenerationComplete(
+    projectId: string,
+    articleId: string,
+    opts?: ArticleGenerationWaitOptions,
+  ): Promise<ArticleDetail> {
+    const previousGeneratedAt = (opts?.previousGeneratedAt || "").trim();
+    const expectImage = !!opts?.expectImage;
+    const pollOpts = { skipGlobalLoading: true as const };
+
+    await pollWithBackoff(
+      () => api.getArticleGenerationStatus(projectId, articleId, pollOpts),
+      (status) => {
+        const genAt = (status.generated_at || "").trim();
+        const generationFinished =
+          status.has_body && (!previousGeneratedAt || !genAt || genAt !== previousGeneratedAt);
+        if (!generationFinished) return false;
+        if (expectImage && !status.has_featured_image) return false;
+        return true;
+      },
+      {
+        intervalMs: opts?.intervalMs ?? POLL_INITIAL_INTERVAL_MS,
+        maxWaitMs: opts?.maxWaitMs ?? GENERATION_POLL_MAX_WAIT_MS,
+      },
+    );
+
+    return api.refreshArticleEditorPayload(projectId, articleId, {
+      ...pollOpts,
+      timeoutMs: ARTICLE_EDITOR_FETCH_TIMEOUT_MS,
+    });
+  },
+
+  async waitForFeaturedImageReady(
+    projectId: string,
+    articleId: string,
+    opts?: {
+      previousRegenCount?: number;
+      hadFeaturedImage?: boolean;
+      intervalMs?: number;
+      maxWaitMs?: number;
+      skipGlobalLoading?: boolean;
+    },
+  ): Promise<{ article: ArticleDetail; image_url: string }> {
+    const baselineCount = opts?.previousRegenCount ?? 0;
+    const baselineHas = !!opts?.hadFeaturedImage;
+    const pollOpts = { skipGlobalLoading: true as const };
+
+    await pollWithBackoff(
+      () => api.getArticleGenerationStatus(projectId, articleId, pollOpts),
+      (status) =>
+        status.has_featured_image &&
+        (!baselineHas || status.featured_image_regeneration_count > baselineCount),
+      {
+        intervalMs: opts?.intervalMs ?? POLL_INITIAL_INTERVAL_MS,
+        maxWaitMs: opts?.maxWaitMs ?? 180_000,
+      },
+    );
+
+    let imageUrl = "";
+    try {
+      imageUrl = await fetchArticleFeaturedImageResolved(projectId, articleId, { ...pollOpts, fresh: true });
+    } catch {
+      /* optional */
+    }
+    const shell = await api.getArticleEditorShell(projectId, articleId, { ...pollOpts, fresh: true });
+    const merged: ArticleDetail = {
+      ...shell,
+      image_url: imageUrl || shell.image_url || "",
+      has_featured_image: shell.has_featured_image || !!imageUrl,
+    };
+    return { article: merged, image_url: imageUrl };
+  },
+
   async generateArticle(
     projectId: string,
     articleId: string,
@@ -1466,54 +2447,130 @@ export const api = {
       image_prompt_id?: string | null;
       focus_keyphrase?: string | null;
       generate_image?: boolean;
-    },
-  ) {
-    return apiFetch<{
-      ok: boolean;
-      status: string;
-      message: string;
-      requested?: unknown;
-      resolved?: unknown;
-      generated?: {
-        article?: string;
-        meta_title?: string;
-        meta_description?: string;
+      /** Shopify only: products to map into content and optional img2img reference. */
+      mapped_products?: Array<{
+        title: string;
+        handle: string;
+        featured_image_url?: string | null;
         image_url?: string | null;
-      };
-    }>(
+      }> | null;
+      /** WordPress only: site-map pages to link and optional img2img reference. */
+      mapped_pages?: Array<{
+        title: string;
+        post_url: string;
+        featured_image_url?: string | null;
+        image_url?: string | null;
+        post_id?: string | null;
+      }> | null;
+    },
+    opts?: ArticleGenerationWaitOptions & { previousGeneratedAt?: string | null },
+  ) {
+    const { previousGeneratedAt, expectImage, intervalMs, maxWaitMs, skipGlobalLoading, ...fetchOpts } = opts ?? {};
+    const res = await apiFetch<
+      | {
+          ok: boolean;
+          status: string;
+          message: string;
+          image_warning?: string | null;
+          requested?: unknown;
+          resolved?: unknown;
+          generated?: {
+            article?: string;
+            meta_title?: string;
+            meta_description?: string;
+            image_url?: string | null;
+          };
+        }
+      | ArticleOperationQueuedResponse
+    >(
       `/api/projects/${projectId}/articles/${articleId}/generate`,
       {
         method: "POST",
         body: JSON.stringify(payload),
       },
-      { timeoutMs: LONG_API_TIMEOUT_MS },
-    );
+      { timeoutMs: LONG_API_TIMEOUT_MS, ...fetchOpts },
+    ).finally(() => invalidateArticleDetailCache(projectId, articleId));
+
+    if (isArticleOperationQueuedResponse(res)) {
+      const art = await api.waitForArticleGenerationComplete(projectId, articleId, {
+        previousGeneratedAt,
+        expectImage: expectImage ?? !!payload.generate_image,
+        intervalMs,
+        maxWaitMs,
+        skipGlobalLoading,
+      });
+      return {
+        ok: true,
+        status: "generated",
+        message: res.message || "Article generated successfully.",
+        hydratedArticle: art,
+        generated: {
+          article: art.article,
+          meta_title: art.meta_title || undefined,
+          meta_description: art.meta_description || undefined,
+          image_url: (art.image_url || "").trim() || null,
+        },
+      };
+    }
+    return res;
   },
 
   async regenerateArticleImage(
     projectId: string,
     articleId: string,
     payload: { image_prompt_id?: string | null; custom_image_prompt?: string | null },
+    opts?: ApiFetchOptions & {
+      previousRegenCount?: number;
+      hadFeaturedImage?: boolean;
+      intervalMs?: number;
+      maxWaitMs?: number;
+    },
   ) {
-    return apiFetch<{
-      ok: boolean;
-      status: string;
-      message: string;
-      image_url?: string | null;
-      usage?: {
-        used: number;
-        limit: number | null;
-        remaining: number | null;
-        unlimited: boolean;
-      };
-    }>(
+    const { previousRegenCount, hadFeaturedImage, intervalMs, maxWaitMs, ...fetchOpts } = opts ?? {};
+    const res = await apiFetch<
+      | {
+          ok: boolean;
+          status: string;
+          message: string;
+          image_url?: string | null;
+          has_featured_image?: boolean;
+          save_warning?: string | null;
+          usage?: {
+            used: number;
+            limit: number | null;
+            remaining: number | null;
+            unlimited: boolean;
+          };
+        }
+      | ArticleOperationQueuedResponse
+    >(
       `/api/projects/${projectId}/articles/${articleId}/regenerate-image`,
       {
         method: "POST",
         body: JSON.stringify(payload),
       },
-      { timeoutMs: LONG_API_TIMEOUT_MS },
-    );
+      { timeoutMs: LONG_API_TIMEOUT_MS, skipGlobalLoading: true, ...fetchOpts },
+    ).finally(() => invalidateArticleDetailCache(projectId, articleId));
+
+    if (isArticleOperationQueuedResponse(res)) {
+      const waited = await api.waitForFeaturedImageReady(projectId, articleId, {
+        previousRegenCount,
+        hadFeaturedImage,
+        intervalMs,
+        maxWaitMs,
+        skipGlobalLoading: true,
+      });
+      return {
+        ok: true,
+        status: "image_regenerated",
+        message: res.message || "Featured image regenerated successfully.",
+        image_url: waited.image_url || null,
+        has_featured_image: true,
+        save_warning: null,
+        hydratedArticle: waited.article,
+      };
+    }
+    return res;
   },
 
   async scheduleArticle(
@@ -1561,6 +2618,7 @@ export const api = {
     projectId: string,
     articleId: string,
     payload: { image_file?: File | null; post_type: string; wp_status: "draft" | "publish"; category_ids: number[] },
+    opts?: ApiFetchOptions,
   ) {
     const fd = new FormData();
     if (payload.image_file) fd.set("image_file", payload.image_file);
@@ -1570,7 +2628,7 @@ export const api = {
     const res = await apiFetchRaw(
       `/api/projects/${projectId}/articles/${articleId}/publish`,
       { method: "POST", body: fd },
-      { timeoutMs: LONG_API_TIMEOUT_MS },
+      { timeoutMs: LONG_API_TIMEOUT_MS, ...opts },
     );
     if (!res.ok) {
       const text = await res.text();
@@ -1596,6 +2654,25 @@ export const api = {
       wp_post_id?: number;
       wp_link?: string | null;
     };
+  },
+
+  async publishArticleToShopify(
+    projectId: string,
+    articleId: string,
+    payload: { blog_id?: number | null; publish?: boolean },
+    opts?: ApiFetchOptions,
+  ) {
+    return apiFetch<{
+      ok: boolean;
+      status: "draft" | "published" | string;
+      message: string;
+      shopify_article_id?: number | null;
+      shopify_blog_id?: number | null;
+      shopify_link?: string | null;
+    }>(`/api/projects/${projectId}/articles/${articleId}/shopify/publish`, {
+      method: "POST",
+      body: JSON.stringify(payload || {}),
+    }, opts);
   },
 
   async updateArticleOnWordPress(
@@ -1636,7 +2713,25 @@ export const api = {
       message: string;
       wp_post_id?: number;
       wp_link?: string | null;
+      featured_media_id?: number | null;
+      featured_image_uploaded?: boolean;
     };
+  },
+
+  async syncArticleFromWordPress(projectId: string, articleId: string) {
+    return apiFetch<WordPressArticleSyncResponse>(
+      `/api/projects/${projectId}/articles/${articleId}/sync-from-wordpress`,
+      { method: "POST" },
+      { timeoutMs: LONG_API_TIMEOUT_MS, skipGlobalLoading: true },
+    ).finally(() => invalidateArticleDetailCache(projectId, articleId));
+  },
+
+  async syncLinkedArticlesFromWordPress(projectId: string) {
+    return apiFetch<WordPressBulkSyncResponse>(
+      `/api/projects/${projectId}/wordpress/sync-linked-articles`,
+      { method: "POST" },
+      { timeoutMs: LONG_API_TIMEOUT_MS },
+    );
   },
 
   async requestIndexing(projectId: string, articleId: string) {
@@ -1730,20 +2825,65 @@ export const api = {
   async topicClusterList(projectId: string) {
     return apiFetch<{ clusters: TopicCluster[] }>(`/api/projects/${projectId}/topic-clusters`);
   },
-  async topicClusterGet(projectId: string, clusterId: string) {
+  async topicClusterGet(projectId: string, clusterId: string, opts?: ApiFetchOptions) {
     return apiFetch<TopicCluster>(
       `/api/projects/${projectId}/topic-clusters/${encodeURIComponent(clusterId)}`,
+      undefined,
+      opts,
     );
+  },
+  async waitForTopicClusterReady(
+    projectId: string,
+    clusterId: string,
+    opts?: TopicClusterWaitOptions,
+  ): Promise<TopicCluster> {
+    const intervalMs = opts?.intervalMs ?? 2000;
+    const maxWaitMs = opts?.maxWaitMs ?? 240_000;
+    const deadline = Date.now() + maxWaitMs;
+    const fetchOpts = opts?.skipGlobalLoading ? { skipGlobalLoading: true as const } : undefined;
+    while (Date.now() < deadline) {
+      const row = await api.topicClusterGet(projectId, clusterId, fetchOpts);
+      opts?.onProgress?.(row);
+      const status = (row.status || "").toLowerCase();
+      if (!TOPIC_CLUSTER_BUSY_STATUSES.has(status)) {
+        if (status === "error") {
+          throw new ApiError("Cluster operation failed.", 502, row);
+        }
+        return row;
+      }
+      await sleepMs(intervalMs);
+    }
+    throw new ApiError("Timed out waiting for the cluster operation to finish.", 408);
   },
   async topicClusterPlan(
     projectId: string,
     payload: { seed_intent: string; country_code?: string; tone?: string; language?: string },
+    opts?: ApiFetchOptions & TopicClusterWaitOptions,
   ) {
-    return apiFetch<TopicCluster>(`/api/projects/${projectId}/topic-clusters/plan`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-      headers: { "Content-Type": "application/json" },
-    }, { timeoutMs: LONG_API_TIMEOUT_MS });
+    const { onProgress, intervalMs, maxWaitMs, ...fetchOpts } = opts ?? {};
+    const res = await apiFetch<TopicCluster | TopicClusterQueuedResponse>(
+      `/api/projects/${projectId}/topic-clusters/plan`,
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+        headers: { "Content-Type": "application/json" },
+      },
+      { timeoutMs: LONG_API_TIMEOUT_MS, ...fetchOpts },
+    );
+    if (isTopicClusterQueuedResponse(res)) {
+      try {
+        onProgress?.(await api.topicClusterGet(projectId, res.cluster_id, fetchOpts));
+      } catch {
+        // Placeholder row may not be readable yet; polling will retry.
+      }
+      return api.waitForTopicClusterReady(projectId, res.cluster_id, {
+        onProgress,
+        intervalMs,
+        maxWaitMs,
+        skipGlobalLoading: fetchOpts?.skipGlobalLoading,
+      });
+    }
+    return res as TopicCluster;
   },
   async validateClusterTopics(
     projectId: string,
@@ -1776,17 +2916,39 @@ export const api = {
       image_prompt_id?: string | null;
       /** ``null``/omitted ⇒ generate every pending topic. */
       topic_ids?: string[] | null;
+      mapped_products?: Array<{
+        title: string;
+        handle: string;
+        featured_image_url?: string | null;
+        image_url?: string | null;
+      }> | null;
     },
+    opts?: ApiFetchOptions & TopicClusterWaitOptions,
   ) {
-    return apiFetch<TopicClusterGenerateAllResponse>(
+    const { onProgress, intervalMs, maxWaitMs, ...fetchOpts } = opts ?? {};
+    const res = await apiFetch<TopicClusterGenerateAllResponse | TopicClusterQueuedResponse>(
       `/api/projects/${projectId}/topic-clusters/${encodeURIComponent(clusterId)}/generate-all`,
       {
         method: "POST",
         body: JSON.stringify(body ?? {}),
         headers: { "Content-Type": "application/json" },
       },
-      { timeoutMs: LONG_API_TIMEOUT_MS },
+      { timeoutMs: LONG_API_TIMEOUT_MS, ...fetchOpts },
     );
+    if (isTopicClusterQueuedResponse(res)) {
+      const cluster = await api.waitForTopicClusterReady(projectId, res.cluster_id, {
+        onProgress,
+        intervalMs,
+        maxWaitMs,
+        skipGlobalLoading: fetchOpts?.skipGlobalLoading,
+      });
+      return {
+        ok: true,
+        cluster,
+        errors: cluster.generation_errors || [],
+      };
+    }
+    return res as TopicClusterGenerateAllResponse;
   },
 
   async topicClusterImport(
@@ -1812,11 +2974,11 @@ export const api = {
     );
   },
 
-  async articleQuota(projectId: string) {
-    return apiFetch<ArticleQuota>(`/api/projects/${projectId}/article-quota`);
+  async articleQuota(projectId: string, opts?: ApiFetchOptions) {
+    return apiFetch<ArticleQuota>(`/api/projects/${projectId}/article-quota`, undefined, opts);
   },
-  async projectFeatureLimits(projectId: string) {
-    return apiFetch<ProjectFeatureLimits>(`/api/projects/${projectId}/feature-limits`);
+  async projectFeatureLimits(projectId: string, opts?: ApiFetchOptions) {
+    return apiFetch<ProjectFeatureLimits>(`/api/projects/${projectId}/feature-limits`, undefined, opts);
   },
 
   // Feature 4 — Smart Refresh (foundations)

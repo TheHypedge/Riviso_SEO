@@ -17,12 +17,17 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pymongo.errors import PyMongoError
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.datastructures import MutableHeaders
 from starlette.responses import Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+from app.services.storage_db import is_transient_storage_error
+from app.services.storage_http import DATABASE_UNAVAILABLE_DETAIL
 
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -34,6 +39,8 @@ from app.core.logging import configure_logging
 from app.core.production import run_startup_checks
 from app.services.scheduler import scheduler_loop
 from app.services.generation_worker import start_generation_worker, stop_generation_worker
+from app.services.subscription_daily_reset import subscription_daily_reset_loop
+from app.middleware.plan_limits import PlanLimitsMiddleware
 from app.legacy.storage import get_legacy_storage_module
 
 _log = logging.getLogger("uvicorn.error")
@@ -117,6 +124,7 @@ async def lifespan(app: FastAPI):
 
     scheduler_task: asyncio.Task | None = None
     generation_worker_task: asyncio.Task | None = None
+    subscription_reset_task: asyncio.Task | None = None
 
     enable_worker = (os.environ.get("ENABLE_GENERATION_WORKER", "1") or "1").strip()
     if enable_worker in {"1", "true", "yes", "on"}:
@@ -127,8 +135,16 @@ async def lifespan(app: FastAPI):
         # One task per process; use ENABLE_SCHEDULER=0 when running multiple uvicorn workers.
         scheduler_task = asyncio.create_task(scheduler_loop(poll_seconds=10.0))
 
+    subscription_reset_task = asyncio.create_task(subscription_daily_reset_loop())
+
     yield
 
+    if subscription_reset_task:
+        subscription_reset_task.cancel()
+        try:
+            await subscription_reset_task
+        except asyncio.CancelledError:
+            pass
     if generation_worker_task:
         await stop_generation_worker()
     if scheduler_task:
@@ -153,6 +169,19 @@ def create_app() -> FastAPI:
     )
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, lambda request, exc: Response("Rate limit exceeded", status_code=429))
+
+    @app.exception_handler(PyMongoError)
+    async def _pymongo_exception_handler(_request: Request, exc: PyMongoError) -> JSONResponse:
+        """Return JSON (with CORS) instead of an uncaught 500 that browsers report as 'Failed to fetch'."""
+        if is_transient_storage_error(exc):
+            return JSONResponse(status_code=503, content={"detail": DATABASE_UNAVAILABLE_DETAIL})
+        _log.exception("MongoDB error: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "A database error occurred. Please try again."},
+        )
+
+    app.add_middleware(PlanLimitsMiddleware)
     app.add_middleware(SlowAPIMiddleware)
 
     # Pure ASGI wrapper (avoid BaseHTTPMiddleware): uncaught DB errors otherwise surface as

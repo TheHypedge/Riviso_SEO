@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter, Cormorant_Garamond } from "next/font/google";
 import "./globals.css";
 import ExtensionCleanup from "@/components/ExtensionCleanup";
+import { AppProviders } from "@/components/AppProviders";
 import { GlobalLoadingProvider } from "@/components/GlobalLoadingProvider";
 
 const geistSans = Geist({
@@ -88,7 +89,9 @@ export default function RootLayout({
           "Scripts inside React components are never executed" warning.
         */}
         <ExtensionCleanup />
-        <GlobalLoadingProvider>{children}</GlobalLoadingProvider>
+        <GlobalLoadingProvider>
+          <AppProviders>{children}</AppProviders>
+        </GlobalLoadingProvider>
       </body>
     </html>
   );

@@ -1,33 +1,31 @@
-=== Riviso Content Operations ===
+=== RivisoSEO ===
 Contributors: riviso
 Tags: rest-api, yoast, seo, application-passwords, riviso
 Requires at least: 5.8
 Tested up to: 6.8
 Requires PHP: 7.4
-Stable tag: 0.2.0
+Stable tag: 0.6.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Connector for Riviso content operations:
-
-- Expose Yoast meta fields in REST (`show_in_rest`).
-- Authenticated `/ping` endpoint for connection verification.
-- Authenticated `/publish` endpoint for reliable post creation (avoids WAF blocks on wp/v2/posts).
+RivisoSEO connector for WordPress. Automatically maps SEO metadata to Yoast SEO or Rank Math.
 
 == Installation ==
 
-1. In Riviso, open Project Settings and click **Download plugin**.
-2. In WordPress: **Plugins → Add New → Upload Plugin**.
-3. Choose `riviso-content-operations.zip`, click **Install Now**, then **Activate**.
+1. Download the plugin ZIP from Riviso Project Settings.
+2. WordPress → Plugins → Add New → Upload Plugin → Install → Activate **RivisoSEO**.
 
-== Authentication ==
+== File layout ==
 
-Use WordPress Application Passwords:
+    wp-content/plugins/riviso-content-operations/
+        riviso-content-operations.php   ← WordPress bootstrap (Plugin Name header)
+        includes/connector.php
+        plugin.php                        ← legacy loader only
+        index.php
+        uninstall.php
 
-- Users → Profile → Application Passwords → create a password
-- Use HTTP Basic Auth against `wp-json/*` endpoints
+The ZIP contains exactly one top-level folder: `riviso-content-operations/`.
 
-== REST Endpoints ==
+== After activation ==
 
-- GET `/wp-json/riviso/v1/ping` (requires auth)
-- POST `/wp-json/riviso/v1/publish` (requires `publish_posts`)
+Open **ReviSo Settings** in the WordPress admin sidebar for connection details.

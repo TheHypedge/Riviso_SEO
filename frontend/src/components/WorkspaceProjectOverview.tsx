@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { ArticlesOverviewChart } from "@/components/ArticlesOverviewChart";
 import { OverviewStatCarousel } from "@/components/OverviewStatCarousel";
 import { OverviewReadinessGate } from "@/components/OverviewReadinessGate";
+import { OverviewPageSkeleton } from "@/components/skeleton";
 import { articleEditorPath, isValidArticleRef } from "@/lib/articlePaths";
 import { formatOverviewDateTime } from "@/lib/articlesOverview";
 import { evaluateWorkspaceOverviewReadiness } from "@/lib/overviewReadiness";
@@ -214,7 +215,7 @@ export function WorkspaceProjectOverview(props: {
   );
 
   if (loading) {
-    return <div className={styles.wsOverviewLoading}>Loading workspace overview…</div>;
+    return <OverviewPageSkeleton label="Loading workspace overview" />;
   }
 
   if (!data) {

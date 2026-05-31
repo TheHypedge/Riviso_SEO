@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import TurndownService from "turndown";
 
 import styles from "@/app/page.module.css";
+import { EditorLinesSkeleton } from "@/components/skeleton";
 import { markdownToArticleHtml } from "@/lib/articleMarkdown";
 
 const turndown = new TurndownService({
@@ -43,9 +44,11 @@ export type ArticleRichEditorProps = {
   value: string;
   onChange: (markdown: string) => void;
   placeholder?: string;
+  /** Bumped when parent applies external markdown (e.g. humanize) to force a clean sync. */
+  contentRevision?: number;
 };
 
-export function ArticleRichEditor({ value, onChange, placeholder }: ArticleRichEditorProps) {
+export function ArticleRichEditor({ value, onChange, placeholder, contentRevision = 0 }: ArticleRichEditorProps) {
   const syncingFromParent = useRef(false);
   const [blockFormat, setBlockFormat] = useState<BlockFormat>("paragraph");
 
@@ -101,16 +104,16 @@ export function ArticleRichEditor({ value, onChange, placeholder }: ArticleRichE
 
   useEffect(() => {
     if (!editor) return;
-    if (syncingFromParent.current) {
+    const incomingMd = (value || "").trim();
+    const currentMd = htmlToMarkdown(editor.getHTML()).trim();
+    if (incomingMd === currentMd) return;
+    syncingFromParent.current = true;
+    editor.commands.setContent(markdownToArticleHtml(value), { emitUpdate: false });
+    queueMicrotask(() => {
       syncingFromParent.current = false;
-      return;
-    }
-    const html = markdownToArticleHtml(value);
-    const cur = editor.getHTML();
-    if (cur.trim() === html.trim()) return;
-    editor.commands.setContent(html, { emitUpdate: false });
-    queueMicrotask(() => setBlockFormat(activeBlockFormat(editor)));
-  }, [value, editor]);
+      setBlockFormat(activeBlockFormat(editor));
+    });
+  }, [value, editor, contentRevision]);
 
   function applyBlockFormat(next: BlockFormat) {
     if (!editor) return;
@@ -125,7 +128,7 @@ export function ArticleRichEditor({ value, onChange, placeholder }: ArticleRichE
   }
 
   if (!editor) {
-    return <div className={styles.muted} style={{ padding: 12 }}>Loading editor…</div>;
+    return <EditorLinesSkeleton lines={6} />;
   }
 
   return (

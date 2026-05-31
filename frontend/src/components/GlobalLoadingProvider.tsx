@@ -1,6 +1,12 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+
+import {
+  PIPELINE_STAGE_LABELS,
+  type PipelineEvent,
+  pipelineStageProgress,
+} from "@/lib/pipelineStream";
 
 type GlobalLoadingApi = {
   show: () => void;
@@ -14,10 +20,22 @@ function clampNonNegative(n: number) {
   return n < 0 ? 0 : n;
 }
 
+function formatLogTime(iso: string): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso.slice(11, 19) || iso;
+    return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  } catch {
+    return iso.slice(11, 19) || iso;
+  }
+}
+
+/** Pipeline SSE overlay only — routine API loads use page-level skeletons. */
 export function GlobalLoadingProvider({ children }: { children: React.ReactNode }) {
   const [pendingCount, setPendingCount] = useState(0);
-  const [visible, setVisible] = useState(false);
-  const [statusLines, setStatusLines] = useState<string[]>([]);
+  const [pipelineEvents, setPipelineEvents] = useState<PipelineEvent[]>([]);
+  const [pipelineActive, setPipelineActive] = useState(false);
 
   const show = useCallback(() => setPendingCount((c) => c + 1), []);
   const hide = useCallback(() => setPendingCount((c) => clampNonNegative(c - 1)), []);
@@ -29,38 +47,25 @@ export function GlobalLoadingProvider({ children }: { children: React.ReactNode 
       if (!delta) return;
       setPendingCount((c) => clampNonNegative(c + delta));
     };
-
     window.addEventListener("aa:loading", handler as EventListener);
     return () => window.removeEventListener("aa:loading", handler as EventListener);
   }, []);
 
   useEffect(() => {
     const handler = (evt: Event) => {
-      const ce = evt as CustomEvent<{ lines?: string[] | null }>;
-      const lines = ce?.detail?.lines;
-      if (lines === null) {
-        setStatusLines([]);
-        return;
-      }
-      if (Array.isArray(lines)) setStatusLines(lines.filter(Boolean));
+      const ce = evt as CustomEvent<{ events?: PipelineEvent[]; active?: boolean }>;
+      if (ce.detail?.events) setPipelineEvents(ce.detail.events);
+      if (typeof ce.detail?.active === "boolean") setPipelineActive(ce.detail.active);
     };
-    window.addEventListener("aa:loadingStatus", handler as EventListener);
-    return () => window.removeEventListener("aa:loadingStatus", handler as EventListener);
+    window.addEventListener("aa:pipelineProgress", handler as EventListener);
+    return () => window.removeEventListener("aa:pipelineProgress", handler as EventListener);
   }, []);
 
   useEffect(() => {
-    if (pendingCount > 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setVisible(true);
-      return;
-    }
-    // Keep overlay visible briefly so the user can read "completed".
-    const t = window.setTimeout(() => {
-      setVisible(false);
-      setStatusLines([]);
-    }, 650);
+    if (pipelineActive) return;
+    const t = window.setTimeout(() => setPipelineEvents([]), 650);
     return () => window.clearTimeout(t);
-  }, [pendingCount]);
+  }, [pipelineActive]);
 
   const value = useMemo(
     () => ({
@@ -71,10 +76,19 @@ export function GlobalLoadingProvider({ children }: { children: React.ReactNode 
     [hide, pendingCount, show],
   );
 
+  const showOverlay = pipelineActive && pipelineEvents.length > 0;
+  const latest = pipelineEvents[pipelineEvents.length - 1];
+  const progressPct = pipelineStageProgress(latest?.stage);
+
   return (
     <GlobalLoadingContext.Provider value={value}>
       {children}
-      <GlobalLoadingOverlay open={visible} statusLines={statusLines} />
+      <GlobalLoadingOverlay
+        open={showOverlay}
+        pipelineEvents={pipelineEvents}
+        progressPct={progressPct}
+        latestStage={latest?.stage || ""}
+      />
     </GlobalLoadingContext.Provider>
   );
 }
@@ -85,33 +99,72 @@ export function useGlobalLoading() {
   return ctx;
 }
 
-function GlobalLoadingOverlay({ open, statusLines }: { open: boolean; statusLines: string[] }) {
+function GlobalLoadingOverlay({
+  open,
+  pipelineEvents,
+  progressPct,
+  latestStage,
+}: {
+  open: boolean;
+  pipelineEvents: PipelineEvent[];
+  progressPct: number;
+  latestStage: string;
+}) {
+  const logScrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = logScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [pipelineEvents.length, pipelineEvents[pipelineEvents.length - 1]?.message]);
+
   if (!open) return null;
 
+  const stageLabel = PIPELINE_STAGE_LABELS[latestStage] || (latestStage ? latestStage.replace(/_/g, " ") : "Working");
+
   return (
-    <div className="aaLoadingOverlay" role="status" aria-live="polite" aria-label="Loading">
-      <div className="aaLoadingPanel">
+    <div className="aaLoadingOverlay" role="status" aria-live="polite" aria-label="Pipeline progress">
+      <div className="aaLoadingPanel aaLoadingPanelWide">
         <div className="aaLoadingGlow" />
         <div className="aaLoadingSpinner">
           <div className="aaLoadingRing" />
           <div className="aaLoadingRing aaLoadingRing2" />
         </div>
-        <div className="aaLoadingText">Working…</div>
+        <div className="aaLoadingText">Pipeline in progress</div>
         <div className="aaLoadingSub">
-          {statusLines.length ? (
-            <div className="aaLoadingSteps">
-              {statusLines.map((s, idx) => (
-                <div key={`${idx}-${s}`} className={idx === statusLines.length - 1 ? "aaLoadingStep aaLoadingStepActive" : "aaLoadingStep"}>
-                  {s}
-                </div>
-              ))}
+          <div className="aaPipelineMeta">
+            <span className="aaPipelineStageBadge">{stageLabel}</span>
+            <span className="aaPipelineProgressPct">{progressPct}%</span>
+          </div>
+          <div className="aaPipelineProgressTrack" aria-hidden>
+            <div className="aaPipelineProgressFill" style={{ width: `${progressPct}%` }} />
+          </div>
+          <div className="aaPipelineTerminal" aria-label="Live pipeline log">
+            <div className="aaPipelineTerminalHeader">
+              <span className="aaPipelineTerminalDot" />
+              <span className="aaPipelineTerminalDot aaPipelineTerminalDotMid" />
+              <span className="aaPipelineTerminalDot aaPipelineTerminalDotDim" />
+              <span className="aaPipelineTerminalTitle">riviso pipeline stream</span>
             </div>
-          ) : (
-            "Generating premium results"
-          )}
+            <div className="aaPipelineLogScroll" ref={logScrollRef}>
+              {pipelineEvents.map((ev, idx) => {
+                const isLatest = idx === pipelineEvents.length - 1;
+                const isError = ev.stage === "error";
+                const isComplete = ev.stage === "complete";
+                return (
+                  <div
+                    key={`${idx}-${ev.time}-${ev.stage}`}
+                    className={`aaPipelineLogRow ${isLatest ? "aaPipelineLogRowActive" : ""} ${isError ? "aaPipelineLogRowError" : ""} ${isComplete ? "aaPipelineLogRowComplete" : ""}`}
+                  >
+                    <span className="aaPipelineLogTime">{formatLogTime(ev.time)}</span>
+                    <span className="aaPipelineLogMsg">{ev.message}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       </div>
     </div>
   );
 }
-

@@ -34,14 +34,18 @@ import asyncio
 import hashlib
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 import markdown as md
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from pymongo.errors import PyMongoError
 
 from app.core.deps import get_current_user
+from app.core.project_lookup import require_project_access
 from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
+from app.services.storage_db import call_storage
+from app.services.storage_http import raise_storage_http
 from app.services.content_sanitizer import (
     sanitize_article_body,
     sanitize_meta_description,
@@ -49,6 +53,7 @@ from app.services.content_sanitizer import (
 )
 from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient, resolve_featured_media_id
+from app.services.shopify_client import ShopifyClient
 from app.services.gsc_actions import inspect_url_status, maybe_request_url_inspection, request_url_inspection_now
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.scheduler import start_scheduled_job_preparation_task
@@ -62,12 +67,37 @@ from app.services.article_pipeline import (
     execute_featured_image_regeneration,
     image_regeneration_limit_snapshot,
 )
+from app.services.cluster_internal_link_service import build_cluster_link_context
+from app.services.async_operation_dispatch import (
+    enqueue_article_generation_job,
+    enqueue_image_regeneration_job,
+    should_use_async_queue,
+)
+from app.services.pipeline_streamer import (
+    MSG_HUMANIZE,
+    MSG_PUBLISH_COMPLETE,
+    MSG_PUBLISH_DISPATCH,
+    STAGE_COMPLETE,
+    STAGE_HUMANIZATION,
+    STAGE_PUBLISH_DISPATCH,
+    pipeline_event_stream,
+    publish_pipeline_status,
+)
+from app.services.plan_gatekeeper import PlanAction, require_plan_action
+from app.services.integrity_engine import (
+    AIDetectionAuditor,
+    execute_structural_humanization,
+    protected_terms_from_article,
+)
 from app.core.article_duplicates import normalize_article_title_key as _normalize_article_title_key
 from app.core.article_duplicates import sync_project_title_index as _sync_project_title_index
 from app.schemas.articles import (
+    ArticleListItem,
     ArticleCreate,
+    ArticleBodyResponse,
     ArticleDetailResponse,
     ArticleFeaturedImageResponse,
+    ArticleGenerationStatusResponse,
     ArticleListPageResponse,
     ArticlePublic,
     ArticleTitleRef,
@@ -79,6 +109,7 @@ from app.schemas.articles import (
     BulkScheduleRequest,
     BulkScheduleResponse,
     GenerateRequest,
+    ShopifyPublishRequest,
     RegenerateImageRequest,
     ScheduleRequest,
 )
@@ -106,16 +137,30 @@ def _load_plans_cached(st) -> dict:
     return _plans_cache_data
 
 
-def _detail_image_for_response(article: dict) -> tuple[str | None, bool]:
+def _detail_image_for_response(article: dict, *, st=None) -> tuple[str | None, bool]:
     """Omit inline data URLs from the editor JSON; load them via GET .../featured-image."""
     raw = (article.get("image_url") or "").strip()
-    if not raw:
-        return None, False
-    if raw.startswith("data:"):
+    aid = (article.get("id") or "").strip()
+    has_fn = getattr(st, "article_has_stored_featured_image", None) if st is not None else None
+    if callable(has_fn):
+        has_stored = has_fn(article_id=aid, row=article)
+    else:
+        gen_at = (article.get("featured_image_generated_at") or "").strip()
+        storage = (article.get("featured_image_storage") or "").strip()
+        has_stored = bool(gen_at) or storage in {"file", "url", "inline"}
+        if not has_stored and aid:
+            file_fn = getattr(st, "featured_image_file_exists", None) if st is not None else None
+            if callable(file_fn):
+                has_stored = bool(file_fn(aid))
+    if raw.startswith("http://") or raw.startswith("https://"):
+        if len(raw) <= 500_000:
+            return raw, False
         return None, True
-    if len(raw) > 500_000:
+    if raw.startswith("data:") or (raw and len(raw) > 500_000):
         return None, True
-    return raw, False
+    if has_stored:
+        return None, True
+    return None, False
 
 
 def _coerce_keywords(raw: object) -> list[str]:
@@ -192,9 +237,12 @@ def _derive_listing_status(a: dict) -> str:
     raw = _stored_article_status_normalized(a)
     wp_last = _normalize_wp_rest_status(a.get("wp_last_wp_status"))
     has_post = _wp_post_present(a)
+    shopify_published = bool((a.get("shopify_link") or "").strip() or a.get("shopify_article_id"))
 
     # DB explicitly published → always show published (even if wp_link/wp_post_id missing; data can be inconsistent).
     if raw == "published" or wp_last == "publish":
+        return "published"
+    if shopify_published:
         return "published"
     if wp_last == "draft" and has_post:
         return "draft"
@@ -353,9 +401,30 @@ def _to_public(a: dict) -> ArticlePublic:
         wp_link=(a.get("wp_link") or "").strip() or None,
         wp_post_id=a.get("wp_post_id"),
         wp_rest_base=(a.get("wp_rest_base") or "").strip() or None,
+        wp_last_wp_status=(a.get("wp_last_wp_status") or "").strip() or None,
+        wp_modified_at=(a.get("wp_modified_at") or "").strip() or None,
+        wp_synced_at=(a.get("wp_synced_at") or "").strip() or None,
         gsc_status=(a.get("gsc_status") or "").strip() or None,
         hasBody=bool(a.get("hasBody")) if "hasBody" in a else None,
         image_url=(a.get("image_url") or "").strip() or None,
+        shopify_blog_id=a.get("shopify_blog_id"),
+        shopify_article_id=a.get("shopify_article_id"),
+        shopify_link=(a.get("shopify_link") or "").strip() or None,
+    )
+
+
+def _to_list_item(a: dict) -> ArticleListItem:
+    """Lightweight list row — no body, meta blobs, or image URLs."""
+    return ArticleListItem(
+        id=(a.get("id") or "").strip(),
+        project_id=(a.get("project_id") or "").strip(),
+        title=(a.get("title") or "").strip(),
+        status=_derive_listing_status(a),
+        keywords=_coerce_keywords(a.get("keywords")),
+        focus_keyphrase=(a.get("focus_keyphrase") or "").strip() or None,
+        gsc_status=(a.get("gsc_status") or "").strip() or None,
+        wp_link=(a.get("wp_link") or "").strip() or None,
+        monitor_status=(a.get("monitor_status") or "").strip() or None,
     )
 
 
@@ -364,24 +433,26 @@ def _to_public(a: dict) -> ArticlePublic:
 # ---------------------------------------------------------------------------
 
 
-def _require_project_access(*, st, user: dict, project_id: str) -> dict:
-    pid = (project_id or "").strip()
-    proj = None
-    if hasattr(st, "get_project_by_id"):
-        proj = st.get_project_by_id(pid)
-    if not proj:
-        proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
-        raise HTTPException(status_code=404, detail="Project not found")
-    return proj
+def _require_project_access(*, st, user: dict, project_id: str, full: bool = False) -> dict:
+    return require_project_access(st=st, user=user, project_id=project_id, full=full)
 
 
 def _require_verified_website(proj: dict) -> None:
-    """Generation/scheduling depend on project WordPress context and must only run after verification."""
+    """Require a verified website connection (WordPress or Shopify) before generation/scheduling."""
+    plat = (proj.get("platform") or "").strip().lower()
+    if plat == "shopify" or (proj.get("shopify_shop") or "").strip() or (proj.get("shopify_access_token") or "").strip():
+        shopify_ok = (proj.get("shopify_verified_status") or "").strip().lower() == "connected" and bool(
+            (proj.get("shopify_verified_at") or "").strip()
+        )
+        if shopify_ok:
+            return
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "website_not_connected",
+                "message": "Shopify is not verified for this project. Enter your shop URL and Admin API access token, then click Verify connection in Project Settings.",
+            },
+        )
     status = (proj.get("wp_verified_status") or "").strip().lower()
     if status != "connected":
         raise HTTPException(
@@ -405,11 +476,28 @@ def _article_image_regeneration_usage(*, st, user: dict, article: dict) -> dict:
     )
 
 
-def _to_detail_response(*, st, user: dict, article: dict, view_article: dict | None = None) -> ArticleDetailResponse:
+def _to_detail_response(
+    *,
+    st,
+    user: dict,
+    article: dict,
+    view_article: dict | None = None,
+    include_cluster_context: bool = False,
+) -> ArticleDetailResponse:
     a_view = view_article or article
     pub = _to_public(a_view)
     regen = _article_image_regeneration_usage(st=st, user=user, article=article)
-    image_url, has_featured_image = _detail_image_for_response(article)
+    image_url, has_featured_image = _detail_image_for_response(article, st=st)
+    cluster_ctx = None
+    if include_cluster_context:
+        try:
+            cluster_ctx = build_cluster_link_context(
+                st,
+                project_id=(article.get("project_id") or "").strip(),
+                article_id=(article.get("id") or "").strip(),
+            )
+        except Exception:
+            _log.debug("cluster_link_context build failed", exc_info=True)
     try:
         return ArticleDetailResponse(
             id=pub.id,
@@ -426,6 +514,9 @@ def _to_detail_response(*, st, user: dict, article: dict, view_article: dict | N
             wp_link=pub.wp_link,
             wp_post_id=pub.wp_post_id,
             wp_rest_base=pub.wp_rest_base,
+            shopify_blog_id=pub.shopify_blog_id,
+            shopify_article_id=pub.shopify_article_id,
+            shopify_link=pub.shopify_link,
             gsc_status=pub.gsc_status,
             gsc_inspection_requested_at=pub.gsc_inspection_requested_at,
             gsc_inspection_last_attempt_at=pub.gsc_inspection_last_attempt_at,
@@ -444,6 +535,13 @@ def _to_detail_response(*, st, user: dict, article: dict, view_article: dict | N
             featured_image_regeneration_limit=regen["limit"],
             featured_image_regeneration_remaining=regen["remaining"],
             featured_image_regeneration_unlimited=regen["unlimited"],
+            integrity_ai_percentage=article.get("integrity_ai_percentage"),
+            integrity_flagged_paragraphs=article.get("integrity_flagged_paragraphs"),
+            integrity_last_audited_at=(article.get("integrity_last_audited_at") or None),
+            topic_cluster_id=(article.get("topic_cluster_id") or "").strip() or None,
+            topic_slot_id=(article.get("topic_slot_id") or "").strip() or None,
+            topic_role=(article.get("topic_role") or "").strip() or None,
+            cluster_link_context=cluster_ctx,
         )
     except ValidationError as e:
         _log.warning(
@@ -471,6 +569,40 @@ def _get_article_or_404(*, st, project_id: str, article_id: str) -> dict:
         if (a.get("id") or "").strip() == aid and (a.get("project_id") or "").strip() == pid:
             return a
     raise HTTPException(status_code=404, detail="Not found")
+
+
+def _get_article_image_regen_or_404(*, st, project_id: str, article_id: str) -> dict:
+    """Article metadata for image regen without loading body or inline image bytes."""
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        raise HTTPException(status_code=404, detail="Not found")
+    slim_get = getattr(st, "get_article_for_image_regeneration", None)
+    if callable(slim_get):
+        a = slim_get(project_id=pid, article_id=aid)
+        if isinstance(a, dict):
+            return a
+    a = _get_article_or_404(st=st, project_id=pid, article_id=aid)
+    slim = {k: a.get(k) for k in (
+        "id",
+        "project_id",
+        "title",
+        "keywords",
+        "focus_keyphrase",
+        "featured_image_regeneration_count",
+        "featured_image_generated_at",
+        "featured_image_source",
+        "featured_image_prompt_id",
+        "shopify_mapped_products",
+        "wp_mapped_pages",
+    )}
+    slim["has_featured_image"] = bool((a.get("image_url") or "").strip()) or bool(
+        (a.get("featured_image_generated_at") or "").strip()
+    )
+    has_fn = getattr(st, "article_has_stored_featured_image", None)
+    if callable(has_fn):
+        slim["has_featured_image"] = has_fn(article_id=aid, row=a)
+    return slim
 
 
 # ---------------------------------------------------------------------------
@@ -571,11 +703,11 @@ async def _listing_rows_page(
     return rows[:per_page]
 
 
-async def _public_listing_items_for_rows(st, project_id: str, rows: list[dict]) -> list[ArticlePublic]:
+async def _public_listing_items_for_rows(st, project_id: str, rows: list[dict]) -> list[ArticleListItem]:
     ids = [(a.get("id") or "").strip() for a in rows if isinstance(a, dict) and (a.get("id") or "").strip()]
     posted_jobs = await run_sync(_fetch_posted_job_overlay_for_article_ids, st, project_id, ids)
     return [
-        _to_public(_merge_posted_job_into_article_row(a, posted_jobs.get((a.get("id") or "").strip())))
+        _to_list_item(_merge_posted_job_into_article_row(a, posted_jobs.get((a.get("id") or "").strip())))
         for a in rows
         if isinstance(a, dict)
     ]
@@ -631,11 +763,11 @@ async def _listing_page_with_derived_status(
     date_from: str | None,
     date_to: str | None,
     sort: str,
-) -> list[ArticlePublic]:
+) -> list[ArticleListItem]:
     """Fill one UI page when status is derived (not a raw Mongo field)."""
     need = per_page
     skip = (max(1, page) - 1) * per_page
-    collected: list[ArticlePublic] = []
+    collected: list[ArticleListItem] = []
     mongo_page = 1
     batch_size = max(per_page * 3, 50)
     scanned = 0
@@ -689,7 +821,7 @@ async def list_articles(
     project_id: str,
     user: dict = Depends(get_current_user),
     page: int = Query(1, ge=1),
-    per_page: int = Query(10, ge=1, le=5000),
+    per_page: int = Query(10, ge=1, le=100),
     q: str | None = Query(None, max_length=200),
     status: str | None = Query(None, max_length=32),
     date_from: str | None = Query(None, max_length=32),
@@ -767,7 +899,10 @@ async def list_articles(
 
 
 @router.post("/export/consume", status_code=200)
-async def consume_export_quota(project_id: str, user: dict = Depends(get_current_user)) -> dict:
+async def consume_export_quota(
+    project_id: str,
+    user: dict = Depends(require_plan_action(PlanAction.BULK_EXPORT, consume=False)),
+) -> dict:
     """
     Consume an export allowance for the user's current plan.
 
@@ -856,10 +991,9 @@ async def create_article(
             },
         )
     except PyMongoError as e:
-        raise HTTPException(
-            status_code=503,
-            detail="Database temporarily unavailable. Please try again.",
-        ) from e
+        from app.services.storage_http import raise_storage_http
+
+        raise_storage_http(e)
 
     # Return minimal created row.
     return ArticlePublic(
@@ -962,7 +1096,7 @@ def _dedupe_bulk_upload_rows(rows: list) -> tuple[list, list[str], int]:
 async def bulk_upload_articles(
     project_id: str,
     payload: BulkUploadRequest,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_plan_action(PlanAction.BULK_UPLOAD, consume=False)),
 ) -> BulkUploadResponse:
     """
     Import many articles from a parsed Excel flow. In-sheet dedupe first, then project index.
@@ -1082,6 +1216,101 @@ async def bulk_upload_articles(
     )
 
 
+def _get_article_shell_or_404(*, st, project_id: str, article_id: str) -> dict:
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        raise HTTPException(status_code=404, detail="Not found")
+    if hasattr(st, "get_article_editor_shell"):
+        a = st.get_article_editor_shell(project_id=pid, article_id=aid)
+    else:
+        a = st.get_article(project_id=pid, article_id=aid) if hasattr(st, "get_article") else None
+        if isinstance(a, dict):
+            a = dict(a)
+            a["article"] = ""
+            a["image_url"] = ""
+    if not a:
+        raise HTTPException(status_code=404, detail="Not found")
+    return a
+
+
+@router.get("/{article_id}/editor-shell", response_model=ArticleDetailResponse)
+async def get_article_editor_shell(
+    project_id: str,
+    article_id: str,
+    user: dict = Depends(get_current_user),
+) -> ArticleDetailResponse:
+    """Editor metadata without body or inline image — fast first paint."""
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    aid = (article_id or "").strip()
+    try:
+        a = await run_sync(
+            call_storage,
+            _get_article_shell_or_404,
+            st=st,
+            project_id=project_id,
+            article_id=article_id,
+        )
+        job = None
+        try:
+            job = await run_sync(call_storage, _fetch_posted_job_overlay_for_article, st, project_id, aid)
+        except Exception:
+            # Overlay is optional for editor paint; do not block shell on scheduler/mongo blips.
+            job = None
+        a_view = _merge_posted_job_into_article_row(a, job)
+        return await run_sync(
+            _to_detail_response,
+            st=st,
+            user=user,
+            article=a,
+            view_article=a_view,
+            include_cluster_context=False,
+        )
+    except HTTPException:
+        raise
+    except ValidationError as e:
+        _log.warning("get_article_editor_shell validation failed project=%s article=%s: %s", project_id, aid, e)
+        raise HTTPException(status_code=500, detail="Article data could not be serialized") from e
+    except Exception as e:
+        try:
+            raise_storage_http(e)
+        except HTTPException:
+            raise
+        _log.exception("get_article_editor_shell failed project=%s article=%s", project_id, aid)
+        raise HTTPException(status_code=500, detail="Could not load article") from e
+
+
+@router.get("/{article_id}/body", response_model=ArticleBodyResponse)
+async def get_article_body(
+    project_id: str,
+    article_id: str,
+    user: dict = Depends(get_current_user),
+) -> ArticleBodyResponse:
+    """Article body only — loaded after editor shell."""
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    try:
+        if hasattr(st, "get_article_body_text"):
+            text = await run_sync(call_storage, st.get_article_body_text, project_id=pid, article_id=aid)
+        else:
+            a = await run_sync(call_storage, _get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+            text = (a.get("article") or "") if isinstance(a, dict) else ""
+        if text is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        return ArticleBodyResponse(article=text or "")
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            raise_storage_http(e)
+        except HTTPException:
+            raise
+        raise HTTPException(status_code=500, detail="Could not load article body") from e
+
+
 @router.get("/{article_id}", response_model=ArticleDetailResponse)
 async def get_article_detail(
     project_id: str,
@@ -1094,13 +1323,32 @@ async def get_article_detail(
     aid = (article_id or "").strip()
 
     try:
-        a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
-        job = await run_sync(_fetch_posted_job_overlay_for_article, st, project_id, aid)
+        a, job = await asyncio.gather(
+            run_sync(
+                call_storage,
+                _get_article_or_404,
+                st=st,
+                project_id=project_id,
+                article_id=article_id,
+            ),
+            run_sync(call_storage, _fetch_posted_job_overlay_for_article, st, project_id, aid),
+        )
         a_view = _merge_posted_job_into_article_row(a, job)
-        return await run_sync(_to_detail_response, st=st, user=user, article=a, view_article=a_view)
-    except HTTPException:
-        raise
+        include_cluster = bool((a.get("topic_cluster_id") or "").strip())
+        return await run_sync(
+            _to_detail_response,
+            st=st,
+            user=user,
+            article=a,
+            view_article=a_view,
+            include_cluster_context=include_cluster,
+        )
+        raise HTTPException(status_code=500, detail="Article data could not be serialized") from e
     except Exception as e:
+        try:
+            raise_storage_http(e)
+        except HTTPException:
+            raise
         _log.exception(
             "get_article_detail failed project=%s article=%s",
             project_id,
@@ -1118,11 +1366,87 @@ async def get_article_featured_image(
     """Return large inline featured images separately so the main editor payload stays small."""
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
-    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
-    raw = (a.get("image_url") or "").strip()
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    try:
+        if hasattr(st, "get_article_image_url"):
+            raw = await run_sync(call_storage, st.get_article_image_url, project_id=pid, article_id=aid)
+        else:
+            a = await run_sync(call_storage, _get_article_or_404, st=st, project_id=pid, article_id=aid)
+            raw = (a.get("image_url") or "").strip() or None
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise_storage_http(e)
     if not raw:
         raise HTTPException(status_code=404, detail="No featured image for this article")
     return ArticleFeaturedImageResponse(image_url=raw)
+
+
+@router.get("/{article_id}/generation-status", response_model=ArticleGenerationStatusResponse)
+async def get_article_generation_status(
+    project_id: str,
+    article_id: str,
+    user: dict = Depends(get_current_user),
+) -> ArticleGenerationStatusResponse:
+    """Lightweight poll target for async content/image generation (no body or image payload)."""
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    try:
+        if hasattr(st, "get_article_generation_status"):
+            row = await run_sync(call_storage, st.get_article_generation_status, project_id=pid, article_id=aid)
+        else:
+            a = await run_sync(call_storage, _get_article_or_404, st=st, project_id=pid, article_id=aid)
+            row = {
+                "id": aid,
+                "status": (a.get("status") or "pending")[:32],
+                "generated_at": (a.get("generated_at") or "")[:64] or None,
+                "has_body": bool((a.get("article") or "").strip()),
+                "has_featured_image": bool((a.get("image_url") or "").strip())
+                or bool((a.get("featured_image_generated_at") or "").strip()),
+                "featured_image_regeneration_count": int(a.get("featured_image_regeneration_count") or 0),
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise_storage_http(e)
+    if not isinstance(row, dict):
+        raise HTTPException(status_code=404, detail="Not found")
+    return ArticleGenerationStatusResponse(
+        id=(row.get("id") or aid).strip(),
+        status=(row.get("status") or "pending")[:32],
+        generated_at=(row.get("generated_at") or None),
+        has_body=bool(row.get("has_body")),
+        has_featured_image=bool(row.get("has_featured_image")),
+        featured_image_regeneration_count=int(row.get("featured_image_regeneration_count") or 0),
+    )
+
+
+@router.get("/{article_id}/cluster-link-context")
+async def get_article_cluster_link_context(
+    project_id: str,
+    article_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Sibling internal-link targets — loaded on demand, not on every editor shell fetch."""
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    aid = (article_id or "").strip()
+    try:
+        ctx = await run_sync(
+            call_storage,
+            build_cluster_link_context,
+            st,
+            project_id=(project_id or "").strip(),
+            article_id=aid,
+        )
+    except Exception as e:
+        raise_storage_http(e)
+    if not ctx:
+        return {"cluster_link_context": None}
+    return {"cluster_link_context": ctx}
 
 
 @router.patch("/{article_id}", response_model=ArticleDetailResponse)
@@ -1181,65 +1505,255 @@ async def update_article(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/{article_id}/generate")
+@router.post("/{article_id}/generate", response_model=None)
 async def generate_article_and_image(
     project_id: str,
     article_id: str,
     payload: GenerateRequest,
-    user: dict = Depends(get_current_user),
-) -> dict:
+    user: dict = Depends(require_plan_action(PlanAction.GENERATE_CONTENT, consume=False)),
+) -> dict | JSONResponse:
     """
     Generate article HTML and optional featured image (OpenAI), then persist to storage.
 
     Requires ``OPENAI_API_KEY``; uses project prompts and article row fields as context.
     """
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     wp_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
     ip_id = (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
+    mapped_products_payload: list[dict] | None = None
+    if payload.mapped_products is not None:
+        mapped_products_payload = [p.model_dump() for p in payload.mapped_products]
+    mapped_pages_payload: list[dict] | None = None
+    if payload.mapped_pages is not None:
+        mapped_pages_payload = [p.model_dump() for p in payload.mapped_pages]
+
+    aid = (article_id or "").strip()
+    gen_payload = {
+        "writing_prompt_id": wp_id,
+        "image_prompt_id": ip_id,
+        "generate_image": bool(payload.generate_image),
+        "focus_keyphrase": payload.focus_keyphrase,
+        "mapped_products": mapped_products_payload,
+        "mapped_pages": mapped_pages_payload,
+    }
+
+    if should_use_async_queue():
+        job_id = enqueue_article_generation_job(
+            project_id=project_id,
+            article_id=aid,
+            user_id=(user.get("id") or "").strip(),
+            payload=gen_payload,
+        )
+        await publish_pipeline_status(
+            aid,
+            "📋 Generation job queued — waiting for background worker...",
+            "queued",
+        )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "queued",
+                "job_id": job_id,
+                "article_id": aid,
+                "message": "Article generation queued.",
+            },
+        )
+
     async with generation_slot():
         return await execute_article_generation(
             st=st,
             user=user,
             proj=proj,
             project_id=project_id,
-            article_id=(article_id or "").strip(),
+            article_id=aid,
             row=row,
             writing_prompt_id=wp_id,
             image_prompt_id=ip_id,
             generate_image=bool(payload.generate_image),
             focus_keyphrase_override=payload.focus_keyphrase,
+            mapped_products=mapped_products_payload,
+            mapped_pages=mapped_pages_payload,
         )
 
 
-@router.post("/{article_id}/regenerate-image")
+@router.get("/{article_id}/events")
+async def article_pipeline_events(
+    project_id: str,
+    article_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+) -> StreamingResponse:
+    """
+    Server-Sent Events stream of live pipeline log lines for this article
+    (generation, humanization, publishing). Requires Redis pub/sub.
+    """
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+
+    async def event_generator():
+        try:
+            async for chunk in pipeline_event_stream(article_id, request=request):
+                yield chunk
+        except asyncio.CancelledError:
+            raise
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/{article_id}/regenerate-image", response_model=None)
 async def regenerate_article_featured_image(
     project_id: str,
     article_id: str,
     payload: RegenerateImageRequest,
     user: dict = Depends(get_current_user),
-) -> dict:
+) -> dict | JSONResponse:
     """Regenerate only the article featured image, capped per article by the user's plan."""
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
-    _require_verified_website(proj)
-    row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    aid = (article_id or "").strip()
+    try:
+        row = await run_sync(
+            call_storage,
+            _get_article_image_regen_or_404,
+            st=st,
+            project_id=project_id,
+            article_id=aid,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise_storage_http(e)
     custom_prompt = (payload.custom_image_prompt or "").strip() or None
     if custom_prompt and len(custom_prompt) < 10:
         raise HTTPException(status_code=400, detail="Custom image prompt must be at least 10 characters.")
     ip_id = None if custom_prompt else (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
-    async with generation_slot():
-        return await execute_featured_image_regeneration(
-            st=st,
-            user=user,
-            proj=proj,
-            article_id=(article_id or "").strip(),
-            row=row,
-            image_prompt_id=ip_id,
-            custom_image_prompt=custom_prompt,
+
+    regen_payload = {
+        "image_prompt_id": ip_id,
+        "custom_image_prompt": custom_prompt,
+    }
+    if should_use_async_queue():
+        job_id = enqueue_image_regeneration_job(
+            project_id=project_id,
+            article_id=aid,
+            user_id=(user.get("id") or "").strip(),
+            payload=regen_payload,
         )
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "queued",
+                "job_id": job_id,
+                "article_id": aid,
+                "message": "Featured image regeneration queued.",
+            },
+        )
+
+    try:
+        async with generation_slot():
+            return await execute_featured_image_regeneration(
+                st=st,
+                user=user,
+                proj=proj,
+                article_id=aid,
+                row=row,
+                image_prompt_id=ip_id,
+                custom_image_prompt=custom_prompt,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise_storage_http(e)
+
+
+class IntegrityMarkdownBody(BaseModel):
+    markdown: str | None = Field(default=None, max_length=500_000)
+
+
+@router.post("/{article_id}/integrity/audit", status_code=200)
+async def audit_article_integrity(
+    project_id: str,
+    article_id: str,
+    payload: IntegrityMarkdownBody | None = None,
+    user: dict = Depends(require_plan_action(PlanAction.HUMANIZE, consume=False)),
+) -> dict:
+    """
+    Integrity audit (fast heuristics): flags templated / overly-uniform paragraphs.
+    Returns: { ai_percentage, flagged_paragraphs: [{index,text,reason}], metrics }
+    """
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    md_body = ((payload.markdown if payload and payload.markdown else None) or a.get("article") or "").strip()
+    auditor = AIDetectionAuditor()
+    payload = auditor.audit_markdown(md_body)
+    try:
+        persist = getattr(st, "patch_article_fields", None) or st.update_article_fields
+        await run_sync(
+            persist,
+            (article_id or "").strip(),
+            {
+                "integrity_ai_percentage": payload.get("ai_percentage"),
+                "integrity_flagged_paragraphs": payload.get("flagged_paragraphs"),
+                "integrity_last_audited_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        )
+    except Exception:
+        pass
+    return payload
+
+
+@router.post("/{article_id}/integrity/humanize", status_code=200)
+async def humanize_article_integrity(
+    project_id: str,
+    article_id: str,
+    payload: IntegrityMarkdownBody | None = None,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Full-document structural humanization (industry-neutral). Does not persist until the user saves/applies in the editor.
+    Returns original + humanized + before/after audit for UI.
+    """
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    md_body = ((payload.markdown if payload and payload.markdown else None) or a.get("article") or "").strip()
+    await publish_pipeline_status(article_id, MSG_HUMANIZE, STAGE_HUMANIZATION)
+    auditor = AIDetectionAuditor()
+    audit_before = auditor.audit_markdown(md_body)
+    res = await execute_structural_humanization(
+        md=md_body,
+        protected_terms=protected_terms_from_article(a),
+        full_document=True,
+        max_passes=5,
+    )
+    human_md = (res.get("humanized_markdown") or "").strip()
+    audit_after = auditor.audit_markdown(human_md or md_body)
+    await publish_pipeline_status(
+        article_id,
+        "✨ Structural humanization pass complete.",
+        STAGE_COMPLETE,
+    )
+    return {
+        "ok": True,
+        "original_markdown": md_body,
+        "humanized_markdown": human_md or md_body,
+        "rewritten": res.get("rewritten") or [],
+        "before": audit_before,
+        "after": audit_after,
+    }
 
 
 def _validate_bulk_schedule_cadence(*, cadence: str | None, parsed: list[tuple[str, str, datetime]]) -> None:
@@ -1412,7 +1926,7 @@ async def bulk_schedule_articles(
 ) -> BulkScheduleResponse:
     """Schedule many articles in one round-trip (bulk weekly/monthly UI)."""
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
 
     wp_status = (payload.wp_status or "draft").strip().lower()
@@ -1538,7 +2052,7 @@ async def schedule_article(
     user: dict = Depends(get_current_user),
 ) -> dict:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
@@ -1641,6 +2155,39 @@ def _resolve_wp_post_id(a: dict) -> int | None:
     return _wp_post_id_int(a) or _wp_post_id_from_link((a.get("wp_link") or "").strip())
 
 
+def _featured_image_url_loader(st, project_id: str, article_id: str):
+    """Load disk-backed or omitted inline featured images for WordPress upload."""
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+
+    def load() -> str | None:
+        fn = getattr(st, "get_article_image_url", None)
+        if callable(fn):
+            return fn(project_id=pid, article_id=aid)
+        file_fn = getattr(st, "featured_image_file_exists", None)
+        load_fn = getattr(st, "_load_featured_image_file_as_data_url", None)
+        if callable(file_fn) and callable(load_fn) and file_fn(aid):
+            return load_fn(aid)
+        return None
+
+    return load
+
+
+def _article_has_stored_featured_image(st, article: dict, article_id: str) -> bool:
+    aid = (article_id or "").strip()
+    if (article.get("image_url") or "").strip():
+        return True
+    if article.get("has_featured_image"):
+        return True
+    storage = (article.get("featured_image_storage") or "").strip()
+    if storage in {"file", "url", "inline"}:
+        return True
+    file_fn = getattr(st, "featured_image_file_exists", None)
+    if callable(file_fn) and file_fn(aid):
+        return True
+    return False
+
+
 @router.post("/{article_id}/publish", status_code=200)
 async def publish_to_live_site(
     project_id: str,
@@ -1655,7 +2202,7 @@ async def publish_to_live_site(
     Publish an article to the live WordPress site.
     """
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
@@ -1765,45 +2312,6 @@ async def publish_to_live_site(
 
     wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
 
-    # Featured image is best-effort — a media 403 must not block publishing the article body.
-    featured_media_id: int | None = None
-    if image_file is not None:
-        data = await image_file.read()
-        if data:
-            featured_media_id = await wp.upload_media_optional(
-                filename=image_file.filename or "upload.png",
-                content_type=image_file.content_type or "image/png",
-                data=data,
-            )
-    else:
-        featured_media_id = await resolve_featured_media_id(wp, a, timeout=90.0)
-
-    payload: dict = {
-        "title": title[:500],
-        "status": (wp_status or "draft").strip().lower(),
-        "content": content_html,
-        "meta": {
-            # Yoast SEO meta keys (best-effort; requires Yoast + REST meta enabled)
-            "_yoast_wpseo_title": (a.get("meta_title") or "").strip()[:400],
-            "_yoast_wpseo_metadesc": (a.get("meta_description") or "").strip()[:600],
-            "_yoast_wpseo_focuskw": (a.get("focus_keyphrase") or "").strip()[:500],
-        },
-    }
-    if featured_media_id is not None:
-        payload["featured_media"] = featured_media_id
-    if cat_ids:
-        payload["categories"] = cat_ids
-
-    # WordPress tags from our keywords (create if missing)
-    kw = [str(x).strip() for x in (a.get("keywords") or []) if str(x).strip()]
-    if kw:
-        try:
-            tag_ids = await wp.ensure_tag_ids(kw[:15], timeout=20.0)
-            if tag_ids:
-                payload["tags"] = tag_ids
-        except Exception:
-            pass
-
     def _release_manual_claim(err_msg: str | None) -> None:
         """If we atomically claimed a scheduled job for this manual publish but
         the WordPress call failed, mark the job as 'failed' so the user sees
@@ -1823,13 +2331,61 @@ async def publish_to_live_site(
         except Exception:
             pass
 
-    from app.services.wordpress_publish import publish_post_to_wordpress
+    from app.services.wordpress_publish import assert_wordpress_publish_ready, publish_post_to_wordpress
 
+    try:
+        await assert_wordpress_publish_ready(wp)
+    except Exception as e:
+        _release_manual_claim(str(e))
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+    # Featured image is best-effort — a media 403 must not block publishing the article body.
+    featured_media_id: int | None = None
+    if image_file is not None:
+        data = await image_file.read()
+        if data:
+            featured_media_id = await wp.upload_media_optional(
+                filename=image_file.filename or "upload.png",
+                content_type=image_file.content_type or "image/png",
+                data=data,
+            )
+    else:
+        featured_media_id = await resolve_featured_media_id(
+            wp,
+            a,
+            timeout=90.0,
+            load_image_url=_featured_image_url_loader(st, project_id, article_id),
+        )
+
+    payload: dict = {
+        "title": title[:500],
+        "status": (wp_status or "draft").strip().lower(),
+        "content": content_html,
+        "meta": {
+            # Yoast SEO meta keys (best-effort; requires Yoast + REST meta enabled)
+            "_yoast_wpseo_title": (a.get("meta_title") or "").strip()[:400],
+            "_yoast_wpseo_metadesc": (a.get("meta_description") or "").strip()[:600],
+            "_yoast_wpseo_focuskw": (a.get("focus_keyphrase") or "").strip()[:500],
+        },
+    }
+    if featured_media_id is not None:
+        payload["featured_media"] = featured_media_id
+    if cat_ids:
+        payload["categories"] = cat_ids
+
+    # WordPress tags from keywords — applied inside Riviso plugin (no REST tag API spam).
+    kw = [str(x).strip() for x in (a.get("keywords") or []) if str(x).strip()]
+    if kw:
+        payload["tag_names"] = kw[:15]
+
+    await publish_pipeline_status(article_id, MSG_PUBLISH_DISPATCH, STAGE_PUBLISH_DISPATCH)
     try:
         created = await publish_post_to_wordpress(wp, post_type=rest_base, payload=payload)
     except Exception as e:
         _release_manual_claim(f"WordPress publish failed: {e}")
-        raise HTTPException(status_code=502, detail=f"WordPress publish failed: {e}") from e
+        msg = str(e)
+        status_code = 403 if "403" in msg or "blocked publishing" in msg.lower() else 502
+        raise HTTPException(status_code=status_code, detail=f"WordPress publish failed: {msg}") from e
 
     wp_post_id = created.get("id") if isinstance(created, dict) else None
     wp_link = created.get("link") if isinstance(created, dict) else None
@@ -1902,12 +2458,221 @@ async def publish_to_live_site(
     except Exception:
         pass
 
+    message = (
+        "Published to WordPress."
+        if created_wp_status == "publish"
+        else "Saved to WordPress as draft."
+    )
+    await publish_pipeline_status(article_id, MSG_PUBLISH_COMPLETE, STAGE_COMPLETE)
     return {
         "ok": True,
         "status": "published" if created_wp_status == "publish" else "draft",
-        "message": "Published to WordPress successfully." if created_wp_status == "publish" else "Created draft on WordPress successfully.",
+        "message": message,
         "wp_post_id": wp_post_id,
         "wp_link": wp_link,
+        "featured_media_id": featured_media_id,
+    }
+
+
+@router.post("/{article_id}/shopify/publish", status_code=200)
+async def publish_to_shopify_blog(
+    project_id: str,
+    article_id: str,
+    payload: ShopifyPublishRequest | None = None,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Create a Shopify Blog Article for this project.
+    """
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+
+    plat = (proj.get("platform") or "").strip().lower()
+    if plat != "shopify":
+        raise HTTPException(status_code=400, detail="This project is not a Shopify project.")
+
+    from app.services.shopify_credentials import refresh_project_token_if_needed
+
+    pid = (proj.get("id") or "").strip()
+    proj = await refresh_project_token_if_needed(st=st, project_id=pid, proj=proj)
+    token = (proj.get("shopify_access_token") or "").strip()
+    shop = (proj.get("shopify_shop") or "").strip()
+    if not token or not shop:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "website_not_connected",
+                "message": "Shopify store is not connected for this project. Connect Shopify in Project Settings before publishing.",
+            },
+        )
+    from app.services.shopify_api_errors import parse_granted_scopes, scopes_missing_for_publish
+    from app.services.shopify_client import ShopifyClient
+
+    client = ShopifyClient(shop=shop, access_token=token)
+    try:
+        live_handles = await client.fetch_access_scopes()
+        granted_live = set(live_handles)
+    except Exception:
+        granted_live = parse_granted_scopes(proj.get("shopify_scope") or "")
+    missing_publish = scopes_missing_for_publish(granted_live)
+    if missing_publish:
+        need = ", ".join(f"`{s}`" for s in missing_publish)
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "shopify_scope_missing",
+                "message": (
+                    f"Shopify publish permission is missing ({need}). "
+                    "Enable Store content → read_content and write_content on your app version, "
+                    "click Update app permissions in Riviso, then try again."
+                ),
+                "missing_scopes": missing_publish,
+                "granted_scopes": sorted(granted_live),
+            },
+        )
+
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    title = (a.get("title") or "").strip()
+    article_md = (a.get("article") or "").strip()
+    if not title or not article_md:
+        raise HTTPException(status_code=400, detail="Article title/content is required before publishing")
+
+    body = payload or ShopifyPublishRequest()
+    blog_id: int | None = body.blog_id
+    publish_now = bool(body.publish)
+
+    # Resolve blog id from synced catalog if needed.
+    if blog_id is None:
+        catalog = proj.get("shopify_catalog") if isinstance(proj.get("shopify_catalog"), dict) else {}
+        blogs = catalog.get("blogs") if isinstance(catalog.get("blogs"), list) else []
+        first = next((b for b in blogs if isinstance(b, dict) and b.get("id")), None)
+        if first and str(first.get("id")).strip().isdigit():
+            blog_id = int(str(first.get("id")).strip())
+    if blog_id is None:
+        try:
+            live_blogs = await client.get_paginated("/blogs.json", resource_key="blogs", max_pages=1)
+            first_live = next((b for b in live_blogs if isinstance(b, dict) and b.get("id")), None)
+            if first_live and str(first_live.get("id")).strip().isdigit():
+                blog_id = int(str(first_live.get("id")).strip())
+        except Exception:
+            pass
+    if blog_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "shopify_blog_missing",
+                "message": (
+                    "No Shopify blog found. Add a blog in Shopify Admin → Online Store → Blog posts, "
+                    "enable read_content on your app, then Sync from Shopify in Project Settings."
+                ),
+            },
+        )
+
+    # Best-effort: compute public link when handles are available.
+    def _public_base() -> str:
+        base = (proj.get("website_url") or "").strip().rstrip("/")
+        if base.startswith("http://") or base.startswith("https://"):
+            return base
+        return f"https://{shop}"
+
+    def _blog_handle_for(bid: int) -> str:
+        catalog = proj.get("shopify_catalog") if isinstance(proj.get("shopify_catalog"), dict) else {}
+        blogs = catalog.get("blogs") if isinstance(catalog.get("blogs"), list) else []
+        for b in blogs:
+            if not isinstance(b, dict):
+                continue
+            if str(b.get("id") or "").strip() == str(bid):
+                return (b.get("handle") or "").strip()
+        return ""
+
+    content_html = _article_markdown_to_html(article_md)
+    # Tags from keywords.
+    tags = ", ".join([str(x).strip() for x in (a.get("keywords") or []) if str(x).strip()][:20])
+
+    from app.services.shopify_article_image import (
+        build_shopify_article_image_payload,
+        shopify_article_has_featured_image,
+    )
+
+    image_payload = await build_shopify_article_image_payload(a, alt=title)
+    if (a.get("image_url") or "").strip() and not image_payload:
+        _log.warning(
+            "Shopify publish: article has image_url but could not build attachment (article_id=%s)",
+            article_id,
+        )
+
+    article_body: dict = {
+        "title": title[:255],
+        "body_html": content_html,
+        "tags": tags,
+        "published": publish_now,
+    }
+    if image_payload:
+        article_body["image"] = image_payload
+
+    await publish_pipeline_status(article_id, MSG_PUBLISH_DISPATCH, STAGE_PUBLISH_DISPATCH)
+    try:
+        created = await client.post_json(
+            f"/blogs/{blog_id}/articles.json",
+            payload={"article": article_body},
+        )
+    except Exception as exc:
+        hint = ""
+        msg = str(exc)
+        if "403" in msg or "Forbidden" in msg:
+            hint = (
+                " (403 Forbidden: your Shopify token likely lacks write_content scope; "
+                "reconnect Shopify in Project Settings to grant publish permissions.)"
+            )
+        raise HTTPException(status_code=502, detail=f"Shopify publish failed: {exc}{hint}") from exc
+
+    art = created.get("article") if isinstance(created, dict) else None
+    if not isinstance(art, dict):
+        raise HTTPException(status_code=502, detail="Shopify publish failed: invalid response from Shopify")
+
+    shopify_article_id = art.get("id")
+    if image_payload and shopify_article_id and not shopify_article_has_featured_image(art):
+        try:
+            updated = await client.put_json(
+                f"/blogs/{blog_id}/articles/{shopify_article_id}.json",
+                payload={"article": {"image": image_payload}},
+            )
+            art_updated = updated.get("article") if isinstance(updated, dict) else None
+            if isinstance(art_updated, dict):
+                art = art_updated
+        except Exception:
+            _log.warning(
+                "Shopify publish: featured image PUT failed (article_id=%s shopify_id=%s)",
+                article_id,
+                shopify_article_id,
+                exc_info=True,
+            )
+    handle = (art.get("handle") or "").strip()
+    blog_handle = _blog_handle_for(blog_id)
+    link = ""
+    if handle and blog_handle:
+        link = f"{_public_base()}/blogs/{blog_handle}/{handle}"
+    # Fallback to admin URL.
+    if not link and shopify_article_id:
+        link = f"https://{shop}/admin/blogs/{blog_id}/articles/{shopify_article_id}"
+
+    updates: dict = {
+        "shopify_blog_id": blog_id,
+        "shopify_article_id": shopify_article_id,
+        "shopify_link": link,
+        "shopify_published_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") if publish_now else "",
+        "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") if publish_now else (a.get("posted_at") or ""),
+        "status": "published" if publish_now else (a.get("status") or "draft"),
+    }
+    await run_sync(st.update_article_fields, article_id, updates)
+    await publish_pipeline_status(article_id, MSG_PUBLISH_COMPLETE, STAGE_COMPLETE)
+    return {
+        "ok": True,
+        "status": "published" if publish_now else "draft",
+        "message": "Published to Shopify." if publish_now else "Created draft on Shopify.",
+        "shopify_article_id": shopify_article_id,
+        "shopify_blog_id": blog_id,
+        "shopify_link": link or None,
     }
 
 
@@ -1923,9 +2688,15 @@ async def update_wordpress_post(
 ) -> dict:
     """Push the current article row to an existing WordPress post (no new post created)."""
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
-    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    aid = (article_id or "").strip()
+    try:
+        a = await run_sync(call_storage, _get_article_or_404, st=st, project_id=project_id, article_id=aid)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise_storage_http(e)
 
     wp_post_id = _resolve_wp_post_id(a)
     if not wp_post_id:
@@ -1966,7 +2737,9 @@ async def update_wordpress_post(
 
     wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
 
+    expects_featured_image = _article_has_stored_featured_image(st, a, aid) or image_file is not None
     featured_media_id: int | None = None
+    featured_image_warning: str | None = None
     if image_file is not None:
         data = await image_file.read()
         if data:
@@ -1976,7 +2749,18 @@ async def update_wordpress_post(
                 data=data,
             )
     else:
-        featured_media_id = await resolve_featured_media_id(wp, a, timeout=90.0)
+        featured_media_id = await resolve_featured_media_id(
+            wp,
+            a,
+            timeout=90.0,
+            load_image_url=_featured_image_url_loader(st, project_id, aid),
+        )
+
+    if expects_featured_image and featured_media_id is None:
+        featured_image_warning = (
+            "Post updated but the featured image could not be uploaded to WordPress. "
+            "Ensure the WordPress user has upload_files permission and REST media uploads are allowed."
+        )
 
     payload: dict = {
         "title": title[:500],
@@ -1995,12 +2779,7 @@ async def update_wordpress_post(
 
     kw = [str(x).strip() for x in (a.get("keywords") or []) if str(x).strip()]
     if kw:
-        try:
-            tag_ids = await wp.ensure_tag_ids(kw[:15], timeout=20.0)
-            if tag_ids:
-                payload["tags"] = tag_ids
-        except Exception:
-            pass
+        payload["tag_names"] = kw[:15]
 
     from app.services.wordpress_publish import update_post_on_wordpress
 
@@ -2031,12 +2810,92 @@ async def update_wordpress_post(
     }
     await run_sync(st.update_article_fields, article_id, updates)
 
+    message = "WordPress post updated successfully."
+    if featured_image_warning:
+        message = featured_image_warning
+
     return {
         "ok": True,
         "status": "published" if updated_wp_status == "publish" else "draft",
-        "message": "WordPress post updated successfully.",
+        "message": message,
         "wp_post_id": wp_post_id,
         "wp_link": updates.get("wp_link"),
+        "featured_media_id": featured_media_id,
+        "featured_image_uploaded": featured_media_id is not None,
+    }
+
+
+@router.post("/{article_id}/sync-from-wordpress", status_code=200)
+async def sync_article_from_wordpress_route(
+    project_id: str,
+    article_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Pull the latest title, body, SEO meta, permalink, and status from WordPress into Riviso.
+    """
+    from app.api.routes.wordpress import _get_wp_client_for_project
+
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    _require_verified_website(proj)
+    aid = (article_id or "").strip()
+    try:
+        row = await run_sync(call_storage, _get_article_or_404, st=st, project_id=project_id, article_id=aid)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise_storage_http(e)
+
+    wp = _get_wp_client_for_project(proj)
+    from app.services.wordpress_sync import sync_article_from_wordpress
+
+    try:
+        result = await sync_article_from_wordpress(
+            wp=wp,
+            article=row,
+            rest_base=(row.get("wp_rest_base") or "").strip() or None,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"WordPress sync failed: {e}") from e
+
+    updates = result.get("updates") or {}
+    if updates:
+        try:
+            saved = await run_sync(call_storage, st.update_article_fields, aid, updates)
+        except Exception as e:
+            raise_storage_http(e)
+        if not saved:
+            raise HTTPException(status_code=500, detail="Could not save synced WordPress data.")
+
+    fresh = await run_sync(call_storage, _get_article_or_404, st=st, project_id=project_id, article_id=aid)
+    detail = _to_detail_response(st=st, user=user, article=fresh)
+
+    change_labels = {
+        "title": "title",
+        "article": "body",
+        "wp_link": "live URL",
+        "wp_status": "WordPress status",
+        "meta_title": "meta title",
+        "meta_description": "meta description",
+        "focus_keyphrase": "focus keyphrase",
+        "checked": "no content changes",
+    }
+    changes = [change_labels.get(c, c) for c in (result.get("changes") or [])]
+
+    return {
+        "ok": True,
+        "message": "Synced from WordPress."
+        if changes != ["no content changes"]
+        else "Already up to date with WordPress.",
+        "changes": changes,
+        "wp_link": result.get("wp_link"),
+        "wp_status": result.get("wp_status"),
+        "wp_modified_at": result.get("wp_modified_at"),
+        "wp_synced_at": result.get("wp_synced_at"),
+        "article": detail.model_dump(),
     }
 
 
@@ -2057,7 +2916,7 @@ async def request_indexing(project_id: str, article_id: str, user: dict = Depend
        the only way to actually create the visible "Indexing requested" entry.
     """
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     live_url = (a.get("wp_link") or "").strip()
     if not live_url:
@@ -2087,7 +2946,7 @@ async def indexing_status(project_id: str, article_id: str, user: dict = Depends
     consume any indexing quota beyond Google's standard URL Inspection API limits.
     """
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     live_url = (a.get("wp_link") or "").strip()
     if not live_url:
@@ -2121,7 +2980,7 @@ async def monitor_mark(
     from app.services.rank_monitor_service import RankMonitorService
 
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
     status = ((payload or {}).get("status") or "").strip().lower()

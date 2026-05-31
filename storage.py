@@ -11,9 +11,11 @@ import json
 import logging
 import os
 import re
+import secrets
 import threading
 import time
-from datetime import date, datetime
+import base64
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from database import get_db, init_db
@@ -48,6 +50,121 @@ _storage_init_error: str | None = None
 def _data_path(filename: str) -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(here, "data", filename)
+
+
+def _data_path(filename: str) -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(here, "data", filename)
+
+
+def _article_images_dir() -> str:
+    path = _data_path("article_images")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _article_image_file_path(article_id: str) -> str:
+    safe = re.sub(r"[^\w\-]", "", (article_id or "").strip()) or "unknown"
+    return os.path.join(_article_images_dir(), f"{safe}.png")
+
+
+def _article_image_meta_path(article_id: str) -> str:
+    return _article_image_file_path(article_id) + ".meta.json"
+
+
+def featured_image_file_exists(article_id: str) -> bool:
+    aid = (article_id or "").strip()
+    if os.path.isfile(_article_image_file_path(aid)):
+        return True
+    legacy = os.path.join(_article_images_dir(), f"{re.sub(r'[^\w\-]', '', aid) or 'unknown'}.bin")
+    return os.path.isfile(legacy)
+
+
+def article_has_stored_featured_image(*, article_id: str = "", row: dict | None = None) -> bool:
+    """True when a featured image exists in Mongo, on disk, or inline on the row."""
+    r = row or {}
+    if (r.get("image_url") or "").strip():
+        return True
+    if (r.get("featured_image_generated_at") or "").strip():
+        return True
+    storage = (r.get("featured_image_storage") or "").strip()
+    if storage in {"file", "url", "inline"}:
+        return True
+    aid = (article_id or r.get("id") or "").strip()
+    return bool(aid and featured_image_file_exists(aid))
+
+
+def _persist_featured_image_file(article_id: str, image_url: str) -> bool:
+    """Write a data-URL or raw base64 image to disk; return True on success."""
+    raw = (image_url or "").strip()
+    if not raw.startswith("data:"):
+        return False
+    m = re.match(r"^data:([^;]+);base64,(.+)$", raw, flags=re.DOTALL)
+    if not m:
+        return False
+    content_type, b64 = m.group(1), m.group(2)
+    try:
+        data = base64.b64decode(b64, validate=True)
+    except Exception:
+        return False
+    bin_path = _article_image_file_path(article_id)
+    meta_path = _article_image_meta_path(article_id)
+    tmp = bin_path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, bin_path)
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump({"content_type": content_type or "image/png"}, f)
+    return True
+
+
+def _load_featured_image_file_as_data_url(article_id: str) -> str | None:
+    aid = (article_id or "").strip()
+    bin_path = _article_image_file_path(aid)
+    if not os.path.isfile(bin_path):
+        legacy = os.path.join(_article_images_dir(), f"{re.sub(r'[^\w\-]', '', aid) or 'unknown'}.bin")
+        if os.path.isfile(legacy):
+            bin_path = legacy
+        else:
+            return None
+    try:
+        with open(bin_path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None
+    content_type = "image/png"
+    meta_path = _article_image_meta_path(article_id)
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            if isinstance(meta, dict) and meta.get("content_type"):
+                content_type = str(meta["content_type"])
+        except Exception:
+            pass
+    b64 = base64.b64encode(data).decode("ascii")
+    return f"data:{content_type};base64,{b64}"
+
+
+def _externalize_featured_image_in_updates(article_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+    """
+    Keep Mongo writes small: store multi‑MB data URLs on disk, persist only metadata in Mongo.
+    HTTPS URLs from OpenAI stay inline (short strings).
+    """
+    u2 = dict(updates or {})
+    img = (u2.get("image_url") or "").strip()
+    if not img:
+        return u2
+    if img.startswith("http://") or img.startswith("https://"):
+        u2["featured_image_storage"] = "url"
+        return u2
+    if img.startswith("data:") or len(img) > 80_000:
+        if _persist_featured_image_file(article_id, img):
+            u2["image_url"] = ""
+            u2["featured_image_storage"] = "file"
+        else:
+            u2["featured_image_storage"] = "inline"
+    return u2
 
 
 def _users_json_path() -> str:
@@ -267,6 +384,23 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         # capability, missing, unknown). Cleared on credential changes.
         "wp_plugin_status": (d.get("wp_plugin_status") or "")[:32],
         "wp_plugin_message": (d.get("wp_plugin_message") or "")[:1000],
+        "platform": ((d.get("platform") or "wordpress").strip().lower() or "wordpress")[:32],
+        "shopify_shop": (d.get("shopify_shop") or "").strip()[:2048],
+        "shopify_access_token": (d.get("shopify_access_token") or "").strip()[:5000],
+        "shopify_client_id": (d.get("shopify_client_id") or "").strip()[:256],
+        "shopify_client_secret": (d.get("shopify_client_secret") or "").strip()[:5000],
+        "shopify_token_expires_at": (d.get("shopify_token_expires_at") or "").strip()[:32],
+        "shopify_scope": (d.get("shopify_scope") or "").strip()[:2000],
+        "shopify_connected_at": (d.get("shopify_connected_at") or "").strip()[:64],
+        "shopify_verified_at": (d.get("shopify_verified_at") or "").strip()[:32],
+        "shopify_verified_status": (d.get("shopify_verified_status") or "").strip()[:32],
+        "shopify_verified_message": (d.get("shopify_verified_message") or "").strip()[:1000],
+        "shopify_sync_at": (d.get("shopify_sync_at") or "").strip()[:64],
+        "shopify_sync_status": (d.get("shopify_sync_status") or "").strip()[:32],
+        "shopify_sync_message": (d.get("shopify_sync_message") or "").strip()[:1000],
+        "shopify_catalog": d.get("shopify_catalog") if isinstance(d.get("shopify_catalog"), dict) else {},
+        "shopify_product_aware_enabled": bool(d.get("shopify_product_aware_enabled", False)),
+        "wp_internal_link_aware_enabled": bool(d.get("wp_internal_link_aware_enabled", False)),
         "created_at": (d.get("created_at") or "")[:64],
     }
 
@@ -317,6 +451,13 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "usage_monthly_llm_tokens_used": int(d.get("usage_monthly_llm_tokens_used") or 0),
         "created_at": (d.get("created_at") or "")[:64],
         "pending_product_tour": bool(d.get("pending_product_tour", False)),
+        "email_verification_token": (d.get("email_verification_token") or "").strip()[:128],
+        "email_verification_expires": (d.get("email_verification_expires") or "").strip()[:64],
+        "email_verification_expires_at": d.get("email_verification_expires_at"),
+        "email_verification_sent_at": d.get("email_verification_sent_at"),
+        "password_reset_token": (d.get("password_reset_token") or "").strip()[:128],
+        "password_reset_expires": (d.get("password_reset_expires") or "").strip()[:64],
+        "password_reset_expires_at": d.get("password_reset_expires_at"),
         # Google Search Console OAuth (stored per-user)
         "gsc_access_token": (d.get("gsc_access_token") or "").strip()[:5000],
         "gsc_refresh_token": (d.get("gsc_refresh_token") or "").strip()[:5000],
@@ -1004,6 +1145,8 @@ def _default_plans() -> dict[str, Any]:
         "beta": {
             "name": "Beta Plan",
             "is_default": True,
+            "is_trial_plan": True,
+            "trial_period_days": 14,
             "cost_monthly": 0.0,
             "max_projects": 2,
             "max_articles": 5,
@@ -1102,6 +1245,14 @@ def upsert_plan(plan_key: str, plan: dict[str, Any]) -> None:
                     v2 = dict(v)
                     v2["is_default"] = False
                     plans[k] = v2
+        if payload.get("is_trial_plan") is True:
+            for k, v in list(plans.items()):
+                if not isinstance(v, dict):
+                    continue
+                if str(k).strip().lower() != key and v.get("is_trial_plan") is True:
+                    v2 = dict(v)
+                    v2["is_trial_plan"] = False
+                    plans[k] = v2
         plans[key] = payload
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -1115,6 +1266,11 @@ def upsert_plan(plan_key: str, plan: dict[str, Any]) -> None:
         if payload.get("is_default") is True:
             try:
                 get_db().plans.update_many({"_id": {"$ne": key}}, {"$set": {"is_default": False}})
+            except Exception:
+                pass
+        if payload.get("is_trial_plan") is True:
+            try:
+                get_db().plans.update_many({"_id": {"$ne": key}}, {"$set": {"is_trial_plan": False}})
             except Exception:
                 pass
         doc = {**payload, "_id": key}
@@ -1140,6 +1296,209 @@ def get_default_plan_key() -> str:
         if k:
             return k
     return "beta"
+
+
+def get_trial_plan_key() -> str | None:
+    """Return the plan key marked as the self-expiring trial plan (at most one)."""
+    for k, v in (load_plans() or {}).items():
+        if isinstance(v, dict) and v.get("is_trial_plan") is True:
+            kk = (v.get("key") or k or "").strip().lower()
+            if kk:
+                return kk
+    return None
+
+
+def _parse_user_created_at(raw: str) -> datetime:
+    text = (raw or "").strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return datetime.strptime(text[:19], fmt.replace("Z", ""))
+        except ValueError:
+            continue
+    return datetime.utcnow()
+
+
+def _subscription_usage_from_user(user: dict[str, Any]) -> dict[str, Any]:
+    day_key = _utc_day_key_now()
+    month_key = _utc_month_key_now()
+    u_day = (user.get("usage_daily_articles_date") or "").strip()
+    day_count = int(user.get("usage_daily_articles_count") or 0)
+    if u_day != day_key:
+        day_count = 0
+    u_month = (user.get("usage_monthly_articles_month") or "").strip()
+    month_count = int(user.get("usage_monthly_articles_count") or 0)
+    if u_month != month_key:
+        month_count = 0
+    return {
+        "articlesGeneratedToday": day_count,
+        "articlesGeneratedTodayDate": day_key,
+        "articlesGeneratedThisMonth": month_count,
+        "articlesGeneratedMonthKey": month_key,
+        "regenerationsThisMonth": int(user.get("usage_monthly_image_regen_count") or 0),
+        "schedulesThisMonth": int(user.get("usage_monthly_scheduled_count") or 0),
+        "exportsThisMonth": int(user.get("usage_monthly_export_count") or 0),
+    }
+
+
+def _normalize_subscription(doc: dict[str, Any]) -> dict[str, Any]:
+    uid = (doc.get("user_id") or doc.get("userId") or "").strip()
+    if not uid:
+        raise ValueError("subscription requires user_id")
+    usage_in = doc.get("usage") if isinstance(doc.get("usage"), dict) else {}
+    return {
+        "user_id": uid,
+        "plan_key": (doc.get("plan_key") or doc.get("planKey") or "beta").strip().lower() or "beta",
+        "trial_start_date": (doc.get("trial_start_date") or doc.get("trialStartDate") or "").strip(),
+        "trial_end_date": (doc.get("trial_end_date") or doc.get("trialEndDate") or "").strip(),
+        "usage": {
+            "articlesGeneratedToday": int(usage_in.get("articlesGeneratedToday") or 0),
+            "articlesGeneratedTodayDate": (usage_in.get("articlesGeneratedTodayDate") or "").strip(),
+            "articlesGeneratedThisMonth": int(usage_in.get("articlesGeneratedThisMonth") or 0),
+            "articlesGeneratedMonthKey": (usage_in.get("articlesGeneratedMonthKey") or "").strip(),
+            "regenerationsThisMonth": int(usage_in.get("regenerationsThisMonth") or 0),
+            "schedulesThisMonth": int(usage_in.get("schedulesThisMonth") or 0),
+            "exportsThisMonth": int(usage_in.get("exportsThisMonth") or 0),
+        },
+        "created_at": (doc.get("created_at") or _now_iso_seconds())[:64],
+        "updated_at": (doc.get("updated_at") or _now_iso_seconds())[:64],
+    }
+
+
+def _trial_window_for_signup(*, plan_key: str, account_created_at: str) -> tuple[str, str]:
+    """Return ISO UTC trial start/end when signup plan is the designated trial plan."""
+    pk = (plan_key or "").strip().lower()
+    trial_key = get_trial_plan_key()
+    if not trial_key or pk != trial_key:
+        return "", ""
+    plans = load_plans() or {}
+    plan = plans.get(trial_key) if isinstance(plans.get(trial_key), dict) else {}
+    try:
+        days = max(1, int(plan.get("trial_period_days") or plan.get("validityDays") or 0))
+    except Exception:
+        days = 14
+    start = _parse_user_created_at(account_created_at)
+    end = start + timedelta(days=days)
+    return start.strftime("%Y-%m-%dT%H:%M:%SZ"), end.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def create_subscription_for_user(
+    *,
+    user_id: str,
+    plan_key: str,
+    account_created_at: str,
+) -> dict[str, Any]:
+    uid = (user_id or "").strip()
+    if not uid:
+        raise ValueError("user_id is required")
+    trial_start, trial_end = _trial_window_for_signup(plan_key=plan_key, account_created_at=account_created_at)
+    now = _now_iso_seconds()
+    doc = _normalize_subscription(
+        {
+            "user_id": uid,
+            "plan_key": (plan_key or "beta").strip().lower() or "beta",
+            "trial_start_date": trial_start,
+            "trial_end_date": trial_end,
+            "usage": {
+                "articlesGeneratedToday": 0,
+                "articlesGeneratedTodayDate": _utc_day_key_now(),
+                "articlesGeneratedThisMonth": 0,
+                "articlesGeneratedMonthKey": _utc_month_key_now(),
+                "regenerationsThisMonth": 0,
+                "schedulesThisMonth": 0,
+                "exportsThisMonth": 0,
+            },
+            "created_at": now,
+            "updated_at": now,
+        }
+    )
+    if _storage_mode != "mongo":
+        rows = _load_json_list("subscriptions.json")
+        rows = [r for r in rows if (r.get("user_id") or "").strip() != uid]
+        rows.append(doc)
+        with _db_write_lock:
+            _save_json("subscriptions.json", rows[-50000:])
+        return doc
+    with _db_write_lock:
+        get_db().subscriptions.replace_one({"user_id": uid}, {**doc, "_id": uid}, upsert=True)
+    return doc
+
+
+def ensure_subscription_for_user(user: dict[str, Any]) -> dict[str, Any]:
+    """Load or lazily create a subscription row for ``user``."""
+    uid = (user.get("id") or "").strip()
+    if not uid:
+        raise ValueError("user id required")
+    existing = get_subscription_by_user_id(uid)
+    if existing:
+        usage = _subscription_usage_from_user(user)
+        if usage != existing.get("usage"):
+            existing = {**existing, "usage": usage, "updated_at": _now_iso_seconds()}
+            if _storage_mode != "mongo":
+                rows = _load_json_list("subscriptions.json")
+                for i, r in enumerate(rows):
+                    if (r.get("user_id") or "").strip() == uid:
+                        rows[i] = existing
+                with _db_write_lock:
+                    _save_json("subscriptions.json", rows)
+            else:
+                with _db_write_lock:
+                    get_db().subscriptions.update_one({"user_id": uid}, {"$set": {"usage": usage, "updated_at": existing["updated_at"]}})
+        plan_key = (user.get("subscription_type") or existing.get("plan_key") or "beta").strip().lower()
+        if plan_key != (existing.get("plan_key") or ""):
+            existing["plan_key"] = plan_key
+        return existing
+    created_at = (user.get("created_at") or _now_iso_seconds()).strip()
+    plan_key = (user.get("subscription_type") or "beta").strip().lower() or "beta"
+    return create_subscription_for_user(user_id=uid, plan_key=plan_key, account_created_at=created_at)
+
+
+def get_subscription_by_user_id(user_id: str) -> dict[str, Any] | None:
+    uid = (user_id or "").strip()
+    if not uid:
+        return None
+    if _storage_mode != "mongo":
+        for r in reversed(_load_json_list("subscriptions.json")):
+            if isinstance(r, dict) and (r.get("user_id") or "").strip() == uid:
+                return _normalize_subscription(r)
+        return None
+    doc = get_db().subscriptions.find_one({"user_id": uid}, {"_id": 0})
+    if not isinstance(doc, dict):
+        return None
+    return _normalize_subscription(doc)
+
+
+def reset_daily_subscription_usage() -> int:
+    """Midnight UTC reset for daily usage counters on all active subscriptions."""
+    day_key = _utc_day_key_now()
+    patch = {
+        "usage.articlesGeneratedToday": 0,
+        "usage.articlesGeneratedTodayDate": day_key,
+        "updated_at": _now_iso_seconds(),
+    }
+    if _storage_mode != "mongo":
+        rows = _load_json_list("subscriptions.json")
+        n = 0
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            usage = r.get("usage") if isinstance(r.get("usage"), dict) else {}
+            if (usage.get("articlesGeneratedTodayDate") or "").strip() == day_key and int(usage.get("articlesGeneratedToday") or 0) == 0:
+                continue
+            usage["articlesGeneratedToday"] = 0
+            usage["articlesGeneratedTodayDate"] = day_key
+            r["usage"] = usage
+            r["updated_at"] = patch["updated_at"]
+            n += 1
+        if n:
+            with _db_write_lock:
+                _save_json("subscriptions.json", rows)
+        return n
+    with _db_write_lock:
+        res = get_db().subscriptions.update_many(
+            {},
+            {"$set": patch},
+        )
+    return int(getattr(res, "modified_count", 0) or 0)
 
 
 def get_user_by_id(user_id: str) -> dict[str, Any] | None:
@@ -1191,6 +1550,10 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
         "usage_monthly_llm_tokens_used": int(doc.get("usage_monthly_llm_tokens_used") or 0),
         "created_at": (doc.get("created_at") or "").strip(),
         "pending_product_tour": bool(doc.get("pending_product_tour", False)),
+        "email_verification_token": (doc.get("email_verification_token") or "").strip(),
+        "email_verification_expires": (doc.get("email_verification_expires") or "").strip(),
+        "password_reset_token": (doc.get("password_reset_token") or "").strip(),
+        "password_reset_expires": (doc.get("password_reset_expires") or "").strip(),
         # Google Search Console OAuth (stored per-user)
         "gsc_access_token": (doc.get("gsc_access_token") or "").strip(),
         "gsc_refresh_token": (doc.get("gsc_refresh_token") or "").strip(),
@@ -1243,7 +1606,197 @@ def get_user_by_email(email: str) -> dict[str, Any] | None:
         "usage_monthly_llm_tokens_used": int(doc.get("usage_monthly_llm_tokens_used") or 0),
         "created_at": (doc.get("created_at") or "").strip(),
         "pending_product_tour": bool(doc.get("pending_product_tour", False)),
+        "email_verification_token": (doc.get("email_verification_token") or "").strip(),
+        "email_verification_expires": (doc.get("email_verification_expires") or "").strip(),
+        "password_reset_token": (doc.get("password_reset_token") or "").strip(),
+        "password_reset_expires": (doc.get("password_reset_expires") or "").strip(),
     }
+
+
+def _parse_iso_ts(raw: str) -> datetime | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(text[:19], fmt.replace("Z", ""))
+        except ValueError:
+            continue
+    return None
+
+
+_WEAK_EMAIL_OTPS = frozenset(
+    {
+        "000000",
+        "111111",
+        "222222",
+        "333333",
+        "444444",
+        "555555",
+        "666666",
+        "777777",
+        "888888",
+        "999999",
+        "123456",
+        "654321",
+        "012345",
+        "543210",
+    }
+)
+
+
+def generate_email_verification_otp() -> str:
+    """Cryptographically random 6-digit OTP (never a trivial/sequential code)."""
+    for _ in range(32):
+        code = "".join(secrets.choice("0123456789") for _ in range(6))
+        if code not in _WEAK_EMAIL_OTPS:
+            return code
+    return f"{secrets.randbelow(900_000) + 100_000:06d}"
+
+
+def set_email_verification(*, user_id: str, token: str, expires_at: datetime, sent_at: datetime | None = None) -> bool:
+    uid = (user_id or "").strip()
+    tok = (token or "").strip()[:128]
+    if not uid or not tok:
+        return False
+    sent = sent_at or datetime.utcnow()
+    exp_iso = expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    updates = {
+        "email_verification_token": tok,
+        "email_verification_expires": exp_iso,
+        "email_verification_expires_at": expires_at,
+        "email_verification_sent_at": sent,
+    }
+    return update_user_fields(uid, updates)
+
+
+def resend_email_verification(*, email: str, cooldown_seconds: int = 60) -> tuple[str, str, int, str | None]:
+    """
+    Regenerate verification code for pending accounts.
+
+    Returns ``(action, message, retry_after_seconds, token)`` where action is
+    ``sent``, ``cooldown``, or ``noop``.
+    """
+    em = (email or "").strip().lower()
+    generic = "If that email is pending verification, a new code has been sent."
+    if not em:
+        return "noop", generic, 0, None
+    user = get_user_by_email(em)
+    if not user:
+        return "noop", generic, 0, None
+    status = (user.get("account_status") or "active").strip().lower()
+    if status != "pending":
+        return "noop", generic, 0, None
+
+    now = datetime.utcnow()
+    last_sent_raw = user.get("email_verification_sent_at")
+    last_sent: datetime | None = None
+    if isinstance(last_sent_raw, datetime):
+        last_sent = last_sent_raw
+    elif isinstance(last_sent_raw, str):
+        last_sent = _parse_iso_ts(last_sent_raw)
+
+    if last_sent:
+        elapsed = (now - last_sent).total_seconds()
+        if elapsed < cooldown_seconds:
+            retry = max(1, int(cooldown_seconds - elapsed))
+            return (
+                "cooldown",
+                f"Please wait {retry} seconds before requesting another code.",
+                retry,
+                None,
+            )
+
+    token = generate_email_verification_otp()
+    expires_at = now + timedelta(minutes=15)
+    uid = (user.get("id") or "").strip()
+    ok = set_email_verification(user_id=uid, token=token, expires_at=expires_at, sent_at=now)
+    if not ok:
+        return "noop", "Could not resend verification email.", 0, None
+    return "sent", "Verification email sent. Check your inbox.", cooldown_seconds, token
+
+
+def verify_email_with_token(*, email: str, token: str) -> tuple[bool, str]:
+    em = (email or "").strip().lower()
+    tok = (token or "").strip()
+    if not em or not tok:
+        return False, "Email and verification code are required."
+    user = get_user_by_email(em)
+    if not user:
+        return False, "Invalid verification code."
+    stored = (user.get("email_verification_token") or "").strip()
+    if not stored or stored != tok:
+        return False, "Invalid verification code."
+    exp_raw = (user.get("email_verification_expires") or "").strip()
+    exp = _parse_iso_ts(exp_raw)
+    if not exp or datetime.utcnow() > exp:
+        return False, "Verification code has expired. Request a new one."
+    uid = (user.get("id") or "").strip()
+    ok = update_user_fields(
+        uid,
+        {
+            "account_status": "active",
+            "email_verification_token": "",
+            "email_verification_expires": "",
+            "email_verification_expires_at": None,
+        },
+    )
+    return (ok, "Email verified successfully.") if ok else (False, "Could not activate account.")
+
+
+def set_password_reset_token(*, email: str, token: str, expires_at: datetime) -> bool:
+    em = (email or "").strip().lower()
+    tok = (token or "").strip()[:128]
+    if not em or not tok:
+        return False
+    user = get_user_by_email(em)
+    if not user:
+        return False
+    uid = (user.get("id") or "").strip()
+    exp_iso = expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return update_user_fields(
+        uid,
+        {
+            "password_reset_token": tok,
+            "password_reset_expires": exp_iso,
+            "password_reset_expires_at": expires_at,
+        },
+    )
+
+
+def get_user_by_password_reset_token(*, email: str, token: str) -> dict[str, Any] | None:
+    em = (email or "").strip().lower()
+    tok = (token or "").strip()
+    if not em or not tok:
+        return None
+    user = get_user_by_email(em)
+    if not user:
+        return None
+    if (user.get("password_reset_token") or "").strip() != tok:
+        return None
+    exp = _parse_iso_ts((user.get("password_reset_expires") or "").strip())
+    if not exp or datetime.utcnow() > exp:
+        return None
+    return user
+
+
+def complete_password_reset(*, email: str, token: str, password_hash: str) -> tuple[bool, str]:
+    user = get_user_by_password_reset_token(email=email, token=token)
+    if not user:
+        return False, "Invalid or expired reset link."
+    uid = (user.get("id") or "").strip()
+    if not uid:
+        return False, "Invalid or expired reset link."
+    ok = update_user_fields(
+        uid,
+        {
+            "password_hash": password_hash,
+            "password_reset_token": "",
+            "password_reset_expires": "",
+            "password_reset_expires_at": None,
+        },
+    )
+    return (True, "Password updated successfully.") if ok else (False, "Could not update password.")
 
 
 def insert_user(user: dict[str, Any]) -> None:
@@ -1255,6 +1808,11 @@ def insert_user(user: dict[str, Any]) -> None:
                 raise ValueError("email already registered")
             users.append(norm)
             _save_json_users(users)
+        create_subscription_for_user(
+            user_id=norm["id"],
+            plan_key=norm.get("subscription_type") or "beta",
+            account_created_at=norm.get("created_at") or _now_iso_seconds(),
+        )
         return
     if _storage_mode != "mongo":
         raise RuntimeError("User storage requires MongoDB or JSON fallback")
@@ -1263,6 +1821,11 @@ def insert_user(user: dict[str, Any]) -> None:
         res = get_db().users.insert_one(doc)
         if not res.acknowledged:
             raise RuntimeError("MongoDB insert_user was not acknowledged")
+    create_subscription_for_user(
+        user_id=norm["id"],
+        plan_key=norm.get("subscription_type") or "beta",
+        account_created_at=norm.get("created_at") or _now_iso_seconds(),
+    )
 
 
 def delete_user(user_id: str) -> bool:
@@ -1402,10 +1965,13 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "featured_image_optimizer_model": (d.get("featured_image_optimizer_model") or "")[:200],
         "featured_image_prompt_optimizer_error": d.get("featured_image_prompt_optimizer_error") or "",
         "featured_image_regeneration_count": int(d.get("featured_image_regeneration_count") or 0),
+        "featured_image_storage": (d.get("featured_image_storage") or "")[:16],
         "wp_post_id": wp_id,
         "wp_link": (d.get("wp_link") or "")[:2048],
         "wp_rest_base": (d.get("wp_rest_base") or "")[:200],
         "wp_last_wp_status": (d.get("wp_last_wp_status") or "")[:32],
+        "wp_modified_at": (d.get("wp_modified_at") or "")[:64],
+        "wp_synced_at": (d.get("wp_synced_at") or "")[:64],
         "wp_scheduled_at": _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at")),
         "wp_schedule_wp_status": (d.get("wp_schedule_wp_status") or "")[:32],
         "wp_schedule_error": d.get("wp_schedule_error") or "",
@@ -1425,6 +1991,13 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         # Automated internal-linking (Feature 3) — counters only; the actual links live in the body.
         "internal_links_applied_at": (d.get("internal_links_applied_at") or "")[:64],
         "internal_links_count": int(d.get("internal_links_count") or 0),
+        "shopify_blog_id": d.get("shopify_blog_id"),
+        "shopify_article_id": d.get("shopify_article_id"),
+        "shopify_link": (d.get("shopify_link") or "")[:2048],
+        "shopify_published_at": (d.get("shopify_published_at") or "")[:64],
+        "topic_cluster_id": (d.get("topic_cluster_id") or "")[:64],
+        "topic_slot_id": (d.get("topic_slot_id") or "")[:64],
+        "topic_role": (d.get("topic_role") or "")[:16],
     }
 
 
@@ -1507,6 +2080,23 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
             "wp_verified_message",
             "wp_plugin_status",
             "wp_plugin_message",
+            "platform",
+            "shopify_shop",
+            "shopify_access_token",
+            "shopify_client_id",
+            "shopify_client_secret",
+            "shopify_token_expires_at",
+            "shopify_scope",
+            "shopify_connected_at",
+            "shopify_verified_at",
+            "shopify_verified_status",
+            "shopify_verified_message",
+            "shopify_sync_at",
+            "shopify_sync_status",
+            "shopify_sync_message",
+            "shopify_catalog",
+            "shopify_product_aware_enabled",
+            "wp_internal_link_aware_enabled",
         ):
             p[k] = v
 
@@ -1550,14 +2140,29 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "featured_image_optimizer_model",
             "featured_image_prompt_optimizer_error",
             "featured_image_regeneration_count",
+            "featured_image_storage",
             "wp_link",
             "wp_rest_base",
             "wp_last_wp_status",
+            "wp_modified_at",
+            "wp_synced_at",
             "wp_scheduled_at",
             "wp_schedule_wp_status",
             "wp_schedule_error",
             "wp_schedule_batch_id",
             "gsc_status",
+            "shopify_blog_id",
+            "shopify_article_id",
+            "shopify_link",
+            "shopify_published_at",
+            "shopify_mapped_products",
+            "wp_mapped_pages",
+            "topic_cluster_id",
+            "topic_slot_id",
+            "topic_role",
+            "integrity_ai_percentage",
+            "integrity_flagged_paragraphs",
+            "integrity_last_audited_at",
         ):
             a[k] = v
 
@@ -1612,6 +2217,23 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "wp_verified_message": d.get("wp_verified_message") or "",
         "wp_plugin_status": d.get("wp_plugin_status") or "",
         "wp_plugin_message": d.get("wp_plugin_message") or "",
+        "platform": ((d.get("platform") or "wordpress").strip().lower() or "wordpress")[:32],
+        "shopify_shop": (d.get("shopify_shop") or "").strip()[:2048],
+        "shopify_access_token": (d.get("shopify_access_token") or "").strip()[:5000],
+        "shopify_client_id": (d.get("shopify_client_id") or "").strip()[:256],
+        "shopify_client_secret": (d.get("shopify_client_secret") or "").strip()[:5000],
+        "shopify_token_expires_at": (d.get("shopify_token_expires_at") or "").strip()[:32],
+        "shopify_scope": (d.get("shopify_scope") or "").strip()[:2000],
+        "shopify_connected_at": (d.get("shopify_connected_at") or "").strip()[:64],
+        "shopify_verified_at": (d.get("shopify_verified_at") or "").strip()[:32],
+        "shopify_verified_status": (d.get("shopify_verified_status") or "").strip()[:32],
+        "shopify_verified_message": (d.get("shopify_verified_message") or "").strip()[:1000],
+        "shopify_sync_at": (d.get("shopify_sync_at") or "").strip()[:64],
+        "shopify_sync_status": (d.get("shopify_sync_status") or "").strip()[:32],
+        "shopify_sync_message": (d.get("shopify_sync_message") or "").strip()[:1000],
+        "shopify_catalog": d.get("shopify_catalog") if isinstance(d.get("shopify_catalog"), dict) else {},
+        "shopify_product_aware_enabled": bool(d.get("shopify_product_aware_enabled", False)),
+        "wp_internal_link_aware_enabled": bool(d.get("wp_internal_link_aware_enabled", False)),
         "created_at": d.get("created_at") or "",
     }
 
@@ -1659,6 +2281,8 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
         "wp_link": d.get("wp_link") or "",
         "wp_rest_base": d.get("wp_rest_base") or "",
         "wp_last_wp_status": d.get("wp_last_wp_status") or "",
+        "wp_modified_at": d.get("wp_modified_at") or "",
+        "wp_synced_at": d.get("wp_synced_at") or "",
         "wp_scheduled_at": _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at")),
         "wp_schedule_wp_status": d.get("wp_schedule_wp_status") or "",
         "wp_schedule_error": d.get("wp_schedule_error") or "",
@@ -1681,8 +2305,8 @@ def load_projects(owner_user_id: str | None = None) -> list[dict[str, Any]]:
     """
     Load projects, optionally filtered by owner_user_id.
 
-    This keeps backward compatibility with callers that previously used load_projects()
-    while enabling efficient per-user queries for the API layer.
+    Prefer :func:`load_projects_listing` for dashboard project lists (skips heavy
+    embedded fields such as ``shopify_catalog`` and prompt arrays).
     """
     owner = (owner_user_id or "").strip()
     if _storage_mode != "mongo":
@@ -1700,6 +2324,167 @@ def load_projects(owner_user_id: str | None = None) -> list[dict[str, Any]]:
     q = _mongo_owner_user_id_filter(owner) if owner else {}
     cur = db.projects.find(q).sort("created_at", 1)
     return [_mongo_doc_to_project(doc) for doc in cur]
+
+
+_PROJECT_LISTING_MONGO_PROJECTION: dict[str, int] = {
+    "_id": 0,
+    "id": 1,
+    "owner_user_id": 1,
+    "name": 1,
+    "website_url": 1,
+    "platform": 1,
+    "shopify_shop": 1,
+    "shopify_access_token": 1,
+    "shopify_verified_status": 1,
+    "shopify_verified_at": 1,
+    "shopify_sync_status": 1,
+    "brand_identity": 1,
+    "niche_identifier": 1,
+    "brand_voice": 1,
+    "brand_tones": 1,
+    "brand_rules": 1,
+    "niche_topic": 1,
+    "audience": 1,
+    "target_countries": 1,
+    "target_countries_all": 1,
+    "target_cities": 1,
+    "target_cities_all": 1,
+    "created_at": 1,
+}
+
+_PROJECT_ACCESS_MONGO_PROJECTION: dict[str, int] = {
+    **_PROJECT_LISTING_MONGO_PROJECTION,
+    "wp_verified_at": 1,
+    "wp_verified_status": 1,
+    "wp_verified_message": 1,
+    "wp_site_url": 1,
+    "default_prompt_id": 1,
+    "default_image_prompt_id": 1,
+}
+
+_PROJECT_SHOPIFY_CATALOG_PROJECTION: dict[str, int] = {
+    "_id": 0,
+    "id": 1,
+    "owner_user_id": 1,
+    "platform": 1,
+    "shopify_shop": 1,
+    "shopify_catalog": 1,
+    "shopify_sync_at": 1,
+    "shopify_sync_status": 1,
+    "shopify_sync_message": 1,
+    "shopify_verified_status": 1,
+    "shopify_verified_at": 1,
+}
+
+_PROJECT_SHOPIFY_STATUS_PROJECTION: dict[str, int] = {
+    "_id": 0,
+    "id": 1,
+    "owner_user_id": 1,
+    "shopify_shop": 1,
+    "shopify_access_token": 1,
+    "shopify_scope": 1,
+    "shopify_client_id": 1,
+    "shopify_connected_at": 1,
+    "shopify_sync_at": 1,
+    "shopify_sync_status": 1,
+    "shopify_sync_message": 1,
+    "shopify_verified_at": 1,
+    "shopify_verified_status": 1,
+    "shopify_catalog.counts": 1,
+    "shopify_catalog.granted_scopes": 1,
+    "shopify_catalog.warnings": 1,
+}
+
+_SCHEDULED_JOB_LISTING_PROJECTION: dict[str, int] = {
+    "_id": 0,
+    "id": 1,
+    "project_id": 1,
+    "article_id": 1,
+    "state": 1,
+    "run_at": 1,
+    "updated_at": 1,
+    "last_error": 1,
+    "wp_link": 1,
+    "wp_post_id": 1,
+    "wp_status": 1,
+}
+
+
+def load_projects_listing(owner_user_id: str | None = None) -> list[dict[str, Any]]:
+    """Project dashboard list — excludes catalog, prompts, tokens, and GSC secrets."""
+    owner = (owner_user_id or "").strip()
+    if _storage_mode != "mongo":
+        return load_projects(owner_user_id=owner or None)
+    db = get_db()
+    q = _mongo_owner_user_id_filter(owner) if owner else {}
+    cur = db.projects.find(q, _PROJECT_LISTING_MONGO_PROJECTION).sort("created_at", 1)
+    return [_mongo_doc_to_project(doc) for doc in cur]
+
+
+def get_project_listing_by_id(project_id: str) -> dict[str, Any] | None:
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if _storage_mode != "mongo":
+        for p in _load_json_list("projects.json"):
+            if isinstance(p, dict) and (p.get("id") or "").strip() == pid:
+                return _normalize_project_dict(dict(p))
+        return None
+    doc = get_db().projects.find_one({"id": pid}, _PROJECT_LISTING_MONGO_PROJECTION)
+    if not isinstance(doc, dict):
+        return None
+    return _mongo_doc_to_project(doc)
+
+
+def get_project_access_row(project_id: str) -> dict[str, Any] | None:
+    """Auth + platform verification fields without heavy project blobs."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if _storage_mode != "mongo":
+        return get_project_listing_by_id(pid)
+    doc = get_db().projects.find_one({"id": pid}, _PROJECT_ACCESS_MONGO_PROJECTION)
+    if not isinstance(doc, dict):
+        return None
+    return _mongo_doc_to_project(doc)
+
+
+def get_project_shopify_catalog_doc(project_id: str) -> dict[str, Any] | None:
+    """Read cached Shopify catalog only (no live Admin API)."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if _storage_mode != "mongo":
+        proj = get_project_listing_by_id(pid)
+        return proj if isinstance(proj, dict) else None
+    doc = get_db().projects.find_one({"id": pid}, _PROJECT_SHOPIFY_CATALOG_PROJECTION)
+    if not isinstance(doc, dict):
+        return None
+    return _mongo_doc_to_project(doc)
+
+
+def get_project_shopify_status_doc(project_id: str) -> dict[str, Any] | None:
+    """Shopify dashboard status from Mongo only — excludes product/page catalog payloads."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if _storage_mode != "mongo":
+        proj = get_project_listing_by_id(pid)
+        if not isinstance(proj, dict):
+            return None
+        catalog = proj.get("shopify_catalog") if isinstance(proj.get("shopify_catalog"), dict) else {}
+        return {
+            **proj,
+            "shopify_catalog": {
+                k: catalog.get(k)
+                for k in ("counts", "granted_scopes", "warnings")
+                if k in catalog
+            },
+        }
+    doc = get_db().projects.find_one({"id": pid}, _PROJECT_SHOPIFY_STATUS_PROJECTION)
+    if not isinstance(doc, dict):
+        return None
+    return _mongo_doc_to_project(doc)
 
 
 def get_project_by_id(project_id: str) -> dict[str, Any] | None:
@@ -1725,6 +2510,14 @@ def load_articles() -> list[dict[str, Any]]:
     return [_mongo_doc_to_article(doc) for doc in db.articles.find({})]
 
 
+def _find_article_doc(db, pid: str, aid: str, projection: dict[str, Any] | None = None):
+    """Resolve article by logical id or legacy ``_id``."""
+    doc = db.articles.find_one({"project_id": pid, "id": aid}, projection)
+    if not isinstance(doc, dict):
+        doc = db.articles.find_one({"_id": aid, "project_id": pid}, projection)
+    return doc if isinstance(doc, dict) else None
+
+
 def get_article(*, project_id: str, article_id: str) -> dict[str, Any] | None:
     """
     Fetch one article by id within a project.
@@ -1744,13 +2537,269 @@ def get_article(*, project_id: str, article_id: str) -> dict[str, Any] | None:
         return None
 
     db = get_db()
-    # Listings and APIs use the logical ``id`` field; legacy rows may only match on ``_id``.
-    doc = db.articles.find_one({"project_id": pid, "id": aid})
-    if not isinstance(doc, dict):
-        doc = db.articles.find_one({"_id": aid, "project_id": pid})
-    if not isinstance(doc, dict):
+    doc = _find_article_doc(db, pid, aid)
+    if not doc:
         return None
     return _mongo_doc_to_article(doc)
+
+
+# Fields required for featured-image generation/regeneration (no article body or inline image bytes).
+_IMAGE_REGEN_FIELD_NAMES = (
+    "id",
+    "project_id",
+    "title",
+    "keywords",
+    "focus_keyphrase",
+    "featured_image_regeneration_count",
+    "featured_image_generated_at",
+    "featured_image_source",
+    "featured_image_prompt_id",
+    "shopify_mapped_products",
+    "wp_mapped_pages",
+)
+
+
+def get_article_for_image_regeneration(*, project_id: str, article_id: str) -> dict[str, Any] | None:
+    """
+    Lightweight article row for OpenAI image generation.
+
+    Excludes ``article`` (markdown body) and ``image_url`` (often a multi‑MB data URL) so
+    Mongo reads stay fast and do not hit socket timeouts on large documents.
+    """
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        return None
+    if _storage_mode != "mongo":
+        row = get_article(project_id=pid, article_id=aid)
+        if not row:
+            return None
+        out = {k: row.get(k) for k in _IMAGE_REGEN_FIELD_NAMES}
+        out["has_featured_image"] = article_has_stored_featured_image(article_id=aid, row=row)
+        return out
+
+    db = get_db()
+    match_or = [{"project_id": pid, "id": aid}, {"_id": aid, "project_id": pid}]
+    pipeline = [
+        {"$match": {"$or": match_or}},
+        {"$limit": 1},
+        {
+            "$project": {
+                "_id": 0,
+                "id": 1,
+                "project_id": 1,
+                "title": 1,
+                "keywords": 1,
+                "focus_keyphrase": 1,
+                "featured_image_regeneration_count": 1,
+                "featured_image_generated_at": 1,
+                "featured_image_source": 1,
+                "featured_image_prompt_id": 1,
+                "shopify_mapped_products": 1,
+                "wp_mapped_pages": 1,
+                "has_featured_image": {
+                    "$or": [
+                        {"$gt": [{"$strLenCP": {"$ifNull": ["$image_url", ""]}}, 0]},
+                        {"$gt": [{"$strLenCP": {"$ifNull": ["$featured_image_generated_at", ""]}}, 0]},
+                    ]
+                },
+            }
+        },
+    ]
+    cur = db.articles.aggregate(pipeline)
+    doc = next(cur, None)
+    if not isinstance(doc, dict):
+        return None
+    row = _mongo_doc_to_article(doc)
+    row["has_featured_image"] = article_has_stored_featured_image(article_id=aid, row=row)
+    return row
+
+
+def get_article_image_url(*, project_id: str, article_id: str) -> str | None:
+    """Return only ``image_url`` (for GET featured-image) without loading the article body."""
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        return None
+    if _storage_mode != "mongo":
+        row = get_article(project_id=pid, article_id=aid)
+        if not row:
+            if featured_image_file_exists(aid):
+                return _load_featured_image_file_as_data_url(aid)
+            return None
+        if featured_image_file_exists(aid):
+            loaded = _load_featured_image_file_as_data_url(aid)
+            if loaded:
+                return loaded
+        raw = (row.get("image_url") or "").strip()
+        return raw or None
+
+    db = get_db()
+    doc = _find_article_doc(
+        db,
+        pid,
+        aid,
+        {"_id": 0, "image_url": 1, "featured_image_storage": 1},
+    )
+    if featured_image_file_exists(aid):
+        loaded = _load_featured_image_file_as_data_url(aid)
+        if loaded:
+            return loaded
+    if not doc:
+        return None
+    raw = (doc.get("image_url") or "").strip()
+    return raw or None
+
+
+def get_article_generation_status(*, project_id: str, article_id: str) -> dict[str, Any] | None:
+    """Tiny projection for frontend polling — no body, image bytes, or cluster scans."""
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        return None
+    if _storage_mode != "mongo":
+        row = get_article(project_id=pid, article_id=aid)
+        if not row:
+            return None
+        has_img = article_has_stored_featured_image(article_id=aid, row=row)
+        return {
+            "id": aid,
+            "status": (row.get("status") or "pending")[:32],
+            "generated_at": (row.get("generated_at") or "")[:64] or None,
+            "has_body": bool((row.get("article") or "").strip()),
+            "has_featured_image": has_img,
+            "featured_image_regeneration_count": int(row.get("featured_image_regeneration_count") or 0),
+        }
+
+    db = get_db()
+    match_or = [{"project_id": pid, "id": aid}, {"_id": aid, "project_id": pid}]
+    pipeline = [
+        {"$match": {"$or": match_or}},
+        {"$limit": 1},
+        {
+            "$project": {
+                "_id": 0,
+                "id": 1,
+                "status": 1,
+                "generated_at": 1,
+                "featured_image_generated_at": 1,
+                "featured_image_regeneration_count": 1,
+                "has_body": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
+                "has_featured_image": {
+                    "$or": [
+                        {"$gt": [{"$strLenCP": {"$ifNull": ["$image_url", ""]}}, 0]},
+                        {"$gt": [{"$strLenCP": {"$ifNull": ["$featured_image_generated_at", ""]}}, 0]},
+                    ]
+                },
+            }
+        },
+    ]
+    try:
+        doc = next(db.articles.aggregate(pipeline), None)
+    except Exception:
+        doc = _find_article_doc(
+            db,
+            pid,
+            aid,
+            {
+                "_id": 0,
+                "id": 1,
+                "status": 1,
+                "generated_at": 1,
+                "featured_image_generated_at": 1,
+                "featured_image_regeneration_count": 1,
+            },
+        )
+        if not isinstance(doc, dict):
+            return None
+        doc["has_body"] = _mongo_article_has_body(db, pid, aid)
+        doc["has_featured_image"] = article_has_stored_featured_image(article_id=aid, row=doc)
+    if not isinstance(doc, dict):
+        return None
+    has_img = bool(doc.get("has_featured_image"))
+    if not has_img:
+        has_img = article_has_stored_featured_image(article_id=aid, row=doc)
+    return {
+        "id": (doc.get("id") or aid).strip(),
+        "status": (doc.get("status") or "pending")[:32],
+        "generated_at": (doc.get("generated_at") or "")[:64] or None,
+        "has_body": bool(doc.get("has_body")),
+        "has_featured_image": has_img,
+        "featured_image_regeneration_count": int(doc.get("featured_image_regeneration_count") or 0),
+    }
+
+
+def get_article_editor_shell(*, project_id: str, article_id: str) -> dict[str, Any] | None:
+    """Metadata for the editor without the large ``article`` body or inline ``image_url``."""
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        return None
+    if _storage_mode != "mongo":
+        row = get_article(project_id=pid, article_id=aid)
+        if not row:
+            return None
+        out = dict(row)
+        out["hasBody"] = bool((row.get("article") or "").strip())
+        out["article"] = ""
+        out["image_url"] = ""
+        return out
+
+    db = get_db()
+    doc = _find_article_doc(
+        db,
+        pid,
+        aid,
+        {
+            "_id": 0,
+            "article": 0,
+            "image_url": 0,
+        },
+    )
+    if not doc:
+        return None
+    row = _mongo_doc_to_article(doc)
+    row["article"] = ""
+    row["image_url"] = ""
+    row["hasBody"] = _mongo_article_has_body(db, pid, aid)
+    return row
+
+
+def _mongo_article_has_body(db, pid: str, aid: str) -> bool:
+    """True when body text exists, without loading the full article string."""
+    for match in ({"project_id": pid, "id": aid}, {"_id": aid, "project_id": pid}):
+        try:
+            cur = db.articles.aggregate(
+                [
+                    {"$match": match},
+                    {"$limit": 1},
+                    {"$project": {"hb": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]}}},
+                ]
+            )
+            for d in cur:
+                return bool(d.get("hb"))
+        except Exception:
+            probe = db.articles.find_one(match, {"_id": 0, "article": 1})
+            if isinstance(probe, dict):
+                return bool((probe.get("article") or "").strip())
+    return False
+
+
+def get_article_body_text(*, project_id: str, article_id: str) -> str | None:
+    """Return only the article body markdown/HTML."""
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        return None
+    if _storage_mode != "mongo":
+        row = get_article(project_id=pid, article_id=aid)
+        return (row or {}).get("article") or "" if row else None
+
+    db = get_db()
+    doc = _find_article_doc(db, pid, aid, {"_id": 0, "article": 1})
+    if not doc:
+        return None
+    return (doc.get("article") or "")
 
 
 def load_articles_by_ids_for_project(project_id: str, article_ids: list[str]) -> dict[str, dict[str, Any]]:
@@ -1769,12 +2818,24 @@ def load_articles_by_ids_for_project(project_id: str, article_ids: list[str]) ->
                 out[aid] = _normalize_article_dict(a)
         return out
     out: dict[str, dict[str, Any]] = {}
-    for doc in get_db().articles.find({"project_id": pid, "id": {"$in": aids}}):
+    stub_proj = {
+        "_id": 0,
+        "id": 1,
+        "title": 1,
+        "status": 1,
+        "focus_keyphrase": 1,
+        "keywords": 1,
+        "wp_scheduled_at": 1,
+        "wp_post_id": 1,
+        "wp_link": 1,
+        "posted_at": 1,
+        "created_at": 1,
+    }
+    for doc in get_db().articles.find({"project_id": pid, "id": {"$in": aids}}, stub_proj):
         if isinstance(doc, dict):
-            a = _mongo_doc_to_article(doc)
-            aid = (a.get("id") or "").strip()
+            aid = (doc.get("id") or "").strip()
             if aid:
-                out[aid] = a
+                out[aid] = dict(doc)
     return out
 
 
@@ -1880,7 +2941,7 @@ def load_scheduled_pending_for_project_minimal(project_id: str, *, limit: int = 
         "wp_schedule_wp_status": 1,
         "wp_schedule_state": 1,
         "wp_schedule_error": 1,
-        "article": 1,
+        "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
     }
     lim = max(1, min(int(limit or 200), 1000))
     cur = get_db().articles.find(q, proj).sort("wp_scheduled_at", 1).limit(lim)
@@ -1932,6 +2993,33 @@ def load_articles_schedule_stubs_for_project(project_id: str, *, limit: int = 50
     return out
 
 
+# Listing queries must not touch the full ``article`` body (large HTML); only fields needed for
+# status derivation and the Articles table UI.
+_LISTING_PROJECTION_STAGE = {
+    "$project": {
+        "_id": 0,
+        "id": 1,
+        "project_id": 1,
+        "title": 1,
+        "keywords": 1,
+        "status": {"$ifNull": ["$status", "pending"]},
+        "focus_keyphrase": 1,
+        "posted_at": 1,
+        "created_at": 1,
+        "updated_at": 1,
+        "wp_post_id": 1,
+        "wp_link": 1,
+        "wp_last_wp_status": 1,
+        "wp_scheduled_at": 1,
+        "gsc_status": 1,
+        "monitor_status": 1,
+        "shopify_link": 1,
+        "shopify_article_id": 1,
+        "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
+    }
+}
+
+
 def load_articles_listing_for_project(
     project_id: str,
     *,
@@ -1958,7 +3046,7 @@ def load_articles_listing_for_project(
         {"$match": {"project_id": pid}},
         {
             "$project": {
-                "_id": 0,
+                **_LISTING_PROJECTION_STAGE["$project"],
                 "id": {
                     "$cond": {
                         "if": {"$gt": [{"$strLenCP": {"$ifNull": ["$id", ""]}}, 0]},
@@ -1966,37 +3054,6 @@ def load_articles_listing_for_project(
                         "else": {"$toString": "$_id"},
                     }
                 },
-                "project_id": 1,
-                "title": 1,
-                "keywords": 1,
-                # Always emit a string so API/UI never miss status when the field was null or odd-typed.
-                "status": {"$ifNull": ["$status", "pending"]},
-                "focus_keyphrase": 1,
-                "meta_title": 1,
-                "meta_description": 1,
-                "generated_at": 1,
-                "posted_at": 1,
-                "created_at": 1,
-                "updated_at": 1,
-                "wp_post_id": 1,
-                "wp_link": 1,
-                "wp_rest_base": 1,
-                "wp_last_wp_status": 1,
-                "wp_scheduled_at": 1,
-                "wp_schedule_wp_status": 1,
-                "wp_schedule_error": 1,
-                "wp_schedule_batch_id": 1,
-                "wp_schedule_batch_index": 1,
-                "wp_schedule_batch_total": 1,
-                "gsc_status": 1,
-                "gsc_inspection_requested_at": 1,
-                "gsc_inspection_error": 1,
-                # Feature 4 — rank monitor status surfaced for the "Optimization status" column.
-                "monitor_status": 1,
-                "monitor_last_checked_at": 1,
-                # Feature 3 — count of internal links injected into the body (currently 0 in v1).
-                "internal_links_count": 1,
-                "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
             }
         },
         {"$sort": {"created_at": -1}},
@@ -2008,42 +3065,6 @@ def load_articles_listing_for_project(
         d["wp_scheduled_at"] = _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at"))
         out.append(d)
     return out
-
-
-_LISTING_PROJECTION_STAGE = {
-    "$project": {
-        "_id": 0,
-        "id": 1,
-        "project_id": 1,
-        "title": 1,
-        "keywords": 1,
-        "status": {"$ifNull": ["$status", "pending"]},
-        "focus_keyphrase": 1,
-        "meta_title": 1,
-        "meta_description": 1,
-        "generated_at": 1,
-        "posted_at": 1,
-        "created_at": 1,
-        "updated_at": 1,
-        "wp_post_id": 1,
-        "wp_link": 1,
-        "wp_rest_base": 1,
-        "wp_last_wp_status": 1,
-        "wp_scheduled_at": 1,
-        "wp_schedule_wp_status": 1,
-        "wp_schedule_error": 1,
-        "wp_schedule_batch_id": 1,
-        "wp_schedule_batch_index": 1,
-        "wp_schedule_batch_total": 1,
-        "gsc_status": 1,
-        "gsc_inspection_requested_at": 1,
-        "gsc_inspection_error": 1,
-        "monitor_status": 1,
-        "monitor_last_checked_at": 1,
-        "internal_links_count": 1,
-        "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
-    }
-}
 
 
 def _listing_match_for_project(
@@ -2360,7 +3381,9 @@ def load_recent_article_listings_for_projects(
                 "gsc_status": 1,
                 "gsc_inspection_requested_at": 1,
                 "gsc_inspection_error": 1,
-                "image_url": 1,
+                "hasFeaturedImage": {
+                    "$gt": [{"$strLenCP": {"$ifNull": ["$image_url", ""]}}, 0],
+                },
                 "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
             }
         },
@@ -2421,7 +3444,20 @@ def load_research_serp_history(
         out = [r for r in rows if (r.get("project_id") or "").strip() == pid]
         out.sort(key=lambda r: float(r.get("fetched_at") or 0.0), reverse=True)
         return out[:lim]
-    cur = get_db().research_serp.find({"project_id": pid}, {"_id": 0}).sort("fetched_at", -1).limit(lim)
+    cur = get_db().research_serp.find(
+        {"project_id": pid},
+        {
+            "_id": 0,
+            "project_id": 1,
+            "query": 1,
+            "gl": 1,
+            "hl": 1,
+            "fetched_at": 1,
+            "results": 1,
+            "related_searches": 1,
+            "created_at": 1,
+        },
+    ).sort("fetched_at", -1).limit(lim)
     return [dict(d) for d in cur]
 
 
@@ -2485,7 +3521,12 @@ def get_research_cache(*, cache_key: str, max_age_s: int = 6 * 60 * 60) -> dict[
                 ts = 0.0
             if now is not None and max_age_s and ts and (now - ts) > float(max_age_s):
                 return None
-            return r.get("value") if isinstance(r.get("value"), dict) else None
+            val = r.get("value") if isinstance(r.get("value"), dict) else None
+            if isinstance(val, dict):
+                status = (val.get("status") or "").strip().lower()
+                if status in {"queued", "processing"}:
+                    return None
+            return val
         return None
     doc = get_db().research_cache.find_one({"_id": key})
     if not isinstance(doc, dict):
@@ -2497,7 +3538,12 @@ def get_research_cache(*, cache_key: str, max_age_s: int = 6 * 60 * 60) -> dict[
     if max_age_s and saved_at and (time.time() - saved_at) > float(max_age_s):
         return None
     v = doc.get("value")
-    return v if isinstance(v, dict) else None
+    if not isinstance(v, dict):
+        return None
+    status = (v.get("status") or "").strip().lower()
+    if status in {"queued", "processing"}:
+        return None
+    return v
 
 
 def set_research_cache(*, cache_key: str, value: dict[str, Any]) -> None:
@@ -2562,19 +3608,42 @@ def load_scheduled_jobs(
     if st:
         q["state"] = st
 
-    cur = get_db().scheduled_jobs.find(q).sort("run_at", 1)
+    cur = get_db().scheduled_jobs.find(q, _SCHEDULED_JOB_LISTING_PROJECTION).sort("run_at", 1)
     if lim is not None:
         cur = cur.limit(lim)
     out: list[dict[str, Any]] = []
     for doc in cur:
         if isinstance(doc, dict):
             d = dict(doc)
-            d.pop("_id", None)
             try:
                 out.append(_normalize_scheduled_job_dict(d))
             except Exception:
                 continue
     return out
+
+
+def get_research_job_status(*, cache_key: str) -> dict[str, Any] | None:
+    """Return in-flight research job status (queued/processing) for polling."""
+    key = (cache_key or "").strip()
+    if not key:
+        return None
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("research_cache.json") if isinstance(x, dict)]
+        for r in reversed(rows):
+            if (r.get("key") or "").strip() != key:
+                continue
+            val = r.get("value") if isinstance(r.get("value"), dict) else None
+            if isinstance(val, dict) and (val.get("status") or "").strip().lower() in {"queued", "processing"}:
+                return val
+            return None
+        return None
+    doc = get_db().research_cache.find_one({"_id": key}, {"_id": 0, "value": 1})
+    if not isinstance(doc, dict):
+        return None
+    val = doc.get("value")
+    if isinstance(val, dict) and (val.get("status") or "").strip().lower() in {"queued", "processing"}:
+        return val
+    return None
 
 
 def load_due_scheduled_jobs(
@@ -2696,9 +3765,8 @@ def update_scheduled_job_fields(job_id: str, updates: dict[str, Any]) -> bool:
                 _save_json_scheduled_jobs([_normalize_scheduled_job_dict(x) for x in rows if isinstance(x, dict)])
             return found
     with _db_write_lock:
-        # Scheduled jobs are stored with `_id = id` for fast point lookups. Query by `_id`
-        # so we always hit the default index and avoid full collection scans.
-        doc = get_db().scheduled_jobs.find_one({"_id": jid})
+        job_filter = {"$or": [{"_id": jid}, {"id": jid}]}
+        doc = get_db().scheduled_jobs.find_one(job_filter)
         if not doc:
             return False
         d = dict(doc)
@@ -2706,7 +3774,7 @@ def update_scheduled_job_fields(job_id: str, updates: dict[str, Any]) -> bool:
         merged = {**d, **updates, "id": jid}
         norm = _normalize_scheduled_job_dict(merged)
         new_doc = {**norm, "_id": norm["id"]}
-        res = get_db().scheduled_jobs.replace_one({"_id": jid}, new_doc)
+        res = get_db().scheduled_jobs.replace_one(job_filter, new_doc)
         return bool(res.acknowledged and res.matched_count == 1)
 
 
@@ -2721,7 +3789,7 @@ def patch_scheduled_job_fields(job_id: str, updates: dict[str, Any]) -> bool:
     if _storage_mode != "mongo":
         return update_scheduled_job_fields(jid, u2)
     with _db_write_lock:
-        res = get_db().scheduled_jobs.update_one({"_id": jid}, {"$set": u2})
+        res = get_db().scheduled_jobs.update_one({"$or": [{"_id": jid}, {"id": jid}]}, {"$set": u2})
         return bool(res.acknowledged and res.matched_count >= 1)
 
 
@@ -3054,10 +4122,15 @@ def patch_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     u2 = dict(updates)
     u2.setdefault("updated_at", ts)
+    u2 = _externalize_featured_image_in_updates(aid, u2)
     if _storage_mode != "mongo":
         return update_article_fields(aid, u2)
     with _db_write_lock:
-        res = get_db().articles.update_one({"id": aid}, {"$set": u2})
+        db = get_db()
+        res = db.articles.update_one(
+            {"$or": [{"id": aid}, {"_id": aid}]},
+            {"$set": u2},
+        )
         return bool(res.acknowledged and res.matched_count >= 1)
 
 
@@ -3157,6 +4230,7 @@ def _normalize_site_map_entry(d: dict[str, Any]) -> dict[str, Any]:
         "focus_keywords": keywords_clean,
         "post_id": str(d.get("post_id") or "")[:64],
         "post_modified_at": (d.get("post_modified_at") or "")[:64],
+        "featured_image_url": (d.get("featured_image_url") or "")[:4000],
         "fetched_at": (d.get("fetched_at") or _now_iso_seconds())[:64],
     }
 
@@ -3469,9 +4543,203 @@ def list_due_content_monitors(*, before_iso: str, limit: int = 200) -> list[dict
     return list(cur)
 
 
+# ---------------------------------------------------------------------------
+# shopify_products  (per-project Shopify catalog rows)
+# ---------------------------------------------------------------------------
+
+
+def _coerce_shopify_product_id(raw: Any) -> int | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_shopify_product_row(
+    *,
+    project_id: str,
+    summary: dict[str, Any],
+    synced_at: str,
+) -> dict[str, Any] | None:
+    """Map sync summary or storage doc to a normalized shopify_products document."""
+    pid = (project_id or "").strip()
+    spid = _coerce_shopify_product_id(summary.get("shopify_product_id") if "shopify_product_id" in summary else summary.get("id"))
+    if not pid or spid is None:
+        return None
+    title = str(summary.get("title") or "").strip()[:500]
+    handle = str(summary.get("handle") or "").strip()[:256]
+    if not title or not handle:
+        return None
+    image = str(
+        summary.get("featured_image_url")
+        or summary.get("image_url")
+        or ""
+    ).strip()[:4000]
+    return {
+        "project_id": pid,
+        "shopify_product_id": spid,
+        "title": title,
+        "handle": handle,
+        "featured_image_url": image,
+        "status": str(summary.get("status") or "").strip()[:32],
+        "tags": str(summary.get("tags") or "").strip()[:2000],
+        "price": str(summary.get("price") or "").strip()[:64],
+        "product_type": str(summary.get("product_type") or "").strip()[:256],
+        "vendor": str(summary.get("vendor") or "").strip()[:256],
+        "updated_at": str(summary.get("updated_at") or "").strip()[:64],
+        "updatedAt": synced_at,
+    }
+
+
+def _shopify_product_doc_to_catalog_row(doc: dict[str, Any]) -> dict[str, Any]:
+    """API / catalog list shape expected by the frontend."""
+    return {
+        "id": doc.get("shopify_product_id"),
+        "title": doc.get("title") or "",
+        "handle": doc.get("handle") or "",
+        "product_type": doc.get("product_type") or "",
+        "vendor": doc.get("vendor") or "",
+        "status": doc.get("status") or "",
+        "tags": doc.get("tags") or "",
+        "image_url": doc.get("featured_image_url") or "",
+        "price": doc.get("price") or "",
+        "updated_at": doc.get("updated_at") or "",
+    }
+
+
+def upsert_shopify_products_bulk(project_id: str, products: list[dict[str, Any]]) -> int:
+    """
+    Upsert synced product rows into ``shopify_products`` and remove stale rows for the project.
+    Returns the number of products written.
+    """
+    pid = (project_id or "").strip()
+    if not pid:
+        return 0
+    synced_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    rows: list[dict[str, Any]] = []
+    synced_ids: list[int] = []
+    for raw in products or []:
+        if not isinstance(raw, dict):
+            continue
+        norm = _normalize_shopify_product_row(project_id=pid, summary=raw, synced_at=synced_at)
+        if not norm:
+            continue
+        rows.append(norm)
+        synced_ids.append(int(norm["shopify_product_id"]))
+
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            existing = [
+                r
+                for r in _load_json_list("shopify_products.json")
+                if isinstance(r, dict) and (r.get("project_id") or "").strip() != pid
+            ]
+            existing.extend(rows)
+            with open(_data_path("shopify_products.json"), "w", encoding="utf-8") as f:
+                json.dump(existing, f, indent=2)
+        return len(rows)
+
+    from pymongo import UpdateOne
+
+    with _db_write_lock:
+        db = get_db()
+        ops: list[UpdateOne] = []
+        for norm in rows:
+            spid = norm["shopify_product_id"]
+            filt = {"project_id": pid, "shopify_product_id": spid}
+            ops.append(
+                UpdateOne(
+                    filt,
+                    {"$set": norm},
+                    upsert=True,
+                )
+            )
+        if ops:
+            db.shopify_products.bulk_write(ops, ordered=False)
+        if synced_ids:
+            db.shopify_products.delete_many(
+                {"project_id": pid, "shopify_product_id": {"$nin": synced_ids}},
+            )
+        elif rows == []:
+            db.shopify_products.delete_many({"project_id": pid})
+    return len(rows)
+
+
+def list_shopify_products(
+    project_id: str,
+    *,
+    status: str | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """List catalog rows for API responses (legacy ``products[]`` shape)."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    lim = max(1, min(int(limit or 500), 500))
+    status_f = (status or "").strip().lower()
+
+    if _storage_mode != "mongo":
+        rows = [
+            r
+            for r in _load_json_list("shopify_products.json")
+            if isinstance(r, dict) and (r.get("project_id") or "").strip() == pid
+        ]
+        if status_f:
+            rows = [r for r in rows if str(r.get("status") or "").strip().lower() == status_f]
+        rows.sort(key=lambda r: (r.get("title") or "").lower())
+        return [_shopify_product_doc_to_catalog_row(r) for r in rows[:lim]]
+
+    q: dict[str, Any] = {"project_id": pid}
+    if status_f:
+        q["status"] = status_f
+    cur = (
+        get_db()
+        .shopify_products.find(q, {"_id": 0})
+        .sort("title", 1)
+        .limit(lim)
+    )
+    return [_shopify_product_doc_to_catalog_row(doc) for doc in cur if isinstance(doc, dict)]
+
+
+def count_shopify_products(project_id: str) -> int:
+    pid = (project_id or "").strip()
+    if not pid:
+        return 0
+    if _storage_mode != "mongo":
+        return len(
+            [
+                r
+                for r in _load_json_list("shopify_products.json")
+                if isinstance(r, dict) and (r.get("project_id") or "").strip() == pid
+            ]
+        )
+    return int(get_db().shopify_products.count_documents({"project_id": pid}))
+
+
+def delete_shopify_products_for_project(project_id: str) -> int:
+    pid = (project_id or "").strip()
+    if not pid:
+        return 0
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list("shopify_products.json")
+            kept = [r for r in rows if isinstance(r, dict) and (r.get("project_id") or "").strip() != pid]
+            removed = len(rows) - len(kept)
+            if removed:
+                with open(_data_path("shopify_products.json"), "w", encoding="utf-8") as f:
+                    json.dump(kept, f, indent=2)
+            return removed
+    with _db_write_lock:
+        res = get_db().shopify_products.delete_many({"project_id": pid})
+    return int(res.deleted_count or 0)
+
+
 def init_storage() -> None:
     global _storage_mode, _storage_init_error
     force_json = (os.environ.get("FORCE_JSON_STORAGE") or "").strip().lower() in {"1", "true", "yes", "on"}
+    require_mongo = (os.environ.get("REQUIRE_MONGO") or "").strip().lower() in {"1", "true", "yes", "on"}
     if force_json:
         _storage_mode = "json"
         _storage_init_error = "FORCE_JSON_STORAGE enabled"
@@ -3487,5 +4755,9 @@ def init_storage() -> None:
         _storage_mode = "mongo"
         _storage_init_error = None
     except Exception as e:
+        if require_mongo:
+            # When operators expect live Atlas data, failing open into JSON mode hides the real issue
+            # (IP allowlist / DNS / TLS interception). Crash early so the deployment is obviously broken.
+            raise
         _storage_mode = "json"
         _storage_init_error = str(e)

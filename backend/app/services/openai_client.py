@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from typing import Any
 
 import httpx
 
 from app.core.config import settings
+
+log = logging.getLogger(__name__)
 
 
 class OpenAIClient:
@@ -96,16 +99,93 @@ class OpenAIClient:
             raise RuntimeError("Model JSON response is not an object")
         return obj
 
-    async def generate_image_url(self, *, model: str, prompt: str) -> str | None:
+    async def generate_image_url(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        reference_image_url: str | None = None,
+    ) -> str | None:
+        ref = (reference_image_url or "").strip()
+        if ref:
+            try:
+                edited = await self._generate_image_with_reference(
+                    model=model,
+                    prompt=prompt,
+                    reference_image_url=ref,
+                )
+                if edited:
+                    return edited
+            except Exception:
+                log.exception("Reference image generation failed; falling back to text-to-image")
+
         payload = {
             "model": model,
             "prompt": prompt,
             "size": "1024x1024",
-            # Most current image models return base64 in `b64_json`.
         }
-        # Image generations can be slow for high-quality renders.
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0)) as client:
-            res = await client.post("https://api.openai.com/v1/images/generations", headers=self._headers(), json=payload)
+            res = await client.post(
+                "https://api.openai.com/v1/images/generations",
+                headers=self._headers(),
+                json=payload,
+            )
+        return self._extract_image_from_response(res)
+
+    async def _generate_image_with_reference(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        reference_image_url: str,
+    ) -> str | None:
+        """Img2Img-style generation using Shopify product hero image as visual reference."""
+        edit_model = model if (model or "").startswith("gpt-image") else "gpt-image-1"
+        payload = {
+            "model": edit_model,
+            "prompt": (
+                f"{prompt}\n\nUse the reference product image for composition, palette, and "
+                "material cues. Do not copy logos or text verbatim from the reference."
+            )[:32000],
+            "size": "1024x1024",
+            "images": [{"image_url": reference_image_url}],
+        }
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0)) as client:
+            res = await client.post(
+                "https://api.openai.com/v1/images/edits",
+                headers=self._headers(),
+                json=payload,
+            )
+        if res.status_code >= 400:
+            # Some deployments expect multipart file upload; download and retry once.
+            image_bytes = await self._download_image_bytes(reference_image_url)
+            if not image_bytes:
+                res.raise_for_status()
+            files = {"image": ("reference.png", image_bytes, "image/png")}
+            data = {"model": edit_model, "prompt": payload["prompt"], "size": "1024x1024"}
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0)) as client:
+                res = await client.post(
+                    "https://api.openai.com/v1/images/edits",
+                    headers={"authorization": f"Bearer {self._key}"},
+                    data=data,
+                    files=files,
+                )
+        return self._extract_image_from_response(res)
+
+    async def _download_image_bytes(self, url: str) -> bytes | None:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=60.0), follow_redirects=True) as client:
+                res = await client.get(url)
+                res.raise_for_status()
+                content_type = (res.headers.get("content-type") or "").lower()
+                if content_type and not content_type.startswith("image/"):
+                    return None
+                return res.content
+        except Exception:
+            log.debug("Could not download reference image %s", url[:120], exc_info=True)
+            return None
+
+    def _extract_image_from_response(self, res: httpx.Response) -> str | None:
         res.raise_for_status()
         data = res.json()
         items = data.get("data") or []
@@ -116,7 +196,6 @@ class OpenAIClient:
                 return url.strip()
             b64 = first.get("b64_json")
             if isinstance(b64, str) and b64.strip():
-                # Basic validation; if invalid base64, just ignore.
                 try:
                     _ = base64.b64decode(b64, validate=True)
                 except Exception:

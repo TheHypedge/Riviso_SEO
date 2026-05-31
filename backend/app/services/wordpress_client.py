@@ -3,11 +3,17 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
-from typing import Any
+from typing import Any, Callable
+from urllib.parse import urlparse
 
 import httpx
 
 log = logging.getLogger(__name__)
+
+_PLUGIN_PING_NAMESPACES = ("riviso/v1", "auto-articles/v1")
+
+# Hostinger and similar WAFs block httpx/python default User-Agent with HTTP 403 (empty HTML).
+RIVISO_WP_USER_AGENT = "Riviso/1.0 WordPress-Connector"
 
 
 class WordpressClient:
@@ -15,19 +21,60 @@ class WordpressClient:
         self.site_url = (site_url or "").strip().rstrip("/")
         self.username = (username or "").strip()
         self.app_password = (app_password or "").replace(" ", "").strip()
+        self._resolved_site_url: str | None = None
         if not self.site_url:
             raise RuntimeError("Missing WordPress site URL")
         if not self.username or not self.app_password:
             raise RuntimeError("Missing WordPress credentials")
 
         basic = base64.b64encode(f"{self.username}:{self.app_password}".encode("utf-8")).decode("ascii")
-        self._headers = {"authorization": f"Basic {basic}"}
+        self._headers = {
+            "authorization": f"Basic {basic}",
+            "accept": "application/json",
+            "user-agent": RIVISO_WP_USER_AGENT,
+        }
+
+    def auth_headers(self) -> dict[str, str]:
+        return dict(self._headers)
+
+    async def ensure_resolved_site_url(self) -> str:
+        """Resolve canonical site URL from Riviso ping (avoids www/non-www auth loss on redirect)."""
+        if self._resolved_site_url:
+            return self._resolved_site_url
+        resolved = self.site_url
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            for ns in _PLUGIN_PING_NAMESPACES:
+                try:
+                    res = await client.get(
+                        f"{self.site_url}/wp-json/{ns}/ping",
+                        headers={**self._headers, "accept": "application/json"},
+                    )
+                except Exception:
+                    continue
+                if res.status_code != 200:
+                    continue
+                try:
+                    data = res.json()
+                except Exception:
+                    data = None
+                if isinstance(data, dict):
+                    site = (data.get("site_url") or "").strip().rstrip("/")
+                    if site:
+                        resolved = site
+                        break
+                final = urlparse(str(res.url))
+                if final.scheme and final.netloc:
+                    resolved = f"{final.scheme}://{final.netloc}".rstrip("/")
+                    break
+        self._resolved_site_url = resolved
+        return resolved
 
     def _url(self, path: str) -> str:
         p = (path or "").strip()
         if not p.startswith("/"):
             p = "/" + p
-        return f"{self.site_url}{p}"
+        base = (self._resolved_site_url or self.site_url).rstrip("/")
+        return f"{base}{p}"
 
     async def get_json(self, path: str, *, timeout: float = 20.0) -> Any:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
@@ -50,15 +97,41 @@ class WordpressClient:
         return res.json()
 
     async def upload_media(self, *, filename: str, content_type: str, data: bytes, timeout: float = 60.0) -> Any:
+        url = self._url("/wp-json/wp/v2/media")
+        safe_name = filename or "featured.png"
+        ctype = content_type or "application/octet-stream"
+        last_err: Exception | None = None
+
+        # WordPress expects multipart/form-data with a ``file`` field (most compatible).
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                res = await client.post(
+                    url,
+                    headers=dict(self._headers),
+                    files={"file": (safe_name, data, ctype)},
+                )
+            res.raise_for_status()
+            return res.json()
+        except Exception as e:
+            last_err = e
+
+        # Fallback: raw binary upload (some hosts accept Content-Disposition attachment).
         headers = {
             **self._headers,
-            "content-type": content_type or "application/octet-stream",
-            "content-disposition": f'attachment; filename="{filename or "image.png"}"',
+            "content-type": ctype,
+            "content-disposition": f'attachment; filename="{safe_name}"',
         }
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            res = await client.post(self._url("/wp-json/wp/v2/media"), headers=headers, content=data)
-        res.raise_for_status()
-        return res.json()
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                res = await client.post(url, headers=headers, content=data)
+            res.raise_for_status()
+            return res.json()
+        except Exception as e:
+            last_err = e
+
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError("WordPress media upload failed")
 
     async def upload_media_optional(
         self,
@@ -96,40 +169,6 @@ class WordpressClient:
         return None
 
 
-def featured_image_upload_from_article(article: dict) -> tuple[bytes, str, str] | None:
-    """Decode a stored ``data:image/...;base64,...`` featured image for WP upload."""
-    img_url = (article.get("image_url") or "").strip()
-    if not img_url.startswith("data:image/") or ";base64," not in img_url:
-        return None
-    try:
-        header, b64 = img_url.split(";base64,", 1)
-        content_type = header.replace("data:", "", 1).strip() or "image/png"
-        data = base64.b64decode(b64, validate=False)
-    except (ValueError, IndexError, binascii.Error):
-        return None
-    if not data:
-        return None
-    ext = "png"
-    if "jpeg" in content_type or "jpg" in content_type:
-        ext = "jpg"
-    elif "webp" in content_type:
-        ext = "webp"
-    return data, content_type, f"featured.{ext}"
-
-
-async def resolve_featured_media_id(wp: WordpressClient, article: dict, *, timeout: float = 90.0) -> int | None:
-    """Best-effort featured media id from the article's generated image (never raises)."""
-    parsed = featured_image_upload_from_article(article)
-    if not parsed:
-        return None
-    data, content_type, filename = parsed
-    return await wp.upload_media_optional(
-        filename=filename,
-        content_type=content_type,
-        data=data,
-        timeout=timeout,
-    )
-
     async def ensure_tag_ids(self, names: list[str], *, timeout: float = 20.0) -> list[int]:
         """
         Ensure WP tags exist for provided names, returning tag IDs.
@@ -141,10 +180,7 @@ async def resolve_featured_media_id(wp: WordpressClient, article: dict, *, timeo
             name = (raw or "").strip()
             if not name:
                 continue
-            # Search existing tags
             try:
-                # Name is safe enough for this simple query param; httpx will handle encoding on its side only when building URLs,
-                # but we pass a string here, so keep it conservative.
                 q = name.replace("&", " ").replace("?", " ").strip()
                 data = await self.get_json(f"/wp-json/wp/v2/tags?per_page=100&search={q}", timeout=timeout)
             except Exception:
@@ -169,4 +205,81 @@ async def resolve_featured_media_id(wp: WordpressClient, article: dict, *, timeo
                 seen.add(found_id)
                 out.append(found_id)
         return out
+
+
+def featured_image_upload_from_article(article: dict) -> tuple[bytes, str, str] | None:
+    """Decode a stored ``data:image/...;base64,...`` featured image for WP upload."""
+    img_url = (article.get("image_url") or "").strip()
+    if not img_url.startswith("data:image/") or ";base64," not in img_url:
+        return None
+    try:
+        header, b64 = img_url.split(";base64,", 1)
+        content_type = header.replace("data:", "", 1).strip() or "image/png"
+        data = base64.b64decode(b64, validate=False)
+    except (ValueError, IndexError, binascii.Error):
+        return None
+    if not data:
+        return None
+    ext = "png"
+    if "jpeg" in content_type or "jpg" in content_type:
+        ext = "jpg"
+    elif "webp" in content_type:
+        ext = "webp"
+    return data, content_type, f"featured.{ext}"
+
+
+async def _featured_image_bytes_from_url(img_url: str, *, timeout: float) -> tuple[bytes, str, str] | None:
+    url = (img_url or "").strip()
+    if not url.startswith("http://") and not url.startswith("https://"):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            res = await client.get(url)
+        res.raise_for_status()
+        content_type = (res.headers.get("content-type") or "image/png").split(";")[0].strip() or "image/png"
+        data = res.content
+        if not data:
+            return None
+        ext = "png"
+        if "jpeg" in content_type or "jpg" in content_type:
+            ext = "jpg"
+        elif "webp" in content_type:
+            ext = "webp"
+        return data, content_type, f"featured.{ext}"
+    except Exception:
+        log.warning("Could not download featured image URL for WordPress upload", exc_info=True)
+        return None
+
+
+async def resolve_featured_media_id(
+    wp: WordpressClient,
+    article: dict,
+    *,
+    timeout: float = 90.0,
+    load_image_url: Callable[[], str | None] | None = None,
+) -> int | None:
+    """Best-effort featured media id from generated/uploaded image (never raises)."""
+    row = dict(article or {})
+    img_url = (row.get("image_url") or "").strip()
+    if not img_url.startswith("data:image/") and callable(load_image_url):
+        try:
+            loaded = load_image_url()
+            if isinstance(loaded, str) and loaded.strip():
+                row["image_url"] = loaded.strip()
+                img_url = row["image_url"]
+        except Exception:
+            log.debug("featured image loader failed", exc_info=True)
+
+    parsed = featured_image_upload_from_article(row)
+    if not parsed:
+        parsed = await _featured_image_bytes_from_url(img_url, timeout=timeout)
+    if not parsed:
+        return None
+    data, content_type, filename = parsed
+    return await wp.upload_media_optional(
+        filename=filename,
+        content_type=content_type,
+        data=data,
+        timeout=timeout,
+    )
 

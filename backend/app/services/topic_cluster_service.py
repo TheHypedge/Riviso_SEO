@@ -40,6 +40,20 @@ def _now_iso_seconds() -> str:
 
 
 def _require_verified_website(project: dict[str, Any]) -> None:
+    plat = (project.get("platform") or "").strip().lower()
+    if plat == "shopify" or (project.get("shopify_shop") or "").strip() or (project.get("shopify_access_token") or "").strip():
+        shopify_ok = (project.get("shopify_verified_status") or "").strip().lower() == "connected" and bool(
+            (project.get("shopify_verified_at") or "").strip()
+        )
+        if shopify_ok:
+            return
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "website_not_connected",
+                "message": "Shopify is not verified for this project. Verify connection in Project Settings before generating articles.",
+            },
+        )
     status = (project.get("wp_verified_status") or "").strip().lower()
     if status != "connected":
         raise HTTPException(
@@ -72,26 +86,35 @@ def _insert_pending_article(
     title: str,
     keywords: list[str],
     focus_keyphrase: str,
+    topic_cluster_id: str | None = None,
+    topic_slot_id: str | None = None,
+    topic_role: str | None = None,
 ) -> str:
     aid = str(uuid.uuid4())
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    st.insert_article(
-        {
-            "id": aid,
-            "project_id": project_id,
-            "title": title[:500],
-            "keywords": keywords[:10],
-            "status": "pending",
-            "article": "",
-            "focus_keyphrase": (focus_keyphrase or "").strip()[:500],
-            "meta_title": "",
-            "meta_description": "",
-            "generated_at": "",
-            "posted_at": "",
-            "created_at": now_str,
-            "gsc_status": "pending",
-        }
-    )
+    payload: dict[str, Any] = {
+        "id": aid,
+        "project_id": project_id,
+        "title": title[:500],
+        "keywords": keywords[:10],
+        "status": "pending",
+        "article": "",
+        "focus_keyphrase": (focus_keyphrase or "").strip()[:500],
+        "meta_title": "",
+        "meta_description": "",
+        "generated_at": "",
+        "posted_at": "",
+        "created_at": now_str,
+        "gsc_status": "pending",
+    }
+    cid = (topic_cluster_id or "").strip()
+    if cid:
+        payload["topic_cluster_id"] = cid[:64]
+        payload["topic_slot_id"] = (topic_slot_id or "").strip()[:64]
+        role = (topic_role or "").strip().lower()
+        if role in {"pillar", "cluster"}:
+            payload["topic_role"] = role
+    st.insert_article(payload)
     return aid
 
 
@@ -217,6 +240,46 @@ class TopicClusterService:
             "clusters": derived["clusters"],
             "serp_summary": serp_summary,
             "generation_errors": [],
+        }
+        return self.persist(doc)
+
+    async def plan_and_persist_into(
+        self,
+        *,
+        cluster_id: str,
+        seed_intent: str,
+        country_code: str,
+        tone: str,
+        language: str,
+    ) -> dict[str, Any]:
+        """Async worker path: fill an existing ``planning`` cluster row."""
+        raw = (seed_intent or "").strip()
+        if len(raw) < 3:
+            raise HTTPException(status_code=400, detail="seed_intent must be at least 3 characters")
+        cid = (cluster_id or "").strip()
+        if not cid:
+            raise HTTPException(status_code=400, detail="cluster_id is required")
+        serp_rows, serp_summary = await self.analyze_serp(seed_intent=raw, country_code=country_code, language=language)
+        derived = await self.derive_pillar_and_clusters(
+            seed_intent=raw,
+            country_code=country_code,
+            tone=tone,
+            language=language,
+            serp_results=serp_rows,
+        )
+        doc: dict[str, Any] = {
+            "id": cid,
+            "project_id": self.project_id,
+            "owner_user_id": self.owner_user_id,
+            "seed_intent": raw[:500],
+            "country_code": (country_code or "IN").strip().upper()[:8],
+            "tone": (tone or "informative").strip()[:32],
+            "status": "draft",
+            "pillar": derived["pillar"],
+            "clusters": derived["clusters"],
+            "serp_summary": serp_summary,
+            "generation_errors": [],
+            "error_message": "",
         }
         return self.persist(doc)
 
@@ -376,7 +439,15 @@ class TopicClusterService:
         imported_count = 0
         scheduled_count = 0
 
-        async def _import_one(*, topic_id: str, title: str, keywords: list[str], focus: str, slot_offset: int) -> str | None:
+        async def _import_one(
+            *,
+            topic_id: str,
+            title: str,
+            keywords: list[str],
+            focus: str,
+            slot_offset: int,
+            topic_role: str,
+        ) -> str | None:
             """Insert pending article and (if applicable) schedule it. Returns article id."""
             nonlocal imported_count, scheduled_count
             try:
@@ -390,6 +461,9 @@ class TopicClusterService:
                     title=t_title,
                     keywords=kws,
                     focus_keyphrase=fk,
+                    topic_cluster_id=cluster_id,
+                    topic_slot_id=topic_id,
+                    topic_role=topic_role,
                 )
                 imported_count += 1
 
@@ -448,6 +522,7 @@ class TopicClusterService:
                 log.exception("cluster import failed for %s", topic_id)
                 return None
 
+        cluster_id = (row.get("id") or "").strip()
         slot = 0
         if include_pillar:
             aid = await _import_one(
@@ -456,6 +531,7 @@ class TopicClusterService:
                 keywords=list(pillar.get("keywords") or []),
                 focus=self._topic_focus(pillar),
                 slot_offset=slot,
+                topic_role="pillar",
             )
             slot += 1
             if aid:
@@ -469,6 +545,7 @@ class TopicClusterService:
                 keywords=list(c.get("keywords") or []),
                 focus=self._topic_focus(c),
                 slot_offset=slot,
+                topic_role="cluster",
             )
             slot += 1
             if aid:
@@ -514,6 +591,7 @@ class TopicClusterService:
         writing_prompt_id: str | None,
         image_prompt_id: str | None,
         topic_ids: list[str] | None = None,
+        mapped_products: list[dict] | None = None,
     ) -> dict[str, Any]:
         """
         Generate article bodies for the pillar + each cluster without ``imported_article_id``.
@@ -589,7 +667,9 @@ class TopicClusterService:
         row["generation_errors"] = []
         await asyncio.to_thread(lambda: st.save_topic_cluster(dict(row)))
 
-        async def _one_slot(*, topic_id: str, title: str, keywords: list[str], focus: str) -> str | None:
+        cluster_id = (row.get("id") or "").strip()
+
+        async def _one_slot(*, topic_id: str, title: str, keywords: list[str], focus: str, topic_role: str) -> str | None:
             if not (title or "").strip():
                 return None
             t_title = await asyncio.to_thread(_unique_article_title, st=st, project_id=pid, desired=title)
@@ -603,12 +683,15 @@ class TopicClusterService:
                     title=t_title,
                     keywords=kws,
                     focus_keyphrase=fk,
+                    topic_cluster_id=cluster_id,
+                    topic_slot_id=topic_id,
+                    topic_role=topic_role,
                 )
                 fresh = await asyncio.to_thread(lambda: st.get_article(project_id=pid, article_id=aid))
                 if not isinstance(fresh, dict):
                     raise RuntimeError("inserted article not readable")
                 async with generation_slot():
-                    await execute_article_generation(
+                    gen_result = await execute_article_generation(
                         st=st,
                         user=user,
                         proj=proj,
@@ -619,7 +702,13 @@ class TopicClusterService:
                         image_prompt_id=image_prompt_id,
                         generate_image=generate_image,
                         focus_keyphrase_override=None,
+                        mapped_products=mapped_products,
                     )
+                if generate_image:
+                    img_url = ((gen_result.get("generated") or {}).get("image_url") or "").strip()
+                    if not img_url:
+                        warn = (gen_result.get("image_warning") or "").strip() or "Featured image was not generated."
+                        errors.append({"topic_id": topic_id, "message": warn[:500]})
                 return aid
             except HTTPException as he:
                 errors.append({"topic_id": topic_id, "message": (str(he.detail) if he.detail else str(he))[:500]})
@@ -635,6 +724,7 @@ class TopicClusterService:
                 title=str(pillar.get("title") or ""),
                 keywords=list(pillar.get("keywords") or []),
                 focus=self._topic_focus(pillar),
+                topic_role="pillar",
             )
             if aid:
                 pillar["imported_article_id"] = aid
@@ -646,6 +736,7 @@ class TopicClusterService:
                 title=str(c.get("title") or ""),
                 keywords=list(c.get("keywords") or []),
                 focus=self._topic_focus(c),
+                topic_role="cluster",
             )
             if aid:
                 # Mutate the original cluster row from ``row``'s list so persistence picks it up.

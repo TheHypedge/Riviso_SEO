@@ -5,6 +5,6 @@
  * @package RivisoContentOperations
  */
 
-if (!defined('ABSPATH')) {
-    exit;
+if ( ! defined( 'WPINC' ) ) {
+	die;
 }

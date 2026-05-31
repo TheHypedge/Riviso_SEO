@@ -1,0 +1,406 @@
+/* Shared skeleton loaders — use across dashboard, projects, articles, forms */
+
+@keyframes aaSkelShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.bone {
+  display: block;
+  border-radius: 8px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.11) 45%,
+    rgba(255, 255, 255, 0.04) 90%
+  );
+  background-size: 200% 100%;
+  animation: aaSkelShimmer 1.35s ease-in-out infinite;
+}
+
+.boneXs {
+  composes: bone;
+  width: 38%;
+  height: 9px;
+}
+
+.boneSm {
+  composes: bone;
+  width: 68%;
+  height: 11px;
+}
+
+.boneMd {
+  composes: bone;
+  width: 42%;
+  height: 14px;
+  margin-bottom: 8px;
+}
+
+.boneLg {
+  composes: bone;
+  width: 56%;
+  height: 28px;
+  margin-bottom: 10px;
+}
+
+.boneFull {
+  composes: bone;
+  width: 100%;
+  height: 11px;
+}
+
+.boneTrack {
+  composes: bone;
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.boneThumb {
+  composes: bone;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.boneCircle {
+  composes: bone;
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bone,
+  .boneXs,
+  .boneSm,
+  .boneMd,
+  .boneLg,
+  .boneFull,
+  .boneTrack,
+  .boneThumb,
+  .boneCircle {
+    animation: none;
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+/* ---- Overview page (workspace + project) ---- */
+
+.overviewShell {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 1100px) {
+  .statGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.statCard {
+  border: 1px solid var(--aa-hairline);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 14px;
+  padding: 14px 16px 12px;
+  min-height: 88px;
+}
+
+.heroGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.85fr);
+  gap: 16px;
+}
+
+@media (max-width: 1100px) {
+  .heroGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panelCard {
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card, rgba(255, 255, 255, 0.02));
+  border-radius: 16px;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.panelHead {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--aa-hairline-soft, var(--aa-hairline));
+}
+
+.chartArea {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 20px 18px 18px;
+  min-height: 220px;
+}
+
+.chartBar {
+  composes: bone;
+  flex: 1;
+  min-height: 28%;
+  border-radius: 6px 6px 2px 2px;
+  align-self: flex-end;
+}
+
+.chartBar:nth-child(1) { height: 42%; }
+.chartBar:nth-child(2) { height: 58%; }
+.chartBar:nth-child(3) { height: 36%; }
+.chartBar:nth-child(4) { height: 72%; }
+.chartBar:nth-child(5) { height: 48%; }
+.chartBar:nth-child(6) { height: 64%; }
+.chartBar:nth-child(7) { height: 40%; }
+.chartBar:nth-child(8) { height: 52%; }
+
+.pipelineRows {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 18px 20px;
+}
+
+.pipelineRow {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.boardGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 1024px) {
+  .boardGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.feedPanel {
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card, rgba(255, 255, 255, 0.02));
+  border-radius: 16px;
+  overflow: hidden;
+}
+
+.feedList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px 18px;
+}
+
+.feedRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.feedText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---- Dashboard project cards ---- */
+
+.projectsGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+@media (max-width: 1100px) {
+  .projectsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .projectsGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.projectCard {
+  border: 1px solid var(--aa-hairline);
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 14px;
+  padding: 18px 18px 16px;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---- Articles table ---- */
+
+.tableShell {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.tableHead {
+  display: grid;
+  grid-template-columns: 40px 1.4fr 1fr 1fr 100px 80px;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--aa-hairline);
+}
+
+.tableRow {
+  display: grid;
+  grid-template-columns: 40px 1.4fr 1fr 1fr 100px 80px;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--aa-hairline-soft, var(--aa-hairline));
+  align-items: center;
+}
+
+@media (max-width: 900px) {
+  .tableHead {
+    display: none;
+  }
+  .tableRow {
+    display: none;
+  }
+}
+
+.mobileList {
+  display: none;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+@media (max-width: 900px) {
+  .mobileList {
+    display: flex;
+  }
+}
+
+.mobileListForced {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.mobileCard {
+  border: 1px solid var(--aa-hairline);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ---- Form / modal ---- */
+
+.formStack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.formField {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detailStack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.detailCard {
+  border: 1px solid var(--aa-hairline);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.editorLineWide {
+  composes: boneFull;
+  width: 72%;
+}
+
+.editorLineMid {
+  composes: boneFull;
+  width: 100%;
+}
+
+.editorLineShort {
+  composes: boneFull;
+  width: 48%;
+}
+
+.checkboxBone {
+  composes: bone;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+
+.thumbSm {
+  composes: boneThumb;
+  width: 32px;
+  height: 32px;
+}
+
+.inputBone {
+  composes: bone;
+  width: 100%;
+  height: 40px;
+  border-radius: 10px;
+}
+
+.textLines {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.textLine {
+  composes: bone;
+  height: 11px;
+}
+
+.textLine:nth-child(1) { width: 88%; }
+.textLine:nth-child(2) { width: 72%; }
+.textLine:nth-child(3) { width: 56%; }
+.textLine:nth-child(4) { width: 64%; }
+
+.editorBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+}

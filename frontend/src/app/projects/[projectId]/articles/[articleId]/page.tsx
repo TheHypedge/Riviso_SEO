@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import styles from "../../../../page.module.css";
 import editorStyles from "./articleEditor.module.css";
@@ -12,29 +12,88 @@ import {
   api,
   ApiError,
   ArticleDetail,
+  ClusterLinkContext,
   clearAuth,
   getAccessToken,
+  invalidateArticleDetailCache,
   PromptListResponse,
 } from "@/lib/api";
+import { ArticleEditorIntegritySkeleton, ArticleEditorSkeleton } from "@/components/ArticleEditorSkeleton";
+import { ArticleIntegrityBody } from "@/components/ArticleIntegrityBody";
+import { IntegrityHumanizeCompare } from "@/components/IntegrityHumanizeCompare";
 import { ArticleReadonlyBody } from "@/components/ArticleReadonlyBody";
+import { LazyArticleImage } from "@/components/LazyArticleImage";
+import { auditMarkdown, type IntegrityFlag, type IntegritySignal } from "@/lib/rivisoLinguistics";
+import { readArticleEditorCache, writeArticleEditorCache } from "@/lib/articleEditorCache";
 import { articleEditorPath, formatArticleLoadError } from "@/lib/articlePaths";
+import { connectionErrorMessage, isDatabaseUnavailable } from "@/lib/networkErrors";
 import {
   canPushWordPressUpdate,
+  formatWordPressRestStatus,
   isArticleLiveOnWordPress,
+  isWordPressPostTrashed,
   parseWpPostId,
   shouldShowWordPressPublish,
   shouldShowWordPressUpdate,
 } from "@/lib/articleEditorWordpress";
+import { resolveProjectPlatform } from "@/lib/projectPlatform";
+import { runWithArticlePipelineMonitor } from "@/lib/pipelineStream";
+import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
+import { WordPressPageMapPicker } from "@/components/wordpress/WordPressPageMapPicker";
+import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
+import type { MappedWordPressPage } from "@/lib/wordpressPageMapping";
+import { resolveFeaturedImageFileForWordPress } from "@/lib/featuredImageFile";
+import { formatShopifyBlogOptionLabel, SHOPIFY_BLOG_CHANNEL_HELP } from "@/lib/shopifyBlogLabel";
+
+function clampPct(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(100, n));
+}
+
+function IntegrityRing({ value, label }: { value: number; label: string }) {
+  const pct = clampPct(value);
+  const r = 18;
+  const c = 2 * Math.PI * r;
+  const dash = (pct / 100) * c;
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <svg width="44" height="44" viewBox="0 0 44 44" aria-label={label}>
+        <circle cx="22" cy="22" r={r} fill="none" stroke="rgba(255,255,255,0.10)" strokeWidth="4" />
+        <circle
+          cx="22"
+          cy="22"
+          r={r}
+          fill="none"
+          stroke="rgba(217,119,87,0.95)"
+          strokeWidth="4"
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${c - dash}`}
+          transform="rotate(-90 22 22)"
+        />
+      </svg>
+      <div style={{ display: "grid", gap: 2 }}>
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 800,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            color: "rgba(255,255,255,0.62)",
+          }}
+        >
+          {label}
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 800, color: "rgba(255,255,255,0.94)" }}>{Math.round(pct)}%</div>
+      </div>
+    </div>
+  );
+}
 
 const ArticleRichEditor = dynamic(
   () => import("@/components/ArticleRichEditor").then((m) => m.ArticleRichEditor),
   {
     ssr: false,
-    loading: () => (
-      <div className={styles.muted} style={{ padding: 16 }}>
-        Loading editor…
-      </div>
-    ),
+    loading: () => <ArticleEditorSkeleton bodyOnly />,
   },
 );
 
@@ -129,10 +188,8 @@ export default function ArticleEditPage() {
     [params.projectId, params.articleId],
   );
 
-  // ``loading`` value isn't rendered directly — the global loading provider
-  // shows the typewriter overlay instead — but ``setLoading`` is wired up so
-  // we can re-enable a local skeleton later without touching call sites.
-  const [, setLoading] = useState(true);
+  const [contentLoading, setContentLoading] = useState(true);
+  const [bodyLoading, setBodyLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [errorCanRetry, setErrorCanRetry] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -140,6 +197,20 @@ export default function ArticleEditPage() {
 
   const [article, setArticle] = useState<ArticleDetail | null>(null);
   const [projectSettings, setProjectSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
+  const [shopifyStatus, setShopifyStatus] = useState<import("@/lib/api").ShopifyStatus | null>(null);
+  const [shopifyCatalog, setShopifyCatalog] = useState<import("@/lib/api").ShopifyCatalog | null>(null);
+  const [shopifyCatalogLoading, setShopifyCatalogLoading] = useState(false);
+  const [mappedProductsForGenerate, setMappedProductsForGenerate] = useState<MappedShopifyProduct[]>([]);
+  const [mappedPagesForGenerate, setMappedPagesForGenerate] = useState<MappedWordPressPage[]>([]);
+  const [productMapBeforeGenerateOpen, setProductMapBeforeGenerateOpen] = useState(false);
+  const [siteMapEntries, setSiteMapEntries] = useState<import("@/lib/api").SiteMapListResponse["entries"]>([]);
+  const [siteMapLoading, setSiteMapLoading] = useState(false);
+  const [clusterLinkContext, setClusterLinkContext] = useState<ClusterLinkContext | null>(null);
+  const [clusterLinkLoading, setClusterLinkLoading] = useState(false);
+  const [shopifyBlogId, setShopifyBlogId] = useState<number | null>(null);
+  const [shopifyPublishNow, setShopifyPublishNow] = useState(false);
+  const [shopifyPublishBusy, setShopifyPublishBusy] = useState(false);
+  const [shopifyCatalogSyncing, setShopifyCatalogSyncing] = useState(false);
   const [writingPrompts, setWritingPrompts] = useState<PromptListResponse | null>(
     null,
   );
@@ -148,8 +219,7 @@ export default function ArticleEditPage() {
   );
   const [promptsLoading, setPromptsLoading] = useState(false);
   const [wpMetaLoading, setWpMetaLoading] = useState(false);
-
-  // Editable fields
+  const [wpMetaError, setWpMetaError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [keywords, setKeywords] = useState("");
   const [focus, setFocus] = useState("");
@@ -167,6 +237,13 @@ export default function ArticleEditPage() {
     return URL.createObjectURL(uploadedImageFile);
   }, [uploadedImageFile]);
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string>("");
+  const [featuredImageLoading, setFeaturedImageLoading] = useState(false);
+  const [featuredImageLoadFailed, setFeaturedImageLoadFailed] = useState(false);
+  const featuredImageLoadRef = useRef<{ articleKey: string; state: "idle" | "loading" | "loaded" | "failed" }>({
+    articleKey: "",
+    state: "idle",
+  });
+  const prevArticleKeyRef = useRef<string | null>(null);
   const [editorBaseline, setEditorBaseline] = useState<EditorBaseline | null>(null);
   const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const [pendingLeaveHref, setPendingLeaveHref] = useState<string | null>(null);
@@ -174,6 +251,8 @@ export default function ArticleEditPage() {
   const articleStatus = (article?.status || "").trim().toLowerCase();
   const wpPostId = useMemo(() => parseWpPostId(article?.wp_post_id), [article?.wp_post_id]);
   const wpLink = (article?.wp_link || "").trim();
+  const wpLastStatus = (article?.wp_last_wp_status || "").trim().toLowerCase();
+  const isWpTrashed = isWordPressPostTrashed({ wpLastStatus: article?.wp_last_wp_status, wpLink });
   const wpEditorCtx = useMemo(
     () => ({
       articleStatus: article?.status || "",
@@ -186,7 +265,8 @@ export default function ArticleEditPage() {
   const showUpdateWordPress = shouldShowWordPressUpdate(wpEditorCtx);
   const showPublishWordPress = shouldShowWordPressPublish(wpEditorCtx);
   const isScheduledArticle = articleStatus === "scheduled";
-  const editorLocked = articleStatus === "published" && !isLiveOnWordPress;
+  /** Only scheduled rows are read-only; draft/pending/generated content stays editable until live on WP. */
+  const editorLocked = isScheduledArticle;
 
   // WordPress publish options
   const [wpPostTypes, setWpPostTypes] = useState<{ rest_base: string; name: string; taxonomies: string[] }[]>([]);
@@ -194,6 +274,15 @@ export default function ArticleEditPage() {
   const [wpPostType, setWpPostType] = useState("posts");
   const [wpStatus, setWpStatus] = useState<"draft" | "publish">("draft");
   const [wpCategoryIds, setWpCategoryIds] = useState<number[]>([]);
+
+  const effectiveWpStatus = useMemo((): "draft" | "publish" => {
+    if (showUpdateWordPress) {
+      const last = (article?.wp_last_wp_status || "").trim().toLowerCase();
+      if (last === "publish" || last === "draft") return last;
+      if (articleStatus === "published") return "publish";
+    }
+    return wpStatus;
+  }, [article?.wp_last_wp_status, articleStatus, showUpdateWordPress, wpStatus]);
 
   // Regenerate confirmation
   const [showRegenConfirm, setShowRegenConfirm] = useState(false);
@@ -203,9 +292,78 @@ export default function ArticleEditPage() {
   const [regenCustomPrompt, setRegenCustomPrompt] = useState("");
   const [websiteConnectionModal, setWebsiteConnectionModal] = useState(false);
   const [imageRegenBusy, setImageRegenBusy] = useState(false);
+  const [imageGenPhase, setImageGenPhase] = useState<"idle" | "generating" | "saving">("idle");
+  const [wpPublishBusy, setWpPublishBusy] = useState(false);
   const [wpUpdateBusy, setWpUpdateBusy] = useState(false);
+  const [wpSyncBusy, setWpSyncBusy] = useState(false);
+  const [showWpSyncConfirm, setShowWpSyncConfirm] = useState(false);
   const [liveUrlCopied, setLiveUrlCopied] = useState(false);
-  const websiteConnected = (projectSettings?.wp_verified_status || "").trim().toLowerCase() === "connected";
+  const wpAutoSyncKeyRef = useRef<string | null>(null);
+  const projectPlatform = useMemo(
+    () => (projectSettings ? resolveProjectPlatform({ settings: projectSettings }) : null),
+    [projectSettings],
+  );
+  const isShopifyProject = projectPlatform === "shopify";
+  const isWordPressProject = projectPlatform === "wordpress";
+  const shopifyProductAware = Boolean(projectSettings?.shopify_product_aware_enabled);
+  const wpInternalLinkAware = Boolean(projectSettings?.wp_internal_link_aware_enabled);
+  const websiteConnected = isShopifyProject
+    ? (projectSettings?.shopify_verified_status || "").toLowerCase() === "connected" &&
+      !!(projectSettings?.shopify_verified_at || "").trim()
+    : (projectSettings?.wp_verified_status || "").trim().toLowerCase() === "connected";
+
+  // Integrity dashboard
+  const [integrityLoading, setIntegrityLoading] = useState(false);
+  const [aiPct, setAiPct] = useState<number>(0);
+  const [flaggedParagraphs, setFlaggedParagraphs] = useState<IntegrityFlag[]>([]);
+  const [highlightAi, setHighlightAi] = useState(false);
+  const [humanizeBusy, setHumanizeBusy] = useState(false);
+  const [showIntegrityModal, setShowIntegrityModal] = useState(false);
+  const [integrityOriginal, setIntegrityOriginal] = useState("");
+  const [integrityHumanized, setIntegrityHumanized] = useState("");
+  const [integrityRewritten, setIntegrityRewritten] = useState<
+    { index: number; before: string; after: string }[]
+  >([]);
+  const [integrityAiBefore, setIntegrityAiBefore] = useState<number | null>(null);
+  const [integrityAiAfter, setIntegrityAiAfter] = useState<number | null>(null);
+  const [editorRevision, setEditorRevision] = useState(0);
+
+  const flaggedIndices = useMemo(() => flaggedParagraphs.map((p) => p.index), [flaggedParagraphs]);
+  const canHumanize = body.trim().length >= 40;
+  const isPublishedArticle = articleStatus === "published";
+
+  const hasGeneratedContent = useMemo(
+    () =>
+      !!(body || "").trim() ||
+      !!(metaTitle || "").trim() ||
+      !!(metaDesc || "").trim() ||
+      !!generatedImageUrl ||
+      !!(article?.generated_at || "").trim(),
+    [article?.generated_at, body, generatedImageUrl, metaDesc, metaTitle],
+  );
+
+  const applyIntegrityResult = useCallback(
+    (res: { ai_percentage: number; flagged_paragraphs?: IntegrityFlag[] }, opts?: { autoHighlight?: boolean }) => {
+      setAiPct(clampPct(res.ai_percentage));
+      const flags = (res.flagged_paragraphs || []) as IntegrityFlag[];
+      setFlaggedParagraphs(flags);
+      if (opts?.autoHighlight !== false && flags.length) setHighlightAi(true);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const md = body.trim();
+    if (!md) {
+      setAiPct(0);
+      setFlaggedParagraphs([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      applyIntegrityResult(auditMarkdown(md), { autoHighlight: false });
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [body, applyIntegrityResult]);
 
   const isDirty = useMemo(() => {
     if (!editorBaseline) return false;
@@ -266,96 +424,429 @@ export default function ArticleEditPage() {
   }, [uploadedImagePreview]);
 
   useEffect(() => {
+    if (!token) return;
+    if (!isShopifyProject) return;
+    if (!projectSettings) return;
+    let cancelled = false;
+    void api
+      .getShopifyStatus(params.projectId, { skipGlobalLoading: true })
+      .then((st) => {
+        if (!cancelled) setShopifyStatus(st);
+      })
+      .catch(() => {
+        /* non-fatal */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isShopifyProject, params.projectId, projectSettings, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    if (!isShopifyProject) return;
+    let cancelled = false;
+    setShopifyCatalogLoading(true);
+    void api
+      .getShopifyCatalog(params.projectId)
+      .then((cat) => {
+        if (cancelled) return;
+        setShopifyCatalog(cat);
+        const blogs = Array.isArray(cat?.blogs) ? cat.blogs : [];
+        if (blogs.length && shopifyBlogId == null) {
+          const first = blogs.find((b) => b && typeof b === "object" && "id" in b) as { id?: unknown } | undefined;
+          const idNum = first && typeof first.id === "number" ? first.id : Number(first?.id);
+          if (Number.isFinite(idNum)) setShopifyBlogId(idNum);
+        }
+      })
+      .catch(() => {
+        /* non-fatal */
+      })
+      .finally(() => {
+        if (!cancelled) setShopifyCatalogLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isShopifyProject, params.projectId, shopifyBlogId, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    if (!isWordPressProject) return;
+    let cancelled = false;
+    setSiteMapLoading(true);
+    void api
+      .siteMapList(params.projectId)
+      .then((res) => {
+        if (cancelled) return;
+        setSiteMapEntries(Array.isArray(res?.entries) ? res.entries : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSiteMapEntries([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSiteMapLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isWordPressProject, params.projectId, token]);
+
+  const applyStoredIntegrity = useCallback(
+    (a: ArticleDetail) => {
+      const storedPct = a.integrity_ai_percentage;
+      const storedFlags = a.integrity_flagged_paragraphs;
+      if (storedPct != null && Array.isArray(storedFlags) && storedFlags.length) {
+        applyIntegrityResult(
+          { ai_percentage: Number(storedPct), flagged_paragraphs: storedFlags as IntegrityFlag[] },
+          { autoHighlight: true },
+        );
+        return;
+      }
+      setAiPct(0);
+      setFlaggedParagraphs([]);
+    },
+    [applyIntegrityResult],
+  );
+
+  const scheduleIntegrityAudit = useCallback(
+    (articleMd: string, a?: ArticleDetail | null) => {
+      const md = articleMd.trim();
+      if (!md) {
+        setAiPct(0);
+        setFlaggedParagraphs([]);
+        return;
+      }
+      const run = () => {
+        applyIntegrityResult(auditMarkdown(md), { autoHighlight: false });
+        if (a) applyStoredIntegrity(a);
+      };
+      const w = window as unknown as {
+        requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+      };
+      if (typeof w.requestIdleCallback === "function") {
+        w.requestIdleCallback(run, { timeout: 2500 });
+      } else {
+        window.setTimeout(run, 0);
+      }
+    },
+    [applyIntegrityResult, applyStoredIntegrity],
+  );
+
+  const loadFeaturedImageFromApi = useCallback(
+    async (opts?: { force?: boolean }) => {
+      const articleKey = `${params.projectId}:${params.articleId}`;
+      const shell = article;
+      if (!shell?.has_featured_image && !opts?.force) return null;
+
+      const inlineUrl = (shell?.image_url || "").trim();
+      if (inlineUrl && !opts?.force) {
+        setGeneratedImageUrl(inlineUrl);
+        featuredImageLoadRef.current = { articleKey, state: "loaded" };
+        return inlineUrl;
+      }
+
+      const loadRef = featuredImageLoadRef.current;
+      if (!opts?.force) {
+        if (loadRef.articleKey === articleKey && loadRef.state === "loaded") return null;
+        if (loadRef.articleKey === articleKey && loadRef.state === "failed") return null;
+        if (loadRef.articleKey === articleKey && loadRef.state === "loading") return null;
+      }
+
+      featuredImageLoadRef.current = { articleKey, state: "loading" };
+      setFeaturedImageLoadFailed(false);
+      setFeaturedImageLoading(true);
+      try {
+        const url = await api.resolveArticleFeaturedImageUrl(params.projectId, params.articleId, {
+          skipGlobalLoading: true,
+          fresh: !!opts?.force,
+          maxAttempts: opts?.force ? 6 : 2,
+        });
+        if (!url) {
+          featuredImageLoadRef.current = { articleKey, state: "failed" };
+          setFeaturedImageLoadFailed(true);
+          return null;
+        }
+        setGeneratedImageUrl(url);
+        setEditorBaseline((prev) => (prev ? { ...prev, imageUrl: url } : prev));
+        setArticle((prev) =>
+          prev && prev.id === params.articleId ? { ...prev, image_url: url, has_featured_image: true } : prev,
+        );
+        featuredImageLoadRef.current = { articleKey, state: "loaded" };
+        return url;
+      } catch {
+        featuredImageLoadRef.current = { articleKey, state: "failed" };
+        setFeaturedImageLoadFailed(true);
+        return null;
+      } finally {
+        setFeaturedImageLoading(false);
+      }
+    },
+    [article?.has_featured_image, article?.image_url, params.articleId, params.projectId],
+  );
+
+  const hydrateEditorShell = useCallback(
+    (a: ArticleDetail) => {
+      const articleKey = `${params.projectId}:${params.articleId}`;
+      setArticle(a);
+      setTitle(a.title || "");
+      setKeywords(kwToString(a.keywords));
+      setFocus(a.focus_keyphrase || "");
+      setMetaTitle(a.meta_title || "");
+      setMetaDesc(a.meta_description || "");
+      const inlineImage = (a.image_url || "").trim();
+      if (inlineImage) {
+        setGeneratedImageUrl(inlineImage);
+        featuredImageLoadRef.current = { articleKey, state: "loaded" };
+      } else if (!a.has_featured_image) {
+        setGeneratedImageUrl("");
+        featuredImageLoadRef.current = { articleKey, state: "idle" };
+        setFeaturedImageLoadFailed(false);
+      }
+      // Disk-backed image: keep any already-loaded URL; dedicated effect fetches once.
+      if (a.wp_rest_base) setWpPostType(a.wp_rest_base);
+      applyStoredIntegrity(a);
+    },
+    [applyStoredIntegrity, params.projectId, params.articleId],
+  );
+
+  const applyArticleBody = useCallback(
+    (bodyText: string, shell: ArticleDetail) => {
+      const merged: ArticleDetail = { ...shell, article: bodyText };
+      setArticle(merged);
+      setBody(bodyText);
+      setEditorBaseline(
+        baselineFromFields({
+          title: shell.title || "",
+          keywords: kwToString(shell.keywords),
+          focus: shell.focus_keyphrase || "",
+          body: bodyText,
+          metaTitle: shell.meta_title || "",
+          metaDesc: shell.meta_description || "",
+          imageUrl: shell.image_url || "",
+        }),
+      );
+      setEditorRevision((r) => r + 1);
+      scheduleIntegrityAudit(bodyText, shell);
+    },
+    [scheduleIntegrityAudit],
+  );
+
+  const hydrateEditorFromArticle = useCallback(
+    (a: ArticleDetail) => {
+      hydrateEditorShell(a);
+      applyArticleBody(a.article || "", a);
+    },
+    [applyArticleBody, hydrateEditorShell],
+  );
+
+  // Staged load: shell (meta/SEO) first, then body — no global blocking overlay.
+  useEffect(() => {
     if (!token) {
-      router.replace("/login");
+      router.replace("/");
       return;
     }
     if (!editorPath) return;
+
+    const ac = new AbortController();
+    let cancelled = false;
+
+    const stopLoading = () => {
+      setContentLoading(false);
+      setBodyLoading(false);
+    };
+
+    const cached = readArticleEditorCache(params.projectId, params.articleId);
+    if (cached) {
+      hydrateEditorFromArticle(cached);
+      stopLoading();
+    } else {
+      setContentLoading(true);
+      setBodyLoading(true);
+    }
+
     (async () => {
       setError(null);
       setErrorCanRetry(false);
       setNotice(null);
-      setLoading(true);
+
+      void api
+        .getProjectSettings(params.projectId, { skipGlobalLoading: true, signal: ac.signal })
+        .then((ps) => {
+          if (!cancelled && ps) setProjectSettings(ps);
+        })
+        .catch(() => {
+          /* non-blocking */
+        });
+
+      const fetchOpts = { skipGlobalLoading: true, signal: ac.signal, fresh: !!cached } as const;
+
       try {
-        const a = await api.getArticle(params.projectId, params.articleId);
+        const [shellResult, bodyResult] = await Promise.allSettled([
+          api.getArticleEditorShell(params.projectId, params.articleId, fetchOpts),
+          api.getArticleBody(params.projectId, params.articleId, fetchOpts),
+        ]);
 
-        setArticle(a);
-        setTitle(a.title || "");
-        setKeywords(kwToString(a.keywords));
-        setFocus(a.focus_keyphrase || "");
-        setBody(a.article || "");
-        setMetaTitle(a.meta_title || "");
-        setMetaDesc(a.meta_description || "");
-        setGeneratedImageUrl(a.image_url || "");
-        setEditorBaseline(baselineFromArticle(a));
-        if (a.wp_rest_base) setWpPostType(a.wp_rest_base);
+        if (cancelled || ac.signal.aborted) return;
 
-        if (a.has_featured_image && !a.image_url) {
-          void api
-            .getArticleFeaturedImage(params.projectId, params.articleId)
-            .then((img) => {
-              const url = img.image_url || "";
-              setGeneratedImageUrl(url);
-              setEditorBaseline((prev) => (prev ? { ...prev, imageUrl: url } : prev));
-            })
-            .catch(() => {
-              /* image optional for editing text */
-            });
+        if (shellResult.status === "rejected") {
+          throw shellResult.reason;
         }
 
-        void Promise.allSettled([
-          api.listWritingPrompts(params.projectId),
-          api.listImagePrompts(params.projectId),
-          api.getProjectSettings(params.projectId),
-        ]).then(([wpRes, ipRes, settingsRes]) => {
-          const wp = wpRes.status === "fulfilled" ? wpRes.value : null;
-          const ip = ipRes.status === "fulfilled" ? ipRes.value : null;
-          if (settingsRes.status === "fulfilled") setProjectSettings(settingsRes.value);
-          if (wp) {
-            setWritingPrompts(wp);
-            setWritingPromptId(wp.default_id || "");
-          }
-          if (ip) {
-            setImagePrompts(ip);
-            setImagePromptId(ip.default_id || "");
-          }
-          if (!wp) setWritingPromptId("");
-          if (!ip) setImagePromptId("");
-        });
-      } catch (e) {
-        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
-          clearAuth();
-          router.replace("/login");
+        const shell = shellResult.value;
+        hydrateEditorShell(shell);
+        setContentLoading(false);
+
+        if (bodyResult.status === "fulfilled") {
+          applyArticleBody(bodyResult.value.article || "", shell);
+          writeArticleEditorCache(params.projectId, params.articleId, {
+            ...shell,
+            article: bodyResult.value.article || "",
+          });
+          setBodyLoading(false);
           return;
         }
-        const info = formatArticleLoadError(e);
-        setError(info.message);
-        setErrorCanRetry(info.canRetry);
+
+        // Shell loaded; body alone failed — show SEO and surface body error.
+        const bodyErr = bodyResult.reason;
+        if (!cancelled) {
+          const info = formatArticleLoadError(bodyErr);
+          setError(info.message);
+          setErrorCanRetry(info.canRetry);
+        }
+        setBodyLoading(false);
+      } catch (e) {
+        if (cancelled || ac.signal.aborted) return;
+        if (
+          e instanceof ApiError &&
+          e.status === 0 &&
+          e.detail &&
+          typeof e.detail === "object" &&
+          (e.detail as { code?: string }).code === "aborted"
+        ) {
+          return;
+        }
+
+        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+          clearAuth();
+          router.replace("/");
+          return;
+        }
+
+        // Do not chain a full-document fetch when Atlas is down (adds 30s+ of retries).
+        const msg =
+          e instanceof ApiError && (isDatabaseUnavailable(e) || e.status === 408)
+            ? connectionErrorMessage(e)
+            : formatArticleLoadError(e).message;
+        const canRetry =
+          e instanceof ApiError
+            ? e.status === 503 || e.status === 408 || e.status === 0 || e.status >= 500
+            : formatArticleLoadError(e).canRetry;
+
+        if (!cached) {
+          setError(msg);
+          setErrorCanRetry(canRetry);
+        } else {
+          setNotice("Showing cached copy — live data could not be refreshed.");
+          setErrorCanRetry(canRetry);
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled && !ac.signal.aborted) {
+          stopLoading();
+        }
       }
     })();
-  }, [editorPath, params.articleId, params.projectId, router, token, loadAttempt]);
 
-  // Background prefetch (non-blocking) for better perceived performance.
-  useEffect(() => {
-    if (!token) return;
-    const prefetch = () => {
-      // Fire-and-forget: keep editor responsive.
-      void ensurePromptsLoaded();
-      // WP meta is heavier and often unused; prefetch slightly later.
-      setTimeout(() => void ensureWpMetaLoaded(), 900);
-    };
-    // Prefer idle time; fallback to short delay.
-    const w = window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number; cancelIdleCallback?: (id: number) => void };
-    const idleId = typeof w.requestIdleCallback === "function" ? w.requestIdleCallback(prefetch, { timeout: 2000 }) : null;
-    const t = idleId ? null : window.setTimeout(prefetch, 900);
     return () => {
-      if (idleId && typeof w.cancelIdleCallback === "function") w.cancelIdleCallback(idleId);
+      cancelled = true;
+      ac.abort();
+      stopLoading();
+    };
+  }, [
+    applyArticleBody,
+    editorPath,
+    hydrateEditorFromArticle,
+    hydrateEditorShell,
+    params.articleId,
+    params.projectId,
+    router,
+    token,
+    loadAttempt,
+  ]);
+
+  // Keep publish status aligned with WordPress when editing a linked post.
+  useEffect(() => {
+    if (!isLiveOnWordPress || !article?.id) return;
+    const last = (article.wp_last_wp_status || "").trim().toLowerCase();
+    if (last === "publish" || last === "draft") {
+      setWpStatus(last);
+    } else if ((article.status || "").trim().toLowerCase() === "published") {
+      setWpStatus("publish");
+    }
+  }, [article?.id, article?.status, article?.wp_last_wp_status, isLiveOnWordPress]);
+
+  const needsWpMeta = isWordPressProject && websiteConnected;
+
+  // Sync WP publish options from the article row when available.
+  useEffect(() => {
+    if (!isWordPressProject || !article?.id) return;
+    if (article.wp_rest_base) setWpPostType(article.wp_rest_base);
+  }, [article?.id, article?.wp_rest_base, isWordPressProject]);
+
+  // Auto-load WordPress post types + categories in the background (no manual click required).
+  useEffect(() => {
+    if (!token || !needsWpMeta || !article?.id) return;
+    if (wpPostTypes.length || wpCategories.length) return;
+    void ensureWpMetaLoaded();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, needsWpMeta, article?.id, params.projectId, wpPostTypes.length, wpCategories.length]);
+
+  // Reset featured-image fetch state when navigating to a different article (not on first mount).
+  useEffect(() => {
+    const articleKey = `${params.projectId}:${params.articleId}`;
+    if (prevArticleKeyRef.current !== null && prevArticleKeyRef.current !== articleKey) {
+      featuredImageLoadRef.current = { articleKey, state: "idle" };
+      setFeaturedImageLoadFailed(false);
+      setFeaturedImageLoading(false);
+      setGeneratedImageUrl("");
+    }
+    prevArticleKeyRef.current = articleKey;
+  }, [params.projectId, params.articleId]);
+
+  // Load disk-backed featured image once per article (deduped via ref).
+  useEffect(() => {
+    if (!token || !article?.id || !article.has_featured_image) return;
+    if ((article.image_url || "").trim()) return;
+    void loadFeaturedImageFromApi();
+  }, [article?.id, article?.has_featured_image, article?.image_url, loadFeaturedImageFromApi, token]);
+
+  // Background: prompts — settings already loaded in staged shell effect.
+  useEffect(() => {
+    if (!token || !article?.id || editorLocked) return;
+    if (writingPrompts && imagePrompts) return;
+
+    let cancelled = false;
+    const runBackground = () => {
+      if (cancelled) return;
+      void ensurePromptsLoaded();
+    };
+
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    const idleId =
+      typeof w.requestIdleCallback === "function"
+        ? w.requestIdleCallback(runBackground, { timeout: 2500 })
+        : null;
+    const t = idleId == null ? window.setTimeout(runBackground, 400) : null;
+
+    return () => {
+      cancelled = true;
+      if (idleId != null && typeof w.cancelIdleCallback === "function") w.cancelIdleCallback(idleId);
       if (t) window.clearTimeout(t);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.projectId, token]);
+  }, [article?.id, editorLocked, params.articleId, params.projectId, token, writingPrompts, imagePrompts]);
 
   async function ensurePromptsLoaded(): Promise<PromptListResponse | null> {
     if (promptsLoading) return imagePrompts;
@@ -388,27 +879,73 @@ export default function ArticleEditPage() {
     return loadedImagePrompts;
   }
 
-  async function ensureWpMetaLoaded() {
+  async function ensureWpMetaLoaded(opts?: { force?: boolean }) {
+    if (!isWordPressProject) return;
     if (wpMetaLoading) return;
-    if (wpPostTypes.length || wpCategories.length) return;
+    if (!opts?.force && (wpPostTypes.length || wpCategories.length)) return;
     setWpMetaLoading(true);
+    setWpMetaError(null);
+    const fetchOpts = { skipGlobalLoading: true, timeoutMs: 25_000 };
     try {
-      const [types, cats, ps] = await Promise.all([
-        api.wordpressPostTypes(params.projectId, { timeoutMs: 8000 }),
-        api.wordpressCategories(params.projectId, { timeoutMs: 8000 }),
-        api.getProjectSettingsWithOpts(params.projectId, { timeoutMs: 8000 }),
+      const [typesRes, catsRes, psRes] = await Promise.allSettled([
+        api.wordpressPostTypes(params.projectId, fetchOpts),
+        api.wordpressCategories(params.projectId, fetchOpts),
+        api.getProjectSettings(params.projectId, fetchOpts),
       ]);
-      setWpPostTypes(types);
-      setWpCategories(cats);
-      if (types.find((t) => t.rest_base === "posts")) setWpPostType("posts");
-      setWpPostType((ps.default_wp_rest_base || "posts") as string);
-      setWpStatus(((ps.default_wp_status || "draft") as "draft" | "publish"));
-      setWpCategoryIds((ps.default_wp_category_ids || []) as number[]);
-    } catch {
-      // ignore
+      if (typesRes.status === "fulfilled") {
+        setWpPostTypes(typesRes.value);
+      }
+      if (catsRes.status === "fulfilled") {
+        setWpCategories(catsRes.value);
+      }
+      if (psRes.status === "fulfilled") {
+        const ps = psRes.value;
+        if (!article?.wp_rest_base) {
+          setWpPostType((ps.default_wp_rest_base || "posts") as string);
+        }
+        if (!isLiveOnWordPress) {
+          setWpStatus(((ps.default_wp_status || "draft") as "draft" | "publish"));
+          setWpCategoryIds((ps.default_wp_category_ids || []) as number[]);
+        }
+      }
+      if (typesRes.status === "rejected" && catsRes.status === "rejected") {
+        setWpMetaError(
+          "Could not load WordPress post types or categories (your host may block wp/v2). " +
+            "You can still publish via the Riviso plugin — try Publish, or use project defaults below.",
+        );
+      } else if (typesRes.status === "rejected") {
+        setWpPostTypes([{ rest_base: "posts", name: "Posts", taxonomies: ["category", "post_tag"] }]);
+        setWpMetaError(null);
+      } else if (catsRes.status === "rejected") {
+        setWpCategories([]);
+        setWpMetaError(null);
+      }
+    } catch (e) {
+      setWpMetaError(connectionErrorMessage(e));
     } finally {
       setWpMetaLoading(false);
     }
+  }
+
+  async function persistEditorForWordPress(opts?: { skipGlobalLoading?: boolean }) {
+    const updated = await api.updateArticle(
+      params.projectId,
+      params.articleId,
+      {
+        title,
+        keywords: kwFromString(keywords),
+        focus_keyphrase: focus,
+        article: body,
+        meta_title: metaTitle,
+        meta_description: metaDesc,
+      },
+      opts?.skipGlobalLoading ? { skipGlobalLoading: true } : undefined,
+    );
+    setArticle(updated);
+    setEditorBaseline(
+      baselineFromFields({ title, keywords, focus, body, metaTitle, metaDesc, imageUrl: generatedImageUrl }),
+    );
+    return updated;
   }
 
   async function save() {
@@ -445,101 +982,200 @@ export default function ArticleEditPage() {
     }
   }
 
+  async function ensureClusterLinkContext(force = false): Promise<ClusterLinkContext | null> {
+    if (!isWordPressProject) return null;
+    if (!force && clusterLinkContext) return clusterLinkContext;
+    if (clusterLinkLoading) return clusterLinkContext;
+    setClusterLinkLoading(true);
+    try {
+      const res = await api.getArticleClusterLinkContext(params.projectId, params.articleId, {
+        skipGlobalLoading: true,
+      });
+      const ctx = res.cluster_link_context ?? null;
+      setClusterLinkContext(ctx);
+      return ctx;
+    } catch {
+      return null;
+    } finally {
+      setClusterLinkLoading(false);
+    }
+  }
+
+  function openPlatformMapBeforeGenerate() {
+    if (isShopifyProject) {
+      setMappedProductsForGenerate([]);
+      void api
+        .getShopifyCatalog(params.projectId)
+        .then((cat) => setShopifyCatalog(cat))
+        .catch(() => {
+          /* optional — map modal still opens */
+        });
+    } else if (isWordPressProject) {
+      setMappedPagesForGenerate([]);
+      setSiteMapLoading(true);
+      void api
+        .siteMapList(params.projectId)
+        .then((res) => setSiteMapEntries(Array.isArray(res?.entries) ? res.entries : []))
+        .catch(() => setSiteMapEntries([]))
+        .finally(() => setSiteMapLoading(false));
+    }
+    setProductMapBeforeGenerateOpen(true);
+  }
+
+  const isClusterArticle = Boolean(clusterLinkContext?.cluster_id || article?.topic_cluster_id);
+  const clusterRoleLabel =
+    clusterLinkContext?.role === "pillar"
+      ? "pillar"
+      : clusterLinkContext?.role === "cluster"
+        ? "supporting cluster"
+        : "cluster";
+
+  async function startGenerateFlow(opts?: { regenerate?: boolean }) {
+    if (isShopifyProject || isWordPressProject) {
+      if (isWordPressProject) {
+        const ctx = await ensureClusterLinkContext();
+        if (ctx?.auto_link_ready) {
+          void doGenerate(undefined, undefined, { ...opts, skipPlatformMapping: true });
+          return;
+        }
+      }
+      openPlatformMapBeforeGenerate();
+      if (isWordPressProject && !clusterLinkContext) {
+        void ensureClusterLinkContext();
+      }
+      return;
+    }
+    void doGenerate(undefined, undefined, opts);
+  }
+
   async function generate() {
     await ensurePromptsLoaded();
-    if (!websiteConnected) {
+    // Shopify projects can generate/regenerate drafts without store OAuth.
+    if (!isShopifyProject && !isWordPressProject && !websiteConnected) {
       setWebsiteConnectionModal(true);
       return;
     }
-    const alreadyGenerated =
-      !!(body || "").trim() || !!(metaTitle || "").trim() || !!(metaDesc || "").trim() || !!generatedImageUrl;
-    if (alreadyGenerated) {
+    if (hasGeneratedContent) {
       setShowRegenConfirm(true);
       return;
     }
-    return doGenerate();
+    startGenerateFlow();
   }
 
-  async function doGenerate() {
-    if (!websiteConnected) {
+  async function doGenerate(
+    mappedProductsOverride?: MappedShopifyProduct[],
+    mappedPagesOverride?: MappedWordPressPage[],
+    opts?: { regenerate?: boolean; skipPlatformMapping?: boolean },
+  ) {
+    if (!isShopifyProject && !isWordPressProject && !websiteConnected) {
       setWebsiteConnectionModal(true);
       return;
     }
     setError(null);
     setNotice(null);
     try {
-      // Progressive status messages for the global loader overlay.
-      const setLoadingLines = (lines: string[] | null) => {
-        if (typeof window === "undefined") return;
-        window.dispatchEvent(new CustomEvent("aa:loadingStatus", { detail: { lines } }));
-      };
-
-      const timers: number[] = [];
-      setLoadingLines(["Article Generation in progress"]);
-      timers.push(
-        window.setTimeout(() => setLoadingLines(["Article Generation in progress", "Article is now getting prepared"]), 900),
+      await runWithArticlePipelineMonitor(
+        params.projectId,
+        params.articleId,
+        async () => {
+          const pickedProducts = isShopifyProject
+            ? opts?.skipPlatformMapping
+              ? undefined
+              : mappedProductsOverride !== undefined
+                ? mappedProductsOverride
+                : mappedProductsForGenerate.length
+                  ? mappedProductsForGenerate
+                  : undefined
+            : undefined;
+          const pickedPages = isWordPressProject
+            ? opts?.skipPlatformMapping
+              ? undefined
+              : mappedPagesOverride !== undefined
+                ? mappedPagesOverride
+                : mappedPagesForGenerate.length
+                  ? mappedPagesForGenerate
+                  : undefined
+            : undefined;
+          const res = await api.generateArticle(
+            params.projectId,
+            params.articleId,
+            {
+              writing_prompt_id: writingPromptId || null,
+              image_prompt_id: imagePromptId || null,
+              focus_keyphrase: focus || null,
+              generate_image: generateImage,
+              mapped_products: isShopifyProject ? pickedProducts : undefined,
+              mapped_pages: isWordPressProject ? pickedPages : undefined,
+            },
+            {
+              previousGeneratedAt: article?.generated_at ?? null,
+              expectImage: generateImage,
+              skipGlobalLoading: true,
+            },
+          );
+          if (res.generated?.article) setBody(res.generated.article);
+          if (res.generated?.meta_title !== undefined) setMetaTitle(clampChars(res.generated.meta_title || "", META_TITLE_MAX));
+          if (res.generated?.meta_description !== undefined) setMetaDesc(clampChars(res.generated.meta_description || "", META_DESC_MAX));
+          if (res.generated?.image_url) {
+            setGeneratedImageUrl(res.generated.image_url);
+          }
+          const hydrated = "hydratedArticle" in res ? res.hydratedArticle : undefined;
+          if (hydrated) {
+            setArticle(hydrated);
+            hydrateEditorFromArticle(hydrated);
+            writeArticleEditorCache(params.projectId, params.articleId, hydrated);
+          } else if (res.generated?.article) {
+            invalidateArticleDetailCache(params.projectId, params.articleId);
+            const refreshed = await api.refreshArticleEditorPayload(params.projectId, params.articleId, {
+              skipGlobalLoading: true,
+            });
+            setArticle(refreshed);
+            hydrateEditorFromArticle(refreshed);
+            writeArticleEditorCache(params.projectId, params.articleId, refreshed);
+            if (!res.generated?.image_url && refreshed.has_featured_image) {
+              const url = (refreshed.image_url || "").trim();
+              if (url) setGeneratedImageUrl(url);
+            }
+          }
+          if ("image_warning" in res && res.image_warning) {
+            setError(res.image_warning);
+          }
+          setNotice(
+            opts?.regenerate
+              ? `Regenerated: ${res.message}`
+              : `${res.status}: ${res.message}${res.generated?.image_url ? `\nImage: ${res.generated.image_url}` : ""}`,
+          );
+        },
+        {
+          initialMessage: opts?.regenerate
+            ? "Regenerating article — connecting to live pipeline stream…"
+            : "Starting article generation — connecting to live pipeline stream…",
+        },
       );
-      if (generateImage) {
-        timers.push(
-          window.setTimeout(
-            () =>
-              setLoadingLines([
-                "Article generation is completed.",
-                "Now Article Image generation is in progress.",
-              ]),
-            2200,
-          ),
-        );
-        timers.push(
-          window.setTimeout(() => setLoadingLines(["Now Article Image generation is in progress.", "Article Image is getting prepared."]), 3800),
-        );
-      }
-
-      const res = await api.generateArticle(params.projectId, params.articleId, {
-        writing_prompt_id: writingPromptId || null,
-        image_prompt_id: imagePromptId || null,
-        focus_keyphrase: focus || null,
-        generate_image: generateImage,
-      });
-      if (res.generated?.article) setBody(res.generated.article);
-      if (res.generated?.meta_title !== undefined) setMetaTitle(clampChars(res.generated.meta_title || "", META_TITLE_MAX));
-      if (res.generated?.meta_description !== undefined) setMetaDesc(clampChars(res.generated.meta_description || "", META_DESC_MAX));
-      if (res.generated?.image_url) setGeneratedImageUrl(res.generated.image_url);
-      const refreshed = await api.getArticle(params.projectId, params.articleId);
-      setArticle(refreshed);
-      setTitle(refreshed.title || title);
-      setKeywords(kwToString(refreshed.keywords));
-      setFocus(refreshed.focus_keyphrase || focus);
-      setNotice(`${res.status}: ${res.message}${res.generated?.image_url ? `\nImage: ${res.generated.image_url}` : ""}`);
-
-      setLoadingLines(
-        generateImage
-          ? ["All tasks are completed."]
-          : ["Article generation is completed.", "All tasks are completed."],
-      );
-      window.setTimeout(() => setLoadingLines(null), 900);
-      timers.forEach((t) => window.clearTimeout(t));
     } catch (e) {
       if (showWebsiteConnectionErrorIfNeeded(e)) return;
       if (e instanceof ApiError && e.status === 408) {
         setError(e.message);
         return;
       }
-      setError(e instanceof Error ? e.message : "Generate request failed");
+      setError(
+        connectionErrorMessage(e) ||
+          (opts?.regenerate ? "Regenerate request failed" : "Generate request failed"),
+      );
     }
   }
 
   function openImageRegenModal() {
     setError(null);
-    if (!websiteConnected) {
-      setWebsiteConnectionModal(true);
+    if (!generateImage) {
+      setError("Enable “Generate image” (Yes) to create a featured image.");
       return;
     }
-    const canRegenImage = !!(generatedImageUrl || article?.has_featured_image);
-    if (!canRegenImage) {
-      setError("Generate an article image first, then you can regenerate it.");
+    if (!body.trim()) {
+      setError("Generate article content first, then create the featured image.");
       return;
     }
+    void ensurePromptsLoaded();
     setRegenPromptSource("saved");
     setRegenPromptId(
       imagePromptId || imagePrompts?.default_id || imagePrompts?.items?.[0]?.id || "",
@@ -555,32 +1191,83 @@ export default function ArticleEditPage() {
   }
 
   async function regenerateFeaturedImage(opts?: { image_prompt_id?: string | null; custom_image_prompt?: string | null }) {
-    if (!websiteConnected) {
-      setWebsiteConnectionModal(true);
+    const hasImgNow = !!(generatedImageUrl || article?.has_featured_image);
+    const regenUnlimited = article?.featured_image_regeneration_unlimited ?? true;
+    const regenRemaining = article?.featured_image_regeneration_remaining;
+    const regenExhausted = !regenUnlimited && (regenRemaining ?? 0) <= 0;
+    if (!generateImage) {
+      setError("Enable “Generate image” (Yes) to create a featured image.");
+      return;
+    }
+    if (!body.trim()) {
+      setError("Generate article content first, then create the featured image.");
+      return;
+    }
+    if (regenExhausted && hasImgNow) {
+      setError("The max featured image regeneration limit is exhausted for this article.");
       return;
     }
     setError(null);
     setNotice(null);
     setImageRegenBusy(true);
-    const setLoadingLines = (lines: string[] | null) => {
-      if (typeof window === "undefined") return;
-      window.dispatchEvent(new CustomEvent("aa:loadingStatus", { detail: { lines } }));
-    };
+    setImageGenPhase("generating");
+    setShowImageRegenModal(false);
     try {
-      setLoadingLines(["Featured image regeneration is in progress."]);
-      const res = await api.regenerateArticleImage(params.projectId, params.articleId, {
-        image_prompt_id: opts?.custom_image_prompt ? null : (opts?.image_prompt_id ?? imagePromptId) || null,
-        custom_image_prompt: opts?.custom_image_prompt?.trim() || null,
-      });
-      const regenImageUrl = res.image_url || "";
-      if (regenImageUrl) setGeneratedImageUrl(regenImageUrl);
-      const refreshed = await api.getArticle(params.projectId, params.articleId);
-      setArticle(refreshed);
-      setGeneratedImageUrl((prev) => regenImageUrl || refreshed.image_url || prev);
-      setNotice(`${res.status}: ${res.message}. Use Update article to push the new image to WordPress.`);
-      setShowImageRegenModal(false);
-      setLoadingLines(["Featured image regenerated.", "All tasks are completed."]);
-      window.setTimeout(() => setLoadingLines(null), 900);
+      await runWithArticlePipelineMonitor(
+        params.projectId,
+        params.articleId,
+        async () => {
+          const res = await api.regenerateArticleImage(
+            params.projectId,
+            params.articleId,
+            {
+              image_prompt_id: opts?.custom_image_prompt ? null : (opts?.image_prompt_id ?? imagePromptId) || null,
+              custom_image_prompt: opts?.custom_image_prompt?.trim() || null,
+            },
+            {
+              previousRegenCount: article?.featured_image_regeneration_count ?? 0,
+              hadFeaturedImage: !!(generatedImageUrl || article?.has_featured_image),
+              skipGlobalLoading: true,
+            },
+          );
+          setImageGenPhase("saving");
+          let regenImageUrl = res.image_url || "";
+          if (regenImageUrl) {
+          setGeneratedImageUrl(regenImageUrl);
+          }
+          const hydrated = "hydratedArticle" in res ? res.hydratedArticle : undefined;
+          if (hydrated) {
+          setArticle(hydrated);
+          if (!regenImageUrl && hydrated.has_featured_image) {
+          regenImageUrl = (hydrated.image_url || "").trim();
+          }
+          }
+          if (regenImageUrl) {
+          setGeneratedImageUrl(regenImageUrl);
+          setEditorBaseline((prev) => (prev ? { ...prev, imageUrl: regenImageUrl } : prev));
+          } else if (hydrated?.has_featured_image) {
+          featuredImageLoadRef.current = {
+          articleKey: `${params.projectId}:${params.articleId}`,
+          state: "idle",
+          };
+          await loadFeaturedImageFromApi({ force: true });
+          } else if (!hydrated?.has_featured_image) {
+          setError(
+          "Featured image was not saved. If the backend log shows a database timeout, check MongoDB connectivity and retry.",
+          );
+          return;
+          }
+          if (res.save_warning) {
+          setError(res.save_warning);
+          }
+          setNotice(
+            `${res.status}: ${res.message}${
+              isWordPressProject ? " Use Update article to push the new image to WordPress." : ""
+            }`,
+          );
+        },
+        { initialMessage: "Generating featured image — connecting to live pipeline stream…" },
+      );
     } catch (e) {
       if (showWebsiteConnectionErrorIfNeeded(e)) return;
       if (e instanceof ApiError && e.detail && typeof e.detail === "object" && !Array.isArray(e.detail)) {
@@ -589,11 +1276,22 @@ export default function ArticleEditPage() {
           setError(typeof d.message === "string" ? d.message : "Featured image regeneration limit reached for this article.");
           return;
         }
+        const partialUrl = typeof d.image_url === "string" ? d.image_url : "";
+        if (partialUrl) {
+          setGeneratedImageUrl(partialUrl);
+          setEditorBaseline((prev) => (prev ? { ...prev, imageUrl: partialUrl } : prev));
+          setError(
+            typeof d.message === "string"
+              ? d.message
+              : "Image was generated but could not be saved. Retry when the database is available.",
+          );
+          return;
+        }
       }
-      setError(e instanceof Error ? e.message : "Featured image regeneration failed");
+      setError(connectionErrorMessage(e));
     } finally {
-      window.setTimeout(() => setLoadingLines(null), 900);
       setImageRegenBusy(false);
+      setImageGenPhase("idle");
     }
   }
 
@@ -609,60 +1307,77 @@ export default function ArticleEditPage() {
     websiteConnected,
     hasTitle: !!title.trim(),
     hasBody: !!body.trim(),
-    hasPendingChanges: hasPendingWpChanges,
-    busy: wpUpdateBusy,
+    busy: wpUpdateBusy || wpPublishBusy,
   });
+
+  const wpPushBusy = wpPublishBusy || wpUpdateBusy;
 
   const imageRegenUsed = article?.featured_image_regeneration_count ?? 0;
   const imageRegenUnlimited = article?.featured_image_regeneration_unlimited ?? true;
   const imageRegenLimit = article?.featured_image_regeneration_limit ?? 0;
   const imageRegenRemaining = article?.featured_image_regeneration_remaining;
   const imageRegenExhausted = !imageRegenUnlimited && (imageRegenRemaining ?? 0) <= 0;
-  const canRegenerateFeaturedImage =
-    !!(generatedImageUrl || article?.has_featured_image) && !imageRegenExhausted;
+  const hasFeaturedImage = !!(generatedImageUrl || article?.has_featured_image);
+  const showFeaturedImageSkeleton = imageRegenBusy || featuredImageLoading;
+  const canFeaturedImageAction =
+    generateImage &&
+    hasGeneratedContent &&
+    (!imageRegenExhausted || !hasFeaturedImage);
+
+  function handleFeaturedImageButtonClick() {
+    if (!canFeaturedImageAction) return;
+    openImageRegenModal();
+  }
 
   async function publishToLiveSite() {
     if (!websiteConnected) {
       setWebsiteConnectionModal(true);
       return;
     }
+    if (wpPublishBusy || wpUpdateBusy) return;
     setError(null);
     setNotice(null);
+    setWpPublishBusy(true);
     try {
-      if (isDirty) {
-        const updated = await api.updateArticle(params.projectId, params.articleId, {
-          title,
-          keywords: kwFromString(keywords),
-          focus_keyphrase: focus,
-          article: body,
-          meta_title: metaTitle,
-          meta_description: metaDesc,
-        });
-        setArticle(updated);
-        setEditorBaseline(
-          baselineFromFields({ title, keywords, focus, body, metaTitle, metaDesc, imageUrl: generatedImageUrl }),
-        );
-      }
-      const res = await api.publishArticleToLiveSite(params.projectId, params.articleId, {
-        image_file: generateImage ? null : uploadedImageFile,
-        post_type: wpPostType,
-        wp_status: wpStatus,
-        category_ids: wpCategoryIds,
-      });
-      const refreshed = await api.getArticle(params.projectId, params.articleId);
-      setArticle(refreshed);
-      const syncedImageUrl = refreshed.image_url || generatedImageUrl;
-      setGeneratedImageUrl(syncedImageUrl);
-      setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
-      if (refreshed.wp_rest_base) setWpPostType(refreshed.wp_rest_base);
-      setNotice(`${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`);
+      await runWithArticlePipelineMonitor(
+        params.projectId,
+        params.articleId,
+        async () => {
+          await persistEditorForWordPress({ skipGlobalLoading: true });
+          const wpImageFile =
+            generateImage && !uploadedImageFile
+              ? await resolveFeaturedImageFileForWordPress({
+                  projectId: params.projectId,
+                  articleId: params.articleId,
+                  generatedImageUrl,
+                  hasFeaturedImage,
+                })
+              : uploadedImageFile;
+          const res = await api.publishArticleToLiveSite(params.projectId, params.articleId, {
+            image_file: wpImageFile,
+            post_type: wpPostType,
+            wp_status: wpStatus,
+            category_ids: wpCategoryIds,
+          }, { skipGlobalLoading: true });
+          const refreshed = await api.getArticle(params.projectId, params.articleId, { fresh: true, skipGlobalLoading: true });
+          setArticle(refreshed);
+          const syncedImageUrl = refreshed.image_url || generatedImageUrl;
+          setGeneratedImageUrl(syncedImageUrl);
+          setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
+          if (refreshed.wp_rest_base) setWpPostType(refreshed.wp_rest_base);
+          setNotice(`${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`);
+        },
+        { initialMessage: "Publishing to WordPress — connecting to live pipeline stream…" },
+      );
     } catch (e) {
       if (showWebsiteConnectionErrorIfNeeded(e)) return;
       if (e instanceof ApiError && e.status === 408) {
         setError(e.message);
         return;
       }
-      setError(e instanceof Error ? e.message : "Publish to live site failed");
+      setError(connectionErrorMessage(e));
+    } finally {
+      setWpPublishBusy(false);
     }
   }
 
@@ -672,45 +1387,79 @@ export default function ArticleEditPage() {
       return;
     }
     if (!showUpdateWordPress) return;
+    if (wpPublishBusy || wpUpdateBusy) return;
     setError(null);
     setNotice(null);
     setWpUpdateBusy(true);
     try {
-      if (isDirty) {
-        const updated = await api.updateArticle(params.projectId, params.articleId, {
-          title,
-          keywords: kwFromString(keywords),
-          focus_keyphrase: focus,
-          article: body,
-          meta_title: metaTitle,
-          meta_description: metaDesc,
-        });
-        setArticle(updated);
-        setEditorBaseline(
-          baselineFromFields({ title, keywords, focus, body, metaTitle, metaDesc, imageUrl: generatedImageUrl }),
-        );
-      }
+      await persistEditorForWordPress();
+      const wpImageFile =
+        generateImage && !uploadedImageFile
+          ? await resolveFeaturedImageFileForWordPress({
+              projectId: params.projectId,
+              articleId: params.articleId,
+              generatedImageUrl,
+              hasFeaturedImage,
+            })
+          : uploadedImageFile;
       const res = await api.updateArticleOnWordPress(params.projectId, params.articleId, {
-        image_file: generateImage ? null : uploadedImageFile,
+        image_file: wpImageFile,
         post_type: wpPostType,
-        wp_status: wpStatus,
+        wp_status: effectiveWpStatus,
         category_ids: wpCategoryIds,
       });
-      const refreshed = await api.getArticle(params.projectId, params.articleId);
+      const refreshed = await api.getArticle(params.projectId, params.articleId, { fresh: true });
       setArticle(refreshed);
       const syncedImageUrl = refreshed.image_url || generatedImageUrl;
       setGeneratedImageUrl(syncedImageUrl);
       setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
-      setNotice(`${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`);
+      if (refreshed.wp_rest_base) setWpPostType(refreshed.wp_rest_base);
+      let noticeText = `${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`;
+      if (res.featured_image_uploaded === false && hasFeaturedImage) {
+        noticeText += "\nFeatured image was not uploaded to WordPress — check upload permissions on your WP user.";
+      }
+      setNotice(noticeText);
     } catch (e) {
       if (showWebsiteConnectionErrorIfNeeded(e)) return;
       if (e instanceof ApiError && e.status === 408) {
         setError(e.message);
         return;
       }
-      setError(e instanceof Error ? e.message : "WordPress update failed");
+      setError(connectionErrorMessage(e));
     } finally {
       setWpUpdateBusy(false);
+    }
+  }
+
+  async function runHumanization() {
+    if (!body.trim()) return;
+    setHumanizeBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await runWithArticlePipelineMonitor(
+        params.projectId,
+        params.articleId,
+        async () => {
+          const res = await api.humanizeArticleIntegrity(params.projectId, params.articleId, body, {
+            timeoutMs: 120_000,
+            skipGlobalLoading: true,
+          });
+          setIntegrityOriginal(res.original_markdown || body);
+          setIntegrityHumanized(res.humanized_markdown || body);
+          setIntegrityRewritten(res.rewritten || []);
+          setIntegrityAiBefore(res.before?.ai_percentage ?? null);
+          setIntegrityAiAfter(res.after?.ai_percentage ?? null);
+          if (res.after) applyIntegrityResult(res.after);
+          setHighlightAi(true);
+          setShowIntegrityModal(true);
+        },
+        { initialMessage: "Running structural humanization — connecting to live pipeline stream…" },
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Humanization failed");
+    } finally {
+      setHumanizeBusy(false);
     }
   }
 
@@ -724,6 +1473,179 @@ export default function ArticleEditPage() {
       /* clipboard unavailable */
     }
   }
+
+  const applyWordPressSyncResult = useCallback(
+    (synced: ArticleDetail, message: string, changes: string[]) => {
+      hydrateEditorFromArticle(synced);
+      writeArticleEditorCache(params.projectId, params.articleId, synced);
+      const summary =
+        changes.length && !changes.every((c) => c === "no content changes")
+          ? `${message} Updated: ${changes.join(", ")}.`
+          : message;
+      setNotice(summary);
+    },
+    [hydrateEditorFromArticle, params.articleId, params.projectId],
+  );
+
+  async function syncFromWordPress(opts?: { silent?: boolean; force?: boolean }) {
+    if (!isWordPressProject || !websiteConnected || !article?.id) return;
+    if (!isLiveOnWordPress) return;
+    if (wpSyncBusy) return;
+    if (!opts?.force && hasPendingWpChanges) {
+      setShowWpSyncConfirm(true);
+      return;
+    }
+
+    setWpSyncBusy(true);
+    if (!opts?.silent) setNotice(null);
+    try {
+      const res = await api.syncArticleFromWordPress(params.projectId, params.articleId);
+      applyWordPressSyncResult(res.article, res.message, res.changes || []);
+    } catch (e) {
+      if (!opts?.silent) {
+        if (showWebsiteConnectionErrorIfNeeded(e)) return;
+        setError(e instanceof Error ? e.message : "WordPress sync failed");
+      }
+    } finally {
+      setWpSyncBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    wpAutoSyncKeyRef.current = null;
+  }, [params.articleId, params.projectId]);
+
+  // Pull latest permalink, body, and status from WordPress when opening a linked article.
+  useEffect(() => {
+    if (!token || !isWordPressProject || !websiteConnected || !article?.id) return;
+    if (!isLiveOnWordPress) return;
+    if (contentLoading || bodyLoading) return;
+    if (hasPendingWpChanges) return;
+    if (wpSyncBusy) return;
+
+    const syncKey = `${params.projectId}:${params.articleId}`;
+    if (wpAutoSyncKeyRef.current === syncKey) return;
+    wpAutoSyncKeyRef.current = syncKey;
+
+    void syncFromWordPress({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    token,
+    isWordPressProject,
+    websiteConnected,
+    article?.id,
+    isLiveOnWordPress,
+    contentLoading,
+    bodyLoading,
+    hasPendingWpChanges,
+    params.projectId,
+    params.articleId,
+  ]);
+
+  async function copyArticleMarkdown() {
+    const md = (body || "").trim();
+    if (!md) return;
+    try {
+      await navigator.clipboard.writeText(md);
+      setNotice("Copied article markdown to clipboard.");
+    } catch {
+      setNotice("Could not copy to clipboard (browser permission).");
+    }
+  }
+
+  async function copyArticleTitleAndMarkdown() {
+    const md = (body || "").trim();
+    const t = (title || article?.title || "").trim();
+    const payload = [t ? `# ${t}` : "", md].filter(Boolean).join("\n\n");
+    if (!payload.trim()) return;
+    try {
+      await navigator.clipboard.writeText(payload);
+      setNotice("Copied title + article markdown to clipboard.");
+    } catch {
+      setNotice("Could not copy to clipboard (browser permission).");
+    }
+  }
+
+  async function syncShopifyCatalogFromEditor() {
+    if (shopifyCatalogSyncing) return;
+    setShopifyCatalogSyncing(true);
+    setError(null);
+    try {
+      await api.syncShopifyCatalog(params.projectId);
+      const cat = await api.getShopifyCatalog(params.projectId);
+      setShopifyCatalog(cat);
+      const blogs = Array.isArray(cat?.blogs) ? cat.blogs : [];
+      if (blogs.length) {
+        const first = blogs[0] as { id?: unknown };
+        const idNum = typeof first.id === "number" ? first.id : Number(first.id);
+        if (Number.isFinite(idNum)) setShopifyBlogId(idNum);
+      }
+      const st = await api.getShopifyStatus(params.projectId, { skipGlobalLoading: true });
+      setShopifyStatus(st);
+      setNotice("Shopify catalog synced.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Shopify sync failed");
+    } finally {
+      setShopifyCatalogSyncing(false);
+    }
+  }
+
+  async function publishToShopify() {
+    if (shopifyPublishBusy) return;
+    if (!websiteConnected) {
+      setWebsiteConnectionModal(true);
+      return;
+    }
+    if (!title.trim() || !body.trim()) {
+      setError("Add article title and body before posting to Shopify.");
+      return;
+    }
+    setShopifyPublishBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await runWithArticlePipelineMonitor(
+        params.projectId,
+        params.articleId,
+        async () => {
+          const res = await api.publishArticleToShopify(
+            params.projectId,
+            params.articleId,
+            {
+              blog_id: shopifyBlogId,
+              publish: shopifyPublishNow,
+            },
+            { skipGlobalLoading: true },
+          );
+          const refreshed = await api.getArticle(params.projectId, params.articleId, { fresh: true, skipGlobalLoading: true });
+          setArticle(refreshed);
+          setNotice(`${res.message}${res.shopify_link ? `\n${res.shopify_link}` : ""}`);
+        },
+        { initialMessage: "Publishing to Shopify — connecting to live pipeline stream…" },
+      );
+    } catch (e) {
+      if (showWebsiteConnectionErrorIfNeeded(e)) return;
+      if (e instanceof ApiError && e.detail && typeof e.detail === "object" && !Array.isArray(e.detail)) {
+        const d = e.detail as Record<string, unknown>;
+        if (typeof d.message === "string") {
+          setError(d.message);
+          return;
+        }
+      }
+      setError(e instanceof Error ? e.message : "Shopify publish failed");
+    } finally {
+      setShopifyPublishBusy(false);
+    }
+  }
+
+  const shopifyLink = (article?.shopify_link || "").trim();
+  const shopifyCanPublish =
+    websiteConnected &&
+    Boolean(shopifyStatus?.can_publish ?? (shopifyStatus?.granted_scopes || []).includes("write_content")) &&
+    !!title.trim() &&
+    !!body.trim();
+  const shopifyBlogsAvailable = (shopifyCatalog?.blogs || []).length > 0;
+  const shopifyMissingPublishScopes = shopifyStatus?.missing_publish_scopes || [];
 
   const displayTitle = (title || article?.title || "Article").trim() || "Article";
 
@@ -784,14 +1706,30 @@ export default function ArticleEditPage() {
                   {wpPostId ? `WordPress #${wpPostId}` : "Live on WordPress"}
                 </span>
               ) : null}
+              {isLiveOnWordPress && wpLastStatus && wpLastStatus !== "publish" ? (
+                <span
+                  className={`${editorStyles.statusPill} ${isWpTrashed ? editorStyles.statusTrash : editorStyles.statusNeutral}`}
+                >
+                  {formatWordPressRestStatus(article?.wp_last_wp_status)}
+                </span>
+              ) : null}
               {showUpdateWordPress && hasPendingWpChanges ? (
                 <span className={`${editorStyles.statusPill} ${editorStyles.statusWarn}`}>Unsynced changes</span>
+              ) : null}
+              {isLiveOnWordPress && article?.wp_synced_at ? (
+                <span className={`${editorStyles.statusPill} ${editorStyles.statusNeutral}`}>
+                  Synced {article.wp_synced_at}
+                </span>
               ) : null}
             </div>
 
             {isLiveOnWordPress && wpLink ? (
-              <div className={editorStyles.liveUrlCard}>
-                <span className={editorStyles.liveUrlLabel}>Live URL</span>
+              <div
+                className={`${editorStyles.liveUrlCard} ${isWpTrashed ? editorStyles.liveUrlCardTrashed : ""}`}
+              >
+                <span className={editorStyles.liveUrlLabel}>
+                  {isWpTrashed ? "WordPress URL" : "Live URL"}
+                </span>
                 <a href={wpLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlLink}>
                   {wpLink}
                 </a>
@@ -808,8 +1746,27 @@ export default function ArticleEditPage() {
                   >
                     Open live
                   </a>
+                  <button
+                    type="button"
+                    className={editorStyles.liveUrlBtn}
+                    onClick={() => void syncFromWordPress()}
+                    disabled={wpSyncBusy || !websiteConnected}
+                    title="Pull the latest title, body, SEO, and permalink from WordPress"
+                  >
+                    {wpSyncBusy ? "Syncing…" : "Sync from WordPress"}
+                  </button>
                 </div>
-                </div>
+                {isWpTrashed ? (
+                  <p className={editorStyles.liveUrlHint}>
+                    This post is in the WordPress trash. Sync to refresh Riviso, or restore it in WordPress admin.
+                  </p>
+                ) : (
+                  <p className={editorStyles.liveUrlHint}>
+                    Changes made in WordPress are pulled here automatically when you open this article, or use Sync
+                    from WordPress.
+                  </p>
+                )}
+              </div>
             ) : null}
           </header>
 
@@ -848,33 +1805,282 @@ export default function ArticleEditPage() {
           ) : null}
           </div>
 
-        {showRegenConfirm ? (
-          <div className={styles.modalBackdrop}>
+        {productMapBeforeGenerateOpen ? (
+          <div
+            className={styles.modalBackdrop}
+            role="dialog"
+            aria-modal="true"
+            aria-label={isShopifyProject ? "Map products before generation" : "Map pages before generation"}
+          >
             <div className={styles.modalPanel}>
               <div className={styles.modalHead}>
-                <div className={styles.modalTitle}>The content is already generated</div>
+                <h3 className={styles.modalTitle}>
+                  {hasGeneratedContent
+                    ? isShopifyProject
+                      ? "Map products before regenerate"
+                      : "Map pages before regenerate"
+                    : isShopifyProject
+                      ? "Map products for this article"
+                      : "Map site pages for this article"}
+                </h3>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label="Close"
+                  onClick={() => setProductMapBeforeGenerateOpen(false)}
+                >
+                  ×
+                </button>
               </div>
               <div className={styles.modalBody}>
-                Are you sure you want to generate new content? <br />
-                <strong>All the older content will be erased.</strong>
+                {isWordPressProject && isClusterArticle && clusterLinkContext ? (
+                  <div
+                    style={{
+                      marginBottom: 12,
+                      padding: "10px 12px",
+                      borderRadius: 10,
+                      border: "1px solid rgba(255,255,255,0.10)",
+                      background: "rgba(255,255,255,0.03)",
+                      fontSize: 12,
+                      lineHeight: 1.55,
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, color: "rgba(255,255,255,0.92)", marginBottom: 6 }}>
+                      Topic cluster · {clusterRoleLabel} article
+                    </div>
+                    {clusterLinkContext.auto_link_ready ? (
+                      <p className={styles.muted} style={{ margin: 0 }}>
+                        {clusterLinkContext.live_sibling_count} related article
+                        {clusterLinkContext.live_sibling_count === 1 ? "" : "s"} already live on WordPress — Riviso
+                        will link them automatically when you generate.
+                      </p>
+                    ) : (
+                      <p className={styles.muted} style={{ margin: 0 }}>
+                        Related cluster articles are not live on WordPress yet. Map published pages below, or skip to
+                        generate without internal links until siblings are published.
+                      </p>
+                    )}
+                    {clusterLinkContext.siblings.length ? (
+                      <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
+                        {clusterLinkContext.siblings.map((s) => (
+                          <li key={s.slot_id} style={{ marginBottom: 4 }}>
+                            <span style={{ fontWeight: 700 }}>{s.title || "Untitled"}</span>
+                            {" — "}
+                            {s.is_live ? (
+                              <span style={{ color: "rgba(120,200,140,0.95)" }}>Live</span>
+                            ) : (
+                              <span style={{ color: "rgba(255,180,120,0.95)" }}>Not live</span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
+                {isShopifyProject ? (
+                  <ShopifyProductMapPicker
+                    products={shopifyCatalog?.products || []}
+                    value={mappedProductsForGenerate}
+                    onChange={setMappedProductsForGenerate}
+                    loading={shopifyCatalogLoading}
+                    grantedScopes={shopifyCatalog?.granted_scopes || []}
+                  />
+                ) : (
+                  <WordPressPageMapPicker
+                    entries={siteMapEntries || []}
+                    value={mappedPagesForGenerate}
+                    onChange={setMappedPagesForGenerate}
+                    loading={siteMapLoading}
+                    internalLinkAwareEnabled={wpInternalLinkAware}
+                  />
+                )}
+              </div>
+              <div className={styles.modalFooter}>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => setProductMapBeforeGenerateOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => {
+                    setProductMapBeforeGenerateOpen(false);
+                    void doGenerate(undefined, undefined, {
+                      regenerate: hasGeneratedContent,
+                      skipPlatformMapping: true,
+                    });
+                  }}
+                >
+                  Skip — {hasGeneratedContent ? "regenerate" : "generate"}{" "}
+                  {isShopifyProject ? "without products" : "without mapped pages"}
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  disabled={isShopifyProject ? !mappedProductsForGenerate.length : !mappedPagesForGenerate.length}
+                  onClick={() => {
+                    if (isShopifyProject) {
+                      const picked = [...mappedProductsForGenerate];
+                      setProductMapBeforeGenerateOpen(false);
+                      void doGenerate(picked, undefined, { regenerate: hasGeneratedContent });
+                    } else {
+                      const picked = [...mappedPagesForGenerate];
+                      setProductMapBeforeGenerateOpen(false);
+                      void doGenerate(undefined, picked, { regenerate: hasGeneratedContent });
+                    }
+                  }}
+                >
+                  {hasGeneratedContent ? "Regenerate" : "Generate"} with mapped{" "}
+                  {isShopifyProject ? "products" : "pages"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showRegenConfirm ? (
+          <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Regenerate article">
+            <div className={styles.modalPanel}>
+              <div className={styles.modalHead}>
+                <div className={styles.modalTitle}>Regenerate article?</div>
+              </div>
+              <div className={styles.modalBody}>
+                <p style={{ margin: "0 0 12px", lineHeight: 1.55 }}>
+                  This runs a fresh generation with the latest <strong>human-writing guardrails</strong> and an automatic
+                  post-pass to reduce AI-detector patterns. Your current draft (body, meta, and featured image if enabled)
+                  will be replaced.
+                </p>
+                <p style={{ margin: 0, lineHeight: 1.55 }}>
+                  <strong>Save anything you need before continuing.</strong> Unsaved editor changes are not kept.
+                </p>
               </div>
               <div className={styles.modalFooter}>
                 <button className={styles.btnSecondary} type="button" onClick={() => setShowRegenConfirm(false)}>
-                  No
+                  Cancel
                 </button>
                 <button
                   className={styles.button}
                   type="button"
-                  onClick={async () => {
+                  onClick={() => {
                     setShowRegenConfirm(false);
-                    setBody("");
-                    setMetaTitle("");
-                    setMetaDesc("");
-                    setGeneratedImageUrl("");
-                    await doGenerate();
+                    startGenerateFlow({ regenerate: true });
                   }}
                 >
-                  Yes, generate new
+                  Regenerate with new guardrails
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showWpSyncConfirm ? (
+          <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Sync from WordPress">
+            <div className={styles.modalPanel}>
+              <div className={styles.modalHead}>
+                <div className={styles.modalTitle}>Sync from WordPress?</div>
+              </div>
+              <div className={styles.modalBody}>
+                <p style={{ margin: 0, lineHeight: 1.55 }}>
+                  You have unsaved edits in Riviso. Syncing will replace the title, body, SEO fields, and live URL with
+                  the current version on WordPress.
+                </p>
+              </div>
+              <div className={styles.modalFooter}>
+                <button className={styles.btnSecondary} type="button" onClick={() => setShowWpSyncConfirm(false)}>
+                  Cancel
+                </button>
+                <button
+                  className={styles.button}
+                  type="button"
+                  onClick={() => {
+                    setShowWpSyncConfirm(false);
+                    void syncFromWordPress({ force: true });
+                  }}
+                >
+                  Sync and overwrite
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {showIntegrityModal ? (
+          <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Integrity comparison">
+            <div className={styles.modalPanel} style={{ maxWidth: 1100, width: "min(96vw, 1100px)" }}>
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>Review humanized changes</h3>
+                <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowIntegrityModal(false)}>
+                  ×
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                <p className={styles.muted} style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5 }}>
+                  Green highlights show rewritten text. Click <strong>Apply to editor</strong> before copying the full
+                  article so every paragraph is updated—not only the flagged sections.
+                </p>
+                <IntegrityHumanizeCompare
+                  original={integrityOriginal || body}
+                  humanized={integrityHumanized || body}
+                  rewritten={integrityRewritten}
+                  aiBefore={integrityAiBefore}
+                  aiAfter={integrityAiAfter}
+                />
+              </div>
+              <div className={styles.modalFooter}>
+                <button className={styles.btnSecondary} type="button" onClick={() => setShowIntegrityModal(false)}>
+                  Cancel
+                </button>
+                <button
+                  className={styles.button}
+                  type="button"
+                  disabled={!integrityHumanized?.trim()}
+                  onClick={() => {
+                    const next = (integrityHumanized || "").trim();
+                    if (!next) return;
+                    setHighlightAi(false);
+                    setBody(next);
+                    setEditorRevision((k) => k + 1);
+                    applyIntegrityResult(auditMarkdown(next), { autoHighlight: false });
+                    setShowIntegrityModal(false);
+                    setNotice("Humanized article applied to the editor.");
+                    void api
+                      .updateArticle(
+                        params.projectId,
+                        params.articleId,
+                        {
+                          title,
+                          keywords: kwFromString(keywords),
+                          focus_keyphrase: focus,
+                          article: next,
+                          meta_title: metaTitle,
+                          meta_description: metaDesc,
+                        },
+                        { skipGlobalLoading: true, timeoutMs: 30_000 },
+                      )
+                      .then((updated) => {
+                        setArticle(updated);
+                        setEditorBaseline(
+                          baselineFromFields({
+                            title,
+                            keywords,
+                            focus,
+                            body: next,
+                            metaTitle,
+                            metaDesc,
+                            imageUrl: generatedImageUrl,
+                          }),
+                        );
+                      })
+                      .catch((e) => {
+                        setEditorBaseline((prev) => (prev ? { ...prev, body: next } : prev));
+                        if (e instanceof Error) setError(e.message);
+                      });
+                  }}
+                >
+                  Apply to editor
                 </button>
               </div>
             </div>
@@ -885,20 +2091,37 @@ export default function ArticleEditPage() {
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Regenerate featured image">
             <div className={styles.modalPanel} style={{ maxWidth: 520 }}>
               <div className={styles.modalHead}>
-                <h3 className={styles.modalTitle}>Regenerate featured image</h3>
+                <h3 className={styles.modalTitle}>
+                  {hasFeaturedImage ? "Regenerate featured image" : "Generate featured image"}
+                </h3>
                 <button
                   type="button"
                   className={styles.iconButton}
                   aria-label="Close"
+                  disabled={imageRegenBusy}
                   onClick={() => setShowImageRegenModal(false)}
                 >
                   ×
                 </button>
               </div>
               <div className={styles.modalBody} style={{ display: "grid", gap: 14 }}>
+                {imageRegenBusy ? (
+                  <div className={editorStyles.imageGenerating} style={{ minHeight: 120 }}>
+                    <div className={editorStyles.imageSpinner} aria-hidden="true" />
+                    <div className={editorStyles.imageGeneratingTitle}>
+                      {imageGenPhase === "saving" ? "Saving featured image…" : "Generating with OpenAI…"}
+                    </div>
+                    <div className={editorStyles.imageGeneratingHint}>
+                      {imageGenPhase === "saving"
+                        ? "Writing to storage."
+                        : "This usually takes 30–90 seconds. Please keep this tab open."}
+                    </div>
+                  </div>
+                ) : (
+                  <>
                 <p className={styles.muted} style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>
-                  Choose a saved image prompt or enter a one-time custom prompt. Custom prompts are not saved to your
-                  project prompt list.
+                  Choose a saved image prompt or enter a one-time custom prompt. If no saved prompt is selected, Riviso
+                  uses your brand/niche defaults. Custom prompts are not saved to your project prompt list.
                 </p>
                 <label className={styles.label} style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
                   <input
@@ -915,15 +2138,12 @@ export default function ArticleEditPage() {
                     value={regenPromptId}
                     onChange={(e) => setRegenPromptId(e.target.value)}
                   >
-                    {(imagePrompts?.items || []).length ? (
-                      imagePrompts!.items.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name || p.id}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">No image prompts — add one in project settings</option>
-                    )}
+                    <option value="">Default (brand + niche)</option>
+                    {(imagePrompts?.items || []).map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name || p.id}
+                      </option>
+                    ))}
                   </select>
                 ) : null}
                 <label className={styles.label} style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
@@ -944,9 +2164,11 @@ export default function ArticleEditPage() {
                     placeholder="Describe the image you want for this article only…"
                   />
                 ) : null}
+                  </>
+                )}
               </div>
               <div className={styles.modalFooter}>
-                <button className={styles.btnSecondary} type="button" onClick={() => setShowImageRegenModal(false)}>
+                <button className={styles.btnSecondary} type="button" disabled={imageRegenBusy} onClick={() => setShowImageRegenModal(false)}>
                   Cancel
                 </button>
                 <button
@@ -954,7 +2176,7 @@ export default function ArticleEditPage() {
                   type="button"
                   disabled={
                     imageRegenBusy ||
-                    (regenPromptSource === "saved" && !regenPromptId) ||
+                    (regenPromptSource === "custom" && regenCustomPrompt.trim().length > 0 && regenCustomPrompt.trim().length < 10) ||
                     (regenPromptSource === "custom" && !regenCustomPrompt.trim())
                   }
                   onClick={() =>
@@ -965,7 +2187,13 @@ export default function ArticleEditPage() {
                     )
                   }
                 >
-                  {imageRegenBusy ? "Regenerating…" : "Regenerate image"}
+                  {imageRegenBusy
+                    ? hasFeaturedImage
+                      ? "Regenerating…"
+                      : "Generating…"
+                    : hasFeaturedImage
+                      ? "Regenerate image"
+                      : "Generate image"}
                 </button>
               </div>
             </div>
@@ -1050,7 +2278,10 @@ export default function ArticleEditPage() {
           <div className={editorStyles.sidebarCol}>
             <div className={editorStyles.sectionCard}>
               <h2 className={editorStyles.sectionTitle}>Prompts</h2>
-              {!editorLocked && !writingPrompts && !imagePrompts ? (
+              {contentLoading ? (
+                <ArticleEditorSkeleton />
+              ) : null}
+              {!contentLoading && !editorLocked && !writingPrompts && !imagePrompts ? (
                 <div className={styles.row}>
                   <button className={styles.btnSecondary} type="button" onClick={ensurePromptsLoaded} disabled={promptsLoading}>
                     {promptsLoading ? "Loading prompts…" : "Load prompts"}
@@ -1061,6 +2292,8 @@ export default function ArticleEditPage() {
                 </div>
               ) : null}
 
+              {!contentLoading ? (
+              <>
               <label className={styles.label}>
                 Writing prompt
                 <select className={styles.input} value={writingPromptId} onChange={(e) => setWritingPromptId(e.target.value)} disabled={editorLocked}>
@@ -1098,18 +2331,67 @@ export default function ArticleEditPage() {
                 </select>
               </label>
 
+              {isShopifyProject ? (
+                <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "8px 0 0" }}>
+                  {hasGeneratedContent ? (
+                    <>
+                      Use <strong>Regenerate</strong> to apply the latest guardrails and optionally remap active products.
+                    </>
+                  ) : (
+                    <>
+                      Click <strong>Generate</strong> to choose active products to weave into content and the featured image.
+                    </>
+                  )}
+                </p>
+              ) : isWordPressProject ? (
+                <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "8px 0 0" }}>
+                  {hasGeneratedContent ? (
+                    <>
+                      Use <strong>Regenerate</strong> to apply the latest guardrails and optionally remap synced site pages.
+                    </>
+                  ) : (
+                    <>
+                      Click <strong>Generate</strong> to map posts from your site map for internal links and optional hero-image
+                      reference.
+                    </>
+                  )}
+                </p>
+              ) : hasGeneratedContent ? (
+                <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "8px 0 0" }}>
+                  <strong>Regenerate</strong> replaces this draft with new content using the latest human-writing guardrails.
+                </p>
+              ) : null}
+
               <div className={editorStyles.fieldActions}>
-                <button className={styles.button} type="button" onClick={generate} disabled={editorLocked}>
-                  Generate
-                </button>
+                {!hasGeneratedContent ? (
+                  <button className={styles.button} type="button" onClick={() => void generate()} disabled={editorLocked}>
+                    Generate
+                  </button>
+                ) : (
+                  <button
+                    className={styles.button}
+                    type="button"
+                    onClick={() => void generate()}
+                    disabled={editorLocked}
+                    title="Replace article with a new draft using latest human-writing guardrails"
+                  >
+                    Regenerate
+                  </button>
+                )}
                 <button className={styles.button} type="button" onClick={save} disabled={editorLocked}>
                   Save
                 </button>
               </div>
+              </>
+              ) : null}
             </div>
 
             <div className={editorStyles.sectionCard}>
               <h2 className={editorStyles.sectionTitle}>SEO</h2>
+              {contentLoading ? (
+                <ArticleEditorSkeleton />
+              ) : (
+              <>
               <label className={styles.label}>
                 Title
                 <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
@@ -1164,18 +2446,49 @@ export default function ArticleEditPage() {
                   />
                 </div>
               </div>
+              </>
+              )}
             </div>
 
           </div>
 
           <div className={editorStyles.contentCol}>
             <div className={`${editorStyles.contentCard} ${styles.articleEditorCard}`}>
-              <h2 className={editorStyles.sectionTitlePrimary}>Article content</h2>
+              <h2 className={editorStyles.sectionTitlePrimary}>
+                Article content
+                {bodyLoading ? (
+                  <span className={styles.muted} style={{ fontSize: 12, fontWeight: 500, marginLeft: 10 }}>
+                    Loading body…
+                  </span>
+                ) : null}
+              </h2>
               <div className={editorStyles.contentCardBody}>
-                {editorLocked ? (
-                  <ArticleReadonlyBody markdown={body} />
+                {bodyLoading ? (
+                  <ArticleEditorSkeleton bodyOnly />
+                ) : editorLocked ? (
+                  highlightAi && body.trim() ? (
+                    <ArticleIntegrityBody markdown={body} flaggedIndices={flaggedIndices} />
+                  ) : (
+                    <ArticleReadonlyBody key={editorRevision} markdown={body} />
+                  )
                 ) : (
-                  <ArticleRichEditor value={body} onChange={setBody} />
+                  <>
+                    <ArticleRichEditor
+                      key={editorRevision}
+                      contentRevision={editorRevision}
+                      value={body}
+                      onChange={setBody}
+                    />
+                    {highlightAi && body.trim() ? (
+                      <div className={styles.integrityHighlightPanel}>
+                        <p className={styles.integrityHighlightBanner} style={{ marginTop: 12 }}>
+                          Flagged passages below use the same layout as your article. Keep editing above; uncheck the
+                          sidebar toggle to hide this preview.
+                        </p>
+                        <ArticleIntegrityBody markdown={body} flaggedIndices={flaggedIndices} />
+                      </div>
+                    ) : null}
+                  </>
                 )}
               </div>
               {showUpdateWordPress && hasPendingWpChanges ? (
@@ -1190,12 +2503,136 @@ export default function ArticleEditPage() {
 
           <div className={editorStyles.sidebarCol}>
             <div className={editorStyles.sectionCard}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <h2 className={editorStyles.sectionTitle} style={{ marginBottom: 0 }}>
+                  Integrity
+                </h2>
+                <button
+                  type="button"
+                  className={styles.btnSecondary}
+                  onClick={() => {
+                    setIntegrityLoading(true);
+                    void api
+                      .auditArticleIntegrity(params.projectId, params.articleId, body, { timeoutMs: 8_000 })
+                      .then((res) => applyIntegrityResult(res))
+                      .finally(() => setIntegrityLoading(false));
+                  }}
+                  disabled={integrityLoading || !body.trim()}
+                  title={!body.trim() ? "Generate or add article content to audit integrity" : "Re-run integrity audit"}
+                >
+                  {integrityLoading ? "Auditing…" : "Re-audit"}
+                </button>
+              </div>
+
+              {bodyLoading ? (
+                <ArticleEditorIntegritySkeleton />
+              ) : (
+              <>
+              <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+                <IntegrityRing value={100 - aiPct} label="Human score" />
+                <IntegrityRing value={aiPct} label="AI risk" />
+              </div>
+
+              <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+                <label className={styles.label} style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={highlightAi}
+                    onChange={(e) => setHighlightAi(e.target.checked)}
+                    disabled={!body.trim()}
+                  />
+                  Highlight AI-like content in article
+                </label>
+
+                {highlightAi && flaggedParagraphs.length ? (
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {flaggedParagraphs.slice(0, 4).map((p) => (
+                      <div key={p.index} style={{ padding: 10, borderRadius: 10, border: "1px solid rgba(255,255,255,0.10)", background: "rgba(217,119,87,0.06)" }}>
+                        <div style={{ fontSize: 12, fontWeight: 800, color: "rgba(255,255,255,0.85)" }}>Paragraph {p.index + 1}</div>
+                        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.62)", marginTop: 6, lineHeight: 1.45 }}>{p.reason}</div>
+                        {(p.signals as IntegritySignal[] | undefined)?.slice(0, 2).map((sig) => (
+                          <div key={`${p.index}-${sig.label}`} style={{ marginTop: 8, fontSize: 11, lineHeight: 1.4, color: "rgba(255,255,255,0.55)" }}>
+                            <strong style={{ color: "rgba(255,255,255,0.75)" }}>{sig.label}:</strong> {sig.detail}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    {flaggedParagraphs.length > 4 ? (
+                      <div className={styles.muted} style={{ fontSize: 12 }}>
+                        +{flaggedParagraphs.length - 4} more flagged paragraphs
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                <button
+                  type="button"
+                  className={`${styles.button} ${canHumanize ? styles.wpUpdateButtonActive : ""}`}
+                  onClick={() => void runHumanization()}
+                  disabled={humanizeBusy || !body.trim() || !canHumanize}
+                  title={
+                    !canHumanize
+                      ? "Add more article content to humanize"
+                      : "Paraphrase the entire article (all industries)"
+                  }
+                >
+                  {humanizeBusy ? "Humanizing…" : isPublishedArticle ? "Humanize →" : "Apply Structural Humanization"}
+                </button>
+                {isPublishedArticle && canHumanize ? (
+                  <p className={styles.muted} style={{ fontSize: 12, margin: 0, lineHeight: 1.45 }}>
+                    Works on published articles. Review changes in the comparison modal, apply to the editor, then use
+                    Update article to push to WordPress.
+                  </p>
+                ) : null}
+              </div>
+              </>
+              )}
+            </div>
+
+            <div className={editorStyles.sectionCard}>
               <h2 className={editorStyles.sectionTitle}>Featured image</h2>
               <div className={styles.articleImageFrame}>
-                {generateImage ? (
+                {showFeaturedImageSkeleton ? (
+                  <div className={editorStyles.imageSkeleton} aria-live="polite" aria-busy="true">
+                    <div className={editorStyles.imageSkeletonShimmer} aria-hidden="true" />
+                    <div className={editorStyles.imageSkeletonPulse} aria-hidden="true" />
+                    <div className={editorStyles.imageSkeletonBars} aria-hidden="true">
+                      <span />
+                      <span />
+                      <span />
+                    </div>
+                    <div className={editorStyles.imageSkeletonContent}>
+                      {imageRegenBusy ? (
+                        <>
+                          <div className={editorStyles.imageSpinner} aria-hidden="true" />
+                          <div className={editorStyles.imageGeneratingTitle}>
+                            {imageGenPhase === "saving" ? "Saving featured image…" : "Generating featured image…"}
+                          </div>
+                          <div className={editorStyles.imageGeneratingHint}>
+                            {imageGenPhase === "saving"
+                              ? "Writing to storage. You can keep editing the article."
+                              : "OpenAI is creating your image (30–90s). The rest of the editor stays available."}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className={editorStyles.imageSpinner} aria-hidden="true" />
+                          <div className={editorStyles.imageGeneratingTitle}>Loading featured image…</div>
+                          <div className={editorStyles.imageGeneratingHint}>
+                            Retrieving your saved image from storage.
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ) : generateImage ? (
                   generatedImageUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={generatedImageUrl} alt="Generated preview" className={styles.articleImage} />
+                    <LazyArticleImage src={generatedImageUrl} alt="Generated preview" className={styles.articleImage} />
+                  ) : featuredImageLoadFailed ? (
+                    <div className={editorStyles.imagePlaceholder}>
+                      Saved featured image could not be loaded.
+                      <div style={{ marginTop: 6 }}>Use &ldquo;Regenerate featured image&rdquo; to create a new one.</div>
+                    </div>
                   ) : (
                     <div className={editorStyles.imagePlaceholder}>
                       Image will be generated using the selected (or default) image prompt.
@@ -1203,8 +2640,7 @@ export default function ArticleEditPage() {
                     </div>
                   )
                 ) : uploadedImagePreview ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={uploadedImagePreview} alt="Uploaded preview" className={styles.articleImage} />
+                  <LazyArticleImage src={uploadedImagePreview} alt="Uploaded preview" className={styles.articleImage} />
                 ) : (
                   <div className={editorStyles.imagePlaceholder}>No image selected.</div>
                 )}
@@ -1226,17 +2662,27 @@ export default function ArticleEditPage() {
                   <button
                     className={styles.btnSecondary}
                     type="button"
-                    onClick={openImageRegenModal}
-                    disabled={imageRegenBusy || !canRegenerateFeaturedImage}
+                    onClick={handleFeaturedImageButtonClick}
+                    disabled={imageRegenBusy || !canFeaturedImageAction}
                     title={
-                      !canRegenerateFeaturedImage
-                        ? imageRegenExhausted
+                      !canFeaturedImageAction
+                        ? imageRegenExhausted && hasFeaturedImage
                           ? "The max featured image regeneration limit is exhausted for this article."
-                          : "Generate an article image first."
-                        : "Regenerate only the featured image using a saved or one-time custom prompt."
+                          : !hasGeneratedContent
+                            ? "Generate article content first."
+                            : "Enable “Generate image” (Yes) to create a featured image."
+                        : hasFeaturedImage
+                          ? "Regenerate only the featured image using a saved or one-time custom prompt."
+                          : "Generate the featured image using a saved or one-time custom prompt."
                     }
                   >
-                    {imageRegenBusy ? "Regenerating image…" : "Regenerate featured image"}
+                    {imageRegenBusy
+                      ? hasFeaturedImage
+                        ? "Regenerating image…"
+                        : "Generating image…"
+                      : hasFeaturedImage
+                        ? "Regenerate featured image"
+                        : "Generate featured image"}
                   </button>
                   {imageRegenExhausted ? (
                     <div className={styles.error} style={{ fontSize: 12 }}>
@@ -1261,113 +2707,285 @@ export default function ArticleEditPage() {
             <div className={editorStyles.sectionCard}>
               <div className={editorStyles.wpCardHead}>
                 <div>
-                  <h2 className={editorStyles.sectionTitlePrimary}>WordPress</h2>
+                  <h2 className={editorStyles.sectionTitlePrimary}>{isShopifyProject ? "Shopify" : "WordPress"}</h2>
                   <p className={editorStyles.wpCardDesc}>
-                    {isScheduledArticle
-                      ? "This article is scheduled. Update is available after it is published live on WordPress."
-                      : showUpdateWordPress
-                        ? "Push edits to your live WordPress post when you change text or the featured image."
-                        : showPublishWordPress
-                          ? "Publish when the article is ready (draft or pending — not yet live on WordPress)."
-                          : "WordPress actions depend on article status."}
+                    {isShopifyProject
+                      ? shopifyLink
+                        ? "This article is on Shopify. Change content here and post again, or open the live link below."
+                        : "Post directly to your Shopify blog as a draft or published article."
+                      : isScheduledArticle
+                        ? "This article is scheduled. Update is available after it is published live on WordPress."
+                        : showUpdateWordPress
+                          ? "Push edits to your live WordPress post when you change text or the featured image."
+                          : showPublishWordPress
+                            ? "Publish when the article is ready (draft or pending — not yet live on WordPress)."
+                            : "WordPress actions depend on article status."}
                   </p>
                 </div>
                 <div className={editorStyles.wpActions}>
-                  {showUpdateWordPress ? (
-                    <button
-                      className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`}
-                      type="button"
-                      onClick={updateWordPressPost}
-                      disabled={!canUpdateWordPress}
-                      title={
-                        !hasPendingWpChanges
-                          ? "Edit the article or regenerate the featured image to enable update"
-                          : !websiteConnected
-                            ? "Connect WordPress in project settings"
-                            : "Save changes to your live WordPress post"
-                      }
-                    >
-                      {wpUpdateBusy ? "Updating…" : "Update article"}
-                    </button>
-                  ) : null}
-                  {showPublishWordPress ? (
-                    <button className={styles.button} type="button" onClick={publishToLiveSite} disabled={!canPublish}>
-                      Publish
-                    </button>
-                  ) : null}
+                  {isShopifyProject ? (
+                    <>
+                      <button
+                        className={styles.button}
+                        type="button"
+                        onClick={() => void publishToShopify()}
+                        disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}
+                        title={
+                          !shopifyBlogsAvailable
+                            ? "Sync catalog to load blogs first"
+                            : !shopifyCanPublish
+                              ? "Connect Shopify and grant write_content scope"
+                              : shopifyPublishNow
+                                ? "Publish live on Shopify"
+                                : "Save as draft on Shopify"
+                        }
+                      >
+                        {shopifyPublishBusy
+                          ? "Posting…"
+                          : shopifyPublishNow
+                            ? "Publish to Shopify"
+                            : "Save Shopify draft"}
+                      </button>
+                      <button className={styles.btnSecondary} type="button" onClick={copyArticleMarkdown} disabled={!body.trim()}>
+                        Copy markdown
+                      </button>
+                      <button
+                        className={styles.btnSecondary}
+                        type="button"
+                        onClick={copyArticleTitleAndMarkdown}
+                        disabled={!body.trim() && !(title || article?.title || "").trim()}
+                      >
+                        Copy title + markdown
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {showUpdateWordPress ? (
+                        <button
+                          className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`}
+                          type="button"
+                          onClick={updateWordPressPost}
+                          disabled={!canUpdateWordPress}
+                          title={
+                            !websiteConnected
+                              ? "Connect WordPress in project settings"
+                              : "Push the current article (title, body, SEO, image, categories) to WordPress"
+                          }
+                        >
+                          {wpUpdateBusy ? "Updating…" : "Update"}
+                        </button>
+                      ) : showPublishWordPress ? (
+                        <button
+                          className={styles.button}
+                          type="button"
+                          onClick={publishToLiveSite}
+                          disabled={!canPublish || wpPushBusy}
+                          title={
+                            !websiteConnected
+                              ? "Connect WordPress in project settings"
+                              : "Publish this article to WordPress"
+                          }
+                        >
+                          {wpPublishBusy ? "Publishing…" : "Publish"}
+                        </button>
+                      ) : null}
+                    </>
+                  )}
                 </div>
               </div>
-              {showUpdateWordPress && hasPendingWpChanges && !canUpdateWordPress && websiteConnected ? (
-                <div className={styles.muted} style={{ fontSize: 12, marginTop: 10 }}>
-                  Add a title and body content to enable update.
-                </div>
-              ) : null}
 
-              {!editorLocked && !wpPostTypes.length && !wpCategories.length ? (
-                <div className={styles.row} style={{ paddingTop: 10 }}>
-                  <button className={styles.btnSecondary} type="button" onClick={ensureWpMetaLoaded} disabled={wpMetaLoading}>
-                    {wpMetaLoading ? "Loading…" : "Load WordPress settings"}
-                  </button>
+              {isShopifyProject ? (
+                <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                  {shopifyLink ? (
+                    <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
+                      Live on Shopify:{" "}
+                      <a href={shopifyLink} target="_blank" rel="noreferrer" style={{ color: "rgba(217,119,87,0.95)" }}>
+                        {shopifyLink}
+                      </a>
+                    </div>
+                  ) : null}
                   <div className={styles.muted} style={{ fontSize: 12 }}>
-                    Optional. Defaults will be used if not loaded.
+                    Store: <strong>{(projectSettings?.shopify_shop || shopifyStatus?.shop || "Not set").toString()}</strong>
+                    {" · "}
+                    <strong>{websiteConnected ? "Connected" : "Not connected"}</strong>
                   </div>
-                </div>
-              ) : null}
-
-              {wpPostTypes.length || wpCategories.length ? (
-                <>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
+                  {shopifyStatus?.setup_hint ? (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                        padding: "10px 12px",
+                        borderRadius: 8,
+                        border: "1px solid color-mix(in oklab, #e6b422, transparent 45%)",
+                        background: "color-mix(in oklab, #e6b422 8%, transparent)",
+                      }}
+                    >
+                      {shopifyStatus.setup_hint}
+                      {shopifyStatus.needs_reauthorize ? (
+                        <>
+                          {" "}
+                          <Link href={`/projects/${params.projectId}?tab=project_settings`}>Project settings → Shopify</Link>
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {(shopifyStatus?.granted_scopes || []).length > 0 ? (
+                    <div className={styles.muted} style={{ fontSize: 11 }}>
+                      Token: {(shopifyStatus?.granted_scopes || []).map((s) => (
+                        <code key={s} style={{ marginRight: 6 }}>
+                          {s}
+                          {s === "read_products" || s === "write_content" ? " ✓" : ""}
+                        </code>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label className={styles.label}>
-                      Post type
-                      <select className={styles.input} value={wpPostType} onChange={(e) => setWpPostType(e.target.value)} disabled={editorLocked}>
-                        <option value="posts">Posts</option>
-                        {wpPostTypes
-                          .filter((t) => t.rest_base && t.rest_base !== "posts")
-                          .map((t) => (
-                            <option key={t.rest_base} value={t.rest_base}>
-                              {t.name || t.rest_base}
+                      Target blog
+                      <select
+                        className={styles.input}
+                        value={shopifyBlogId == null ? "" : String(shopifyBlogId)}
+                        onChange={(e) => setShopifyBlogId(e.target.value ? Number(e.target.value) : null)}
+                        disabled={!shopifyBlogsAvailable}
+                      >
+                        <option value="">Select blog…</option>
+                        {(shopifyCatalog?.blogs || []).map((b) => (
+                          <option key={String(b?.id)} value={String(b?.id || "")}>
+                            {formatShopifyBlogOptionLabel(b)}
+                          </option>
+                        ))}
+                      </select>
+                      <span className={styles.muted} style={{ fontSize: 11, display: "block", marginTop: 6, lineHeight: 1.45 }}>
+                        {SHOPIFY_BLOG_CHANNEL_HELP}
+                      </span>
+                    </label>
+                    <label className={styles.label}>
+                      Post status
+                      <select
+                        className={styles.input}
+                        value={shopifyPublishNow ? "publish" : "draft"}
+                        onChange={(e) => setShopifyPublishNow(e.target.value === "publish")}
+                      >
+                        <option value="draft">Draft on Shopify</option>
+                        <option value="publish">Published (live)</option>
+                      </select>
+                    </label>
+                  </div>
+                  {!shopifyBlogsAvailable ? (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        className={styles.btnSecondary}
+                        onClick={() => void syncShopifyCatalogFromEditor()}
+                        disabled={shopifyCatalogSyncing || !websiteConnected}
+                      >
+                        {shopifyCatalogSyncing ? "Syncing…" : "Sync blogs from Shopify"}
+                      </button>
+                      <span className={styles.muted} style={{ fontSize: 12 }}>
+                        Requires <code>read_content</code>
+                        {shopifyMissingPublishScopes.includes("write_content") ? " and `write_content` to post" : ""}.
+                      </span>
+                    </div>
+                  ) : null}
+                  {shopifyProductAware ? (
+                    <div className={styles.muted} style={{ fontSize: 12 }}>
+                      Product-aware generation is on — map products when generating from Research or cluster modals.
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                  {showUpdateWordPress && hasPendingWpChanges ? (
+                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 10 }}>
+                      You have unsaved edits in the editor — Update will push the latest content to WordPress.
+                    </div>
+                  ) : null}
+
+                  {wpMetaLoading && !wpPostTypes.length && !wpCategories.length ? (
+                    <div className={editorStyles.wpMetaLoading} style={{ marginTop: 12 }}>
+                      <div className={editorStyles.imageSpinner} aria-hidden="true" />
+                      <span>Loading WordPress settings…</span>
+                    </div>
+                  ) : null}
+
+                  {wpMetaError && !wpPostTypes.length && !wpCategories.length ? (
+                    <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                      <div className={styles.error} style={{ fontSize: 12 }}>
+                        {wpMetaError}
+                      </div>
+                      <button
+                        className={styles.btnSecondary}
+                        type="button"
+                        onClick={() => void ensureWpMetaLoaded({ force: true })}
+                        disabled={wpMetaLoading}
+                      >
+                        Retry WordPress settings
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {!wpMetaLoading && !wpMetaError && !wpPostTypes.length && !wpCategories.length && websiteConnected ? (
+                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 10 }}>
+                      Using project defaults for post type and categories until WordPress settings load.
+                    </div>
+                  ) : null}
+
+                  {wpPostTypes.length || wpCategories.length ? (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
+                        <label className={styles.label}>
+                          Post type
+                          <select className={styles.input} value={wpPostType} onChange={(e) => setWpPostType(e.target.value)} disabled={editorLocked}>
+                            <option value="posts">Posts</option>
+                            {wpPostTypes
+                              .filter((t) => t.rest_base && t.rest_base !== "posts")
+                              .map((t) => (
+                                <option key={t.rest_base} value={t.rest_base}>
+                                  {t.name || t.rest_base}
+                                </option>
+                              ))}
+                          </select>
+                        </label>
+
+                        <label className={styles.label}>
+                          Status
+                          <select className={styles.input} value={wpStatus} onChange={(e) => setWpStatus(e.target.value as "draft" | "publish")} disabled={editorLocked}>
+                            <option value="draft">Draft</option>
+                            <option value="publish">Publish</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <label className={styles.label} style={{ marginTop: 10 }}>
+                        Categories
+                        <select
+                          className={styles.input}
+                          multiple
+                          value={wpCategoryIds.map(String)}
+                          onChange={(e) => {
+                            const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
+                            setWpCategoryIds(ids);
+                          }}
+                          style={{ minHeight: 120 }}
+                          disabled={editorLocked}
+                        >
+                          {wpCategories.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name}
                             </option>
                           ))}
-                      </select>
-                    </label>
-
-                    <label className={styles.label}>
-                      Status
-                      <select className={styles.input} value={wpStatus} onChange={(e) => setWpStatus(e.target.value as "draft" | "publish")} disabled={editorLocked}>
-                        <option value="draft">Draft</option>
-                        <option value="publish">Publish</option>
-                      </select>
-                    </label>
-                  </div>
-
-                  <label className={styles.label} style={{ marginTop: 10 }}>
-                    Categories
-                    <select
-                      className={styles.input}
-                      multiple
-                      value={wpCategoryIds.map(String)}
-                      onChange={(e) => {
-                        const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
-                        setWpCategoryIds(ids);
-                      }}
-                      style={{ minHeight: 120 }}
-                      disabled={editorLocked}
-                    >
-                      {wpCategories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                      Hold Cmd/Ctrl to select multiple categories.
+                        </select>
+                        <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                          Hold Cmd/Ctrl to select multiple categories.
+                        </div>
+                      </label>
+                    </>
+                  ) : (
+                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 12 }}>
+                      Publishing will use defaults unless you load WordPress settings.
                     </div>
-                  </label>
+                  )}
                 </>
-              ) : (
-                <div className={styles.muted} style={{ fontSize: 12, marginTop: 12 }}>
-                  Publishing will use defaults unless you load WordPress settings.
-                </div>
               )}
             </div>
           </div>

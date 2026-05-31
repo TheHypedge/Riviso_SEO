@@ -6,7 +6,28 @@ from pydantic import BaseModel, Field
 class ProjectSettingsPublic(BaseModel):
     id: str
     name: str
+    platform: str = "wordpress"
     website_url: str | None = None
+    shopify_shop: str | None = None
+    shopify_connected: bool = False
+    shopify_client_id: str | None = None
+    shopify_client_secret_set: bool = False
+    shopify_access_token_set: bool = False
+    shopify_access_token: str | None = Field(
+        default=None,
+        description="Resolved Admin API token (shpat_); refreshed via client credentials when expired.",
+    )
+    shopify_verified_at: str | None = None
+    shopify_verified_status: str | None = None
+    shopify_verified_message: str | None = None
+    shopify_product_aware_enabled: bool = Field(
+        default=False,
+        description="When true, Shopify projects inject product context into generation prompts.",
+    )
+    wp_internal_link_aware_enabled: bool = Field(
+        default=False,
+        description="When true, WordPress projects inject site-map page context into generation prompts.",
+    )
     wp_site_url: str | None = None
     wp_username: str | None = None
     wp_app_password_set: bool = False
@@ -49,6 +70,12 @@ class ProjectSettingsUpdate(BaseModel):
     default_wp_category_ids: list[int] | None = None
     gsc_property_url: str | None = Field(default=None, max_length=2048)
     gsc_index_on_publish: bool | None = None
+    shopify_product_aware_enabled: bool | None = None
+    wp_internal_link_aware_enabled: bool | None = None
+    shopify_shop: str | None = Field(default=None, max_length=2048)
+    shopify_client_id: str | None = Field(default=None, max_length=256)
+    shopify_client_secret: str | None = Field(default=None, max_length=5000)
+    shopify_access_token: str | None = Field(default=None, max_length=5000)
 
 
 class WordpressVerifyRequest(BaseModel):

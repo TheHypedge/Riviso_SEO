@@ -6,6 +6,10 @@ from typing import Any
 
 from app.core.config import settings
 from app.services.openai_client import OpenAIClient
+from app.services.title_humanization_guardrail import (
+    apply_research_idea_title_guardrails,
+    format_research_curation_title_guardrail_system_appendix,
+)
 
 
 def _clamp_list(xs: list[str], n: int) -> list[str]:
@@ -66,6 +70,7 @@ async def generate_research_ideas(
         "- keywords should be 5-10 supporting terms (no duplicates).\n"
         "- Keep titles concise (<= 90 chars) and clear.\n"
         "- Prefer high-intent, high-clarity, non-clickbait phrasing.\n"
+        + format_research_curation_title_guardrail_system_appendix(serp_blobs=serp_trim)
     )
 
     user = {
@@ -140,6 +145,7 @@ async def generate_research_ideas(
         )
         if len(out) >= max_ideas_i:
             break
+    out = apply_research_idea_title_guardrails(out, seed_keywords=seeds)
     ka = obj.get("keyword_analysis")
     if not isinstance(ka, dict):
         ka = None
