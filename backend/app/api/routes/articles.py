@@ -19,8 +19,6 @@ For bulk upload, the API applies two phases:
    ``skip_project_duplicate_conflicts`` is true (client confirms importing only non-conflicting rows).
 """
 
-from __future__ import annotations
-
 import time
 import uuid
 import base64
