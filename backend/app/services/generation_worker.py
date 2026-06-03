@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from typing import Any
 
 from app.core.config import settings
 from app.legacy.storage import get_legacy_storage_module
@@ -108,6 +109,17 @@ async def _handle_scheduled_prep(payload: dict) -> None:
         await clear_dedup(dedup)
 
 
+async def _persist_article_generation_error(st: Any, aid: str, err_msg: str) -> None:
+    """Persist generation error to the article document so the polling endpoint surfaces it quickly."""
+    try:
+        if hasattr(st, "patch_article_fields"):
+            await run_sync(st.patch_article_fields, aid, {"generation_error": err_msg[:500]})
+        elif hasattr(st, "update_article_fields"):
+            await run_sync(st.update_article_fields, aid, {"generation_error": err_msg[:500]})
+    except Exception:
+        pass
+
+
 async def _handle_article_generate(payload: dict) -> None:
     st = get_legacy_storage_module()
     pid = (payload.get("project_id") or "").strip()
@@ -126,34 +138,63 @@ async def _handle_article_generate(payload: dict) -> None:
 
     proj = await run_sync(_gen_project_reader(st), pid) if hasattr(st, "get_project_by_id") else None
     if not isinstance(proj, dict):
-        raise RuntimeError("Project not found")
+        err = "Project not found — cannot generate article."
+        await _persist_article_generation_error(st, aid, err)
+        raise RuntimeError(err)
+
+    # Auto-create default prompts so generation doesn't fail with
+    # "No writing prompt selected" on projects that were never configured.
+    try:
+        from app.services.scheduler import _ensure_project_prompt_defaults as _epd
+        proj = await _epd(st, pid, proj)
+    except Exception:
+        pass
 
     row = await run_sync(st.get_article, project_id=pid, article_id=aid)
     if not isinstance(row, dict):
-        raise RuntimeError("Article not found")
+        err = "Article not found — it may have been deleted."
+        await _persist_article_generation_error(st, aid, err)
+        raise RuntimeError(err)
 
     await publish_pipeline_status(aid, MSG_WORKER_START, STAGE_WORKER_START)
 
-    async with generation_slot():
-        mapped_products = payload.get("mapped_products")
-        mapped_products_list = mapped_products if isinstance(mapped_products, list) else None
-        mapped_pages = payload.get("mapped_pages")
-        mapped_pages_list = mapped_pages if isinstance(mapped_pages, list) else None
+    # Clear any previous generation error before starting a fresh attempt.
+    try:
+        if hasattr(st, "patch_article_fields"):
+            await run_sync(st.patch_article_fields, aid, {"generation_error": ""})
+    except Exception:
+        pass
 
-        await execute_article_generation(
-            st=st,
-            user=user,
-            proj=proj,
-            project_id=pid,
-            article_id=aid,
-            row=row,
-            writing_prompt_id=payload.get("writing_prompt_id"),
-            generate_image=bool(payload.get("generate_image", True)),
-            image_prompt_id=payload.get("image_prompt_id"),
-            focus_keyphrase_override=payload.get("focus_keyphrase"),
-            mapped_products=mapped_products_list,
-            mapped_pages=mapped_pages_list,
-        )
+    try:
+        async with generation_slot():
+            mapped_products = payload.get("mapped_products")
+            mapped_products_list = mapped_products if isinstance(mapped_products, list) else None
+            mapped_pages = payload.get("mapped_pages")
+            mapped_pages_list = mapped_pages if isinstance(mapped_pages, list) else None
+
+            await execute_article_generation(
+                st=st,
+                user=user,
+                proj=proj,
+                project_id=pid,
+                article_id=aid,
+                row=row,
+                writing_prompt_id=payload.get("writing_prompt_id"),
+                generate_image=bool(payload.get("generate_image", True)),
+                image_prompt_id=payload.get("image_prompt_id"),
+                focus_keyphrase_override=payload.get("focus_keyphrase"),
+                mapped_products=mapped_products_list,
+                mapped_pages=mapped_pages_list,
+            )
+    except Exception as exc:
+        from fastapi import HTTPException as FastAPIHTTPException
+
+        if isinstance(exc, FastAPIHTTPException):
+            err_msg = str(exc.detail) if isinstance(exc.detail, str) else "Generation failed."
+        else:
+            err_msg = str(exc) or "Generation failed — check server logs."
+        await _persist_article_generation_error(st, aid, err_msg)
+        raise
 
 
 async def _handle_image_regenerate(payload: dict) -> None:

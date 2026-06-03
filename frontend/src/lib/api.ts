@@ -771,6 +771,8 @@ export type ArticleGenerationStatus = {
   has_body: boolean;
   has_featured_image: boolean;
   featured_image_regeneration_count: number;
+  /** Set by the worker when generation fails — surfaced immediately by polling. */
+  generation_error?: string | null;
 };
 
 export type ArticleGenerationWaitOptions = {
@@ -1934,6 +1936,7 @@ export const api = {
       writing_prompt_id: string | null;
       image_prompt_id: string | null;
       generate_image: boolean;
+      user_timezone: string;
     }>,
   ) {
     return apiFetch<ScheduledJobPublic>(`/api/projects/${projectId}/scheduled-jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(patch) });
@@ -2444,6 +2447,10 @@ export const api = {
     await pollWithBackoff(
       () => api.getArticleGenerationStatus(projectId, articleId, pollOpts),
       (status) => {
+        // Surface worker errors immediately instead of polling for 10 minutes.
+        const genErr = (status.generation_error || "").trim();
+        if (genErr) throw new ApiError(genErr, 500, { code: "generation_failed" });
+
         const genAt = (status.generated_at || "").trim();
         const generationFinished =
           status.has_body && (!previousGeneratedAt || !genAt || genAt !== previousGeneratedAt);
@@ -2648,6 +2655,7 @@ export const api = {
       writing_prompt_id?: string | null;
       image_prompt_id?: string | null;
       generate_image?: boolean;
+      user_timezone?: string;
     },
   ) {
     return apiFetch<{ ok: boolean; status: string; message: string; wp_scheduled_at?: string; post_type?: string; wp_status?: string }>(
@@ -2667,6 +2675,7 @@ export const api = {
       writing_prompt_id?: string | null;
       image_prompt_id?: string | null;
       generate_image?: boolean;
+      user_timezone?: string;
     },
   ) {
     return apiFetch<{
@@ -3120,7 +3129,7 @@ export const api = {
     return apiFetch<ResearchIdeasResponse>(`/api/projects/${projectId}/research/ideas`, {
       method: "POST",
       body: JSON.stringify(payload),
-    });
+    }, { timeoutMs: LONG_API_TIMEOUT_MS });
   },
   async adminDeleteUser(userId: string) {
     await apiFetch<unknown>(`/api/admin/users/${userId}`, { method: "DELETE" });

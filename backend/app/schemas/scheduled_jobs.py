@@ -32,6 +32,7 @@ class ScheduledJobUpdate(BaseModel):
     writing_prompt_id: str | None = Field(default=None, max_length=100)
     image_prompt_id: str | None = Field(default=None, max_length=100)
     generate_image: bool | None = None
+    user_timezone: str | None = Field(default=None, max_length=64)
 
 
 class ScheduledJobPostNow(BaseModel):

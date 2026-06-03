@@ -12,7 +12,7 @@ from app.core.deps import get_current_user
 from app.core.project_lookup import async_require_project_access, require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.research import ResearchIdeasRequest, ResearchIdeasResponse
-from app.services.async_operation_dispatch import enqueue_research_ideas_job, should_use_async_queue
+from app.services.async_operation_dispatch import should_use_async_queue  # retained for job-status polling path
 from app.services.plan_gatekeeper import PlanAction, require_plan_action
 from app.services.research_job_runner import (
     build_research_cache_key,
@@ -160,6 +160,8 @@ async def research_ideas(
     _enforce_custom_research_quota(st=st, user=user)
 
     job_payload = {
+        "project_id": project_id,
+        "user_id": (user.get("id") or "").strip(),
         "brand_niche": brand_niche,
         "intent": intent,
         "tone": tone,
@@ -169,37 +171,11 @@ async def research_ideas(
         "max_ideas": max_ideas,
     }
 
-    if should_use_async_queue():
-        if hasattr(st, "set_research_cache"):
-            await run_sync(
-                st.set_research_cache,
-                cache_key=cache_key,
-                value={"status": "queued", "queued_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")},
-            )
-        job_id = enqueue_research_ideas_job(
-            project_id=project_id,
-            user_id=(user.get("id") or "").strip(),
-            cache_key=cache_key,
-            payload=job_payload,
-        )
-        return JSONResponse(
-            status_code=202,
-            content={
-                "ok": True,
-                "status": "queued",
-                "job_id": job_id,
-                "poll_cache_key": cache_key,
-                "message": "Research curation queued. Poll GET /research/ideas/jobs/{cache_key}.",
-            },
-        )
-
-    result = await execute_research_ideas(
-        {
-            "project_id": project_id,
-            "user_id": (user.get("id") or "").strip(),
-            **job_payload,
-        }
-    )
+    # Research always runs synchronously — the user waits for results and the
+    # SERP+LLM pipeline completes in ~10-30s (well within the 120s API timeout).
+    # The async-queue path returned 202 which the frontend cannot poll, causing
+    # ideas to never appear in the UI.
+    result = await execute_research_ideas(job_payload)
     await persist_research_ideas_result(
         project_id=project_id,
         user_id=(user.get("id") or "").strip(),

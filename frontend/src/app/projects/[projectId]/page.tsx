@@ -3092,6 +3092,7 @@ export default function ProjectPage() {
         writing_prompt_id: scheduleWritingPromptId || null,
         image_prompt_id: scheduleImagePromptId || null,
         generate_image: true,
+        user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
       // Optimistic UI update: scheduling should not block on re-fetching large lists,
       // which can time out on production proxies.
@@ -3320,6 +3321,7 @@ export default function ProjectPage() {
     setEditRescheduleBusy(true);
     let savedJobId = editJob.id;
     try {
+      const _userTz = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
       if (isOrphanScheduledJob(editJob)) {
         await api.scheduleArticle(projectId, editJob.article_id, {
           wp_scheduled_at: when,
@@ -3328,6 +3330,7 @@ export default function ProjectPage() {
           writing_prompt_id: editJobWritingPromptId || null,
           image_prompt_id: editJobImagePromptId || null,
           generate_image: editJobGenerateImage,
+          user_timezone: _userTz,
         });
       } else {
         const updated = await api.updateScheduledJob(projectId, savedJobId, {
@@ -3338,6 +3341,7 @@ export default function ProjectPage() {
           writing_prompt_id: editJobWritingPromptId || null,
           image_prompt_id: editJobImagePromptId || null,
           generate_image: editJobGenerateImage,
+          user_timezone: _userTz,
         });
         savedJobId = updated.id || savedJobId;
         setScheduledJobs((prev) => {
@@ -3414,6 +3418,7 @@ export default function ProjectPage() {
         writing_prompt_id: values.writingPromptId || null,
         image_prompt_id: values.imagePromptId || null,
         generate_image: values.generateImage,
+        user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
       };
 
       const res = await api.bulkScheduleArticles(projectId, schedulePayload);
@@ -3511,6 +3516,7 @@ export default function ProjectPage() {
         writing_prompt_id: values.writingPromptId || null,
         image_prompt_id: values.imagePromptId || null,
         generate_image: values.generateImage,
+        user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
       if (res.failed?.length) {
         const first = res.failed[0];

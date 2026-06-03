@@ -346,7 +346,9 @@ async def update_scheduled_job(
             raise HTTPException(status_code=400, detail="Missing schedule time")
 
         try:
-            user_tz = zoneinfo_for_user(user.get("timezone"))
+            # Payload timezone (browser-supplied) takes precedence over stored profile.
+            tz_name = (payload.user_timezone or "").strip() or (user.get("timezone") or "").strip()
+            user_tz = zoneinfo_for_user(tz_name or None)
             dt_utc = parse_schedule_input_to_utc(raw, user_tz=user_tz)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e) or "Invalid schedule time format") from None

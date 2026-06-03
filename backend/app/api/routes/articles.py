@@ -1482,6 +1482,7 @@ async def get_article_generation_status(
         raise_storage_http(e)
     if not isinstance(row, dict):
         raise HTTPException(status_code=404, detail="Not found")
+    gen_err = (row.get("generation_error") or "").strip() or None
     return ArticleGenerationStatusResponse(
         id=(row.get("id") or aid).strip(),
         status=(row.get("status") or "pending")[:32],
@@ -1489,6 +1490,7 @@ async def get_article_generation_status(
         has_body=bool(row.get("has_body")),
         has_featured_image=bool(row.get("has_featured_image")),
         featured_image_regeneration_count=int(row.get("featured_image_regeneration_count") or 0),
+        generation_error=gen_err,
     )
 
 
@@ -1591,6 +1593,13 @@ async def generate_article_and_image(
     proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    # Auto-create default prompts so projects created before prompts were
+    # configured can still generate without a 400 "No writing prompt" error.
+    try:
+        from app.services.scheduler import _ensure_project_prompt_defaults as _epd
+        proj = await _epd(st, project_id, proj)
+    except Exception:
+        pass
     wp_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
     ip_id = (payload.image_prompt_id or "").strip() or (proj.get("default_image_prompt_id") or "").strip() or None
     mapped_products_payload: list[dict] | None = None
@@ -1598,7 +1607,14 @@ async def generate_article_and_image(
         mapped_products_payload = [p.model_dump() for p in payload.mapped_products]
     mapped_pages_payload: list[dict] | None = None
     if payload.mapped_pages is not None:
-        mapped_pages_payload = [p.model_dump() for p in payload.mapped_pages]
+        # Filter out items missing an effective title or URL so that an
+        # incomplete entry from the frontend doesn't hard-fail generation.
+        valid_pages = [p for p in payload.mapped_pages if p.is_valid()]
+        if valid_pages:
+            mapped_pages_payload = [
+                {**p.model_dump(), "title": p.effective_title(), "post_url": p.effective_url()}
+                for p in valid_pages
+            ]
 
     aid = (article_id or "").strip()
     gen_payload = {
@@ -1851,12 +1867,16 @@ def _validate_bulk_schedule_cadence(*, cadence: str | None, parsed: list[tuple[s
             raise HTTPException(status_code=400, detail=detail)
 
 
-def _parse_schedule_time_utc(*, raw: str, user: dict) -> datetime:
+def _parse_schedule_time_utc(*, raw: str, user: dict, payload_timezone: str | None = None) -> datetime:
     s = (raw or "").strip()
     if not s:
         raise HTTPException(status_code=400, detail="Missing schedule time")
     try:
-        user_tz = zoneinfo_for_user(user.get("timezone"))
+        # Payload timezone (sent by the browser) takes precedence over the stored
+        # profile timezone. This ensures correct conversion even when the user has
+        # never explicitly saved their profile timezone (common on first use).
+        tz_name = (payload_timezone or "").strip() or (user.get("timezone") or "").strip()
+        user_tz = zoneinfo_for_user(tz_name or None)
         return parse_schedule_input_to_utc(s, user_tz=user_tz)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e) or "Invalid schedule time format") from None
@@ -2051,7 +2071,7 @@ async def bulk_schedule_articles(
             failed.append(BulkScheduleFailure(article_id=aid, error="Article not found"))
             continue
         try:
-            dt_utc = _parse_schedule_time_utc(raw=raw, user=user)
+            dt_utc = _parse_schedule_time_utc(raw=raw, user=user, payload_timezone=payload.user_timezone)
         except HTTPException as e:
             failed.append(BulkScheduleFailure(article_id=aid, error=str(e.detail) or "Invalid schedule time"))
             continue
@@ -2135,7 +2155,7 @@ async def schedule_article(
     _require_verified_website(proj)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
-    dt_utc = _parse_schedule_time_utc(raw=payload.wp_scheduled_at or "", user=user)
+    dt_utc = _parse_schedule_time_utc(raw=payload.wp_scheduled_at or "", user=user, payload_timezone=payload.user_timezone)
     norm_utc = dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
     if not is_schedule_time_allowed(dt_utc):

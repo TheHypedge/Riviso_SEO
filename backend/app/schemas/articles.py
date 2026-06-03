@@ -203,6 +203,9 @@ class ArticleGenerationStatusResponse(BaseModel):
     has_body: bool = False
     has_featured_image: bool = False
     featured_image_regeneration_count: int = 0
+    # Non-empty when the background worker failed — frontend polls this to
+    # surface the error immediately instead of waiting for a 10-minute timeout.
+    generation_error: str | None = None
 
 
 class ArticleUpdateRequest(BaseModel):
@@ -230,15 +233,29 @@ class MappedShopifyProductInput(BaseModel):
 
 
 class MappedWordPressPageInput(BaseModel):
-    """Optional WordPress pages/posts selected for internal-link mapped generation."""
+    """Optional WordPress pages/posts selected for internal-link mapped generation.
 
-    title: str = Field(min_length=1, max_length=500)
-    post_url: str = Field(min_length=1, max_length=2048)
+    Both ``title`` / ``post_url`` fields are optional here so a missing or
+    incomplete entry doesn't cause a hard 422. The route handler filters out
+    any items where both effective title and URL are empty before use.
+    """
+
+    title: str = Field(default="", max_length=500)
+    post_url: str = Field(default="", max_length=2048)
     post_title: str | None = Field(default=None, max_length=500, description="Alias for title.")
     url: str | None = Field(default=None, max_length=2048, description="Alias for post_url.")
     featured_image_url: str | None = Field(default=None, max_length=4000)
     image_url: str | None = Field(default=None, max_length=4000)
     post_id: str | None = Field(default=None, max_length=64)
+
+    def effective_title(self) -> str:
+        return (self.title or self.post_title or "").strip()
+
+    def effective_url(self) -> str:
+        return (self.post_url or self.url or "").strip()
+
+    def is_valid(self) -> bool:
+        return bool(self.effective_title() and self.effective_url())
 
 
 class GenerateRequest(BaseModel):
@@ -290,6 +307,10 @@ class ScheduleRequest(BaseModel):
     writing_prompt_id: str | None = Field(default=None, max_length=100)
     image_prompt_id: str | None = Field(default=None, max_length=100)
     generate_image: bool = True
+    # Client-supplied IANA timezone (e.g. "Asia/Kolkata"). When present, takes
+    # precedence over the stored profile timezone so scheduling works correctly
+    # even when the user has never explicitly saved their profile timezone.
+    user_timezone: str | None = Field(default=None, max_length=64)
 
 
 class BulkScheduleItem(BaseModel):
@@ -309,6 +330,7 @@ class BulkScheduleRequest(BaseModel):
     writing_prompt_id: str | None = Field(default=None, max_length=100)
     image_prompt_id: str | None = Field(default=None, max_length=100)
     generate_image: bool = True
+    user_timezone: str | None = Field(default=None, max_length=64)
 
 
 class BulkScheduleFailure(BaseModel):
