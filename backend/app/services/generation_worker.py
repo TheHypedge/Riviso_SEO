@@ -28,7 +28,12 @@ from app.services.generation_queue import (
     close_redis,
 )
 from app.core.metrics import set_queue_depth
-from app.services.pipeline_streamer import MSG_WORKER_START, STAGE_WORKER_START, publish_pipeline_status
+from app.services.pipeline_streamer import (
+    MSG_WORKER_START,
+    STAGE_WORKER_START,
+    publish_pipeline_error,
+    publish_pipeline_status,
+)
 from app.services.scheduler import (
     _patch_scheduled_job,
     prepare_article_for_scheduled_job,
@@ -222,16 +227,36 @@ async def _handle_image_regenerate(payload: dict) -> None:
 
     await publish_pipeline_status(aid, MSG_WORKER_START, STAGE_WORKER_START)
 
-    async with generation_slot():
-        await execute_featured_image_regeneration(
-            st=st,
-            user=user,
-            proj=proj,
-            article_id=aid,
-            row=row,
-            image_prompt_id=payload.get("image_prompt_id"),
-            custom_image_prompt=(payload.get("custom_image_prompt") or "").strip() or None,
-        )
+    # Clear any previous generation error before starting a fresh attempt.
+    try:
+        if hasattr(st, "patch_article_fields"):
+            await run_sync(st.patch_article_fields, aid, {"generation_error": ""})
+    except Exception:
+        pass
+
+    try:
+        async with generation_slot():
+            await execute_featured_image_regeneration(
+                st=st,
+                user=user,
+                proj=proj,
+                article_id=aid,
+                row=row,
+                image_prompt_id=payload.get("image_prompt_id"),
+                custom_image_prompt=(payload.get("custom_image_prompt") or "").strip() or None,
+            )
+    except Exception as exc:
+        log.exception("Image regeneration failed for article %s", aid)
+        detail = getattr(exc, "detail", None)
+        if isinstance(detail, dict):
+            err_msg = detail.get("message") or str(exc)
+        elif isinstance(detail, str):
+            err_msg = detail
+        else:
+            err_msg = str(exc) or "Image regeneration failed. Please try again."
+        await publish_pipeline_error(aid, f"Image regeneration failed: {err_msg[:300]}")
+        await _persist_article_generation_error(st, aid, err_msg[:500])
+        raise
 
 
 async def _handle_cluster_generate_all(payload: dict) -> None:

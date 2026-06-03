@@ -57,15 +57,16 @@ def _data_path(filename: str) -> str:
     return os.path.join(here, "data", filename)
 
 
-def _article_images_dir() -> str:
+def _article_images_dir(*, ensure: bool = False) -> str:
     path = _data_path("article_images")
-    os.makedirs(path, exist_ok=True)
+    if ensure:
+        os.makedirs(path, exist_ok=True)
     return path
 
 
-def _article_image_file_path(article_id: str) -> str:
+def _article_image_file_path(article_id: str, *, ensure_dir: bool = False) -> str:
     safe = re.sub(r"[^\w\-]", "", (article_id or "").strip()) or "unknown"
-    return os.path.join(_article_images_dir(), f"{safe}.png")
+    return os.path.join(_article_images_dir(ensure=ensure_dir), f"{safe}.png")
 
 
 def _article_image_meta_path(article_id: str) -> str:
@@ -74,10 +75,11 @@ def _article_image_meta_path(article_id: str) -> str:
 
 def featured_image_file_exists(article_id: str) -> bool:
     aid = (article_id or "").strip()
-    if os.path.isfile(_article_image_file_path(aid)):
+    images_dir = _article_images_dir()
+    safe = re.sub(r"[^\w\-]", "", aid) or "unknown"
+    if os.path.isfile(os.path.join(images_dir, f"{safe}.png")):
         return True
-    legacy = os.path.join(_article_images_dir(), f"{re.sub(r'[^\w\-]', '', aid) or 'unknown'}.bin")
-    return os.path.isfile(legacy)
+    return os.path.isfile(os.path.join(images_dir, f"{safe}.bin"))
 
 
 def article_has_stored_featured_image(*, article_id: str = "", row: dict | None = None) -> bool:
@@ -107,7 +109,7 @@ def _persist_featured_image_file(article_id: str, image_url: str) -> bool:
         data = base64.b64decode(b64, validate=True)
     except Exception:
         return False
-    bin_path = _article_image_file_path(article_id)
+    bin_path = _article_image_file_path(article_id, ensure_dir=True)
     meta_path = _article_image_meta_path(article_id)
     tmp = bin_path + ".tmp"
     with open(tmp, "wb") as f:
@@ -194,10 +196,15 @@ def _externalize_featured_image_in_updates(article_id: str, updates: dict[str, A
             u2["featured_image_storage"] = "url"
         return u2
     if img.startswith("data:") or len(img) > 80_000:
-        if _persist_featured_image_file(article_id, img):
+        try:
+            saved = _persist_featured_image_file(article_id, img)
+        except Exception:
+            saved = False
+        if saved:
             u2["image_url"] = ""
             u2["featured_image_storage"] = "file"
         else:
+            # Disk write failed (e.g. permissions) — store inline as fallback.
             u2["featured_image_storage"] = "inline"
     return u2
 

@@ -23,7 +23,8 @@ COPY backend/wordpress_plugin /app/backend/wordpress_plugin
 COPY storage.py /app/storage.py
 COPY database.py /app/database.py
 
-RUN chown -R appuser:appuser /app
+# Pre-create the data directory so named volumes (app_data) initialize with correct ownership.
+RUN mkdir -p /app/data/article_images && chown -R appuser:appuser /app
 
 USER appuser
 

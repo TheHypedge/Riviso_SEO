@@ -2487,9 +2487,18 @@ export const api = {
 
     await pollWithBackoff(
       () => api.getArticleGenerationStatus(projectId, articleId, pollOpts),
-      (status) =>
-        status.has_featured_image &&
-        (!baselineHas || status.featured_image_regeneration_count > baselineCount),
+      (status) => {
+        if (status.generation_error) {
+          throw new ApiError(
+            `Image generation failed: ${status.generation_error}`,
+            500,
+          );
+        }
+        return (
+          status.has_featured_image &&
+          (!baselineHas || status.featured_image_regeneration_count > baselineCount)
+        );
+      },
       {
         intervalMs: opts?.intervalMs ?? POLL_INITIAL_INTERVAL_MS,
         maxWaitMs: opts?.maxWaitMs ?? 180_000,
