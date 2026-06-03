@@ -119,6 +119,15 @@ class Settings(BaseSettings):
         description="Max scheduled jobs to enqueue for prep per scheduler tick.",
     )
 
+    # SMTP (transactional email)
+    smtp_host: str = Field(default="", validation_alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, validation_alias="SMTP_PORT")
+    smtp_user: str = Field(default="", validation_alias="SMTP_USER")
+    smtp_pass: str = Field(default="", validation_alias="SMTP_PASS")
+    smtp_from: str = Field(default="", validation_alias="SMTP_FROM")
+    # "true" → SSL, "false" → STARTTLS, "" → auto-detect from port
+    smtp_secure: str = Field(default="", validation_alias="SMTP_SECURE")
+
     # OpenAI (generation)
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_text_model: str = "gpt-4.1-mini"
@@ -166,7 +175,6 @@ class Settings(BaseSettings):
         """True when both Google OAuth client envs are present (post-strip)."""
         return bool((self.google_oauth_client_id or "").strip() and (self.google_oauth_client_secret or "").strip())
 
-    @property
     @property
     def shopify_oauth_configured(self) -> bool:
         return bool((self.shopify_api_key or "").strip() and (self.shopify_api_secret or "").strip())

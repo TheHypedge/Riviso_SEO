@@ -146,17 +146,52 @@ def _load_featured_image_file_as_data_url(article_id: str) -> str | None:
     return f"data:{content_type};base64,{b64}"
 
 
+def _download_and_persist_image_url(article_id: str, url: str) -> bool:
+    """Download an HTTPS image URL and save it to disk as a file-backed image.
+
+    Returns True on success.  Called synchronously because this runs inside
+    patch_article_fields/update_article_fields which are already blocking calls.
+    """
+    import urllib.request as _req
+    aid = (article_id or "").strip()
+    url = (url or "").strip()
+    if not url.startswith("http://") and not url.startswith("https://"):
+        return False
+    try:
+        with _req.urlopen(url, timeout=30) as resp:  # nosec — URL comes from OpenAI CDN
+            content_type = (resp.headers.get("content-type") or "image/png").split(";")[0].strip()
+            data = resp.read()
+        if not data:
+            return False
+        b64 = base64.b64encode(data).decode("ascii")
+        data_url = f"data:{content_type or 'image/png'};base64,{b64}"
+        return _persist_featured_image_file(aid, data_url)
+    except Exception:
+        return False
+
+
 def _externalize_featured_image_in_updates(article_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     """
-    Keep Mongo writes small: store multi‑MB data URLs on disk, persist only metadata in Mongo.
-    HTTPS URLs from OpenAI stay inline (short strings).
+    Keep Mongo writes small: store multi-MB data URLs on disk, persist only metadata in Mongo.
+
+    HTTPS URLs (e.g. OpenAI CDN) are now also downloaded and stored on disk so
+    that they remain available after the CDN URL expires (~1 hour for OpenAI).
+    Without this, articles scheduled for later the same day or the next day would
+    silently publish without a featured image because the CDN link had expired.
     """
     u2 = dict(updates or {})
     img = (u2.get("image_url") or "").strip()
     if not img:
         return u2
     if img.startswith("http://") or img.startswith("https://"):
-        u2["featured_image_storage"] = "url"
+        # Download and persist to disk so the URL can't expire before publish.
+        if _download_and_persist_image_url(article_id, img):
+            u2["image_url"] = ""
+            u2["featured_image_storage"] = "file"
+        else:
+            # Download failed (network, permissions, etc.) — keep the URL inline
+            # as a best-effort fallback; publish will attempt to re-download it.
+            u2["featured_image_storage"] = "url"
         return u2
     if img.startswith("data:") or len(img) > 80_000:
         if _persist_featured_image_file(article_id, img):
@@ -267,6 +302,15 @@ def _save_json_projects(projects: list[dict[str, Any]]) -> None:
 def _save_json_scheduled_jobs(rows: list[dict[str, Any]]) -> None:
     """Persist scheduled jobs list when using JSON storage fallback."""
     path = _data_path("scheduled_jobs.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def _save_json(filename: str, rows: list[dict[str, Any]]) -> None:
+    """Generic JSON list saver for collections without a dedicated helper."""
+    path = _data_path(filename)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(rows, f, indent=2, ensure_ascii=False)
@@ -1170,7 +1214,44 @@ def _default_plans() -> dict[str, Any]:
     }
 
 
+# P2.2: plans rarely change but are read on every gatekeeper check / subscription
+# status build. Cache the resolved plan map for a short TTL and invalidate it on
+# upsert_plan so admin edits take effect promptly.
+_PLANS_CACHE: dict[str, Any] | None = None
+_PLANS_CACHE_AT: float = 0.0
+_PLANS_CACHE_TTL_SECONDS = 60.0
+_plans_cache_lock = threading.Lock()
+
+
+def _invalidate_plans_cache() -> None:
+    global _PLANS_CACHE, _PLANS_CACHE_AT
+    with _plans_cache_lock:
+        _PLANS_CACHE = None
+        _PLANS_CACHE_AT = 0.0
+
+
+def _copy_plans(plans: Any) -> Any:
+    """Return a defensive copy so callers can't mutate the shared cache."""
+    if isinstance(plans, dict):
+        return {k: (dict(v) if isinstance(v, dict) else v) for k, v in plans.items()}
+    return plans
+
+
 def load_plans() -> dict[str, Any]:
+    """Return dict of plan_key -> plan data (cached ~60s; see ``_invalidate_plans_cache``)."""
+    global _PLANS_CACHE, _PLANS_CACHE_AT
+    now = time.monotonic()
+    cached = _PLANS_CACHE
+    if cached is not None and (now - _PLANS_CACHE_AT) < _PLANS_CACHE_TTL_SECONDS:
+        return _copy_plans(cached)
+    fresh = _load_plans_uncached()
+    with _plans_cache_lock:
+        _PLANS_CACHE = _copy_plans(fresh)
+        _PLANS_CACHE_AT = time.monotonic()
+    return _copy_plans(fresh)
+
+
+def _load_plans_uncached() -> dict[str, Any]:
     """Return dict of plan_key -> plan data."""
     if _storage_mode == "json":
         path = _plans_json_path()
@@ -1202,6 +1283,7 @@ def load_plans() -> dict[str, Any]:
     db = get_db()
     cur = db.plans.find({})
     out: dict[str, Any] = {}
+    defaults = _default_plans()
     for doc in cur:
         key = (doc.get("key") or doc.get("id") or "").strip().lower()
         if not key:
@@ -1210,7 +1292,7 @@ def load_plans() -> dict[str, Any]:
         d.pop("_id", None)
         d.pop("id", None)
         d["key"] = key
-        d = {**((_default_plans().get(key) or {})), **d}
+        d = {**((defaults.get(key) or {})), **d}
         out[key] = d
     if not out:
         # Seed defaults
@@ -1221,6 +1303,14 @@ def load_plans() -> dict[str, Any]:
 
 
 def upsert_plan(plan_key: str, plan: dict[str, Any]) -> None:
+    # P2.2: always drop the cached plan map after a write so edits take effect.
+    try:
+        _upsert_plan_impl(plan_key, plan)
+    finally:
+        _invalidate_plans_cache()
+
+
+def _upsert_plan_impl(plan_key: str, plan: dict[str, Any]) -> None:
     key = (plan_key or "").strip().lower()
     if not key:
         raise ValueError("plan_key is required")
@@ -1501,25 +1591,8 @@ def reset_daily_subscription_usage() -> int:
     return int(getattr(res, "modified_count", 0) or 0)
 
 
-def get_user_by_id(user_id: str) -> dict[str, Any] | None:
-    uid = (user_id or "").strip()
-    if not uid:
-        return None
-    if _storage_mode == "json":
-        for u in _load_json_users():
-            if (u.get("id") or "").strip() == uid:
-                return _user_row_to_public(u)
-        return None
-    if _storage_mode != "mongo":
-        return None
-    db = get_db()
-    doc = db.users.find_one({"id": uid})
-    if not doc and uid:
-        # Case-insensitive id match (UUID casing drift between token and DB).
-        try:
-            doc = db.users.find_one({"id": {"$regex": f"^{re.escape(uid)}$", "$options": "i"}})
-        except re.error:
-            doc = None
+def _user_doc_to_public(doc: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Canonical Mongo user-doc → public dict (shared by sync + Motor async reads)."""
     if not doc:
         return None
     return {
@@ -1562,6 +1635,30 @@ def get_user_by_id(user_id: str) -> dict[str, Any] | None:
         "gsc_email": (doc.get("gsc_email") or "").strip(),
         "gsc_connected_at": (doc.get("gsc_connected_at") or "").strip(),
     }
+
+
+def get_user_by_id(user_id: str) -> dict[str, Any] | None:
+    uid = (user_id or "").strip()
+    if not uid:
+        return None
+    if _storage_mode == "json":
+        for u in _load_json_users():
+            if (u.get("id") or "").strip() == uid:
+                return _user_row_to_public(u)
+        return None
+    if _storage_mode != "mongo":
+        return None
+    db = get_db()
+    doc = db.users.find_one({"id": uid})
+    if not doc and uid:
+        # Case-insensitive id match (UUID casing drift between token and DB).
+        try:
+            doc = db.users.find_one({"id": {"$regex": f"^{re.escape(uid)}$", "$options": "i"}})
+        except re.error:
+            doc = None
+    if not doc:
+        return None
+    return _user_doc_to_public(doc)
 
 
 def get_user_by_email(email: str) -> dict[str, Any] | None:
@@ -1913,6 +2010,32 @@ def hard_delete_user(user_id: str) -> bool:
         return bool(res.deleted_count == 1)
 
 
+def purge_user_data(user_id: str) -> bool:
+    """Hard-delete ALL data owned by a user (L6.5 GDPR account erasure).
+
+    Deletes in order: all projects + their articles/jobs, subscription record,
+    then the user row itself. Returns True if the user existed and was removed.
+    """
+    uid = (user_id or "").strip()
+    if not uid:
+        return False
+
+    for pid in project_ids_for_owner(uid):
+        try:
+            delete_project_and_resources(pid)
+        except Exception:
+            pass
+
+    if _storage_mode == "mongo":
+        with _db_write_lock:
+            db = get_db()
+            db.subscriptions.delete_one({"user_id": uid})
+    elif _storage_mode == "json":
+        pass  # JSON mode has no separate subscriptions file
+
+    return hard_delete_user(uid)
+
+
 def _coerce_wp_scheduled_at_str(v: Any, max_len: int = 64) -> str:
     """MongoDB may store schedule times as BSON Date; app code expects YYYY-mm-dd HH:MM:SS strings."""
     if v is None or v == "":
@@ -1922,6 +2045,66 @@ def _coerce_wp_scheduled_at_str(v: Any, max_len: int = 64) -> str:
     if isinstance(v, date) and not isinstance(v, datetime):
         return v.isoformat()[:max_len]
     return str(v).strip()[:max_len]
+
+
+# Fields whose change can flip the persisted derived listing status (P4.3). Used by
+# patch_article_fields to know when to recompute ``listing_status`` on a $set.
+_LISTING_STATUS_AFFECTING_FIELDS = frozenset(
+    {
+        "status",
+        "wp_last_wp_status",
+        "wp_link",
+        "wp_post_id",
+        "wp_scheduled_at",
+        "shopify_link",
+        "shopify_article_id",
+    }
+)
+
+
+def _article_has_body(a: dict[str, Any]) -> bool:
+    return bool((a.get("article") or "").strip())
+
+
+def _article_wp_post_present(a: dict[str, Any]) -> bool:
+    link = (a.get("wp_link") or "").strip()
+    if link:
+        return True
+    pid = a.get("wp_post_id")
+    if pid is None or pid == "":
+        return False
+    try:
+        return int(pid) > 0
+    except (TypeError, ValueError):
+        s = str(pid).strip().lower()
+        return s not in ("", "0", "none")
+
+
+def _derive_article_listing_status(a: dict[str, Any]) -> str:
+    """Persisted UI status mirror of routes/articles.py:_derive_listing_status.
+
+    Computed purely from article fields so it can be stored on the document and
+    matched directly in Mongo (kills the §3.6 double 20k scan). The route still
+    applies posted-job overlays for the page it renders, so display stays exact.
+    """
+    wp_sched = _coerce_wp_scheduled_at_str(a.get("wp_scheduled_at"))
+    raw = (str(a.get("status") or "pending").strip().lower()) or "pending"
+    wp_last = str(a.get("wp_last_wp_status") or "").strip().lower()
+    has_post = _article_wp_post_present(a)
+    shopify_published = bool((a.get("shopify_link") or "").strip() or a.get("shopify_article_id"))
+    if raw == "published" or wp_last == "publish":
+        return "published"
+    if shopify_published:
+        return "published"
+    if wp_last == "draft" and has_post:
+        return "draft"
+    if wp_sched:
+        if has_post and wp_last == "publish":
+            return "published"
+        return "scheduled"
+    if has_post and raw == "pending":
+        return "draft" if wp_last == "draft" else "published"
+    return raw
 
 
 def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
@@ -1998,6 +2181,10 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "topic_cluster_id": (d.get("topic_cluster_id") or "")[:64],
         "topic_slot_id": (d.get("topic_slot_id") or "")[:64],
         "topic_role": (d.get("topic_role") or "")[:16],
+        # Persisted derived fields (P4.3) — recomputed on every write so listing
+        # queries can use the stored flag/status instead of scanning bodies / 20k rows.
+        "has_body": bool((d.get("article") or "").strip()),
+        "listing_status": _derive_article_listing_status(d),
     }
 
 
@@ -2498,6 +2685,25 @@ def get_project_by_id(project_id: str) -> dict[str, Any] | None:
                 return _normalize_project_dict(dict(p))
         return None
     doc = get_db().projects.find_one({"id": pid})
+    if not isinstance(doc, dict):
+        return None
+    return _mongo_doc_to_project(doc)
+
+
+def get_project_for_generation(project_id: str) -> dict[str, Any] | None:
+    """Project read for the generation/scheduler hot loop (P4.1).
+
+    Excludes the embedded ``shopify_catalog`` metadata: product data lives in the
+    ``shopify_products`` collection and is loaded separately, so the worker never
+    needs the embedded blob. All other project fields (prompts, brand identity,
+    WordPress credentials, etc.) are returned unchanged.
+    """
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if _storage_mode != "mongo":
+        return get_project_by_id(pid)
+    doc = get_db().projects.find_one({"id": pid}, {"shopify_catalog": 0})
     if not isinstance(doc, dict):
         return None
     return _mongo_doc_to_project(doc)
@@ -3015,7 +3221,10 @@ _LISTING_PROJECTION_STAGE = {
         "monitor_status": 1,
         "shopify_link": 1,
         "shopify_article_id": 1,
-        "hasBody": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
+        # Prefer the persisted flag (P4.3); fall back to a body length check only
+        # for rows written before the backfill ran.
+        "hasBody": {"$ifNull": ["$has_body", {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]}]},
+        "listing_status": 1,
     }
 }
 
@@ -3118,14 +3327,22 @@ def count_articles_listing_for_project(
     q: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
+    status_key: str | None = None,
 ) -> int:
-    """Count articles matching listing filters (excludes derived status)."""
+    """Count articles matching listing filters.
+
+    When ``status_key`` is given, matches the persisted ``listing_status`` (P4.3)
+    directly in Mongo instead of scanning up to 20k rows in Python.
+    """
     pid = (project_id or "").strip()
     if not pid:
         return 0
+    sk = (status_key or "").strip().lower()
     if _storage_mode != "mongo":
         rows = load_articles_listing_for_project(pid, limit=20000)
         match = _listing_match_for_project(pid, q=q, date_from=date_from, date_to=date_to)
+        if sk:
+            rows = [r for r in rows if (r.get("listing_status") or "").strip().lower() == sk]
         # JSON fallback: approximate by re-filtering in Python
         out = []
         for r in rows:
@@ -3149,7 +3366,10 @@ def count_articles_listing_for_project(
             out.append(r)
         return len(out)
     db = get_db()
-    return int(db.articles.count_documents(_listing_match_for_project(pid, q=q, date_from=date_from, date_to=date_to)))
+    match = _listing_match_for_project(pid, q=q, date_from=date_from, date_to=date_to)
+    if sk:
+        match["listing_status"] = sk
+    return int(db.articles.count_documents(match))
 
 
 def load_articles_listing_page_for_project(
@@ -3161,8 +3381,13 @@ def load_articles_listing_page_for_project(
     date_from: str | None = None,
     date_to: str | None = None,
     sort: str = "desc",
+    status_key: str | None = None,
 ) -> list[dict[str, Any]]:
-    """One page of listing rows (no full article body), sorted by created_at."""
+    """One page of listing rows (no full article body), sorted by created_at.
+
+    When ``status_key`` is given, matches the persisted ``listing_status`` (P4.3)
+    directly in Mongo so a status-filtered page is a single indexed query.
+    """
     pid = (project_id or "").strip()
     if not pid:
         return []
@@ -3170,10 +3395,13 @@ def load_articles_listing_page_for_project(
     pp = max(1, min(int(per_page or 10), 5000))
     direction = -1 if (sort or "desc").strip().lower() != "asc" else 1
     skip = (pg - 1) * pp
+    sk = (status_key or "").strip().lower()
 
     if _storage_mode != "mongo":
         rows = load_articles_listing_for_project(pid, limit=20000)
         match = _listing_match_for_project(pid, q=q, date_from=date_from, date_to=date_to)
+        if sk:
+            rows = [r for r in rows if (r.get("listing_status") or "").strip().lower() == sk]
         filtered: list[dict[str, Any]] = []
         for r in rows:
             if match.get("$or"):
@@ -3198,8 +3426,11 @@ def load_articles_listing_page_for_project(
         return filtered[skip : skip + pp]
 
     db = get_db()
+    match = _listing_match_for_project(pid, q=q, date_from=date_from, date_to=date_to)
+    if sk:
+        match["listing_status"] = sk
     pipeline = [
-        {"$match": _listing_match_for_project(pid, q=q, date_from=date_from, date_to=date_to)},
+        {"$match": match},
         _LISTING_PROJECTION_STAGE,
         {"$sort": {"created_at": direction}},
         {"$skip": skip},
@@ -3209,6 +3440,63 @@ def load_articles_listing_page_for_project(
     for d in db.articles.aggregate(pipeline, allowDiskUse=False):
         out.append(_normalize_listing_row(dict(d)))
     return out
+
+
+def backfill_article_listing_fields(*, batch_size: int = 1000) -> int:
+    """Idempotent backfill of persisted ``has_body`` + ``listing_status`` (P4.3).
+
+    Only touches docs missing either field. A server-side ``$project`` computes
+    ``has_body`` without transferring article bodies to the client; the
+    ``listing_status`` is derived in Python from the light status fields. Returns
+    the number of documents updated. Safe to call repeatedly (becomes a no-op
+    once every doc carries both fields).
+    """
+    if _storage_mode != "mongo":
+        return 0
+    from pymongo import UpdateOne
+
+    db = get_db()
+    flt = {"$or": [{"has_body": {"$exists": False}}, {"listing_status": {"$exists": False}}]}
+    pipeline = [
+        {"$match": flt},
+        {
+            "$project": {
+                "status": 1,
+                "wp_last_wp_status": 1,
+                "wp_link": 1,
+                "wp_post_id": 1,
+                "wp_scheduled_at": 1,
+                "shopify_link": 1,
+                "shopify_article_id": 1,
+                "has_body": {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]},
+            }
+        },
+    ]
+    updated = 0
+    ops: list[UpdateOne] = []
+    bs = max(100, int(batch_size or 1000))
+    for d in db.articles.aggregate(pipeline, allowDiskUse=True):
+        ops.append(
+            UpdateOne(
+                {"_id": d["_id"]},
+                {
+                    "$set": {
+                        "has_body": bool(d.get("has_body")),
+                        "listing_status": _derive_article_listing_status(d),
+                    }
+                },
+            )
+        )
+        if len(ops) >= bs:
+            res = db.articles.bulk_write(ops, ordered=False)
+            updated += int(res.modified_count or 0)
+            ops = []
+    if ops:
+        res = db.articles.bulk_write(ops, ordered=False)
+        updated += int(res.modified_count or 0)
+    if updated:
+        _log.info("backfill_article_listing_fields: updated %d article(s)", updated)
+    return updated
 
 
 def load_article_titles_for_project(project_id: str, *, limit: int = 20000) -> list[dict[str, Any]]:
@@ -3560,7 +3848,13 @@ def set_research_cache(*, cache_key: str, value: dict[str, Any]) -> None:
             rows = rows[-5000:]
             _save_json("research_cache.json", rows)
         return
-    doc = {"_id": key, "saved_at": float(time.time()), "value": v}
+    # `expires_at` is a real datetime so the research_cache TTL index (P4.5) can purge stale entries.
+    doc = {
+        "_id": key,
+        "saved_at": float(time.time()),
+        "expires_at": datetime.utcnow() + timedelta(days=7),
+        "value": v,
+    }
     with _db_write_lock:
         get_db().research_cache.update_one({"_id": key}, {"$set": doc}, upsert=True)
 
@@ -3620,6 +3914,23 @@ def load_scheduled_jobs(
             except Exception:
                 continue
     return out
+
+
+def get_scheduled_job_by_id(job_id: str) -> dict[str, Any] | None:
+    """Indexed single-document lookup for a scheduled job by its id field."""
+    jid = (job_id or "").strip()
+    if not jid:
+        return None
+    if _storage_mode != "mongo":
+        rows = [_normalize_scheduled_job_dict(x) for x in _load_json_list("scheduled_jobs.json")]
+        return next((r for r in rows if (r.get("id") or "").strip() == jid), None)
+    doc = get_db().scheduled_jobs.find_one(
+        {"$or": [{"id": jid}, {"_id": jid}]},
+        _SCHEDULED_JOB_LISTING_PROJECTION,
+    )
+    if not doc:
+        return None
+    return _normalize_scheduled_job_dict(dict(doc))
 
 
 def get_research_job_status(*, cache_key: str) -> dict[str, Any] | None:
@@ -3883,6 +4194,72 @@ def delete_scheduled_job(job_id: str) -> bool:
         return bool(res.deleted_count == 1)
 
 
+def delete_scheduled_jobs_for_project(project_id: str, *, exclude_states: list[str] | None = None) -> int:
+    """Bulk-delete every scheduled-job row for a project in one operation.
+
+    Returns the number of rows removed. ``exclude_states`` keeps rows whose
+    state is in the set (e.g. already ``posted`` jobs).
+    """
+    pid = (project_id or "").strip()
+    if not pid:
+        return 0
+    skip = {(s or "").strip().lower() for s in (exclude_states or []) if (s or "").strip()}
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list("scheduled_jobs.json")
+            kept: list[dict[str, Any]] = []
+            removed = 0
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                if (r.get("project_id") or "").strip() == pid and (r.get("state") or "").strip().lower() not in skip:
+                    removed += 1
+                    continue
+                kept.append(r)
+            if removed:
+                _save_json_scheduled_jobs([_normalize_scheduled_job_dict(x) for x in kept if isinstance(x, dict)])
+            return removed
+    flt: dict[str, Any] = {"project_id": pid}
+    if skip:
+        flt["state"] = {"$nin": sorted(skip)}
+    with _db_write_lock:
+        res = get_db().scheduled_jobs.delete_many(flt)
+        return int(res.deleted_count or 0)
+
+
+def delete_scheduled_jobs_for_article(
+    project_id: str, article_id: str, *, exclude_states: list[str] | None = None
+) -> int:
+    """Bulk-delete scheduled-job rows for one article in a project (single op)."""
+    pid = (project_id or "").strip()
+    aid = (article_id or "").strip()
+    if not pid or not aid:
+        return 0
+    skip = {(s or "").strip().lower() for s in (exclude_states or []) if (s or "").strip()}
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list("scheduled_jobs.json")
+            kept: list[dict[str, Any]] = []
+            removed = 0
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                same = (r.get("project_id") or "").strip() == pid and (r.get("article_id") or "").strip() == aid
+                if same and (r.get("state") or "").strip().lower() not in skip:
+                    removed += 1
+                    continue
+                kept.append(r)
+            if removed:
+                _save_json_scheduled_jobs([_normalize_scheduled_job_dict(x) for x in kept if isinstance(x, dict)])
+            return removed
+    flt: dict[str, Any] = {"project_id": pid, "article_id": aid}
+    if skip:
+        flt["state"] = {"$nin": sorted(skip)}
+    with _db_write_lock:
+        res = get_db().scheduled_jobs.delete_many(flt)
+        return int(res.deleted_count or 0)
+
+
 def count_articles_by_project_ids(project_ids: list[str]) -> dict[str, int]:
     """
     Fast counts for a set of project_ids. Uses Mongo aggregation when available.
@@ -4124,9 +4501,28 @@ def patch_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
     u2.setdefault("updated_at", ts)
     u2 = _externalize_featured_image_in_updates(aid, u2)
     if _storage_mode != "mongo":
+        # JSON path runs through _normalize_article_dict, which recomputes the
+        # persisted derived fields automatically.
         return update_article_fields(aid, u2)
     with _db_write_lock:
         db = get_db()
+        # Keep the persisted derived fields (P4.3) consistent on a partial $set.
+        if "article" in u2:
+            u2["has_body"] = bool((u2.get("article") or "").strip())
+        if _LISTING_STATUS_AFFECTING_FIELDS & set(u2.keys()):
+            proj = {
+                "_id": 0,
+                "status": 1,
+                "wp_last_wp_status": 1,
+                "wp_link": 1,
+                "wp_post_id": 1,
+                "wp_scheduled_at": 1,
+                "shopify_link": 1,
+                "shopify_article_id": 1,
+            }
+            cur = db.articles.find_one({"$or": [{"id": aid}, {"_id": aid}]}, proj) or {}
+            merged = {**cur, **{k: u2[k] for k in u2 if k in _LISTING_STATUS_AFFECTING_FIELDS}}
+            u2["listing_status"] = _derive_article_listing_status(merged)
         res = db.articles.update_one(
             {"$or": [{"id": aid}, {"_id": aid}]},
             {"$set": u2},
@@ -4163,9 +4559,19 @@ def bulk_update_articles(updates: list[tuple[str, dict[str, Any]]]) -> None:
         db = get_db()
         from pymongo import ReplaceOne
 
+        # Batch-read every target doc in a single round-trip instead of one
+        # find_one per id (the previous N+1). Behaviour is preserved: each row
+        # still goes through _apply_article_updates_dict + _normalize_article_dict.
+        ids = [aid for aid, _ in updates if aid]
+        docs_by_id: dict[str, dict[str, Any]] = {}
+        for doc in db.articles.find({"id": {"$in": ids}}):
+            did = (doc.get("id") or "").strip()
+            if did:
+                docs_by_id[did] = doc
+
         ops: list[ReplaceOne] = []
         for aid, u in updates:
-            doc = db.articles.find_one({"id": aid})
+            doc = docs_by_id.get(aid)
             if not doc:
                 _log.warning("bulk_update_articles: missing article id %r in MongoDB", aid)
                 continue

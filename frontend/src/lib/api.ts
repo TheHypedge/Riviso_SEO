@@ -973,9 +973,11 @@ export function getApiBaseUrl(): string {
     return `${window.location.protocol}//${window.location.host}`;
   }
 
-  const targetHost = host === "localhost" ? "127.0.0.1" : host;
-  const proto = window.location.protocol === "https:" ? "https:" : "http:";
-  return `${proto}//${targetHost}:8000`;
+  // S1.3: route local dev through the same-origin Next proxy (`/api/*` → backend,
+  // see next.config rewrites) so the httpOnly auth cookies are first-party and are
+  // actually sent. Talking to `:8000` directly is cross-site, and the SameSite=Lax
+  // cookies would not flow, breaking cookie-only auth.
+  return `${window.location.protocol}//${window.location.host}`;
 }
 
 /** API path for the WordPress connector ZIP (built on demand from backend source). */
@@ -992,10 +994,14 @@ export async function downloadWordpressPlugin(downloadPath?: string): Promise<vo
   const url = base.startsWith("http")
     ? base
     : `${getApiBaseUrl()}${base.startsWith("/") ? base : `/${base}`}`;
+  const headers = new Headers();
+  // S1.3: authenticated via the httpOnly aa_access cookie (credentials: "include").
+  headers.set("x-requested-with", "XMLHttpRequest");
   const res = await fetch(`${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`, {
     method: "GET",
     cache: "no-store",
     credentials: "include",
+    headers,
   });
   if (!res.ok) {
     let detail = `Plugin download failed (${res.status})`;
@@ -1035,38 +1041,69 @@ function apiUrl(path: string) {
   return `${API_BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
-const TOKEN_KEY = "aa_access_token";
-const REFRESH_KEY = "aa_refresh_token";
+// S1.3: Access/refresh JWTs live ONLY in httpOnly cookies (aa_access / aa_refresh)
+// set by the backend, so client JavaScript — and therefore any XSS — can never
+// read them. We keep a single non-sensitive marker in localStorage purely so the
+// UI can synchronously decide whether to render the app shell or redirect to
+// login. The authoritative auth check is always the cookie, enforced server-side.
+const SESSION_KEY = "aa_session";
+const LEGACY_TOKEN_KEYS = ["aa_access_token", "aa_refresh_token"];
 
+/** True when a session marker exists. UI gate only — NOT a security boundary. */
+export function hasSession(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(SESSION_KEY) === "1";
+}
+
+/** Record that the user just authenticated (cookies carry the real tokens). */
+export function markSession() {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(SESSION_KEY, "1");
+  // Purge any JWTs persisted by older builds so they cannot linger in storage.
+  for (const k of LEGACY_TOKEN_KEYS) window.localStorage.removeItem(k);
+}
+
+/**
+ * Back-compat shim for the many `if (!getAccessToken())` UI auth gates. Returns a
+ * non-sensitive truthy marker when a session exists and `null` otherwise; it
+ * never exposes a real JWT. Prefer {@link hasSession} in new code.
+ */
 export function getAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(TOKEN_KEY);
+  return hasSession() ? "1" : null;
 }
 
-export function setAccessToken(token: string) {
-  window.localStorage.setItem(TOKEN_KEY, token);
+/** Deprecated shims: tokens now arrive via httpOnly cookies; only mark the session. */
+export function setAccessToken(_token?: string) {
+  markSession();
 }
-
-export function clearAccessToken() {
-  window.localStorage.removeItem(TOKEN_KEY);
+export function setRefreshToken(_token?: string) {
+  markSession();
 }
-
 export function getRefreshToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(REFRESH_KEY);
+  return null;
 }
 
-export function setRefreshToken(token: string) {
-  window.localStorage.setItem(REFRESH_KEY, token);
-}
-
-export function clearRefreshToken() {
-  window.localStorage.removeItem(REFRESH_KEY);
+function clearSessionMarker() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(SESSION_KEY);
+  for (const k of LEGACY_TOKEN_KEYS) window.localStorage.removeItem(k);
 }
 
 export function clearAuth() {
-  clearAccessToken();
-  clearRefreshToken();
+  clearSessionMarker();
+  // Best-effort server-side refresh-token revocation + cookie clear (S1.1).
+  if (typeof window !== "undefined") {
+    try {
+      void fetch(apiUrl("/api/auth/logout"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "x-requested-with": "XMLHttpRequest" },
+        keepalive: true,
+      });
+    } catch {
+      /* best-effort; cookies also expire on their own */
+    }
+  }
 }
 
 function emitGlobalLoading(delta: number) {
@@ -1279,8 +1316,11 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
   headers.set("content-type", "application/json");
   headers.set("cache-control", "no-cache");
   headers.set("pragma", "no-cache");
-  const token = getAccessToken();
-  if (token) headers.set("authorization", `Bearer ${token}`);
+  // S1.7: CSRF defense for cookie-authenticated mutations. A cross-site form
+  // post cannot set this custom header, and CORS blocks it from disallowed origins.
+  headers.set("x-requested-with", "XMLHttpRequest");
+  // S1.3: auth travels in the httpOnly aa_access cookie (credentials: "include"),
+  // never an Authorization header — there is no JWT in JS to attach.
 
   const doFetch = async (h: Headers) => {
       const signal = mergeAbortSignals(createTimeoutSignal(timeoutMs), opts?.signal ?? init?.signal);
@@ -1330,33 +1370,31 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
       path !== "/api/auth/reactivate" &&
       path !== "/api/auth/refresh"
     ) {
-      const rt = getRefreshToken();
-      if (rt) {
+      // S1.3/S1.1: refresh using the httpOnly aa_refresh cookie (no token in JS).
+      // Only attempt when we believe a session exists, to avoid hammering /refresh
+      // for anonymous visitors. On success the backend rotates and re-sets the
+      // aa_access / aa_refresh cookies, so we simply retry the original request.
+      if (hasSession()) {
         try {
           const refreshSignal = createTimeoutSignal(AUTH_REFRESH_TIMEOUT_MS);
           const refreshed = await fetch(apiUrl("/api/auth/refresh"), {
             method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ refresh_token: rt }),
+            headers: { "x-requested-with": "XMLHttpRequest" },
             credentials: "include",
             signal: refreshSignal,
           });
           if (refreshed.ok) {
-            const tokens = (await refreshed.json()) as TokenPair;
-            if (tokens?.access_token) setAccessToken(tokens.access_token);
-            if (tokens?.refresh_token) setRefreshToken(tokens.refresh_token);
-            const headers2 = new Headers(init?.headers);
-            headers2.set("content-type", "application/json");
-            const token2 = getAccessToken();
-            if (token2) headers2.set("authorization", `Bearer ${token2}`);
             try {
-              res = await doFetch(headers2);
+              res = await doFetch(headers);
             } catch (e) {
               if (isAbortError(e)) {
                 throw clientTimeoutError(timeoutMs);
               }
               throw e;
             }
+          } else if (refreshed.status === 401 || refreshed.status === 403) {
+            // Refresh token was rejected or rotated away — the session is dead.
+            clearSessionMarker();
           }
         } catch (e) {
           if (e instanceof ApiError) throw e;
@@ -1413,9 +1451,9 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
 /** Form upload or non-JSON body: same timeout behavior as apiFetch. */
 async function apiFetchRaw(path: string, init: RequestInit, opts?: ApiFetchOptions): Promise<Response> {
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
-  const token = getAccessToken();
   const headers = new Headers(init.headers);
-  if (token) headers.set("authorization", `Bearer ${token}`);
+  // S1.3: cookie auth (credentials: "include"); S1.7: CSRF marker for mutations.
+  headers.set("x-requested-with", "XMLHttpRequest");
   const signal = mergeAbortSignals(createTimeoutSignal(timeoutMs), opts?.signal ?? init.signal);
 
   try {
@@ -1487,6 +1525,16 @@ export const api = {
       {
         method: "POST",
         body: JSON.stringify({ email }),
+      },
+      { skipGlobalLoading: true },
+    );
+  },
+  async resetPassword(email: string, token: string, password: string) {
+    return apiFetch<{ ok: boolean; message: string }>(
+      "/api/auth/reset-password",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, token, password }),
       },
       { skipGlobalLoading: true },
     );
@@ -1962,15 +2010,30 @@ export const api = {
   /** Fetch all pages for export (bounded). */
   async listArticlesAll(projectId: string, query: Omit<ArticleListQuery, "page" | "per_page"> = {}) {
     const per_page = 500;
-    const items: ArticlePublic[] = [];
-    let page = 1;
-    let total = 0;
-    while (page <= 50) {
-      const res = await api.listArticlesPage(projectId, { ...query, page, per_page });
-      total = res.total;
-      items.push(...(res.items || []));
-      if (items.length >= total || !(res.items || []).length) break;
-      page += 1;
+    const MAX_PAGES = 50;
+    // P2.7: fetch page 1 to learn the total, then pull the remaining pages with
+    // bounded concurrency instead of a serial 50-request waterfall.
+    const first = await api.listArticlesPage(projectId, { ...query, page: 1, per_page });
+    const items: ArticlePublic[] = [...(first.items || [])];
+    const total = first.total || 0;
+    if (items.length >= total || !(first.items || []).length) return items;
+
+    const lastPage = Math.min(MAX_PAGES, Math.ceil(total / per_page));
+    const pages: number[] = [];
+    for (let p = 2; p <= lastPage; p += 1) pages.push(p);
+
+    const CONCURRENCY = 4;
+    for (let i = 0; i < pages.length; i += CONCURRENCY) {
+      const batch = pages.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        batch.map((page) =>
+          api
+            .listArticlesPage(projectId, { ...query, page, per_page })
+            .then((res) => res.items || [])
+            .catch(() => [] as ArticlePublic[]),
+        ),
+      );
+      for (const arr of results) items.push(...arr);
     }
     return items;
   },

@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from app.core.config import settings
+from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
 
 log = logging.getLogger(__name__)
 
@@ -174,7 +175,14 @@ class OpenAIClient:
 
     async def _download_image_bytes(self, url: str) -> bytes | None:
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=60.0), follow_redirects=True) as client:
+            assert_public_http_url(url)  # S1.6c: block internal/metadata reference-image URLs
+        except SsrfError:
+            log.warning("Refusing to download non-public reference image URL")
+            return None
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(15.0, read=60.0), follow_redirects=True, event_hooks=ssrf_guarded_event_hooks()
+            ) as client:
                 res = await client.get(url)
                 res.raise_for_status()
                 content_type = (res.headers.get("content-type") or "").lower()

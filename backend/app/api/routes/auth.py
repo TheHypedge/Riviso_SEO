@@ -124,6 +124,11 @@ def _to_user_public(u: dict) -> UserPublic:
 
 
 
+def _cookie_secure_flag() -> bool:
+    # S1.4: always Secure in production, even if COOKIE_SECURE was left unset.
+    return bool(settings.cookie_secure) or settings.is_production
+
+
 def _set_auth_cookies(response: Response, access: str, refresh: str) -> None:
 
     response.set_cookie(
@@ -134,13 +139,15 @@ def _set_auth_cookies(response: Response, access: str, refresh: str) -> None:
 
         httponly=True,
 
-        secure=bool(settings.cookie_secure),
+        secure=_cookie_secure_flag(),
 
         samesite=settings.cookie_samesite,
 
         domain=settings.cookie_domain,
 
         path="/",
+
+        max_age=settings.access_token_ttl_seconds,
 
     )
 
@@ -152,7 +159,7 @@ def _set_auth_cookies(response: Response, access: str, refresh: str) -> None:
 
         httponly=True,
 
-        secure=bool(settings.cookie_secure),
+        secure=_cookie_secure_flag(),
 
         samesite=settings.cookie_samesite,
 
@@ -160,21 +167,51 @@ def _set_auth_cookies(response: Response, access: str, refresh: str) -> None:
 
         path="/",
 
+        max_age=settings.refresh_token_ttl_seconds,
+
     )
 
 
 
 
 
-def _issue_tokens(user: dict, response: Response) -> TokenPair:
+# S1.1: refresh-token rotation. Each refresh token carries a unique ``jti`` that
+# must be present in the user's server-side allowlist; refreshing rotates it
+# (old jti removed, new added) so a replayed/old refresh token is rejected.
+_MAX_REFRESH_SESSIONS = 10
+
+
+def _active_refresh_jtis(user: dict) -> list[str]:
+    raw = user.get("refresh_session_jtis")
+    if isinstance(raw, list):
+        return [str(x) for x in raw if str(x).strip()]
+    return []
+
+
+async def _persist_refresh_jtis(st, uid: str, jtis: list[str]) -> None:
+    if not uid or not hasattr(st, "update_user_fields"):
+        return
+    trimmed = jtis[-_MAX_REFRESH_SESSIONS:]
+    try:
+        await run_sync(call_storage, st.update_user_fields, uid, {"refresh_session_jtis": trimmed})
+    except Exception:
+        # Non-fatal: failing to persist the allowlist must not block auth.
+        pass
+
+
+async def _issue_tokens(st, user: dict, response: Response) -> TokenPair:
 
     uid = (user.get("id") or "").strip()
 
     role = (user.get("role") or "user").strip().lower()
 
+    jti = uuid.uuid4().hex
+
     access = create_access_token(subject=uid, extra_claims={"role": role})
 
-    refresh = create_refresh_token(subject=uid, extra_claims={"role": role})
+    refresh = create_refresh_token(subject=uid, extra_claims={"role": role, "jti": jti})
+
+    await _persist_refresh_jtis(st, uid, _active_refresh_jtis(user) + [jti])
 
     _set_auth_cookies(response, access, refresh)
 
@@ -182,6 +219,59 @@ def _issue_tokens(user: dict, response: Response) -> TokenPair:
 
 
 
+
+
+# S1.5: account lockout after repeated failed logins (per-account backoff).
+_LOGIN_MAX_FAILURES = 8
+_LOGIN_LOCKOUT_MINUTES = 15
+_TS_FMT = "%Y-%m-%d %H:%M:%S"
+
+
+def _parse_utc_ts(raw) -> datetime | None:
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s, _TS_FMT)
+    except (TypeError, ValueError):
+        return None
+
+
+def _lockout_remaining_seconds(user: dict) -> int:
+    until = _parse_utc_ts(user.get("login_lockout_until"))
+    if not until:
+        return 0
+    delta = (until - datetime.utcnow()).total_seconds()
+    return int(delta) if delta > 0 else 0
+
+
+async def _register_failed_login(st, user: dict) -> None:
+    uid = (user.get("id") or "").strip()
+    if not uid or not hasattr(st, "update_user_fields"):
+        return
+    count = int(user.get("login_failed_count") or 0) + 1
+    updates: dict = {"login_failed_count": count}
+    if count >= _LOGIN_MAX_FAILURES:
+        updates["login_lockout_until"] = (
+            datetime.utcnow() + timedelta(minutes=_LOGIN_LOCKOUT_MINUTES)
+        ).strftime(_TS_FMT)
+        updates["login_failed_count"] = 0
+    try:
+        await run_sync(call_storage, st.update_user_fields, uid, updates)
+    except Exception:
+        pass
+
+
+async def _reset_failed_login(st, user: dict) -> None:
+    uid = (user.get("id") or "").strip()
+    if not uid or not hasattr(st, "update_user_fields"):
+        return
+    if not int(user.get("login_failed_count") or 0) and not (user.get("login_lockout_until") or ""):
+        return
+    try:
+        await run_sync(call_storage, st.update_user_fields, uid, {"login_failed_count": 0, "login_lockout_until": ""})
+    except Exception:
+        pass
 
 
 @limiter.limit("10/minute")
@@ -210,9 +300,27 @@ async def login(payload: LoginRequest, request: Request, response: Response) -> 
 
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    remaining = _lockout_remaining_seconds(user)
+
+    if remaining > 0:
+
+        raise HTTPException(
+
+            status_code=429,
+
+            detail=f"Too many failed login attempts. Try again in about {max(1, remaining // 60)} minute(s).",
+
+            headers={"Retry-After": str(remaining)},
+
+        )
+
     if not check_password_hash(user["password_hash"], payload.password):
 
+        await _register_failed_login(st, user)
+
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    await _reset_failed_login(st, user)
 
     if account_is_inactive(user):
 
@@ -234,7 +342,7 @@ async def login(payload: LoginRequest, request: Request, response: Response) -> 
 
 
 
-    return _issue_tokens(user, response)
+    return await _issue_tokens(st, user, response)
 
 
 
@@ -467,7 +575,7 @@ async def verify_email(payload: VerifyEmailRequest, request: Request, response: 
 
         return VerifyEmailResponse(ok=True, message=message)
 
-    tokens = _issue_tokens(user, response)
+    tokens = await _issue_tokens(st, user, response)
 
     return VerifyEmailResponse(
 
@@ -629,7 +737,7 @@ async def reactivate(payload: LoginRequest, request: Request, response: Response
 
             raise HTTPException(status_code=403, detail=_verification_required_detail())
 
-        return _issue_tokens(user, response)
+        return await _issue_tokens(st, user, response)
 
 
 
@@ -681,7 +789,7 @@ async def reactivate(payload: LoginRequest, request: Request, response: Response
 
         raise HTTPException(status_code=403, detail=_verification_required_detail())
 
-    return _issue_tokens(restored, response)
+    return await _issue_tokens(st, restored, response)
 
 
 
@@ -696,6 +804,8 @@ async def me(user: dict = Depends(get_current_user)) -> UserPublic:
 
 
 
+
+@limiter.limit("20/minute")
 
 @router.post("/refresh", response_model=TokenPair)
 
@@ -765,28 +875,64 @@ async def refresh_token(request: Request, response: Response) -> TokenPair:
 
     role = (user.get("role") or "user").strip().lower()
 
+    # S1.1: validate the refresh-token jti against the server-side allowlist and
+    # rotate it. A replayed or rotated-away token (jti absent from the list) is
+    # rejected. Legacy refresh tokens minted before rotation existed have no jti
+    # and require a one-time re-login.
+    presented_jti = (payload.get("jti") or "").strip()
 
+    active = _active_refresh_jtis(user)
+
+    if not presented_jti or presented_jti not in active:
+
+        raise HTTPException(status_code=401, detail="Refresh token is no longer valid")
+
+    new_jti = uuid.uuid4().hex
+
+    remaining = [j for j in active if j != presented_jti] + [new_jti]
+
+    await _persist_refresh_jtis(st, uid, remaining)
 
     access = create_access_token(subject=uid, extra_claims={"role": role})
 
-    response.set_cookie(
+    refresh = create_refresh_token(subject=uid, extra_claims={"role": role, "jti": new_jti})
 
-        "aa_access",
+    _set_auth_cookies(response, access, refresh)
 
-        access,
+    return TokenPair(access_token=access, refresh_token=refresh)
 
-        httponly=True,
 
-        secure=bool(settings.cookie_secure),
+def _clear_auth_cookies(response: Response) -> None:
+    for name in ("aa_access", "aa_refresh"):
+        response.delete_cookie(name, path="/", domain=settings.cookie_domain)
 
-        samesite=settings.cookie_samesite,
 
-        domain=settings.cookie_domain,
-
-        path="/",
-
-    )
-
-    return TokenPair(access_token=access, refresh_token=rt)
+@router.post("/logout", status_code=200)
+async def logout(request: Request, response: Response) -> dict:
+    """Revoke the presented refresh token's jti server-side and clear auth cookies (S1.1)."""
+    st = get_legacy_storage_module()
+    rt = request.cookies.get("aa_refresh") or ""
+    try:
+        body = await request.json()
+        if isinstance(body, dict) and body.get("refresh_token"):
+            rt = str(body.get("refresh_token"))
+    except Exception:
+        pass
+    rt = str(rt or "").strip()
+    if rt:
+        try:
+            payload = decode_token(rt)
+            uid = (payload.get("sub") or "").strip()
+            jti = (payload.get("jti") or "").strip()
+            if uid and jti:
+                user = await run_sync(call_storage, st.get_user_by_id, uid)
+                if user:
+                    remaining = [j for j in _active_refresh_jtis(user) if j != jti]
+                    await _persist_refresh_jtis(st, uid, remaining)
+        except Exception:
+            # Best-effort revocation; always clear cookies regardless.
+            pass
+    _clear_auth_cookies(response)
+    return {"ok": True}
 
 

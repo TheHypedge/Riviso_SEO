@@ -33,6 +33,7 @@ import re
 import asyncio
 import hashlib
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -41,7 +42,8 @@ from pydantic import BaseModel, Field, ValidationError
 from pymongo.errors import PyMongoError
 
 from app.core.deps import get_current_user
-from app.core.project_lookup import require_project_access
+from app.core.ratelimit import limiter
+from app.core.project_lookup import async_require_project_access, require_project_access
 from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.services.storage_db import call_storage
@@ -433,8 +435,10 @@ def _to_list_item(a: dict) -> ArticleListItem:
 # ---------------------------------------------------------------------------
 
 
-def _require_project_access(*, st, user: dict, project_id: str, full: bool = False) -> dict:
-    return require_project_access(st=st, user=user, project_id=project_id, full=full)
+async def _require_project_access(*, st, user: dict, project_id: str, full: bool = False) -> dict:
+    # Use Motor-backed async lookup (P2.3) — keeps blocking I/O off the event loop
+    # and benefits from the run_with_retry reset on stale Atlas connections.
+    return await async_require_project_access(user=user, project_id=project_id, full=full)
 
 
 def _require_verified_website(proj: dict) -> None:
@@ -559,11 +563,13 @@ def _get_article_or_404(*, st, project_id: str, article_id: str) -> dict:
     if not pid or not aid:
         raise HTTPException(status_code=404, detail="Not found")
     if hasattr(st, "get_article"):
-        a = st.get_article(project_id=pid, article_id=aid)
+        # Route through call_storage so stale Atlas connections are retried and
+        # the client is reset before giving up (avoids bare 503 on first touch).
+        a = call_storage(st.get_article, project_id=pid, article_id=aid)
         if isinstance(a, dict):
             return a
-    rows = st.load_articles() or []
-    for a in rows:
+    rows = call_storage(st.load_articles) if not hasattr(st, "get_article") else []
+    for a in (rows or []):
         if not isinstance(a, dict):
             continue
         if (a.get("id") or "").strip() == aid and (a.get("project_id") or "").strip() == pid:
@@ -641,6 +647,23 @@ _LISTING_STATUS_KEYS = frozenset({"pending", "draft", "published", "scheduled"})
 _LISTING_MAX_SCAN = 20000
 
 
+def _storage_supports_listing_status_match(st) -> bool:
+    """True when storage can match the persisted listing_status server-side (P4.3)."""
+    import inspect
+
+    fn = getattr(st, "count_articles_listing_for_project", None)
+    page = getattr(st, "load_articles_listing_page_for_project", None)
+    if not callable(fn) or not callable(page):
+        return False
+    try:
+        return (
+            "status_key" in inspect.signature(fn).parameters
+            and "status_key" in inspect.signature(page).parameters
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 async def _listing_rows_page(
     st,
     project_id: str,
@@ -651,6 +674,7 @@ async def _listing_rows_page(
     date_from: str | None,
     date_to: str | None,
     sort: str,
+    status_key: str | None = None,
 ) -> list[dict]:
     if hasattr(st, "load_articles_listing_page_for_project"):
         return await run_sync(
@@ -662,6 +686,7 @@ async def _listing_rows_page(
             date_from=date_from,
             date_to=date_to,
             sort=sort,
+            status_key=status_key,
         )
     if hasattr(st, "load_articles_listing_for_project"):
         rows = await run_sync(st.load_articles_listing_for_project, project_id, limit=5000)
@@ -800,7 +825,7 @@ async def _listing_page_with_derived_status(
 async def list_article_titles(project_id: str, user: dict = Depends(get_current_user)) -> list[ArticleTitleRef]:
     """Lightweight id/title list for scheduled jobs and import reconciliation."""
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     if hasattr(st, "load_article_titles_for_project"):
         rows = await run_sync(st.load_article_titles_for_project, project_id, limit=20000)
     elif hasattr(st, "load_articles_listing_for_project"):
@@ -835,12 +860,41 @@ async def list_articles(
     and merges posted scheduled-job overlays only for rows on the current page.
     """
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     status_key = (status or "").strip().lower()
     if status_key and status_key not in _LISTING_STATUS_KEYS:
         status_key = ""
 
-    if status_key:
+    # P4.3: when storage persists ``listing_status`` we match it directly in Mongo
+    # (one indexed query for count + page) instead of scanning up to 20k rows twice.
+    # The page rows still get the posted-job overlay applied for exact display.
+    supports_status_match = _storage_supports_listing_status_match(st)
+    if supports_status_match:
+        # P4.3 fast path: one indexed query each for count + page (no 20k scan).
+        # The page rows still get the posted-job overlay for exact displayed status.
+        sk = status_key or None
+        total = await run_sync(
+            st.count_articles_listing_for_project,
+            project_id,
+            q=q,
+            date_from=date_from,
+            date_to=date_to,
+            status_key=sk,
+        )
+        rows = await _listing_rows_page(
+            st,
+            project_id,
+            page=page,
+            per_page=per_page,
+            q=q,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+            status_key=sk,
+        )
+        items = await _public_listing_items_for_rows(st, project_id, rows)
+    elif status_key:
+        # Legacy fallback (storage without persisted listing_status): derive in Python.
         total = await _count_listing_with_derived_status(
             st,
             project_id,
@@ -910,7 +964,7 @@ async def consume_export_quota(
     even though the XLSX is generated in the browser.
     """
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
     if role == "admin" or not uid:
@@ -947,7 +1001,7 @@ async def create_article(
     in the same project (case-insensitive; see module docstring).
     """
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
 
     if len(payload.keywords) > 10:
         raise HTTPException(status_code=400, detail="Maximum 10 keywords allowed")
@@ -1015,7 +1069,7 @@ async def bulk_action(
 ) -> dict:
     """Bulk delete or status change; ``article_ids`` are validated against this project only."""
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
 
     pid = (project_id or "").strip()
     ids = [str(x).strip() for x in (payload.article_ids or []) if str(x).strip()]
@@ -1024,16 +1078,23 @@ async def bulk_action(
         raise HTTPException(status_code=400, detail="No articles selected")
 
     # Ensure ids belong to this project to avoid cross-project updates.
-    allowed = set()
-    if hasattr(st, "load_articles_listing_for_project"):
-        rows = await run_sync(st.load_articles_listing_for_project, pid, limit=20000)
+    # P2.4: validate via an indexed {"id": {"$in": ids}} query instead of loading
+    # and scanning up to 20k listing rows.
+    if hasattr(st, "load_articles_by_ids_for_project"):
+        found = await run_sync(st.load_articles_by_ids_for_project, pid, ids)
+        allowed = set(found.keys())
     else:
-        rows = await run_sync(st.load_articles)
-    for a in rows:
-        if isinstance(a, dict) and (a.get("project_id") or "") == pid:
-            aid = (a.get("id") or "").strip()
-            if aid:
-                allowed.add(aid)
+        allowed = set()
+        rows = (
+            await run_sync(st.load_articles_listing_for_project, pid, limit=20000)
+            if hasattr(st, "load_articles_listing_for_project")
+            else await run_sync(st.load_articles)
+        )
+        for a in rows:
+            if isinstance(a, dict) and (a.get("project_id") or "") == pid:
+                aid = (a.get("id") or "").strip()
+                if aid:
+                    allowed.add(aid)
     ids = [x for x in ids if x in allowed]
     if not ids:
         return {"ok": True, "updated": 0}
@@ -1093,7 +1154,9 @@ def _dedupe_bulk_upload_rows(rows: list) -> tuple[list, list[str], int]:
 
 
 @router.post("/bulk-upload", response_model=BulkUploadResponse, status_code=200)
+@limiter.limit("12/minute")
 async def bulk_upload_articles(
+    request: Request,
     project_id: str,
     payload: BulkUploadRequest,
     user: dict = Depends(require_plan_action(PlanAction.BULK_UPLOAD, consume=False)),
@@ -1105,7 +1168,7 @@ async def bulk_upload_articles(
     false, the handler returns **409** without writing rows so the client can confirm skipping conflicts.
     """
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
 
     rows_in = list(payload.rows or [])
     rows_work, duplicate_titles, duplicate_dropped = _dedupe_bulk_upload_rows(rows_in)
@@ -1242,22 +1305,27 @@ async def get_article_editor_shell(
 ) -> ArticleDetailResponse:
     """Editor metadata without body or inline image — fast first paint."""
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     aid = (article_id or "").strip()
     try:
-        a = await run_sync(
-            call_storage,
-            _get_article_shell_or_404,
-            st=st,
-            project_id=project_id,
-            article_id=article_id,
+        # P2.5: the article shell and the posted-job overlay are independent reads —
+        # run them concurrently so editor first paint isn't a serial round-trip chain.
+        a_res, job_res = await asyncio.gather(
+            run_sync(
+                call_storage,
+                _get_article_shell_or_404,
+                st=st,
+                project_id=project_id,
+                article_id=article_id,
+            ),
+            run_sync(call_storage, _fetch_posted_job_overlay_for_article, st, project_id, aid),
+            return_exceptions=True,
         )
-        job = None
-        try:
-            job = await run_sync(call_storage, _fetch_posted_job_overlay_for_article, st, project_id, aid)
-        except Exception:
-            # Overlay is optional for editor paint; do not block shell on scheduler/mongo blips.
-            job = None
+        if isinstance(a_res, BaseException):
+            raise a_res
+        a = a_res
+        # Overlay is optional for editor paint; do not block shell on scheduler/mongo blips.
+        job = job_res if not isinstance(job_res, BaseException) else None
         a_view = _merge_posted_job_into_article_row(a, job)
         return await run_sync(
             _to_detail_response,
@@ -1289,7 +1357,7 @@ async def get_article_body(
 ) -> ArticleBodyResponse:
     """Article body only — loaded after editor shell."""
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     pid = (project_id or "").strip()
     aid = (article_id or "").strip()
     try:
@@ -1319,7 +1387,7 @@ async def get_article_detail(
 ) -> ArticleDetailResponse:
     """Full article body and meta for the editor UI."""
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     aid = (article_id or "").strip()
 
     try:
@@ -1365,7 +1433,7 @@ async def get_article_featured_image(
 ) -> ArticleFeaturedImageResponse:
     """Return large inline featured images separately so the main editor payload stays small."""
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     pid = (project_id or "").strip()
     aid = (article_id or "").strip()
     try:
@@ -1391,7 +1459,7 @@ async def get_article_generation_status(
 ) -> ArticleGenerationStatusResponse:
     """Lightweight poll target for async content/image generation (no body or image payload)."""
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     pid = (project_id or "").strip()
     aid = (article_id or "").strip()
     try:
@@ -1432,7 +1500,7 @@ async def get_article_cluster_link_context(
 ) -> dict:
     """Sibling internal-link targets — loaded on demand, not on every editor shell fetch."""
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     aid = (article_id or "").strip()
     try:
         ctx = await run_sync(
@@ -1458,7 +1526,7 @@ async def update_article(
 ) -> ArticleDetailResponse:
     """Partial update; changing ``title`` runs the same duplicate check as create (409 on conflict)."""
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     _ = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     aid_now = (article_id or "").strip()
 
@@ -1506,7 +1574,9 @@ async def update_article(
 
 
 @router.post("/{article_id}/generate", response_model=None)
+@limiter.limit("30/minute")
 async def generate_article_and_image(
+    request: Request,
     project_id: str,
     article_id: str,
     payload: GenerateRequest,
@@ -1518,7 +1588,7 @@ async def generate_article_and_image(
     Requires ``OPENAI_API_KEY``; uses project prompts and article row fields as context.
     """
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     wp_id = (payload.writing_prompt_id or "").strip() or (proj.get("default_prompt_id") or "").strip() or None
@@ -1591,7 +1661,7 @@ async def article_pipeline_events(
     (generation, humanization, publishing). Requires Redis pub/sub.
     """
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
     async def event_generator():
@@ -1613,7 +1683,9 @@ async def article_pipeline_events(
 
 
 @router.post("/{article_id}/regenerate-image", response_model=None)
+@limiter.limit("30/minute")
 async def regenerate_article_featured_image(
+    request: Request,
     project_id: str,
     article_id: str,
     payload: RegenerateImageRequest,
@@ -1621,7 +1693,7 @@ async def regenerate_article_featured_image(
 ) -> dict | JSONResponse:
     """Regenerate only the article featured image, capped per article by the user's plan."""
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     aid = (article_id or "").strip()
     try:
         row = await run_sync(
@@ -1694,7 +1766,7 @@ async def audit_article_integrity(
     Returns: { ai_percentage, flagged_paragraphs: [{index,text,reason}], metrics }
     """
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     md_body = ((payload.markdown if payload and payload.markdown else None) or a.get("article") or "").strip()
     auditor = AIDetectionAuditor()
@@ -1720,14 +1792,14 @@ async def humanize_article_integrity(
     project_id: str,
     article_id: str,
     payload: IntegrityMarkdownBody | None = None,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_plan_action(PlanAction.HUMANIZE)),
 ) -> dict:
     """
     Full-document structural humanization (industry-neutral). Does not persist until the user saves/applies in the editor.
     Returns original + humanized + before/after audit for UI.
     """
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     md_body = ((payload.markdown if payload and payload.markdown else None) or a.get("article") or "").strip()
     await publish_pipeline_status(article_id, MSG_HUMANIZE, STAGE_HUMANIZATION)
@@ -1827,10 +1899,17 @@ async def _persist_schedule_row(
     skip_article_update: bool = False,
 ) -> dict:
     """Write article + scheduled-job rows; optionally queue background prep (non-blocking)."""
+    # All MongoDB writes inside this function go through call_storage so stale
+    # Atlas connections are retried and the client is reset before giving up.
+    # Use patch_article_fields ($set-only, no read) instead of update_article_fields
+    # (find+replace) to avoid holding _db_write_lock across a round-trip and
+    # colliding with the scheduler's background writes.
     cat_raw = (proj.get("wp_category_ids") or "").strip()
+    _art_patch = getattr(st, "patch_article_fields", None) or st.update_article_fields
     if not skip_article_update:
         await run_sync(
-            st.update_article_fields,
+            call_storage,
+            _art_patch,
             article_id,
             {
                 "wp_scheduled_at": norm_utc,
@@ -1847,7 +1926,7 @@ async def _persist_schedule_row(
         job_id = f"job_{stable}"
         if hasattr(st, "load_scheduled_jobs"):
             try:
-                for row in st.load_scheduled_jobs(project_id=project_id, article_id=article_id, limit=10) or []:
+                for row in call_storage(st.load_scheduled_jobs, project_id=project_id, article_id=article_id, limit=10) or []:
                     if not isinstance(row, dict):
                         continue
                     st_row = (row.get("state") or "").strip().lower()
@@ -1879,15 +1958,15 @@ async def _persist_schedule_row(
         }
         updated = False
         try:
-            updated = bool(await run_sync(st.update_scheduled_job_fields, job_id, job_updates))
+            updated = bool(await run_sync(call_storage, st.update_scheduled_job_fields, job_id, job_updates))
         except Exception:
             updated = False
         if not updated:
             try:
-                await run_sync(st.insert_scheduled_job, {**job_updates, "created_at": now_str})
+                await run_sync(call_storage, st.insert_scheduled_job, {**job_updates, "created_at": now_str})
             except Exception:
                 try:
-                    await run_sync(st.update_scheduled_job_fields, job_id, job_updates)
+                    await run_sync(call_storage, st.update_scheduled_job_fields, job_id, job_updates)
                 except Exception:
                     pass
         job_row = {**job_updates}
@@ -1926,7 +2005,7 @@ async def bulk_schedule_articles(
 ) -> BulkScheduleResponse:
     """Schedule many articles in one round-trip (bulk weekly/monthly UI)."""
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
 
     wp_status = (payload.wp_status or "draft").strip().lower()
@@ -2052,7 +2131,7 @@ async def schedule_article(
     user: dict = Depends(get_current_user),
 ) -> dict:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
@@ -2189,10 +2268,12 @@ def _article_has_stored_featured_image(st, article: dict, article_id: str) -> bo
 
 
 @router.post("/{article_id}/publish", status_code=200)
+@limiter.limit("30/minute")
 async def publish_to_live_site(
+    request: Request,
     project_id: str,
     article_id: str,
-    image_file: UploadFile | None = File(default=None),
+    image_file: Optional[UploadFile] = File(default=None),
     post_type: str = Form(default="posts"),
     wp_status: str = Form(default="draft"),
     category_ids: str = Form(default=""),
@@ -2202,7 +2283,7 @@ async def publish_to_live_site(
     Publish an article to the live WordPress site.
     """
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
@@ -2475,7 +2556,9 @@ async def publish_to_live_site(
 
 
 @router.post("/{article_id}/shopify/publish", status_code=200)
+@limiter.limit("60/minute")
 async def publish_to_shopify_blog(
+    request: Request,
     project_id: str,
     article_id: str,
     payload: ShopifyPublishRequest | None = None,
@@ -2485,7 +2568,7 @@ async def publish_to_shopify_blog(
     Create a Shopify Blog Article for this project.
     """
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
 
     plat = (proj.get("platform") or "").strip().lower()
     if plat != "shopify":
@@ -2688,7 +2771,7 @@ async def update_wordpress_post(
 ) -> dict:
     """Push the current article row to an existing WordPress post (no new post created)."""
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
     aid = (article_id or "").strip()
     try:
@@ -2837,7 +2920,7 @@ async def sync_article_from_wordpress_route(
     from app.api.routes.wordpress import _get_wp_client_for_project
 
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
     aid = (article_id or "").strip()
     try:
@@ -2916,7 +2999,7 @@ async def request_indexing(project_id: str, article_id: str, user: dict = Depend
        the only way to actually create the visible "Indexing requested" entry.
     """
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     live_url = (a.get("wp_link") or "").strip()
     if not live_url:
@@ -2946,7 +3029,7 @@ async def indexing_status(project_id: str, article_id: str, user: dict = Depends
     consume any indexing quota beyond Google's standard URL Inspection API limits.
     """
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     live_url = (a.get("wp_link") or "").strip()
     if not live_url:
@@ -2980,7 +3063,7 @@ async def monitor_mark(
     from app.services.rank_monitor_service import RankMonitorService
 
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
 
     status = ((payload or {}).get("status") or "").strip().lower()

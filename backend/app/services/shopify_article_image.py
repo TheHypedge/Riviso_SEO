@@ -12,6 +12,8 @@ from typing import Any
 
 import httpx
 
+from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
+
 log = logging.getLogger(__name__)
 
 _MAX_IMAGE_BYTES = 15 * 1024 * 1024
@@ -50,7 +52,14 @@ async def featured_image_bytes_from_http_url(image_url: str) -> tuple[bytes, str
     if not url.startswith("http://") and not url.startswith("https://"):
         return None
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=90.0), follow_redirects=True) as client:
+        assert_public_http_url(url)  # S1.6c
+    except SsrfError:
+        log.warning("Refusing to download non-public Shopify image URL")
+        return None
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, read=90.0), follow_redirects=True, event_hooks=ssrf_guarded_event_hooks()
+        ) as client:
             res = await client.get(url)
             res.raise_for_status()
             content_type = (res.headers.get("content-type") or "image/png").split(";")[0].strip()

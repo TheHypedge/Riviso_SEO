@@ -23,8 +23,10 @@ from app.services.generation_queue import (
     clear_dedup,
     dequeue_blocking,
     generation_slot,
+    queue_depth,
     close_redis,
 )
+from app.core.metrics import set_queue_depth
 from app.services.pipeline_streamer import MSG_WORKER_START, STAGE_WORKER_START, publish_pipeline_status
 from app.services.scheduler import (
     _patch_scheduled_job,
@@ -43,6 +45,11 @@ async def _storage(fn, /, *args, **kwargs):
     return await run_sync(call_storage, fn, *args, **kwargs)
 
 
+def _gen_project_reader(st):
+    """Prefer the catalog-excluding generation projection (P4.1); fall back to full read."""
+    return getattr(st, "get_project_for_generation", None) or getattr(st, "get_project_by_id", None)
+
+
 async def _handle_scheduled_prep(payload: dict) -> None:
     st = get_legacy_storage_module()
     jid = (payload.get("job_id") or "").strip()
@@ -53,7 +60,7 @@ async def _handle_scheduled_prep(payload: dict) -> None:
 
     dedup = f"prep:{jid}"
     try:
-        proj = await _storage(st.get_project_by_id, pid) if hasattr(st, "get_project_by_id") else None
+        proj = await _storage(_gen_project_reader(st), pid) if hasattr(st, "get_project_by_id") else None
         if not isinstance(proj, dict):
             prows = await _storage(st.load_projects)
             proj = next((p for p in (prows or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
@@ -117,7 +124,7 @@ async def _handle_article_generate(payload: dict) -> None:
         log.warning("article_generate job missing user id=%s", uid)
         return
 
-    proj = await run_sync(st.get_project_by_id, pid) if hasattr(st, "get_project_by_id") else None
+    proj = await run_sync(_gen_project_reader(st), pid) if hasattr(st, "get_project_by_id") else None
     if not isinstance(proj, dict):
         raise RuntimeError("Project not found")
 
@@ -164,7 +171,7 @@ async def _handle_image_regenerate(payload: dict) -> None:
     if not isinstance(user, dict):
         return
 
-    proj = await run_sync(st.get_project_by_id, pid) if hasattr(st, "get_project_by_id") else None
+    proj = await run_sync(_gen_project_reader(st), pid) if hasattr(st, "get_project_by_id") else None
     if not isinstance(proj, dict):
         raise RuntimeError("Project not found")
 
@@ -204,7 +211,7 @@ async def _handle_cluster_generate_all(payload: dict) -> None:
         log.warning("cluster_generate_all missing user id=%s", uid)
         return
 
-    proj = await run_sync(st.get_project_by_id, pid) if hasattr(st, "get_project_by_id") else None
+    proj = await run_sync(_gen_project_reader(st), pid) if hasattr(st, "get_project_by_id") else None
     if not isinstance(proj, dict):
         raise RuntimeError("Project not found")
 
@@ -231,7 +238,7 @@ async def _handle_topic_cluster_plan(payload: dict) -> None:
     if not pid or not cid or not uid:
         return
 
-    proj = await run_sync(st.get_project_by_id, pid) if hasattr(st, "get_project_by_id") else None
+    proj = await run_sync(_gen_project_reader(st), pid) if hasattr(st, "get_project_by_id") else None
     if not isinstance(proj, dict):
         await run_sync(
             st.update_topic_cluster_fields,
@@ -343,15 +350,26 @@ async def generation_worker_loop() -> None:
         settings.max_concurrent_generations,
         (settings.redis_url or "").strip() or "default",
     )
+    import structlog
+
     while True:
         try:
             job = await dequeue_blocking(timeout_seconds=poll)
+            try:
+                set_queue_depth(await queue_depth())
+            except Exception:
+                pass
             if job is None:
                 continue
+            # I5.3: bind a correlation id so worker logs can be matched to the
+            # request/article that enqueued the job.
+            structlog.contextvars.bind_contextvars(job_id=job.id, job_kind=str(job.kind))
             try:
                 await process_generation_job(job)
             except Exception:
                 log.exception("Generation job failed id=%s kind=%s", job.id, job.kind)
+            finally:
+                structlog.contextvars.unbind_contextvars("job_id", "job_kind")
         except asyncio.CancelledError:
             raise
         except Exception:

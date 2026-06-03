@@ -538,6 +538,46 @@
   color: #9effa0;
 }
 
+/* Forgot-password inline text link below the password field */
+.authForgotRow {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -6px;
+}
+
+.authForgotLink {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.62);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  line-height: 1;
+}
+
+.authForgotLink:hover:not(:disabled) {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.authForgotLink:disabled {
+  opacity: 0.4;
+  cursor: default;
+  text-decoration: none;
+}
+
+/* Info/success banner inside the auth card */
+.authInfo {
+  border-radius: 10px;
+  background: rgba(109, 94, 252, 0.14);
+  border: 1px solid rgba(109, 94, 252, 0.32);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 13px;
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+
 .authFooter {
   margin-top: 18px;
   display: flex;

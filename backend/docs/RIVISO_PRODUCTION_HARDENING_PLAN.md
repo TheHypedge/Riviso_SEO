@@ -104,18 +104,18 @@ Everything below is scoped to make *this* topology reliable, secure, and fast.
 | **P2.7** | Frontend: replace `listArticlesAll` (50-page waterfall) with aggregate endpoint on Overview/Tools | Opt §3.2/§3.8 | Use `workspaceOverview()` |
 | **P2.8** | Stop project-shell refetch on tab switch; dedupe GSC analytics fetches | Opt §3.8 | Drop `tab` from deps; share analytics in state |
 
-### Phase P4 — Structural performance refactor (deeper)
+### Phase P4 — Structural performance refactor (deeper)  ✅ DONE
 
-| ID | Item | Audit ref | Fix |
-|----|------|-----------|-----|
-| **P4.1** | Add Mongo projections everywhere (project/user/scheduler light vs full) | Opt §1.2 | Per-call-site projections |
-| **P4.2** | Route all partial writes through `$set`; batch `bulk_update_articles` | Opt §1.3 | bulk_write of `$set` ops |
-| **P4.3** | Persist `has_body` + derived listing status (kill pre-`$limit` body scans & double 20k scans) | Opt §1.4A, §3.6 | Write-time flags + `$match` |
-| **P4.4** | Bulk scheduled-job APIs (upsert/delete); move heal to worker | Opt §3.2, §3.7 | `delete_many`, background heal |
-| **P4.5** | Add missing indexes/TTLs (`site_maps`, monitors, `research_cache`) | Opt §1.5 | `create_index` + TTL |
-| **P4.6** | Typed repositories + domain models (heavy/light fields) | Opt §2.1-2.2 | `ArticleRepository`, etc. |
-| **P4.7** | `RequestContext` carrying memoized user/project/plan | Opt §2.3 | DI object |
-| **P4.8** | Expand Motor async coverage for hot reads | Opt §3.4 | Reduce thread-pool reliance |
+| ID | Item | Audit ref | Fix | Status |
+|----|------|-----------|-----|--------|
+| **P4.1** | Add Mongo projections everywhere (project/user/scheduler light vs full) | Opt §1.2 | Per-call-site projections | ✅ Project/access/listing/shopify projections already in place; added `get_project_for_generation` (catalog-excluded) wired into worker + scheduler. Heavy catalog products already moved to `shopify_products`. |
+| **P4.2** | Route all partial writes through `$set`; batch `bulk_update_articles` | Opt §1.3 | bulk_write of `$set` ops | ✅ `bulk_update_articles` now batch-reads via one `$in` (was N+1 find_ones); `patch_article_fields` ($set) is the partial-write path. |
+| **P4.3** | Persist `has_body` + derived listing status (kill pre-`$limit` body scans & double 20k scans) | Opt §1.4A, §3.6 | Write-time flags + `$match` | ✅ `has_body`+`listing_status` persisted in `_normalize_article_dict` & maintained on `$set`; idempotent startup backfill; compound index; `list_articles` status filter now a single indexed `$match`. |
+| **P4.4** | Bulk scheduled-job APIs (upsert/delete); move heal to worker | Opt §3.2, §3.7 | `delete_many`, background heal | ✅ `delete_scheduled_jobs_for_project/_for_article` (`delete_many`) replace per-row deletes in clear/cancel (via repo). Heal already runs in the scheduler loop (~10s). |
+| **P4.5** | Add missing indexes/TTLs (`site_maps`, monitors, `research_cache`) | Opt §1.5 | `create_index` + TTL | ✅ Done earlier (P0/P1 batch). |
+| **P4.6** | Typed repositories + domain models (heavy/light fields) | Opt §2.1-2.2 | `ArticleRepository`, etc. | ✅ `app/repositories/` (Article/Project/User/ScheduledJob repos + `ArticleRef`/`ProjectRef` light models); adopted in scheduled-job delete routes. |
+| **P4.7** | `RequestContext` carrying memoized user/project/plan | Opt §2.3 | DI object | ✅ `app/core/request_context.py` DI object memoizing user/subscription/project/plan (builds on P2.1/P2.2 cache) and exposing the repositories. |
+| **P4.8** | Expand Motor async coverage for hot reads | Opt §3.4 | Reduce thread-pool reliance | ✅ Motor `fetch_user_by_id` (shared `_user_doc_to_public` normalizer) wired into `get_current_user` with thread-pool fallback; `fetch_project_access_row` added. |
 
 ---
 
@@ -139,17 +139,19 @@ Everything below is scoped to make *this* topology reliable, secure, and fast.
 
 > Explicitly **out of scope for 50 users** (documented so nobody gilds the lily): Kubernetes, DB sharding/read-replicas, multi-region, service mesh, autoscaling fleets. Revisit at ~1,000+ users.
 
-### Phase P5 — Observability, testing & CI
+### Phase P5 — Observability, testing & CI ✅
 
-| ID | Item | Target |
-|----|------|--------|
-| **I5.1** | Error tracking (Sentry) on API + worker + frontend | Capture exceptions w/ PII scrubbing |
-| **I5.2** | Metrics + dashboards (request latency, queue depth, Mongo op time, OpenAI latency) | Prometheus/Grafana or hosted |
-| **I5.3** | Structured logging w/ request IDs | Correlate across API/worker |
-| **I5.4** | CI: `pip-audit` / Dependabot + secret scanning (gitleaks) | Block merges on Critical |
-| **I5.5** | CI: backend pytest + frontend unit tests run on PR | Green gate to deploy |
-| **I5.6** | Integration tests for auth, plan gating, publish flows | Cover the security-sensitive paths |
-| **I5.7** | Uptime monitoring + alerting (on `/health` readiness) | Page on downtime |
+> See `RIVISO_OBSERVABILITY.md` for the full operational reference (env toggles, scrape/probe config, runbook).
+
+| ID | Item | Target | Status |
+|----|------|--------|--------|
+| **I5.1** | Error tracking (Sentry) on API + worker + frontend | Capture exceptions w/ PII scrubbing | ✅ `init_sentry()` (API + worker), `@sentry/nextjs` instrumentation; DSN-gated, `send_default_pii=False` + auth/cookie scrub. No-op without DSN. |
+| **I5.2** | Metrics + dashboards (request latency, queue depth, Mongo op time, OpenAI latency) | Prometheus/Grafana or hosted | ✅ `GET /metrics` (Prometheus): request count/latency/in-flight, generation queue depth, external-call timing hook. Bounded cardinality (route template). `METRICS_TOKEN`/`METRICS_ENABLED` gates. |
+| **I5.3** | Structured logging w/ request IDs | Correlate across API/worker | ✅ Unified JSON logging (structlog + stdlib) via `ProcessorFormatter`; `RequestIdMiddleware` binds `request_id` (echoed in `X-Request-ID`); worker binds `job_id`/`job_kind`. |
+| **I5.4** | CI: `pip-audit` / Dependabot + secret scanning (gitleaks) | Block merges on Critical | ✅ `.github/workflows/security.yml` (pip-audit + npm audit + gitleaks) + `.github/dependabot.yml` + `.gitleaks.toml`. |
+| **I5.5** | CI: backend pytest + frontend unit tests run on PR | Green gate to deploy | ✅ `.github/workflows/ci.yml`: backend `pytest` (JSON storage) + frontend lint + `test:unit`. Dev deps in `backend/requirements-dev.txt`. |
+| **I5.6** | Integration tests for auth, plan gating, publish flows | Cover the security-sensitive paths | ✅ `tests/test_integration_security_paths.py` — auth gating, CSRF, plan/trial/quota gating, admin bypass, request-id/metrics (13 tests). |
+| **I5.7** | Uptime monitoring + alerting (on `/health` readiness) | Page on downtime | ✅ Documented in `RIVISO_OBSERVABILITY.md`: probe public `/api/health`, alerting (UptimeRobot/Cloudflare/Prometheus), SLO targets; complements container healthchecks (I3.7). |
 
 ### Phase P6 — Launch readiness
 

@@ -536,6 +536,7 @@ def humanize_paragraph(
     synonym_strength: float = 0.68,
     protected_terms: list[str] | None = None,
     force_change: bool = False,
+    used_transitions: set[str] | None = None,
 ) -> str:
     """RIVISO Paraphrase + Grammar (internal, industry-neutral)."""
     from app.services.riviso_paraphrase_engine import paraphrase_block
@@ -550,28 +551,108 @@ def humanize_paragraph(
 
     from app.services.riviso_human_profile import (
         _apply_contractions,
+        _naturalize_function_words_once,
         _split_long_sentences_only,
         _vary_openers,
+        _add_rhythmic_short_sentence,
     )
     from app.services.riviso_paraphrase_engine import scrub_ai_markers
 
     after = paraphrase_block(raw, strength=synonym_strength, protected_terms=protected_terms or [])
     if force_change and after.strip() == raw.strip() and len(raw.split()) > 6:
         after = paraphrase_block(raw, strength=min(0.88, synonym_strength + 0.12), protected_terms=protected_terms or [])
-    from app.services.riviso_human_profile import (
-        _add_one_short_sentence_if_needed,
-        _naturalize_function_words_once,
-    )
 
     after = scrub_ai_markers(after)
     after = _split_long_sentences_only(after)
     after = _vary_openers(after)
-    after = _naturalize_function_words_once(after)
-    after = _add_one_short_sentence_if_needed(after)
+    # Pass the shared used_transitions set so no transition repeats across paragraphs.
+    after = _naturalize_function_words_once(after, used_transitions=used_transitions)
+    after = _add_rhythmic_short_sentence(after)
     after = _apply_contractions(after)
     from app.services.riviso_grammar_engine import run_grammar_pipeline
 
     return run_grammar_pipeline(after)
+
+
+def _dedup_paragraph_starters(paras: list[str]) -> list[str]:
+    """
+    Document-level safety pass: if the same 3-word opener appears in more than
+    one paragraph, strip it from the second and later occurrences so the text
+    doesn't feel templated.
+
+    Two complementary strategies:
+    1. Known transition pool: exact-match strip (fast, catches all injected phrases).
+    2. 3-word n-gram: catches any duplicate starter regardless of origin
+       (paraphrase engine may also create repetitive openers).
+    """
+    from app.services.riviso_human_profile import _TRANSITIONS
+
+    _LEGACY_PREFIXES = (
+        "On many matters,",
+        "For most readers,",
+        "In practice,",
+        "For many readers,",
+        "That detail matters.",
+        "Timing often counts.",
+        "Costs can add up fast.",
+        "Costs can add up quick.",
+        "Additionally,",
+        "Furthermore,",
+        "Moreover,",
+    )
+    all_prefixes = tuple(_TRANSITIONS) + _LEGACY_PREFIXES
+
+    result = list(paras)
+
+    # --- Strategy 1: exact transition pool matching ---
+    prefix_counts: dict[str, int] = {}
+    for i, para in enumerate(result):
+        stripped = para.strip()
+        for pref in all_prefixes:
+            norm = pref.strip()
+            if stripped.lower().startswith(norm.lower()):
+                key = norm.lower()
+                prefix_counts[key] = prefix_counts.get(key, 0) + 1
+                if prefix_counts[key] > 1:
+                    without = stripped[len(norm):].lstrip(" —:,")
+                    if without and without[0].islower():
+                        without = without[0].upper() + without[1:]
+                    if without:
+                        result[i] = without
+                break
+
+    # --- Strategy 2: 3-word n-gram duplicate detection ---
+    # Only applied to prose paragraphs (headings and list items are skipped).
+    three_word_seen: dict[str, int] = {}
+    for i, para in enumerate(result):
+        stripped = para.strip()
+        if _HEADING_RE.match(stripped) or re.match(r"^\s*[-*•]\s+", stripped):
+            continue
+        words = stripped.split()
+        if len(words) < 4:
+            continue
+        # Use the first 3 words normalised to lowercase as the key.
+        key = " ".join(w.lower().rstrip(",:—") for w in words[:3])
+        three_word_seen[key] = three_word_seen.get(key, 0) + 1
+        if three_word_seen[key] > 1:
+            # The opener is a duplicate — try to rephrase the first words.
+            # If the paragraph starts with a known transition phrase, strip it.
+            for pref in all_prefixes:
+                norm = pref.strip()
+                if stripped.lower().startswith(norm.lower()):
+                    without = stripped[len(norm):].lstrip(" —:,")
+                    if without and without[0].islower():
+                        without = without[0].upper() + without[1:]
+                    if without:
+                        result[i] = without
+                    break
+            else:
+                # No transition to strip; just capitalise what's there so at
+                # least the paragraph doesn't begin with the same 3 lowercased
+                # tokens.  The grammar engine will smooth it out.
+                pass  # leave as-is rather than mangling good prose
+
+    return result
 
 
 def humanize_markdown_blocks(
@@ -584,6 +665,9 @@ def humanize_markdown_blocks(
 ) -> tuple[list[str], list[dict[str, Any]]]:
     rewritten: list[dict[str, Any]] = []
     out = list(paras)
+    # Share a single used_transitions set across all paragraphs so each
+    # transition phrase can only be used once per document.
+    used_transitions: set[str] = set()
     for i in indices:
         if i < 0 or i >= len(out):
             continue
@@ -593,6 +677,7 @@ def humanize_markdown_blocks(
             synonym_strength=synonym_strength,
             protected_terms=protected_terms,
             force_change=force_change,
+            used_transitions=used_transitions,
         )
         if after and after.strip() != before.strip():
             sim = _cosine_tf(before, after)
@@ -605,4 +690,6 @@ def humanize_markdown_blocks(
                     "semantic_similarity": round(sim, 3),
                 }
             )
+    # Final safety pass: strip any transition that still appears more than once.
+    out = _dedup_paragraph_starters(out)
     return out, rewritten

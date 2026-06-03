@@ -79,6 +79,50 @@ def _storage():
     return get_legacy_storage_module()
 
 
+async def fetch_user_by_id(user_id: str) -> dict[str, Any] | None:
+    """Non-blocking user point-read (P4.8) — runs on the busiest auth path.
+
+    Returns the exact same shape as ``storage.get_user_by_id`` (shared normalizer)
+    and falls back to the sync/thread-pool read in JSON mode.
+    """
+    st = _storage()
+    uid = (user_id or "").strip()
+    if not uid:
+        return None
+    if st.storage_mode() != "mongo":
+        return await anyio.to_thread.run_sync(st.get_user_by_id, uid)
+
+    import re
+
+    from storage import _user_doc_to_public
+
+    db = _database_module().get_async_db()
+    doc = await db.users.find_one({"id": uid})
+    if not doc:
+        try:
+            doc = await db.users.find_one({"id": {"$regex": f"^{re.escape(uid)}$", "$options": "i"}})
+        except re.error:
+            doc = None
+    return _user_doc_to_public(doc) if doc else None
+
+
+async def fetch_project_access_row(project_id: str) -> dict[str, Any] | None:
+    """Non-blocking project access/verification read (P4.8), heavy blobs excluded."""
+    st = _storage()
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if st.storage_mode() != "mongo":
+        reader = getattr(st, "get_project_access_row", None) or st.get_project_by_id
+        return await anyio.to_thread.run_sync(reader, pid)
+
+    from storage import _PROJECT_ACCESS_MONGO_PROJECTION, _mongo_doc_to_project
+
+    db = _database_module().get_async_db()
+    doc = await db.projects.find_one({"id": pid}, _PROJECT_ACCESS_MONGO_PROJECTION)
+    return _mongo_doc_to_project(doc) if doc else None
+
+
 async def fetch_projects_listing(owner_user_id: str) -> list[dict[str, Any]]:
     """
     Owner-scoped project list via a single Motor aggregation (no thread pool).

@@ -1,6 +1,7 @@
 """Sync Shopify catalog into project storage for Riviso content workflows."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
@@ -193,33 +194,44 @@ async def sync_shopify_catalog(
             }
         )
 
-    shop_data = await client.get_json("/shop.json")
+    # P2.5: shop metadata + the five catalog resources are independent Shopify REST
+    # reads; fetch them concurrently instead of serially. httpx.AsyncClient is built
+    # for concurrent requests and get_paginated handles per-resource throttling.
+    shop_data, products_raw, custom_cols, smart_cols, blogs_raw, pages_raw = await asyncio.gather(
+        client.get_json("/shop.json"),
+        _fetch_resource(
+            resource="products",
+            fetcher=lambda: client.get_paginated("/products.json", resource_key="products", max_pages=4),
+            warnings=warnings,
+            granted=granted,
+        ),
+        _fetch_resource(
+            resource="collections",
+            fetcher=lambda: client.get_paginated("/custom_collections.json", resource_key="custom_collections", max_pages=2),
+            warnings=warnings,
+            granted=granted,
+        ),
+        _fetch_resource(
+            resource="collections",
+            fetcher=lambda: client.get_paginated("/smart_collections.json", resource_key="smart_collections", max_pages=2),
+            warnings=warnings,
+            granted=granted,
+        ),
+        _fetch_resource(
+            resource="blogs",
+            fetcher=lambda: client.get_paginated("/blogs.json", resource_key="blogs", max_pages=2),
+            warnings=warnings,
+            granted=granted,
+        ),
+        _fetch_resource(
+            resource="pages",
+            fetcher=lambda: client.get_paginated("/pages.json", resource_key="pages", max_pages=2),
+            warnings=warnings,
+            granted=granted,
+        ),
+    )
     shop_info = shop_data.get("shop") if isinstance(shop_data.get("shop"), dict) else {}
 
-    products_raw = await _fetch_resource(
-        resource="products",
-        fetcher=lambda: client.get_paginated("/products.json", resource_key="products", max_pages=4),
-        warnings=warnings,
-        granted=granted,
-    )
-    custom_cols = await _fetch_resource(
-        resource="collections",
-        fetcher=lambda: client.get_paginated("/custom_collections.json", resource_key="custom_collections", max_pages=2),
-        warnings=warnings,
-        granted=granted,
-    )
-    smart_cols = await _fetch_resource(
-        resource="collections",
-        fetcher=lambda: client.get_paginated("/smart_collections.json", resource_key="smart_collections", max_pages=2),
-        warnings=warnings,
-        granted=granted,
-    )
-    blogs_raw = await _fetch_resource(
-        resource="blogs",
-        fetcher=lambda: client.get_paginated("/blogs.json", resource_key="blogs", max_pages=2),
-        warnings=warnings,
-        granted=granted,
-    )
     article_counts_by_blog: dict[int, int] = {}
     if blogs_raw and resource_scope_satisfied(granted, "blogs"):
         try:
@@ -242,12 +254,6 @@ async def sync_shopify_catalog(
                 article_counts_by_blog[key] = article_counts_by_blog.get(key, 0) + 1
         except Exception:
             pass
-    pages_raw = await _fetch_resource(
-        resource="pages",
-        fetcher=lambda: client.get_paginated("/pages.json", resource_key="pages", max_pages=2),
-        warnings=warnings,
-        granted=granted,
-    )
 
     products = [_product_summary(p) for p in products_raw[:500]]
     collections = [_collection_summary(c) for c in (custom_cols + smart_cols)[:200]]

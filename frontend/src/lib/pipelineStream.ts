@@ -1,8 +1,8 @@
 /**
- * Live article pipeline events via Server-Sent Events (fetch + Authorization header).
+ * Live article pipeline events via Server-Sent Events (fetch + httpOnly auth cookie).
  */
 
-import { getAccessToken, getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl } from "@/lib/api";
 
 export type PipelineEvent = {
   time: string;
@@ -79,9 +79,8 @@ export async function subscribeArticlePipelineStream(
   const path = `/api/projects/${encodeURIComponent(projectId)}/articles/${encodeURIComponent(articleId)}/events`;
   const base = getApiBaseUrl();
   const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
-  const token = getAccessToken();
+  // S1.3: authenticated via the httpOnly aa_access cookie (credentials: "include").
   const headers: Record<string, string> = { Accept: "text/event-stream" };
-  if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(url, {
     method: "GET",

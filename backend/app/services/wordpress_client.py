@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
+
 log = logging.getLogger(__name__)
 
 _PLUGIN_PING_NAMESPACES = ("riviso/v1", "auto-articles/v1")
@@ -22,6 +24,7 @@ class WordpressClient:
         self.username = (username or "").strip()
         self.app_password = (app_password or "").replace(" ", "").strip()
         self._resolved_site_url: str | None = None
+        self._site_url_checked = False
         if not self.site_url:
             raise RuntimeError("Missing WordPress site URL")
         if not self.username or not self.app_password:
@@ -37,12 +40,27 @@ class WordpressClient:
     def auth_headers(self) -> dict[str, str]:
         return dict(self._headers)
 
+    def _guarded_client(self, *, timeout: float) -> httpx.AsyncClient:
+        """httpx client that blocks SSRF: validates the site host once and
+        rejects redirects to private/metadata addresses (S1.6a)."""
+        if not self._site_url_checked:
+            try:
+                assert_public_http_url(self.site_url)
+            except SsrfError as e:
+                raise RuntimeError(f"WordPress site URL is not allowed: {e}") from e
+            self._site_url_checked = True
+        return httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+            event_hooks=ssrf_guarded_event_hooks(),
+        )
+
     async def ensure_resolved_site_url(self) -> str:
         """Resolve canonical site URL from Riviso ping (avoids www/non-www auth loss on redirect)."""
         if self._resolved_site_url:
             return self._resolved_site_url
         resolved = self.site_url
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with self._guarded_client(timeout=15.0) as client:
             for ns in _PLUGIN_PING_NAMESPACES:
                 try:
                     res = await client.get(
@@ -77,21 +95,21 @@ class WordpressClient:
         return f"{base}{p}"
 
     async def get_json(self, path: str, *, timeout: float = 20.0) -> Any:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with self._guarded_client(timeout=timeout) as client:
             res = await client.get(self._url(path), headers=self._headers)
         res.raise_for_status()
         return res.json()
 
     async def post_json(self, path: str, payload: dict[str, Any], *, timeout: float = 30.0) -> Any:
         headers = {**self._headers, "content-type": "application/json"}
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with self._guarded_client(timeout=timeout) as client:
             res = await client.post(self._url(path), headers=headers, json=payload)
         res.raise_for_status()
         return res.json()
 
     async def put_json(self, path: str, payload: dict[str, Any], *, timeout: float = 30.0) -> Any:
         headers = {**self._headers, "content-type": "application/json"}
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with self._guarded_client(timeout=timeout) as client:
             res = await client.put(self._url(path), headers=headers, json=payload)
         res.raise_for_status()
         return res.json()
@@ -104,7 +122,7 @@ class WordpressClient:
 
         # WordPress expects multipart/form-data with a ``file`` field (most compatible).
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            async with self._guarded_client(timeout=timeout) as client:
                 res = await client.post(
                     url,
                     headers=dict(self._headers),
@@ -122,7 +140,7 @@ class WordpressClient:
             "content-disposition": f'attachment; filename="{safe_name}"',
         }
         try:
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            async with self._guarded_client(timeout=timeout) as client:
                 res = await client.post(url, headers=headers, content=data)
             res.raise_for_status()
             return res.json()
@@ -233,7 +251,14 @@ async def _featured_image_bytes_from_url(img_url: str, *, timeout: float) -> tup
     if not url.startswith("http://") and not url.startswith("https://"):
         return None
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        assert_public_http_url(url)  # S1.6c: block internal/metadata image URLs
+    except SsrfError:
+        log.warning("Refusing to download non-public featured image URL")
+        return None
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout, follow_redirects=True, event_hooks=ssrf_guarded_event_hooks()
+        ) as client:
             res = await client.get(url)
         res.raise_for_status()
         content_type = (res.headers.get("content-type") or "image/png").split(";")[0].strip() or "image/png"

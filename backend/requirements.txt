@@ -23,3 +23,5 @@ markdown==3.8.2
 html2text==2024.2.26
 slowapi==0.1.9
 google-auth==2.49.2
+prometheus-client==0.23.1
+sentry-sdk==2.43.0

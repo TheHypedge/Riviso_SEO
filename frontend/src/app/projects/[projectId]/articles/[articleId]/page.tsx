@@ -678,7 +678,12 @@ export default function ArticleEditPage() {
           /* non-blocking */
         });
 
-      const fetchOpts = { skipGlobalLoading: true, signal: ac.signal, fresh: !!cached } as const;
+      // Always fresh: true so the editor bypasses the 60-second in-memory API
+      // cache and hits the network on every open. This prevents stale prefetch
+      // results (stored on hover) from silently blocking a real load, which
+      // caused the editor to show blank title/body when the cache held an
+      // incomplete entry from a previous aborted or errored fetch.
+      const fetchOpts = { skipGlobalLoading: true, signal: ac.signal, fresh: true } as const;
 
       try {
         const [shellResult, bodyResult] = await Promise.allSettled([

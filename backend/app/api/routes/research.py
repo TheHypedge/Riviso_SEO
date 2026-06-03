@@ -3,11 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.core.ratelimit import limiter
+
 from app.core.deps import get_current_user
-from app.core.project_lookup import require_project_access
+from app.core.project_lookup import async_require_project_access, require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.research import ResearchIdeasRequest, ResearchIdeasResponse
 from app.services.async_operation_dispatch import enqueue_research_ideas_job, should_use_async_queue
@@ -75,7 +77,7 @@ async def research_ideas_job_status(
 ) -> dict:
     """Poll async research curation status or fetch a completed cached result."""
     st = get_legacy_storage_module()
-    require_project_access(st=st, user=user, project_id=project_id, full=False)
+    await async_require_project_access(user=user, project_id=project_id, full=False)
     key = (cache_key or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="cache_key is required")
@@ -101,13 +103,15 @@ async def research_ideas_job_status(
 
 
 @router.post("/ideas", response_model=None)
+@limiter.limit("20/minute")
 async def research_ideas(
+    request: Request,
     project_id: str,
     payload: ResearchIdeasRequest,
     user: dict = Depends(require_plan_action(PlanAction.CUSTOM_RESEARCH, consume=False)),
 ) -> ResearchIdeasResponse | JSONResponse:
     st = get_legacy_storage_module()
-    require_project_access(st=st, user=user, project_id=project_id, full=False)
+    await async_require_project_access(user=user, project_id=project_id, full=False)
 
     seeds = [str(x).strip() for x in (payload.seed_keywords or []) if str(x).strip()][:25]
     if not seeds:

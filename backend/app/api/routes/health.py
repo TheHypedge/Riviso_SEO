@@ -2,26 +2,40 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.core.config import settings
+from app.core.deps import get_current_user
 from app.legacy.storage import get_legacy_storage_module
-from app.schemas.health import HealthResponse
+from app.schemas.health import HealthResponse, LivenessResponse
 from app.services.article_generation import GENERATION_REVISION
 from app.services.storage_db import ping_storage
 
 router = APIRouter()
 
 
-@router.get("/health", response_model=HealthResponse, tags=["system"])
-async def health() -> HealthResponse:
+@router.get("/health", response_model=LivenessResponse, tags=["system"])
+async def health() -> LivenessResponse:
     """
-    Cheap liveness probe; extend with DB pings only if your orchestrator needs readiness separation.
+    Public liveness probe for load balancers / uptime monitors.
+
+    S1.11: this endpoint intentionally exposes no internals (no storage mode,
+    DB error, environment, or OAuth fingerprint). Detailed readiness — including
+    a live Mongo ping and config diagnostics — is available to authenticated
+    operators at ``GET /api/health/ready``.
+    """
+    return LivenessResponse(status="ok", service=settings.app_name)
+
+
+@router.get("/health/ready", response_model=HealthResponse, tags=["system"])
+async def health_ready(_user: dict = Depends(get_current_user)) -> HealthResponse:
+    """
+    Detailed readiness for authenticated operators (S1.11).
 
     ``gsc_oauth_configured`` and ``gsc_oauth_client_id_fingerprint`` are surfaced to make
-    VPS misconfiguration diagnosable with a single curl: if the fingerprint is empty after
-    you set ``GOOGLE_OAUTH_CLIENT_ID``/``SECRET``, the FastAPI process never picked the
-    values up — almost always a missed restart of the backend service.
+    VPS misconfiguration diagnosable with a single authenticated curl: if the fingerprint
+    is empty after you set ``GOOGLE_OAUTH_CLIENT_ID``/``SECRET``, the FastAPI process never
+    picked the values up — almost always a missed restart of the backend service.
     """
     st = get_legacy_storage_module()
     mode = ""

@@ -532,7 +532,8 @@ export default function ProjectPage() {
   );
   const [overviewArticles, setOverviewArticles] = useState<ArticlePublic[]>([]);
   const [overviewScheduledJobs, setOverviewScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
-  const [overviewGscSeries, setOverviewGscSeries] = useState<import("@/lib/api").GscAnalyticsSeriesPoint[] | null>(null);
+  // P2.8: the overview GSC chart reads the shared `analytics` state (28-day window
+  // fetched once on mount) instead of keeping a separate, duplicate-fetched series.
   const [overviewLoading, setOverviewLoading] = useState(false);
 
   // Single helper that mutates ``window.location`` query params and asks the
@@ -1215,7 +1216,11 @@ export default function ProjectPage() {
         setLoading(false);
       }
     })();
-  }, [projectId, router, token, tab]);
+    // P2.8: load the project shell (settings/profile/limits/quota/meta) once per
+    // project — not on every tab switch. The settings tab refetches its own data,
+    // so `tab` is intentionally excluded from the dependency list here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, router, token]);
 
   useEffect(() => {
     if (!token || !projectId) return;
@@ -1287,16 +1292,9 @@ export default function ProjectPage() {
         if (cancelled) return;
         setOverviewArticles(articles || []);
         setOverviewScheduledJobs(jobs || []);
-        if (gscStatus?.connected && gscStatus?.property_url) {
-          try {
-            const analytics = await api.gscProjectAnalytics(projectId, { days: 28 });
-            if (!cancelled) setOverviewGscSeries(analytics.series || []);
-          } catch {
-            if (!cancelled) setOverviewGscSeries(null);
-          }
-        } else if (!cancelled) {
-          setOverviewGscSeries(null);
-        }
+        // P2.8: GSC analytics for the 28-day window is already fetched once by the
+        // bootstrap effect into `analytics` — the overview chart now reads that
+        // shared state (see `gscSeries` prop) instead of issuing a duplicate fetch.
       } catch {
         if (!cancelled) {
           setOverviewArticles([]);
@@ -1309,7 +1307,7 @@ export default function ProjectPage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, token, tab, gscStatus?.connected, gscStatus?.property_url]);
+  }, [projectId, token, tab]);
 
   useEffect(() => {
     if (!token || !projectId || tab !== "tools") return;
@@ -1761,6 +1759,8 @@ export default function ProjectPage() {
   }, [projectId, tab, token, reloadScheduledJobs]);
 
   // Poll while jobs are generating or publishing so status badges stay accurate.
+  // P2.6: pause polling while the tab is hidden/offline and back off on consecutive
+  // ticks (6s → 12s → 24s, capped) so a backgrounded tab doesn't hammer the API.
   useEffect(() => {
     if (tab !== "scheduled_articles") return;
     const needsPoll = scheduledJobs.some((j) => {
@@ -1768,10 +1768,41 @@ export default function ProjectPage() {
       return st === "posting" || st === "content_generating" || st === "image_generating";
     });
     if (!needsPoll) return;
-    const id = window.setInterval(() => {
-      void reloadScheduledJobs({ quiet: true });
-    }, 6000);
-    return () => window.clearInterval(id);
+
+    let cancelled = false;
+    let timer: number | undefined;
+    let delay = 6000;
+    const MAX_DELAY = 24000;
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.hidden) {
+        // Hidden tab: skip the network call and re-check shortly.
+        delay = MAX_DELAY;
+      } else if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        delay = MAX_DELAY;
+      } else {
+        await reloadScheduledJobs({ quiet: true });
+        delay = Math.min(MAX_DELAY, delay * 2);
+      }
+      if (!cancelled) timer = window.setTimeout(tick, delay);
+    };
+
+    timer = window.setTimeout(tick, delay);
+    const onVisible = () => {
+      // Resume promptly with a fresh fetch when the user returns to the tab.
+      if (typeof document !== "undefined" && !document.hidden && !cancelled) {
+        delay = 6000;
+        if (timer) window.clearTimeout(timer);
+        timer = window.setTimeout(tick, 0);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [tab, scheduledJobs, reloadScheduledJobs]);
 
   useEffect(() => {
@@ -5393,7 +5424,7 @@ export default function ProjectPage() {
             scheduledJobs={overviewScheduledJobs}
             titleByArticleId={articleTitlesById}
             selectedIds={selectedIds}
-            gscSeries={overviewGscSeries}
+            gscSeries={analytics?.series ?? null}
             loading={overviewLoading}
             onViewList={goToArticlesFromOverview}
           />

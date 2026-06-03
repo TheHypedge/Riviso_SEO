@@ -65,8 +65,9 @@ async def _reload_project(st, project_id: str) -> dict | None:
     pid = (project_id or "").strip()
     if not pid:
         return None
-    if hasattr(st, "get_project_by_id"):
-        proj = await _storage(st.get_project_by_id, pid)
+    reader = getattr(st, "get_project_for_generation", None) or getattr(st, "get_project_by_id", None)
+    if reader is not None:
+        proj = await _storage(reader, pid)
         if isinstance(proj, dict):
             return proj
     rows = await _storage(st.load_projects)
@@ -346,7 +347,45 @@ def start_scheduled_job_preparation_task(
     asyncio.create_task(_prep())
 
 
-async def publish_article_to_wordpress(*, proj: dict, article: dict, post_type: str, wp_status: str, category_ids: list[int]) -> dict:
+def _build_image_loader(st, article_id: str, project_id: str = ""):
+    """
+    Return a callable that loads the stored featured image as a data URL.
+
+    The manual publish route in articles.py passes this same loader to
+    resolve_featured_media_id.  The scheduler must do the same so that:
+    1. Disk-backed images (image_url="" / featured_image_storage="file") are
+       read from local storage instead of being silently skipped.
+    2. Cached HTTPS URLs (featured_image_storage="url") that may have expired
+       are fetched through the storage layer which can fall back to disk.
+    """
+    aid = (article_id or "").strip()
+    pid = (project_id or "").strip()
+
+    def _load() -> str | None:
+        # Try storage-level image URL getter first (handles all storage types).
+        # Requires both project_id and article_id.
+        fn = getattr(st, "get_article_image_url", None)
+        if callable(fn) and pid and aid:
+            try:
+                result = fn(project_id=pid, article_id=aid)
+                if result:
+                    return result
+            except Exception:
+                pass
+        # Fall back: read from disk if a file is present.
+        file_fn = getattr(st, "featured_image_file_exists", None)
+        load_fn = getattr(st, "_load_featured_image_file_as_data_url", None)
+        if callable(file_fn) and callable(load_fn) and aid and file_fn(aid):
+            try:
+                return load_fn(aid)
+            except Exception:
+                pass
+        return None
+
+    return _load
+
+
+async def publish_article_to_wordpress(*, st=None, proj: dict, article: dict, post_type: str, wp_status: str, category_ids: list[int]) -> dict:
     if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
         raise RuntimeError("Website is not connected for this project. Connect and verify WordPress before publishing.")
     wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
@@ -382,7 +421,13 @@ async def publish_article_to_wordpress(*, proj: dict, article: dict, post_type: 
     wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
 
     # Featured image is best-effort — media 403 must not block publishing the article.
-    featured_media_id = await resolve_featured_media_id(wp, article, timeout=90.0)
+    # Build a disk/storage loader so disk-backed images (image_url="" / storage="file")
+    # and expired OpenAI CDN URLs are resolved through storage before upload.
+    article_id = (article.get("id") or "").strip()
+    article_project_id = (article.get("project_id") or "").strip()
+    _st = st or get_legacy_storage_module()
+    _loader = _build_image_loader(_st, article_id, project_id=article_project_id) if article_id else None
+    featured_media_id = await resolve_featured_media_id(wp, article, timeout=90.0, load_image_url=_loader)
 
     payload: dict = {
         "title": title[:500],
@@ -606,6 +651,7 @@ async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_c
         await publish_pipeline_status(aid, MSG_PUBLISH_DISPATCH, STAGE_PUBLISH_DISPATCH)
         cats = _parse_job_category_ids(job)
         created = await publish_article_to_wordpress(
+            st=st,
             proj=proj,
             article=art,
             post_type=(job.get("post_type") or "posts"),
@@ -925,8 +971,10 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
 
                 try:
                     # Point lookups — avoid loading all projects/articles each tick.
-                    if hasattr(st, "get_project_by_id"):
-                        proj = await run_sync(st.get_project_by_id, pid)
+                    if hasattr(st, "get_project_for_generation") or hasattr(st, "get_project_by_id"):
+                        proj = await run_sync(
+                            getattr(st, "get_project_for_generation", None) or st.get_project_by_id, pid
+                        )
                     else:
                         prows = await run_sync(st.load_projects)
                         proj = next(
@@ -1029,6 +1077,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                     cats = list(dict.fromkeys([x for x in cats if x > 0]))[:50]
 
                     created = await publish_article_to_wordpress(
+                        st=st,
                         proj=proj,
                         article=art,
                         post_type=(j.get("post_type") or "posts"),

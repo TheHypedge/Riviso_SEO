@@ -1,17 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.deps import get_current_user
-from app.core.project_lookup import require_project_access
+from app.core.project_lookup import async_require_project_access, require_project_access
 from app.legacy.storage import get_legacy_storage_module
+from app.repositories import ScheduledJobRepository
 from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobPostNow, ScheduledJobUpdate
 from app.services.scheduler import start_scheduled_job_preparation_task, start_scheduled_job_post_now_task
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.schedule_timing import SCHEDULE_TOO_SOON_MESSAGE, is_schedule_time_allowed, minimum_schedule_utc
 from app.services.to_thread import run_sync
+from app.services.storage_db import call_storage, is_transient_storage_error
 
 
 router = APIRouter(prefix="/projects/{project_id}/scheduled-jobs", tags=["scheduled"])
@@ -82,8 +85,9 @@ def _heal_stale_posting_jobs(*, st, project_id: str, rows: list[dict]) -> list[d
     return healed
 
 
-def _require_project_access(*, st, user: dict, project_id: str) -> dict:
-    return require_project_access(st=st, user=user, project_id=project_id, full=False)
+async def _require_project_access(*, st, user: dict, project_id: str) -> dict:
+    # P2.3: use Motor-backed async lookup to keep blocking I/O off the event loop.
+    return await async_require_project_access(user=user, project_id=project_id, full=False)
 
 
 def _require_verified_website(proj: dict) -> None:
@@ -248,6 +252,10 @@ def _find_article_for_job(*, st, project_id: str, article_id: str) -> dict | Non
     aid = (article_id or "").strip()
     if not pid or not aid:
         return None
+    # P2.4: use indexed single-doc lookup; fall back to listing scan only when
+    # get_article is unavailable (JSON storage mode).
+    if hasattr(st, "get_article"):
+        return st.get_article(project_id=pid, article_id=aid)
     rows = st.load_articles_listing_for_project(pid, limit=20000) if hasattr(st, "load_articles_listing_for_project") else (st.load_articles() or [])
     for a in rows or []:
         if not isinstance(a, dict):
@@ -260,7 +268,7 @@ def _find_article_for_job(*, st, project_id: str, article_id: str) -> dict | Non
 @router.get("", response_model=list[ScheduledJobPublic])
 async def list_scheduled(project_id: str, user: dict = Depends(get_current_user)) -> list[ScheduledJobPublic]:
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
     rows = _heal_stale_posting_jobs(st=st, project_id=project_id, rows=[r for r in (rows or []) if isinstance(r, dict)])
     out = [
@@ -280,19 +288,29 @@ async def list_scheduled_board(project_id: str, user: dict = Depends(get_current
     Avoids loading every article page client-side.
     """
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
-    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+    await _require_project_access(st=st, user=user, project_id=project_id)
+
+    # P2.5: the scheduled-jobs read and the article-stub read are independent —
+    # fetch them concurrently instead of one after the other.
+    async def _load_rows() -> list:
+        if hasattr(st, "load_scheduled_jobs"):
+            return await run_sync(st.load_scheduled_jobs, project_id=project_id) or []
+        return []
+
+    async def _load_stubs() -> list:
+        if hasattr(st, "load_articles_schedule_stubs_for_project"):
+            return await run_sync(st.load_articles_schedule_stubs_for_project, project_id, limit=500) or []
+        if hasattr(st, "load_scheduled_pending_for_project_minimal"):
+            return await run_sync(st.load_scheduled_pending_for_project_minimal, project_id, limit=500) or []
+        return []
+
+    rows, stubs = await asyncio.gather(_load_rows(), _load_stubs())
     rows = _heal_stale_posting_jobs(st=st, project_id=project_id, rows=[r for r in (rows or []) if isinstance(r, dict)])
     jobs = [
         _to_public(r)
         for r in (rows or [])
         if isinstance(r, dict) and (r.get("state") or "").strip().lower() != "cancelled"
     ]
-    stubs: list[dict] = []
-    if hasattr(st, "load_articles_schedule_stubs_for_project"):
-        stubs = await run_sync(st.load_articles_schedule_stubs_for_project, project_id, limit=500) or []
-    elif hasattr(st, "load_scheduled_pending_for_project_minimal"):
-        stubs = await run_sync(st.load_scheduled_pending_for_project_minimal, project_id, limit=500) or []
     return _build_scheduled_jobs_board(project_id=project_id, jobs=jobs, article_stubs=stubs)
 
 
@@ -304,11 +322,16 @@ async def update_scheduled_job(
     user: dict = Depends(get_current_user),
 ) -> ScheduledJobPublic:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id)
     _require_verified_website(proj)
     jid = (job_id or "").strip()
-    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
-    row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
+    # Indexed single-doc lookup replaces the full project-jobs scan that caused
+    # a 40-second hang on stale Atlas connections (socket timeout × retry count).
+    if hasattr(st, "get_scheduled_job_by_id"):
+        row = await run_sync(call_storage, st.get_scheduled_job_by_id, jid)
+    else:
+        rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+        row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
     if not row:
         raise HTTPException(status_code=404, detail="Scheduled job not found")
     if (row.get("state") or "").strip().lower() in {"posted", "cancelled"}:
@@ -376,7 +399,6 @@ async def update_scheduled_job(
         updates.setdefault("last_attempt_at", "")
 
     patch_job = getattr(st, "patch_scheduled_job_fields", None) or st.update_scheduled_job_fields
-    from app.services.storage_db import call_storage
 
     ok = await run_sync(call_storage, patch_job, jid, updates)
     if not ok:
@@ -402,6 +424,11 @@ async def update_scheduled_job(
         # Best-effort sync; scheduled job update succeeded already.
         pass
 
+    # Build the post-update job row from the in-memory data we already have —
+    # avoids reloading all scheduled jobs from Atlas (which was the 42-second
+    # hang caused by a stale MongoDB connection after idle time).
+    job_after = {**row, **updates}
+
     # Re-run preparation after reschedule or when recovering a failed job.
     reprep = (
         prev_state == "failed"
@@ -412,15 +439,12 @@ async def update_scheduled_job(
     )
     if reprep:
         try:
-            rows_after = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
-            job_after = next((r for r in (rows_after or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
-            aid = (job_after.get("article_id") or "").strip() if isinstance(job_after, dict) else ""
-            st_after = (job_after.get("state") or "").strip().lower() if isinstance(job_after, dict) else ""
-            if isinstance(job_after, dict) and aid and st_after in {"scheduled", "failed"}:
-                proj2 = await run_sync(st.get_project_by_id, project_id) if hasattr(st, "get_project_by_id") else None
-                if not isinstance(proj2, dict):
-                    prows = await run_sync(st.load_projects)
-                    proj2 = next((p for p in (prows or []) if isinstance(p, dict) and (p.get("id") or "") == (project_id or "").strip()), None)
+            aid = (job_after.get("article_id") or "").strip()
+            st_after = (job_after.get("state") or "").strip().lower()
+            if aid and st_after in {"scheduled", "failed"}:
+                # Reuse `proj` already loaded above; avoid a second round-trip.
+                proj2 = proj
+                # Use the indexed single-doc lookup instead of scanning all articles.
                 art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
                 if proj2 and art:
                     prep_force = prev_state == "failed"
@@ -439,11 +463,7 @@ async def update_scheduled_job(
         except Exception:
             pass
 
-    rows2 = await run_sync(st.load_scheduled_jobs, project_id=project_id)
-    row2 = next((r for r in (rows2 or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
-    if not row2:
-        raise HTTPException(status_code=404, detail="Scheduled job not found")
-    return _to_public(row2)
+    return _to_public(job_after)
 
 
 @router.post("/retry-failed-preparations", status_code=200)
@@ -453,7 +473,7 @@ async def retry_all_failed_preparations(
 ) -> dict:
     """Re-queue every failed scheduled job in this project (e.g. after deploying the generation fix)."""
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id)
     _require_verified_website(proj)
     rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
     failed = [
@@ -485,13 +505,12 @@ async def retry_all_failed_preparations(
         art = await run_sync(_find_article_for_job, st=st, project_id=project_id, article_id=aid)
         if not art:
             continue
-        rows_after = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
-        job_after = next((r for r in (rows_after or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
-        if isinstance(job_after, dict):
-            start_scheduled_job_preparation_task(
-                st=st, jid=jid, proj=proj, art=art, job=job_after, force=True
-            )
-            retried += 1
+        # Use in-memory row + updates; avoids a per-job Atlas round-trip.
+        job_after = {**row, "state": "content_generating", "last_error": "", "attempts": 0, "updated_at": now_str}
+        start_scheduled_job_preparation_task(
+            st=st, jid=jid, proj=proj, art=art, job=job_after, force=True
+        )
+        retried += 1
 
     return {
         "ok": True,
@@ -513,11 +532,14 @@ async def retry_scheduled_job_preparation(
     or stuck before posting.
     """
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id)
     _require_verified_website(proj)
     jid = (job_id or "").strip()
-    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
-    row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
+    if hasattr(st, "get_scheduled_job_by_id"):
+        row = await run_sync(call_storage, st.get_scheduled_job_by_id, jid)
+    else:
+        rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
+        row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
     if not row:
         raise HTTPException(status_code=404, detail="Scheduled job not found")
     state = (row.get("state") or "").strip().lower()
@@ -543,10 +565,10 @@ async def retry_scheduled_job_preparation(
     if not art:
         raise HTTPException(status_code=404, detail="Article not found")
 
-    rows_after = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
-    job_after = next((r for r in (rows_after or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
-    if not isinstance(job_after, dict):
+    if not isinstance(row, dict):
         raise HTTPException(status_code=404, detail="Scheduled job not found")
+    # Use in-memory row + updates instead of reloading all jobs from Atlas.
+    job_after = {**row, "state": prep_state, "last_error": "", "attempts": 0, "updated_at": now_str}
 
     start_scheduled_job_preparation_task(st=st, jid=jid, proj=proj, art=art, job=job_after, force=True)
     job_after = {**job_after, "state": prep_state, "last_error": ""}
@@ -566,7 +588,7 @@ async def post_scheduled_job_now(
 ) -> dict:
     """Generate content when needed, then publish the scheduled job to WordPress immediately."""
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id)
     _require_verified_website(proj)
 
     from app.api.routes.prompts import _ensure_default_prompt
@@ -640,7 +662,6 @@ async def post_scheduled_job_now(
         if not ok:
             raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
 
-    from app.services.storage_db import call_storage, is_transient_storage_error
 
     state = (row.get("state") or "scheduled").strip().lower()
     if state == "posting":
@@ -699,7 +720,7 @@ async def cancel_scheduled_job(project_id: str, job_id: str, user: dict = Depend
     Remove a scheduled job and return the article to the Articles list as pending.
     """
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
     jid = (job_id or "").strip()
     rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
     row = next((r for r in (rows or []) if isinstance(r, dict) and (r.get("id") or "").strip() == jid), None)
@@ -713,7 +734,15 @@ async def cancel_scheduled_job(project_id: str, job_id: str, user: dict = Depend
 
     aid = (row.get("article_id") or "").strip()
     deleted = 0
-    if hasattr(st, "delete_scheduled_job"):
+    if aid and hasattr(st, "delete_scheduled_jobs_for_article"):
+        # One delete_many for every non-posted row of this article (P4.4 via P4.6 repo).
+        deleted = int(
+            await run_sync(
+                ScheduledJobRepository(st).delete_for_article, project_id, aid, exclude_states=["posted"]
+            )
+            or 0
+        )
+    elif hasattr(st, "delete_scheduled_job"):
         for r in rows or []:
             if not isinstance(r, dict):
                 continue
@@ -752,7 +781,13 @@ async def clear_scheduled_jobs(project_id: str, user: dict = Depends(get_current
     This is meant as a "start fresh" button for the UI.
     """
     st = get_legacy_storage_module()
-    _require_project_access(st=st, user=user, project_id=project_id)
+    await _require_project_access(st=st, user=user, project_id=project_id)
+
+    # Fast path: one bulk delete_many instead of N per-row deletes (P4.4 via P4.6 repo).
+    if hasattr(st, "delete_scheduled_jobs_for_project"):
+        deleted = await run_sync(ScheduledJobRepository(st).delete_for_project, project_id)
+        return {"ok": True, "deleted": int(deleted or 0)}
+
     if not hasattr(st, "load_scheduled_jobs"):
         return {"ok": True, "deleted": 0}
     rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) or []

@@ -5,6 +5,13 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class LivenessResponse(BaseModel):
+    """Public liveness probe payload — no internal details (see S1.11)."""
+
+    status: str = Field(default="ok", description="Always 'ok' when the process is serving.")
+    service: str = Field(description="Application name from settings.")
+
+
 class HealthResponse(BaseModel):
     """Liveness metadata; does not perform deep dependency checks (keeps the endpoint fast)."""
 

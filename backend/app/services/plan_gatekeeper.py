@@ -6,10 +6,13 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 
 from app.core.deps import get_current_user
+from app.core.request_cache import cached_subscription, has_cached_subscription
 from app.legacy.storage import get_legacy_storage_module
+
+_UNSET = object()
 
 
 class PlanAction(str, Enum):
@@ -80,19 +83,22 @@ def assert_trial_active(*, user: dict, subscription: dict[str, Any] | None) -> N
         )
 
 
-def check_plan_limits(*, st, user: dict, action: PlanAction, consume: bool = True) -> None:
+def check_plan_limits(*, st, user: dict, action: PlanAction, consume: bool = True, subscription: Any = _UNSET) -> None:
     """
     Central gatekeeper: trial expiry, feature flags, and quota consumption.
 
     Quota consumption delegates to existing storage counters (no pipeline changes).
+    When ``subscription`` is supplied (e.g. memoized by the request-scoped cache,
+    P2.1) it is used as-is instead of re-reading it from storage.
     """
     if (user.get("role") or "").strip().lower() == "admin":
         return
 
     uid = (user.get("id") or "").strip()
-    subscription = st.ensure_subscription_for_user(user) if hasattr(st, "ensure_subscription_for_user") else None
-    if subscription is None and hasattr(st, "get_subscription_by_user_id"):
-        subscription = st.get_subscription_by_user_id(uid)
+    if subscription is _UNSET:
+        subscription = st.ensure_subscription_for_user(user) if hasattr(st, "ensure_subscription_for_user") else None
+        if subscription is None and hasattr(st, "get_subscription_by_user_id"):
+            subscription = st.get_subscription_by_user_id(uid)
 
     assert_trial_active(user=user, subscription=subscription)
 
@@ -167,9 +173,11 @@ def check_plan_limits(*, st, user: dict, action: PlanAction, consume: bool = Tru
 
 
 def require_plan_action(action: PlanAction, *, consume: bool = True):
-    async def _dep(user: dict = Depends(get_current_user)) -> dict:
+    async def _dep(request: Request, user: dict = Depends(get_current_user)) -> dict:
         st = get_legacy_storage_module()
-        check_plan_limits(st=st, user=user, action=action, consume=consume)
+        # P2.1: reuse the subscription loaded by PlanLimitsMiddleware this request.
+        subscription = cached_subscription(request) if has_cached_subscription(request) else _UNSET
+        check_plan_limits(st=st, user=user, action=action, consume=consume, subscription=subscription)
         return user
 
     return _dep

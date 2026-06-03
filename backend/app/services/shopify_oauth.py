@@ -13,6 +13,7 @@ import httpx
 from jose import jwt
 
 from app.core.config import settings
+from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
 
 _MYSHOPIFY_HOST_RE = re.compile(r"([a-z0-9][a-z0-9\-]*\.myshopify\.com)", re.IGNORECASE)
 
@@ -130,8 +131,15 @@ async def resolve_shop_domain(raw: str) -> tuple[str, str, str | None]:
         return shop, f"https://{shop}", None
 
     public_url = f"https://{host}"
+    # S1.6b: the host is user-supplied — block internal/metadata targets before probing.
+    try:
+        assert_public_http_url(public_url)
+    except SsrfError:
+        return "", public_url, "This website address is not allowed."
     paths = ("/cart.js", "/", "/meta.json")
-    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=12.0, follow_redirects=True, event_hooks=ssrf_guarded_event_hooks()
+    ) as client:
         for path in paths:
             try:
                 res = await client.get(f"{public_url}{path}")

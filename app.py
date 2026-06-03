@@ -50,16 +50,24 @@ _storage.init_storage()
 
 
 def _ensure_initial_admin_user() -> None:
-    """Seed default admin when no user exists (MongoDB or JSON fallback)."""
+    """Env-gated one-time admin bootstrap (no hardcoded credentials).
+
+    Seeds an admin only when BOTH ``BOOTSTRAP_ADMIN_EMAIL`` and
+    ``BOOTSTRAP_ADMIN_PASSWORD`` are set in the environment and the user does
+    not already exist. Leaves no default credentials in source or in a fresh DB.
+    """
     sm = _storage.storage_mode() if hasattr(_storage, "storage_mode") else "mongo"
     if sm not in ("mongo", "json"):
         return
-    email = "iamakhileshsoni@gmail.com"
-    password = "Admin@2026"
+    email = (os.environ.get("BOOTSTRAP_ADMIN_EMAIL") or "").strip().lower()
+    password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD") or ""
+    if not email or not password:
+        # No bootstrap requested — never create a default admin.
+        return
     try:
         existing = _storage.get_user_by_email(email)
         if existing:
-            # Ensure the seed email stays admin even if older data was created differently.
+            # Ensure the bootstrap email stays admin even if older data was created differently.
             try:
                 if (existing.get("role") or "").strip().lower() != "admin" and hasattr(_storage, "update_user_fields"):
                     _storage.update_user_fields(existing["id"], {"role": "admin"})
@@ -75,9 +83,9 @@ def _ensure_initial_admin_user() -> None:
                 "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
             }
         )
-        app.logger.info("Created initial admin user: %s", email)
+        app.logger.info("Created bootstrap admin user: %s", email)
     except Exception as e:
-        app.logger.warning("Could not ensure initial admin user: %s", e)
+        app.logger.warning("Could not ensure bootstrap admin user: %s", e)
 
 
 def _migrate_json_if_db_empty() -> None:
@@ -112,6 +120,22 @@ def _migrate_json_if_db_empty() -> None:
 
 
 app = Flask(__name__)
+
+# S0.5: The FastAPI service (`backend/app.main:app`) is the supported production
+# backend; this legacy Flask monolith must not be served in production unless an
+# operator explicitly opts in. wsgi.py imports this module, so raising here stops
+# gunicorn/Procfile from booting the legacy app against a production environment.
+_is_prod_env = (
+    (os.environ.get("ENVIRONMENT") or "").strip().lower() == "production"
+    or (os.environ.get("FLASK_ENV") or "").strip().lower() == "production"
+)
+_allow_legacy_flask = (os.environ.get("ALLOW_LEGACY_FLASK") or "").strip().lower() in ("1", "true", "yes", "on")
+if _is_prod_env and not _allow_legacy_flask:
+    raise RuntimeError(
+        "Legacy Flask app.py is disabled in production. The supported backend is the FastAPI "
+        "service (backend/app.main:app). Set ALLOW_LEGACY_FLASK=1 only if you intentionally run "
+        "the legacy app."
+    )
 
 # Trust reverse-proxy headers (Nginx) so url_for(..., _external=True) generates HTTPS URLs.
 # This is required for Google OAuth redirect_uri to match the Console configuration on production.

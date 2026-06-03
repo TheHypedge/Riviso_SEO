@@ -60,7 +60,13 @@ async def deactivate_me(response: Response, user: dict = Depends(get_current_use
 async def delete_me(response: Response, user: dict = Depends(get_current_user)) -> Response:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
-    ok = st.delete_user(uid)
+    # L6.5: use purge_user_data (hard delete) so all owned projects, articles,
+    # scheduled jobs, and the subscription are erased — not soft-retained.
+    purge_fn = getattr(st, "purge_user_data", None)
+    if purge_fn is not None:
+        ok = purge_fn(uid)
+    else:
+        ok = st.delete_user(uid)
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")
     response.delete_cookie("aa_access", path="/", domain=settings.cookie_domain)

@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16
+    restart: unless-stopped
     environment:
       POSTGRES_DB: auto_articles
       POSTGRES_USER: app
@@ -12,15 +13,25 @@ services:
 
   redis:
     image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
 
+  # API process (I3.1): no in-process scheduler/worker — those run as dedicated
+  # services below so a long generation/publish never blocks request handling.
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    restart: unless-stopped
     env_file:
       # Prefer `backend/.env` on machines where you store real secrets.
       # NOTE: do NOT load `.env.example` here; it often contains empty placeholders
@@ -29,27 +40,96 @@ services:
     environment:
       POSTGRES_DSN: postgresql+asyncpg://app:app@postgres:5432/auto_articles
       REDIS_URL: redis://redis:6379/0
+      ENABLE_SCHEDULER: "0"
+      ENABLE_GENERATION_WORKER: "0"
     ports:
       - "8000:8000"
     depends_on:
       - postgres
       - redis
+    # I3.7: liveness probe → restart policy makes the API self-healing.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # I3.8: resource limits give headroom and prevent one container starving others.
+    mem_limit: 768m
+    cpus: 1.0
+
+  # Generation worker (I3.1): single process consuming the generation queue.
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.run_background"]
+    env_file:
+      - ./backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      ENABLE_GENERATION_WORKER: "1"
+      ENABLE_SCHEDULER: "0"
+    depends_on:
+      - redis
+    # I3.7: liveness probe — verifies the background process is still alive.
+    # The worker has no HTTP port, so we use a sentinel file that run_background
+    # touches on each loop iteration (see app/run_background.py).
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; p='/tmp/riviso_worker.heartbeat'; d=os.path.getmtime(p) if os.path.exists(p) else 0; exit(0 if time.time()-d<120 else 1)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    mem_limit: 1024m
+    cpus: 1.0
+
+  # Scheduler (I3.1): single process — runs scheduled posting + daily subscription
+  # reset. Keep exactly ONE replica so jobs are not double-processed.
+  scheduler:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.run_background"]
+    env_file:
+      - ./backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      ENABLE_SCHEDULER: "1"
+      ENABLE_GENERATION_WORKER: "0"
+    depends_on:
+      - redis
+    # I3.7: same sentinel-file liveness pattern as the worker.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; p='/tmp/riviso_scheduler.heartbeat'; d=os.path.getmtime(p) if os.path.exists(p) else 0; exit(0 if time.time()-d<120 else 1)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    mem_limit: 512m
+    cpus: 0.5
 
   frontend:
     profiles: ["full"]
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    restart: unless-stopped
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
     ports:
       - "3000:3000"
     depends_on:
       - backend
+    mem_limit: 512m
+    cpus: 0.5
 
   nginx:
     profiles: ["full"]
     image: nginx:1.27
+    restart: unless-stopped
     ports:
       - "8080:80"
     volumes:
@@ -58,7 +138,12 @@ services:
       - frontend
       - backend
 
+# Scaling note (I3.8): for zero-downtime + headroom, run 2 API replicas behind a
+# load balancer (`docker compose up --scale backend=2` with a proxy/LB in front,
+# or your orchestrator's rolling deploy). Keep `scheduler` at exactly 1 replica.
+# With multiple API replicas, the Redis-backed rate limiter (I3.10) keeps limits
+# correct, and ENABLE_SCHEDULER=0 on the API avoids duplicate scheduled jobs.
+
 volumes:
   postgres_data:
   redis_data:
-

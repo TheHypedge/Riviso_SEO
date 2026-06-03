@@ -30,11 +30,9 @@ class ProjectSettingsPublic(BaseModel):
     )
     wp_site_url: str | None = None
     wp_username: str | None = None
+    # Only the presence flag is exposed; the secret itself is never returned in
+    # API responses. The UI shows a "set" pill and lets the user re-enter to change it.
     wp_app_password_set: bool = False
-    wp_app_password: str | None = Field(
-        default=None,
-        description="Application password for this project (returned to authorized project members for editing).",
-    )
     # Last-known verification snapshot. ``wp_verified_at`` is the UTC ISO
     # timestamp of the last successful ``POST /wordpress/verify`` for this
     # project; cleared whenever the credentials change. ``wp_verified_status``

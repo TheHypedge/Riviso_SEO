@@ -7,13 +7,15 @@ then loads the user record from legacy storage. Used by all authenticated API ro
 
 from __future__ import annotations
 
-from fastapi import Cookie, Depends, HTTPException
+from fastapi import Cookie, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.core.request_cache import cache_user, cached_user
 from app.core.security import decode_token
 from app.legacy.storage import get_legacy_storage_module
 from app.services.storage_db import call_storage
 from app.services.storage_http import raise_storage_http
+from app.services.to_thread import run_sync
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -36,6 +38,7 @@ def _email_verification_detail() -> dict:
 
 
 async def get_current_user(
+    request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
     aa_access: str | None = Cookie(default=None),
 ) -> dict:
@@ -55,13 +58,27 @@ async def get_current_user(
     user_id = (payload.get("sub") or "").strip()
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token subject")
-    st = get_legacy_storage_module()
-    try:
-        user = call_storage(st.get_user_by_id, user_id)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise_storage_http(e)
+    # P2.1: reuse the user already loaded by PlanLimitsMiddleware for this request.
+    user = cached_user(request, user_id)
+    if user is None:
+        st = get_legacy_storage_module()
+        try:
+            # P4.8: non-blocking Motor read on this hottest path (every authed request).
+            from app.services.mongo_listings_async import fetch_user_by_id
+
+            user = await fetch_user_by_id(user_id)
+        except HTTPException:
+            raise
+        except Exception:
+            # P2.3 fallback: keep blocking pymongo off the event loop via the thread pool.
+            try:
+                user = await run_sync(call_storage, st.get_user_by_id, user_id)
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise_storage_http(e)
+        if user:
+            cache_user(request, user_id, user)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     if account_is_inactive(user):

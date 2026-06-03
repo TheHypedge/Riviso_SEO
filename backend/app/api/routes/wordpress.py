@@ -506,8 +506,12 @@ def _get_wp_client_for_project(proj: dict) -> WordpressClient:
 
 
 @router.get("/wordpress/plugin/download")
-async def download_plugin() -> Response:
-    """Download the Riviso WordPress connector as a WordPress-valid plugin ZIP."""
+async def download_plugin(user: dict = Depends(get_current_user)) -> Response:
+    """Download the Riviso WordPress connector as a WordPress-valid plugin ZIP.
+
+    S1.13: authenticated download only — prevents anonymous scraping of the
+    connector package.
+    """
     from app.services.wordpress_plugin_packager import build_plugin_zip_bytes, get_plugin_version
 
     try:
@@ -582,7 +586,6 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
         wp_site_url=wp_site_url or None,
         wp_username=wp_user,
         wp_app_password_set=bool(app_pw),
-        wp_app_password=app_pw or None,
         # Verification state — set by ``POST /wordpress/verify`` and cleared
         # by ``PATCH /settings`` when the user changes site URL / username /
         # app password (the snapshot would no longer reflect the current creds).

@@ -36,7 +36,10 @@ from app.core.ratelimit import limiter
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.core.metrics import MetricsMiddleware, metrics_available, render_latest, set_queue_depth
+from app.core.observability import init_sentry
 from app.core.production import run_startup_checks
+from app.middleware.request_id import RequestIdMiddleware
 from app.services.scheduler import scheduler_loop
 from app.services.generation_worker import start_generation_worker, stop_generation_worker
 from app.services.subscription_daily_reset import subscription_daily_reset_loop
@@ -60,6 +63,12 @@ _DEFAULT_CORS_ORIGINS = ",".join(
 )
 
 
+def _is_local_origin(origin: str) -> bool:
+    """True for localhost / loopback dev origins that must be excluded in production."""
+    o = (origin or "").strip().lower()
+    return "localhost" in o or "127.0.0.1" in o or "0.0.0.0" in o or "[::1]" in o
+
+
 def _parse_cors_origins(raw: str) -> list[str]:
     out: list[str] = []
     for part in (raw or "").split(","):
@@ -78,9 +87,16 @@ def _effective_cors_origins() -> list[str]:
     "No Access-Control-Allow-Origin" and the article editor shows "Failed to fetch".
     """
     user = _parse_cors_origins(settings.cors_origins or "")
+    base = list(user) + _parse_cors_origins(_DEFAULT_CORS_ORIGINS)
+    if not settings.is_production:
+        # Local dev convenience only.
+        base = list(_LOCAL_DEV_ORIGINS) + base
     merged: list[str] = []
     seen: set[str] = set()
-    for o in list(_LOCAL_DEV_ORIGINS) + user + _parse_cors_origins(_DEFAULT_CORS_ORIGINS):
+    for o in base:
+        # S1.8: never allow localhost / loopback origins in production.
+        if settings.is_production and _is_local_origin(o):
+            continue
         if o not in seen:
             seen.add(o)
             merged.append(o)
@@ -122,6 +138,22 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             _log.warning("Could not read storage mode after init: %s", e)
 
+    # P4.3: backfill persisted has_body + listing_status for rows written before the
+    # feature shipped. Idempotent (only touches docs missing the fields) and runs off
+    # the event loop so startup is never blocked. Disable with RUN_LISTING_BACKFILL=0.
+    if (os.environ.get("RUN_LISTING_BACKFILL", "1") or "1").strip().lower() in {"1", "true", "yes", "on"} and hasattr(
+        st, "backfill_article_listing_fields"
+    ):
+        async def _run_listing_backfill() -> None:
+            try:
+                n = await asyncio.to_thread(st.backfill_article_listing_fields)
+                if n:
+                    _log.info("Listing-field backfill updated %d article(s)", n)
+            except Exception as e:
+                _log.warning("Listing-field backfill skipped: %s", e)
+
+        asyncio.create_task(_run_listing_backfill())
+
     scheduler_task: asyncio.Task | None = None
     generation_worker_task: asyncio.Task | None = None
     subscription_reset_task: asyncio.Task | None = None
@@ -134,8 +166,11 @@ async def lifespan(app: FastAPI):
     if enable in {"1", "true", "yes", "on"}:
         # One task per process; use ENABLE_SCHEDULER=0 when running multiple uvicorn workers.
         scheduler_task = asyncio.create_task(scheduler_loop(poll_seconds=10.0))
-
-    subscription_reset_task = asyncio.create_task(subscription_daily_reset_loop())
+        # I3.1: the daily subscription reset is a singleton job — bind it to the
+        # scheduler so a horizontally-scaled, scheduler-less API (ENABLE_SCHEDULER=0)
+        # does not run it on every instance. The standalone scheduler process
+        # (app.run_background) runs it instead.
+        subscription_reset_task = asyncio.create_task(subscription_daily_reset_loop())
 
     yield
 
@@ -157,6 +192,8 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     configure_logging(level="INFO")
+    # I5.1: error tracking (no-op unless SENTRY_DSN is set + sentry-sdk installed).
+    init_sentry("api")
 
     expose_docs = not settings.is_production
 
@@ -217,6 +254,62 @@ def create_app() -> FastAPI:
 
     app.add_middleware(SecurityHeadersASGIMiddleware)
 
+    # S1.7: CSRF protection for cookie-authenticated mutations. Bearer-token
+    # requests are not CSRF-able (an attacker page cannot read the token to set
+    # the header), and cross-site form posts cannot set a custom request header.
+    _CSRF_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+    _CSRF_EXEMPT_MARKERS = ("/auth/", "/oauth/", "/webhook")
+
+    class CsrfProtectMiddleware:
+        def __init__(self, app: ASGIApp) -> None:
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] != "http":
+                await self.app(scope, receive, send)
+                return
+            method = scope.get("method", "GET").upper()
+            path = scope.get("path", "") or ""
+            if (
+                method in _CSRF_METHODS
+                and path.startswith(settings.api_prefix)
+                and not any(m in path for m in _CSRF_EXEMPT_MARKERS)
+            ):
+                headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+                has_bearer = headers.get("authorization", "").lower().startswith("bearer ")
+                cookie = headers.get("cookie", "")
+                has_session_cookie = "aa_access=" in cookie or "aa_refresh=" in cookie
+                # Only cookie-authenticated requests without a bearer token are CSRF-exposed.
+                if has_session_cookie and not has_bearer and not headers.get("x-requested-with"):
+                    resp = JSONResponse(
+                        status_code=403,
+                        content={"detail": "Missing X-Requested-With header (CSRF protection)."},
+                    )
+                    await resp(scope, receive, send)
+                    return
+            await self.app(scope, receive, send)
+
+    app.add_middleware(CsrfProtectMiddleware)
+
+    # I5.2: Prometheus scrape endpoint. Optionally protected by METRICS_TOKEN
+    # (Bearer or ?token=). Disable entirely with METRICS_ENABLED=0.
+    _metrics_enabled = (os.environ.get("METRICS_ENABLED", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
+    _metrics_token = (os.environ.get("METRICS_TOKEN") or "").strip()
+
+    @app.get("/metrics", include_in_schema=False)
+    async def _metrics(request: Request):
+        if not _metrics_enabled:
+            return Response("metrics disabled", status_code=404)
+        if not metrics_available():
+            return Response("prometheus-client not installed", status_code=503)
+        if _metrics_token:
+            auth = request.headers.get("authorization", "")
+            supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else request.query_params.get("token", "")
+            if supplied != _metrics_token:
+                return Response("unauthorized", status_code=401)
+        body, content_type = render_latest()
+        return Response(content=body, media_type=content_type)
+
     @app.get("/", include_in_schema=False)
     async def _root():
         payload: dict = {
@@ -273,6 +366,12 @@ def create_app() -> FastAPI:
             await self.app(scope, receive, send_wrapper)
 
     app.add_middleware(EnsureCorsASGIMiddleware)
+
+    # Outermost layers: metrics wraps everything for full request latency, and the
+    # request-id binder runs first so every log line (including the wrappers above)
+    # carries a correlation id (I5.2 / I5.3).
+    app.add_middleware(MetricsMiddleware)
+    app.add_middleware(RequestIdMiddleware)
 
     app.include_router(api_router, prefix=settings.api_prefix)
     return app

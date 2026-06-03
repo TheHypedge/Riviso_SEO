@@ -12,7 +12,11 @@ export function readArticleEditorCache(projectId: string, articleId: string): Ar
     const raw = window.sessionStorage.getItem(key(projectId, articleId));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as ArticleDetail;
-    if (!parsed?.id) return null;
+    // Require a non-empty id AND title — an entry with blank title was written
+    // during a previous load that returned incomplete data (article created
+    // without a title, or fetch interrupted). Returning it causes the editor
+    // to show a blank title and body even when the API has the correct data.
+    if (!parsed?.id || !(parsed.title || "").trim()) return null;
     return parsed;
   } catch {
     return null;

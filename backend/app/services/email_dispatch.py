@@ -1,4 +1,13 @@
-"""Fire-and-forget transactional email dispatch via Nodemailer (backend/email)."""
+"""
+Fire-and-forget transactional email dispatch (I3.11).
+
+Primary sender: pure-Python smtplib (email_smtp.py) — no Node dependency,
+immediate SMTP errors surfaced in logs, works in any Python container.
+
+Fallback: Node subprocess (`npx tsx sendCli.ts`) when SMTP env vars are absent
+but the Node email dir exists. This allows a smooth rollout: keep the Node path
+working on older deploys while new deployments set SMTP_HOST/USER/PASS.
+"""
 
 from __future__ import annotations
 
@@ -13,18 +22,21 @@ log = logging.getLogger(__name__)
 _EMAIL_DIR = Path(__file__).resolve().parents[2] / "email"
 
 
+# ---------------------------------------------------------------------------
+# Node subprocess fallback (kept for backward compatibility)
+# ---------------------------------------------------------------------------
 def _email_cli_cmd(kind: str, to: str, payload: str) -> list[str]:
     npx = shutil.which("npx") or "npx"
     send_script = _EMAIL_DIR / "sendCli.ts"
     return [npx, "--yes", "tsx", str(send_script), kind, to, payload]
 
 
-async def _run_email(kind: str, to: str, payload: str) -> None:
+async def _run_email_node(kind: str, to: str, payload: str) -> None:
     to_clean = (to or "").strip()
     if not to_clean:
         return
     if not (_EMAIL_DIR / "emailService.ts").is_file():
-        log.warning("Email service missing at %s", _EMAIL_DIR)
+        log.warning("Email service missing at %s; email not sent", _EMAIL_DIR)
         return
     cmd = _email_cli_cmd(kind, to_clean, payload)
     env = os.environ.copy()
@@ -41,11 +53,63 @@ async def _run_email(kind: str, to: str, payload: str) -> None:
             err = (stderr or b"").decode("utf-8", errors="ignore").strip()
             smtp_pass = (os.environ.get("SMTP_PASS") or "").strip()
             safe = err.replace(smtp_pass, "[redacted]") if smtp_pass else err
-            log.error("Email dispatch failed kind=%s to=%s detail=%s", kind, to_clean, safe[:500])
+            log.error("Email dispatch (node) failed kind=%s to=%s detail=%s", kind, to_clean, safe[:500])
     except Exception:
         log.exception("Email subprocess failed kind=%s", kind)
 
 
+# ---------------------------------------------------------------------------
+# Python SMTP dispatcher — primary path
+# ---------------------------------------------------------------------------
+def _smtp_configured() -> bool:
+    # Delegate to email_smtp which reads from Settings (loaded via pydantic-settings
+    # from backend/.env) rather than os.environ, which only contains vars from the
+    # root .env file loaded by database.py's load_dotenv().
+    try:
+        from app.services.email_smtp import _smtp_configured as _smtp_check
+        return _smtp_check()
+    except Exception:
+        return bool(
+            (os.environ.get("SMTP_HOST") or "").strip()
+            and (os.environ.get("SMTP_USER") or "").strip()
+            and (os.environ.get("SMTP_PASS") or "").strip()
+        )
+
+
+async def _run_email(kind: str, to: str, payload: str) -> None:
+    to_clean = (to or "").strip()
+    if not to_clean:
+        return
+
+    if _smtp_configured():
+        from app.services.email_smtp import (
+            send_password_reset_email,
+            send_plan_notification_email,
+            send_verification_email,
+        )
+        try:
+            if kind == "verification":
+                await send_verification_email(to_clean, payload)
+            elif kind == "password_reset":
+                await send_password_reset_email(to_clean, payload)
+            elif kind == "plan_notification":
+                await send_plan_notification_email(to_clean, payload)
+            else:
+                log.warning("Unknown email kind %r; not sent", kind)
+                return
+            log.info("Email sent kind=%s to=%s", kind, to_clean)
+            return
+        except Exception:
+            log.exception("Python SMTP send failed kind=%s to=%s", kind, to_clean)
+            return
+
+    # Fall back to Node subprocess when SMTP is not configured via env.
+    await _run_email_node(kind, to_clean, payload)
+
+
+# ---------------------------------------------------------------------------
+# Public fire-and-forget helpers (callers unchanged)
+# ---------------------------------------------------------------------------
 def dispatch_verification_email(*, to: str, token: str) -> None:
     asyncio.create_task(_run_email("verification", to, token))
 
@@ -59,10 +123,6 @@ def dispatch_plan_notification_email(*, to: str, plan_name: str) -> None:
 
 
 async def notify_plan_event(*, email: str, plan_name: str, event: str) -> None:
-    """
-    Wrapper for admin/limitation or subscription managers.
-
-    ``event`` is reserved for future template variants (upgrade, trial_expired, etc.).
-    """
+    """Wrapper for admin/subscription managers. ``event`` reserved for future variants."""
     _ = event
     await _run_email("plan_notification", email, plan_name)

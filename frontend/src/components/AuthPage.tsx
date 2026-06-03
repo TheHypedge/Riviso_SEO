@@ -451,14 +451,21 @@ export default function AuthPage() {
               ) : null}
 
               {tab === "login" && !awaitingVerification ? (
-                <button type="button" className={styles.authToggle} onClick={onForgotPassword} disabled={loading}>
-                  Forgot password?
-                </button>
+                <div className={styles.authForgotRow}>
+                  <button
+                    type="button"
+                    className={styles.authForgotLink}
+                    onClick={onForgotPassword}
+                    disabled={loading}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
               ) : null}
               </>
               )}
 
-              {info ? <p className={styles.muted}>{info}</p> : null}
+              {info ? <p className={styles.authInfo}>{info}</p> : null}
               {error ? <p className={`${styles.error} ${styles.authError}`}>{error}</p> : null}
               {reactivationAvailable ? (
                 <div className={styles.authChecklist}>

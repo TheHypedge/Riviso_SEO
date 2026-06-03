@@ -29,6 +29,9 @@ def call_storage(fn: Callable[..., T], /, *args, **kwargs) -> T:
     import os
 
     db = _database_module()
+    # 2 attempts: PyMongo's retryReads/retryWrites handles the first transient
+    # error transparently.  Our outer retry adds one reset-and-reconnect for the
+    # edge cases PyMongo doesn't handle (e.g. pool fully exhausted).
     attempts = int(os.environ.get("MONGODB_API_RETRY_ATTEMPTS") or "2")
     return db.run_with_retry(lambda: fn(*args, **kwargs), attempts=max(1, attempts))
 

@@ -6,9 +6,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app.core.request_cache import cache_subscription, cache_user
 from app.core.security import decode_token
 from app.legacy.storage import get_legacy_storage_module
 from app.services.plan_gatekeeper import is_trial_expired
+from app.services.to_thread import run_sync
 
 
 _SKIP_PREFIXES = (
@@ -77,17 +79,26 @@ class PlanLimitsMiddleware:
             return
 
         st = get_legacy_storage_module()
-        user = st.get_user_by_id(uid) if hasattr(st, "get_user_by_id") else None
+        # P2.3: blocking pymongo reads run off the event loop.
+        user = await run_sync(st.get_user_by_id, uid) if hasattr(st, "get_user_by_id") else None
         if not isinstance(user, dict):
             await self.app(scope, receive, send)
             return
+        # P2.1: memoize so get_current_user / gatekeeper reuse this read instead of
+        # re-querying the same documents later in the same request.
+        cache_user(scope, uid, user)
         if (user.get("role") or "").strip().lower() == "admin":
             await self.app(scope, receive, send)
             return
 
-        subscription = st.get_subscription_by_user_id(uid) if hasattr(st, "get_subscription_by_user_id") else None
+        subscription = (
+            await run_sync(st.get_subscription_by_user_id, uid)
+            if hasattr(st, "get_subscription_by_user_id")
+            else None
+        )
         if subscription is None and hasattr(st, "ensure_subscription_for_user"):
-            subscription = st.ensure_subscription_for_user(user)
+            subscription = await run_sync(st.ensure_subscription_for_user, user)
+        cache_subscription(scope, subscription)
 
         if is_trial_expired(user=user, subscription=subscription):
             response = JSONResponse(
