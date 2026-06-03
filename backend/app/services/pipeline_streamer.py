@@ -98,12 +98,26 @@ async def pipeline_event_stream(
     channel = pipeline_channel(aid)
     r = get_async_redis()
     if r is None:
+        # Redis not configured — emit a connected event so the frontend overlay
+        # opens, then keep the stream alive with heartbeats. The frontend's
+        # polling loop (generation-status endpoint) will detect completion or
+        # error via has_body / generation_error fields without needing pub/sub.
         yield format_sse_payload(
             format_pipeline_event(
-                message="Live pipeline stream unavailable (Redis offline).",
-                stage=STAGE_ERROR,
+                message="Live pipeline stream connected.",
+                stage=STAGE_CONNECTED,
             )
         )
+        while True:
+            if request is not None:
+                try:
+                    disconnected = await request.is_disconnected()
+                except Exception:
+                    disconnected = False
+                if disconnected:
+                    return
+            await asyncio.sleep(heartbeat_seconds)
+            yield ": heartbeat\n\n"
         return
 
     pubsub = r.pubsub()
