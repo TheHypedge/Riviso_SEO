@@ -57,8 +57,10 @@ _DEFAULT_CORS_ORIGINS = ",".join(
         "http://127.0.0.1:3000",
         "https://riviso.com",
         "https://www.riviso.com",
+        "https://app.riviso.com",
         "https://riviso.cloud",
         "https://www.riviso.cloud",
+        "https://app.riviso.cloud",
     ]
 )
 

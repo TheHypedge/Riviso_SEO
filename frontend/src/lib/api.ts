@@ -944,8 +944,10 @@ const ENV_API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").trim().rep
 const RIVISO_APP_HOSTS = new Set([
   "riviso.com",
   "www.riviso.com",
+  "app.riviso.com",
   "riviso.cloud",
   "www.riviso.cloud",
+  "app.riviso.cloud",
 ]);
 
 export function getApiBaseUrl(): string {
