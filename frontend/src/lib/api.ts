@@ -790,6 +790,8 @@ export type ArticleGenerationWaitOptions = {
   intervalMs?: number;
   maxWaitMs?: number;
   skipGlobalLoading?: boolean;
+  /** When true and the backend returns 202 (queued), resolve immediately without polling. */
+  noWait?: boolean;
 };
 
 /** Poll generation-status while a worker runs (Mongo + queue can be slow). */
@@ -2562,7 +2564,7 @@ export const api = {
     },
     opts?: ArticleGenerationWaitOptions & { previousGeneratedAt?: string | null },
   ) {
-    const { previousGeneratedAt, expectImage, intervalMs, maxWaitMs, skipGlobalLoading, ...fetchOpts } = opts ?? {};
+    const { previousGeneratedAt, expectImage, intervalMs, maxWaitMs, skipGlobalLoading, noWait, ...fetchOpts } = opts ?? {};
     const res = await apiFetch<
       | {
           ok: boolean;
@@ -2589,6 +2591,9 @@ export const api = {
     ).finally(() => invalidateArticleDetailCache(projectId, articleId));
 
     if (isArticleOperationQueuedResponse(res)) {
+      if (noWait) {
+        return { ok: true, status: "queued", message: res.message || "Article queued for generation." };
+      }
       const art = await api.waitForArticleGenerationComplete(projectId, articleId, {
         previousGeneratedAt,
         expectImage: expectImage ?? !!payload.generate_image,

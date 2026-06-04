@@ -1943,14 +1943,48 @@ export default function ArticleEditPage() {
                 <div className={styles.modalTitle}>Regenerate article?</div>
               </div>
               <div className={styles.modalBody}>
-                <p style={{ margin: "0 0 12px", lineHeight: 1.55 }}>
-                  This runs a fresh generation with the latest <strong>human-writing guardrails</strong> and an automatic
-                  post-pass to reduce AI-detector patterns. Your current draft (body, meta, and featured image if enabled)
-                  will be replaced.
+                <p style={{ margin: "0 0 16px", lineHeight: 1.55 }}>
+                  This runs a fresh generation with the latest <strong>human-writing guardrails</strong>. Your current
+                  draft (body, meta, and featured image if enabled) will be replaced.{" "}
+                  <strong>Save anything you need before continuing.</strong>
                 </p>
-                <p style={{ margin: 0, lineHeight: 1.55 }}>
-                  <strong>Save anything you need before continuing.</strong> Unsaved editor changes are not kept.
-                </p>
+                <label className={styles.label}>
+                  Writing prompt
+                  <select
+                    className={styles.input}
+                    value={writingPromptId}
+                    onChange={(e) => setWritingPromptId(e.target.value)}
+                  >
+                    <option value="">Project default</option>
+                    {(writingPrompts?.items || []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className={styles.label}>
+                  Image prompt
+                  <select
+                    className={styles.input}
+                    value={imagePromptId}
+                    onChange={(e) => setImagePromptId(e.target.value)}
+                  >
+                    <option value="">Project default</option>
+                    {(imagePrompts?.items || []).map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className={styles.label}>
+                  Generate image
+                  <select
+                    className={styles.input}
+                    value={generateImage ? "yes" : "no"}
+                    onChange={(e) => setGenerateImage(e.target.value === "yes")}
+                  >
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                  </select>
+                </label>
               </div>
               <div className={styles.modalFooter}>
                 <button className={styles.btnSecondary} type="button" onClick={() => setShowRegenConfirm(false)}>
@@ -1964,7 +1998,7 @@ export default function ArticleEditPage() {
                     startGenerateFlow({ regenerate: true });
                   }}
                 >
-                  Regenerate with new guardrails
+                  Regenerate
                 </button>
               </div>
             </div>
