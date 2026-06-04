@@ -603,7 +603,8 @@ export default function ArticleEditPage() {
         setFeaturedImageLoadFailed(false);
       }
       // Disk-backed image: keep any already-loaded URL; dedicated effect fetches once.
-      if (a.wp_rest_base) setWpPostType(a.wp_rest_base);
+      // Post type is NOT synced from article.wp_rest_base here — ensureWpMetaLoaded
+      // always sets it from the project's current default_wp_rest_base.
       applyStoredIntegrity(a);
     },
     [applyStoredIntegrity, params.projectId, params.articleId],
@@ -791,11 +792,9 @@ export default function ArticleEditPage() {
 
   const needsWpMeta = isWordPressProject && websiteConnected;
 
-  // Sync WP publish options from the article row when available.
-  useEffect(() => {
-    if (!isWordPressProject || !article?.id) return;
-    if (article.wp_rest_base) setWpPostType(article.wp_rest_base);
-  }, [article?.id, article?.wp_rest_base, isWordPressProject]);
+  // Post type is sourced from the project's default_wp_rest_base (set in ensureWpMetaLoaded),
+  // not from the article's stale wp_rest_base. This ensures that changing Post Type in Project
+  // Settings takes effect immediately for all new publications.
 
   // Auto-load WordPress post types + categories in the background (no manual click required).
   useEffect(() => {
@@ -905,9 +904,10 @@ export default function ArticleEditPage() {
       }
       if (psRes.status === "fulfilled") {
         const ps = psRes.value;
-        if (!article?.wp_rest_base) {
-          setWpPostType((ps.default_wp_rest_base || "posts") as string);
-        }
+        // Always use the project's current post type — changes in Project Settings
+        // take effect immediately for all new publications regardless of what was
+        // stored on the article from a previous publish.
+        setWpPostType((ps.default_wp_rest_base || "posts") as string);
         if (!isLiveOnWordPress) {
           setWpStatus(((ps.default_wp_status || "draft") as "draft" | "publish"));
           setWpCategoryIds((ps.default_wp_category_ids || []) as number[]);
@@ -1944,8 +1944,7 @@ export default function ArticleEditPage() {
               </div>
               <div className={styles.modalBody}>
                 <p style={{ margin: "0 0 16px", lineHeight: 1.55 }}>
-                  This runs a fresh generation with the latest <strong>human-writing guardrails</strong>. Your current
-                  draft (body, meta, and featured image if enabled) will be replaced.{" "}
+                  This runs a fresh generation using your selected prompts. The current article body and meta will be replaced.{" "}
                   <strong>Save anything you need before continuing.</strong>
                 </p>
                 <label className={styles.label}>
@@ -1967,6 +1966,7 @@ export default function ArticleEditPage() {
                     className={styles.input}
                     value={imagePromptId}
                     onChange={(e) => setImagePromptId(e.target.value)}
+                    disabled={!generateImage}
                   >
                     <option value="">Project default</option>
                     {(imagePrompts?.items || []).map((p) => (
@@ -1974,17 +1974,54 @@ export default function ArticleEditPage() {
                     ))}
                   </select>
                 </label>
-                <label className={styles.label}>
-                  Generate image
-                  <select
-                    className={styles.input}
-                    value={generateImage ? "yes" : "no"}
-                    onChange={(e) => setGenerateImage(e.target.value === "yes")}
-                  >
-                    <option value="yes">Yes</option>
-                    <option value="no">No</option>
-                  </select>
-                </label>
+
+                {/* Featured image choice — prominent Yes/No */}
+                <div style={{ marginTop: 14 }}>
+                  <p style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
+                    Regenerate the Featured Image?
+                  </p>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button
+                      type="button"
+                      onClick={() => setGenerateImage(true)}
+                      style={{
+                        flex: 1, padding: "10px 0", borderRadius: 8, fontSize: 13,
+                        cursor: "pointer", fontWeight: generateImage ? 700 : 400,
+                        border: generateImage
+                          ? "1.5px solid var(--aa-accent, #d97757)"
+                          : "1px solid rgba(255,255,255,0.15)",
+                        background: generateImage
+                          ? "color-mix(in oklab, var(--aa-accent, #d97757) 14%, transparent)"
+                          : "transparent",
+                        color: "inherit",
+                      }}
+                    >
+                      Yes — regenerate image
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGenerateImage(false)}
+                      style={{
+                        flex: 1, padding: "10px 0", borderRadius: 8, fontSize: 13,
+                        cursor: "pointer", fontWeight: !generateImage ? 700 : 400,
+                        border: !generateImage
+                          ? "1.5px solid var(--aa-accent, #d97757)"
+                          : "1px solid rgba(255,255,255,0.15)",
+                        background: !generateImage
+                          ? "color-mix(in oklab, var(--aa-accent, #d97757) 14%, transparent)"
+                          : "transparent",
+                        color: "inherit",
+                      }}
+                    >
+                      No — keep existing image
+                    </button>
+                  </div>
+                  {!generateImage && (
+                    <p className={styles.muted} style={{ fontSize: 11, marginTop: 6 }}>
+                      Your current featured image will not be changed.
+                    </p>
+                  )}
+                </div>
               </div>
               <div className={styles.modalFooter}>
                 <button className={styles.btnSecondary} type="button" onClick={() => setShowRegenConfirm(false)}>
