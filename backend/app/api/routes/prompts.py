@@ -61,14 +61,18 @@ def _enforce_writing_prompt_limits(*, st, user: dict, plan: dict, plan_key: str,
 
 _DEFAULT_WRITING_PROMPT_NAME = "Default writing prompt"
 _DEFAULT_WRITING_PROMPT_TEXT = (
-    "You are Riviso, an expert content writer.\n"
-    "Write a clear, SEO-friendly article for the given title and keywords.\n"
-    "- Use a compelling introduction\n"
-    "- Use helpful headings (H2/H3)\n"
-    "- Include practical details and examples where relevant\n"
-    "- Keep tone professional, readable, and concise\n"
-    "- Avoid fluff, repetition, and keyword stuffing\n"
-    "- End with a short conclusion\n"
+    "Write a well-structured, SEO-friendly article for the given title and keywords.\n\n"
+    "REQUIRED structure:\n"
+    "- Start with a compelling 2–3 sentence introduction that names the problem or situation directly\n"
+    "- Divide the body into at least 3 main sections using ## H2 headings\n"
+    "- Use ### H3 sub-headings inside any section with multiple sub-topics\n"
+    "- Use bullet points (- item) for any list of 3 or more tips, features, steps, or options\n"
+    "- Use numbered lists (1. 2. 3.) for any sequential process or step-by-step instructions\n"
+    "- Use **bold** for key terms, statistics, or critical phrases (2–4 per article)\n"
+    "- Keep paragraphs short: 2–4 sentences maximum\n"
+    "- End with a short 2–3 sentence conclusion — no salesy CTA, no 'In conclusion' opener\n\n"
+    "Tone: professional, readable, and specific — name real details rather than abstract statements.\n"
+    "Avoid fluff, repetition, and keyword stuffing.\n"
 )
 
 
