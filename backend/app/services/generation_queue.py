@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 QUEUE_KEY = "aa:generation:queue"
 DEDUP_PREFIX = "aa:generation:dedup:"
-DEDUP_TTL_SECONDS = 6 * 3600
+DEDUP_TTL_SECONDS = 20 * 60  # 20 minutes — generation takes at most ~5 min; short TTL prevents hours-long lockouts after container restarts
 
 
 class GenerationJobKind(str, Enum):
