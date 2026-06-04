@@ -452,6 +452,8 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         "shopify_catalog": d.get("shopify_catalog") if isinstance(d.get("shopify_catalog"), dict) else {},
         "shopify_product_aware_enabled": bool(d.get("shopify_product_aware_enabled", False)),
         "wp_internal_link_aware_enabled": bool(d.get("wp_internal_link_aware_enabled", False)),
+        "content_optimization_profile": (d.get("content_optimization_profile") or "none")[:64],
+        "humanization_settings": d.get("humanization_settings") if isinstance(d.get("humanization_settings"), dict) else {},
         "created_at": (d.get("created_at") or "")[:64],
     }
 
@@ -2243,6 +2245,10 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
                 p[k] = list(v) if v else []
         elif k in ("target_cities_all", "target_countries_all"):
             p[k] = bool(v)
+        elif k == "humanization_settings":
+            p[k] = v if isinstance(v, dict) else {}
+        elif k == "content_optimization_profile":
+            p[k] = str(v)[:64] if v is not None else "none"
         elif k in p or k in (
             "id",
             "name",
@@ -2432,6 +2438,8 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "shopify_catalog": d.get("shopify_catalog") if isinstance(d.get("shopify_catalog"), dict) else {},
         "shopify_product_aware_enabled": bool(d.get("shopify_product_aware_enabled", False)),
         "wp_internal_link_aware_enabled": bool(d.get("wp_internal_link_aware_enabled", False)),
+        "content_optimization_profile": d.get("content_optimization_profile") or "none",
+        "humanization_settings": d.get("humanization_settings") if isinstance(d.get("humanization_settings"), dict) else {},
         "created_at": d.get("created_at") or "",
     }
 
