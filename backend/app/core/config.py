@@ -89,6 +89,18 @@ class Settings(BaseSettings):
     # Google Indexing API (service account JSON; raw JSON or base64 JSON)
     google_indexing_service_account_json: str = Field(default="", validation_alias="GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON")
 
+    # Process control — read from Settings so .env values always win over Procfile env vars.
+    enable_generation_worker: bool = Field(
+        default=True,
+        validation_alias="ENABLE_GENERATION_WORKER",
+        description="Run the generation worker loop inside this process (set False when using a dedicated worker process).",
+    )
+    enable_scheduler: bool = Field(
+        default=True,
+        validation_alias="ENABLE_SCHEDULER",
+        description="Run the scheduler loop inside this process.",
+    )
+
     # Generation queue (Redis-backed; falls back to in-process queue when Redis is down)
     max_concurrent_generations: int = Field(
         default=3,

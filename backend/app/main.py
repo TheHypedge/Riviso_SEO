@@ -160,12 +160,12 @@ async def lifespan(app: FastAPI):
     generation_worker_task: asyncio.Task | None = None
     subscription_reset_task: asyncio.Task | None = None
 
-    enable_worker = (os.environ.get("ENABLE_GENERATION_WORKER", "1") or "1").strip()
-    if enable_worker in {"1", "true", "yes", "on"}:
+    # Prefer Settings (pydantic-settings reads backend/.env) so the .env value wins
+    # over any ENABLE_GENERATION_WORKER=0 set by the Procfile or a process manager.
+    if settings.enable_generation_worker:
         generation_worker_task = start_generation_worker()
 
-    enable = (os.environ.get("ENABLE_SCHEDULER", "1") or "1").strip()
-    if enable in {"1", "true", "yes", "on"}:
+    if settings.enable_scheduler:
         # One task per process; use ENABLE_SCHEDULER=0 when running multiple uvicorn workers.
         scheduler_task = asyncio.create_task(scheduler_loop(poll_seconds=10.0))
         # I3.1: the daily subscription reset is a singleton job — bind it to the

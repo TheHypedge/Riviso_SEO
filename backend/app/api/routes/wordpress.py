@@ -15,6 +15,7 @@ from app.legacy.storage import get_legacy_storage_module
 from app.schemas.wordpress import WordpressCategory, WordpressPostType
 from app.services.wordpress_client import RIVISO_WP_USER_AGENT, WordpressClient
 from app.schemas.project_settings import (
+    HumanizationSettings,
     ProjectSettingsPublic,
     ProjectSettingsUpdate,
     WordpressVerifyRequest,
@@ -603,6 +604,8 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
         default_wp_category_ids=cats,
         gsc_property_url=gsc_prop,
         gsc_index_on_publish=gsc_index,
+        content_optimization_profile=(proj.get("content_optimization_profile") or "none"),
+        humanization_settings=HumanizationSettings(**(proj.get("humanization_settings") or {})),
     )
 
 
@@ -721,6 +724,32 @@ async def update_project_settings(
         if url != _normalize_url(proj.get("shopify_shop") or proj.get("website_url") or ""):
             shopify_creds_changed = True
         updates["shopify_shop"] = url
+
+    # Content optimization profile
+    if payload.content_optimization_profile is not None:
+        from app.services.content_optimization import VALID_PROFILES
+        val = (payload.content_optimization_profile or "none").strip().lower()
+        if val not in VALID_PROFILES:
+            raise HTTPException(status_code=400, detail=f"Invalid content_optimization_profile. Must be one of: {sorted(VALID_PROFILES)}")
+        updates["content_optimization_profile"] = val
+
+    # Humanization settings — merge-patch so callers can update a single field
+    if payload.humanization_settings is not None:
+        hs = payload.humanization_settings
+        current_hs: dict = dict(proj.get("humanization_settings") or {})
+        if hs.auto_humanize is not None:
+            current_hs["auto_humanize"] = bool(hs.auto_humanize)
+        if hs.target_ai_pct is not None:
+            current_hs["target_ai_pct"] = max(0.0, min(50.0, float(hs.target_ai_pct)))
+        if hs.strength_preset is not None:
+            valid_presets = {"light", "medium", "aggressive"}
+            preset = (hs.strength_preset or "medium").strip().lower()
+            if preset not in valid_presets:
+                raise HTTPException(status_code=400, detail=f"Invalid strength_preset. Must be one of: {sorted(valid_presets)}")
+            current_hs["strength_preset"] = preset
+        if hs.max_passes is not None:
+            current_hs["max_passes"] = max(1, min(10, int(hs.max_passes)))
+        updates["humanization_settings"] = current_hs
 
     if creds_changed:
         # Drop the stale "verified" snapshot — the next /verify call will
