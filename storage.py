@@ -2111,7 +2111,10 @@ def _derive_article_listing_status(a: dict[str, Any]) -> str:
         if has_post and wp_last == "publish":
             return "published"
         return "scheduled"
-    if has_post and raw == "pending":
+    if has_post and raw == "pending" and wp_last in {"publish", "draft"}:
+        # WP REST API has confirmed a live status — trust it over a stale local
+        # `status` field. When wp_last is empty the user has explicitly set the
+        # status (e.g. via bulk change); honour that value directly.
         return "draft" if wp_last == "draft" else "published"
     return raw
 

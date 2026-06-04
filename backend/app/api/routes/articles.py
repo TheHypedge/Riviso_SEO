@@ -251,8 +251,11 @@ def _derive_listing_status(a: dict) -> str:
         if has_post and wp_last == "publish":
             return "published"
         return "scheduled"
-    if has_post and raw == "pending":
-        # WP row exists but app `status` was never upgraded (older Flask paths, partial writes).
+    if has_post and raw == "pending" and wp_last in {"publish", "draft"}:
+        # WP REST API confirms the article's live status — trust it over the
+        # stale local `status` field (older Flask paths never wrote `status`).
+        # If wp_last is empty the user has explicitly set status="pending" via
+        # a bulk action; trust that value instead of overriding with "published".
         return "draft" if wp_last == "draft" else "published"
     return raw
 
