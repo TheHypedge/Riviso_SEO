@@ -283,9 +283,12 @@ async def execute_article_generation(
     elif gen.get("wp_mapped_pages"):
         updates["wp_mapped_pages"] = gen.get("wp_mapped_pages")
     # Post-generation humanization — respects per-project humanization_settings.
+    # Default is OFF (False) so the raw AI output is preserved unless the project
+    # explicitly enables it.  Content optimization profiles depend on the model's
+    # structured output (FAQs, headings, etc.) being kept intact.
     try:
         _hset = humanization_settings if humanization_settings is not None else (proj.get("humanization_settings") or {})
-        _auto_humanize   = bool(_hset.get("auto_humanize", True))
+        _auto_humanize   = bool(_hset.get("auto_humanize", False))
         _target_ai_pct   = float(_hset.get("target_ai_pct") or 6.0)
         _max_passes      = int(_hset.get("max_passes") or 6)
         _preset          = str(_hset.get("strength_preset") or "medium").lower()

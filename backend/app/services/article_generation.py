@@ -187,8 +187,23 @@ def build_generation_messages(
             "- Do not invent posts, slugs, or URLs that are not in the context.\n"
         )
 
+    # Build optimization profile block first — it must appear at the TOP so the model
+    # sees its structural requirements before any other instruction.
+    opt_block = build_optimization_profile_block(content_optimization_profile)
+    if opt_block:
+        opt_section = (
+            "=== CONTENT OPTIMIZATION PROFILE: MANDATORY STRUCTURAL REQUIREMENTS ===\n"
+            "These requirements MUST be satisfied exactly as described. They take priority over "
+            "all other writing style guidelines. Do not omit any required section or format.\n"
+            + opt_block
+            + "=== END CONTENT OPTIMIZATION REQUIREMENTS — all rules above are non-negotiable ===\n\n"
+        )
+    else:
+        opt_section = ""
+
     sys = (
-        HUMAN_FIRST_SYSTEM_ANCHOR
+        opt_section
+        + HUMAN_FIRST_SYSTEM_ANCHOR
         + human_guardrail
         + "\n\nCONTENT STRUCTURE REQUIREMENTS (non-negotiable — apply to every article):\n"
         "- Use ## H2 headings for every main section (minimum 3 H2 sections required).\n"
@@ -214,7 +229,6 @@ def build_generation_messages(
         "- Do NOT output code, poetry, scripts, or conversational text outside the JSON object."
         f"{format_ai_detector_banned_phrases_for_prompt()}"
         f"{format_banned_phrases_for_prompt()}"
-        f"{build_optimization_profile_block(content_optimization_profile)}"
         f"{flavor}"
         f"{product_rules}"
     )
