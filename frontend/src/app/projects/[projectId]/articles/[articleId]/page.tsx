@@ -1349,15 +1349,9 @@ export default function ArticleEditPage() {
         params.articleId,
         async () => {
           await persistEditorForWordPress({ skipGlobalLoading: true });
-          const wpImageFile =
-            generateImage && !uploadedImageFile
-              ? await resolveFeaturedImageFileForWordPress({
-                  projectId: params.projectId,
-                  articleId: params.articleId,
-                  generatedImageUrl,
-                  hasFeaturedImage,
-                })
-              : uploadedImageFile;
+          // Let the backend resolve the auto-generated image from its stored URL —
+          // avoids downloading a large file in the browser and 413-ing nginx.
+          const wpImageFile = uploadedImageFile ?? null;
           const res = await api.publishArticleToLiveSite(params.projectId, params.articleId, {
             image_file: wpImageFile,
             post_type: wpPostType,
@@ -1398,15 +1392,11 @@ export default function ArticleEditPage() {
     setWpUpdateBusy(true);
     try {
       await persistEditorForWordPress({ skipGlobalLoading: true });
-      const wpImageFile =
-        generateImage && !uploadedImageFile
-          ? await resolveFeaturedImageFileForWordPress({
-              projectId: params.projectId,
-              articleId: params.articleId,
-              generatedImageUrl,
-              hasFeaturedImage,
-            })
-          : uploadedImageFile;
+      // For auto-generated images, pass null so the backend resolves the image
+      // from its stored URL directly — avoids downloading a large file in the
+      // browser and re-uploading it through nginx (which would 413 on big images).
+      // Only send an image when the user explicitly uploaded one.
+      const wpImageFile = uploadedImageFile ?? null;
       const res = await api.updateArticleOnWordPress(params.projectId, params.articleId, {
         image_file: wpImageFile,
         post_type: wpPostType,
