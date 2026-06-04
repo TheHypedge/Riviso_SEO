@@ -42,6 +42,7 @@ _Last updated: 2026-06-04_
 | B-06 | 422 "payload: Field required" on article generation | Fixed (removed `from __future__ import annotations` from `articles.py`, `auth.py`, `research.py`) | |
 | B-07 | Custom prompts not followed (AEO/GEO labels but no structure) | Fixed (content_optimization_profile blocks injected into system prompt) | |
 | B-08 | Humanization always at hardcoded 6% target / 6 passes | Fixed (configurable per project via `humanization_settings`) | |
+| B-09 | Generic content with no H2/H3/bullets; custom writing prompt ignored | Fixed (commit 4e4896c) — `HUMAN_FIRST_SYSTEM_ANCHOR` declared "SEO structure secondary" as PRIMARY DIRECTIVE overriding everything; removed. Added explicit structural requirements (min 3 H2, bullets, numbered lists) + USER PROMPT AUTHORITY declaration. Default writing prompt also updated. | Deploy to VPS to activate |
 
 ---
 
