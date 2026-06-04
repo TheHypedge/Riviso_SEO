@@ -4729,20 +4729,31 @@ export default function ProjectPage() {
       if (!imported?.articleIds.length) return;
 
       const mapped = isShopifyProject && m.mappedProducts.length ? m.mappedProducts : undefined;
-      let generated = 0;
-      for (const articleId of imported.articleIds) {
-        await api.generateArticle(projectId, articleId, {
-          writing_prompt_id: m.writingPromptId || null,
-          image_prompt_id: m.imagePromptId || null,
-          generate_image: true,
-          mapped_products: mapped,
-        });
-        generated += 1;
-      }
-      setResearchImportMsg(`Generated ${generated} article${generated === 1 ? "" : "s"} with featured images.`);
+      // Fire all generation requests in parallel and return immediately.
+      // Each POST enqueues the job in the Redis queue; the worker processes them.
+      // Waiting serially for each article would block the UI for up to 10 min per article.
+      await Promise.allSettled(
+        imported.articleIds.map((articleId) =>
+          api.generateArticle(
+            projectId,
+            articleId,
+            {
+              writing_prompt_id: m.writingPromptId || null,
+              image_prompt_id: m.imagePromptId || null,
+              generate_image: true,
+              mapped_products: mapped,
+            },
+            { skipGlobalLoading: true, noWait: true },
+          ),
+        ),
+      );
+      const count = imported.articleIds.length;
+      setResearchImportMsg(
+        `${count} article${count === 1 ? "" : "s"} queued for generation. Check the Articles tab for progress.`,
+      );
       void refreshArticleQuota();
       await reloadArticleTitles();
-      await refreshArticlesList();
+      void refreshArticlesList();
       setCurationPromptModal(null);
       setResearchFilter("imported");
     } catch (e) {
@@ -11101,17 +11112,14 @@ export default function ProjectPage() {
                         void loadShopifyCatalogIfNeeded();
                         setClusterGeneratePromptModal((m) => (m ? { ...m, step: "products" } : m));
                       } else {
-                        void (async () => {
-                          const m = clusterGeneratePromptModal;
-                          if (!m) return;
-                          setClusterGeneratePromptModal({ ...m, busy: true });
-                          await generateForCluster(m.clusterId, {
-                            topicIds: m.topicIds,
-                            writingPromptId: m.writingPromptId || null,
-                            imagePromptId: m.imagePromptId || null,
-                          });
-                          setClusterGeneratePromptModal(null);
-                        })();
+                        const m = clusterGeneratePromptModal;
+                        if (!m) return;
+                        setClusterGeneratePromptModal(null);
+                        void generateForCluster(m.clusterId, {
+                          topicIds: m.topicIds,
+                          writingPromptId: m.writingPromptId || null,
+                          imagePromptId: m.imagePromptId || null,
+                        });
                       }
                     }}
                   >
@@ -11123,17 +11131,16 @@ export default function ProjectPage() {
                       type="button"
                       className={styles.btnSecondary}
                       disabled={clusterGeneratePromptModal.busy}
-                      onClick={async () => {
+                      onClick={() => {
                         const m = clusterGeneratePromptModal;
                         if (!m) return;
-                        setClusterGeneratePromptModal({ ...m, busy: true });
-                        await generateForCluster(m.clusterId, {
+                        setClusterGeneratePromptModal(null);
+                        void generateForCluster(m.clusterId, {
                           topicIds: m.topicIds,
                           writingPromptId: m.writingPromptId || null,
                           imagePromptId: m.imagePromptId || null,
                           mappedProducts: [],
                         });
-                        setClusterGeneratePromptModal(null);
                       }}
                     >
                       Skip — generate without products
@@ -11141,21 +11148,20 @@ export default function ProjectPage() {
                     <button
                       type="button"
                       className={styles.button}
-                      disabled={clusterGeneratePromptModal.busy || !clusterGeneratePromptModal.mappedProducts.length}
-                      onClick={async () => {
+                      disabled={!clusterGeneratePromptModal.mappedProducts.length}
+                      onClick={() => {
                         const m = clusterGeneratePromptModal;
                         if (!m) return;
-                        setClusterGeneratePromptModal({ ...m, busy: true });
-                        await generateForCluster(m.clusterId, {
+                        setClusterGeneratePromptModal(null);
+                        void generateForCluster(m.clusterId, {
                           topicIds: m.topicIds,
                           writingPromptId: m.writingPromptId || null,
                           imagePromptId: m.imagePromptId || null,
                           mappedProducts: m.mappedProducts,
                         });
-                        setClusterGeneratePromptModal(null);
                       }}
                     >
-                      {clusterGeneratePromptModal.busy ? "Generating…" : "Generate with mapped products"}
+                      Generate with mapped products
                     </button>
                   </>
                 )}
