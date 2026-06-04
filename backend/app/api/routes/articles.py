@@ -1562,7 +1562,12 @@ async def update_article(
         updates["meta_description"] = sanitize_meta_description(payload.meta_description, max_len=600)
 
     if updates:
-        await run_sync(st.update_article_fields, article_id, updates)
+        saved = await run_sync(call_storage, st.update_article_fields, article_id, updates)
+        if not saved:
+            raise HTTPException(
+                status_code=409,
+                detail="Article could not be saved (may have been modified concurrently). Reload and try again.",
+            )
 
     a2 = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     return _to_detail_response(st=st, user=user, article=a2)
@@ -2492,18 +2497,30 @@ async def publish_to_live_site(
     if not created_wp_status:
         created_wp_status = (payload["status"] or "").strip().lower()
 
+    now_str_pub = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     updates: dict = {
         "wp_post_id": wp_post_id,
         "wp_link": wp_link or "",
         "wp_rest_base": rest_base,
         "wp_last_wp_status": created_wp_status or payload["status"],
-        "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S") if created_wp_status == "publish" else (a.get("posted_at") or ""),
+        "wp_synced_at": now_str_pub,
+        "posted_at": now_str_pub if created_wp_status == "publish" else (a.get("posted_at") or ""),
         "status": "published" if created_wp_status == "publish" else (a.get("status") or "draft"),
         # Clear schedule marker so the UI shows published, not scheduled (same as scheduler after post).
         "wp_scheduled_at": "",
         "wp_schedule_error": "",
     }
-    await run_sync(st.update_article_fields, article_id, updates)
+    # Cache the WP media ID so subsequent updates don't re-upload the same image.
+    if featured_media_id is not None and featured_media_id > 0:
+        pub_image_url = (a.get("image_url") or "").strip()
+        if not pub_image_url:
+            try:
+                pub_image_url = (_featured_image_url_loader(st, project_id, article_id)() or "").strip()
+            except Exception:
+                pub_image_url = ""
+        updates["wp_featured_media_id"] = featured_media_id
+        updates["wp_featured_image_url"] = pub_image_url
+    await run_sync(call_storage, st.update_article_fields, article_id, updates)
 
     # Best-effort: Search Console URL Inspection after live publish.
     try:
@@ -2841,7 +2858,10 @@ async def update_wordpress_post(
     expects_featured_image = _article_has_stored_featured_image(st, a, aid) or image_file is not None
     featured_media_id: int | None = None
     featured_image_warning: str | None = None
+    image_url_for_update = (a.get("image_url") or "").strip()
+
     if image_file is not None:
+        # Explicit upload from the frontend — always upload.
         data = await image_file.read()
         if data:
             featured_media_id = await wp.upload_media_optional(
@@ -2850,12 +2870,28 @@ async def update_wordpress_post(
                 data=data,
             )
     else:
-        featured_media_id = await resolve_featured_media_id(
-            wp,
-            a,
-            timeout=90.0,
-            load_image_url=_featured_image_url_loader(st, project_id, aid),
+        # Reuse the cached WP media ID when the image URL has not changed since the
+        # last successful push — avoids a redundant download+upload on every Update click.
+        cached_media_id = a.get("wp_featured_media_id")
+        cached_image_url = (a.get("wp_featured_image_url") or "").strip()
+        current_image_url = image_url_for_update or (
+            _featured_image_url_loader(st, project_id, aid)() or ""
         )
+        if (
+            cached_media_id
+            and isinstance(cached_media_id, int)
+            and cached_media_id > 0
+            and current_image_url
+            and current_image_url == cached_image_url
+        ):
+            featured_media_id = cached_media_id
+        else:
+            featured_media_id = await resolve_featured_media_id(
+                wp,
+                a,
+                timeout=90.0,
+                load_image_url=_featured_image_url_loader(st, project_id, aid),
+            )
 
     if expects_featured_image and featured_media_id is None:
         featured_image_warning = (
@@ -2899,17 +2935,24 @@ async def update_wordpress_post(
     if not updated_wp_status:
         updated_wp_status = status_in
 
-    updates: dict = {
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    db_updates: dict = {
         "wp_post_id": wp_post_id,
         "wp_link": (wp_link or a.get("wp_link") or "").strip(),
         "wp_rest_base": rest_base,
         "wp_last_wp_status": updated_wp_status,
-        "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        if updated_wp_status == "publish"
-        else (a.get("posted_at") or ""),
+        "wp_synced_at": now_str,
+        "posted_at": now_str if updated_wp_status == "publish" else (a.get("posted_at") or ""),
         "status": "published" if updated_wp_status == "publish" else (a.get("status") or "draft"),
     }
-    await run_sync(st.update_article_fields, article_id, updates)
+    # Cache the WP media ID so subsequent updates don't re-upload the same image.
+    if featured_media_id is not None and featured_media_id > 0:
+        resolved_image_url = image_url_for_update or (
+            _featured_image_url_loader(st, project_id, aid)() or ""
+        )
+        db_updates["wp_featured_media_id"] = featured_media_id
+        db_updates["wp_featured_image_url"] = resolved_image_url
+    await run_sync(call_storage, st.update_article_fields, article_id, db_updates)
 
     message = "WordPress post updated successfully."
     if featured_image_warning:
@@ -2920,7 +2963,7 @@ async def update_wordpress_post(
         "status": "published" if updated_wp_status == "publish" else "draft",
         "message": message,
         "wp_post_id": wp_post_id,
-        "wp_link": updates.get("wp_link"),
+        "wp_link": db_updates.get("wp_link"),
         "featured_media_id": featured_media_id,
         "featured_image_uploaded": featured_media_id is not None,
     }

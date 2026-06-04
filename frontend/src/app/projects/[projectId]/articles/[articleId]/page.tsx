@@ -1397,7 +1397,7 @@ export default function ArticleEditPage() {
     setNotice(null);
     setWpUpdateBusy(true);
     try {
-      await persistEditorForWordPress();
+      await persistEditorForWordPress({ skipGlobalLoading: true });
       const wpImageFile =
         generateImage && !uploadedImageFile
           ? await resolveFeaturedImageFileForWordPress({
@@ -2769,7 +2769,7 @@ export default function ArticleEditPage() {
                         <button
                           className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`}
                           type="button"
-                          onClick={updateWordPressPost}
+                          onClick={() => void updateWordPressPost()}
                           disabled={!canUpdateWordPress}
                           title={
                             !websiteConnected

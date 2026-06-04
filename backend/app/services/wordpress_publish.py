@@ -186,7 +186,10 @@ async def update_post_on_wordpress(
     wp_post_id: int,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """Update an existing WordPress post via connector plugin (preferred) or core REST PUT."""
+    """Update an existing WordPress post via connector plugin (preferred) or core REST."""
+    # Resolve canonical site URL first so redirecting sites (http→https, www→non-www)
+    # don't strip the Authorization header mid-request and silently fail.
+    await wp.ensure_resolved_site_url()
     rest_base = _normalize_rest_base(post_type)
     pid = int(wp_post_id)
     if pid <= 0:
@@ -198,22 +201,23 @@ async def update_post_on_wordpress(
     for ns in _PLUGIN_NAMESPACES:
         attempts.append((f"plugin:{ns}", dict(plugin_body)))
 
+    # Core REST: try both PUT and POST — some hosts (e.g. Cloudflare, Nginx configs)
+    # block the PUT method. WordPress accepts POST to the same endpoint for updates.
+    core_endpoint = f"/wp-json/wp/v2/{rest_base}/{pid}"
+    no_tags = {k: v for k, v in payload.items() if k != "tags"}
+    no_meta = {k: v for k, v in payload.items() if k not in {"tags", "meta"}}
+    minimal = {k: payload[k] for k in ("title", "content", "status", "categories", "featured_media") if k in payload}
+
     attempts.extend(
         [
-            (f"core:{rest_base}", dict(payload)),
-            (f"core:{rest_base}:no-tags", {k: v for k, v in payload.items() if k != "tags"}),
-            (
-                f"core:{rest_base}:no-meta",
-                {k: v for k, v in payload.items() if k not in {"tags", "meta"}},
-            ),
-            (
-                f"core:{rest_base}:minimal",
-                {
-                    k: payload[k]
-                    for k in ("title", "content", "status", "categories", "featured_media")
-                    if k in payload
-                },
-            ),
+            (f"core-put:{rest_base}", dict(payload)),
+            (f"core-post:{rest_base}", dict(payload)),
+            (f"core-put:{rest_base}:no-tags", no_tags),
+            (f"core-post:{rest_base}:no-tags", no_tags),
+            (f"core-put:{rest_base}:no-meta", no_meta),
+            (f"core-post:{rest_base}:no-meta", no_meta),
+            (f"core-put:{rest_base}:minimal", minimal),
+            (f"core-post:{rest_base}:minimal", minimal),
         ]
     )
 
@@ -225,7 +229,10 @@ async def update_post_on_wordpress(
             if label.startswith("plugin:"):
                 ns = label.split(":", 1)[1]
                 return await _post_plugin_update(wp, ns, body)
-            updated = await wp.put_json(f"/wp-json/wp/v2/{rest_base}/{pid}", body, timeout=90.0)
+            if label.startswith("core-post:"):
+                updated = await wp.post_json(core_endpoint, body, timeout=90.0)
+            else:
+                updated = await wp.put_json(core_endpoint, body, timeout=90.0)
             if not isinstance(updated, dict):
                 raise RuntimeError("Unexpected WordPress REST update response")
             return updated
