@@ -1017,10 +1017,11 @@ export default function ProjectPage() {
   const [wpDeleted, setWpDeleted] = useState<Set<string>>(new Set());
   const [ipDeleted, setIpDeleted] = useState<Set<string>>(new Set());
   // Content optimization profile & humanization settings (saved via savePrompts)
-  const [optProfile, setOptProfile] = useState<string>("none");
+  const [optProfiles, setOptProfiles] = useState<string[]>(["none"]);
   const [humanizeSettings, setHumanizeSettings] = useState<{
     auto_humanize: boolean; target_ai_pct: number; strength_preset: string; max_passes: number;
   }>({ auto_humanize: true, target_ai_pct: 6.0, strength_preset: "medium", max_passes: 6 });
+  const [promptsSaveSuccess, setPromptsSaveSuccess] = useState(false);
   const [showPromptModal, setShowPromptModal] = useState<null | { kind: "writing" | "image"; id: string }>(null);
   const [draftName, setDraftName] = useState("");
   const [draftText, setDraftText] = useState("");
@@ -2488,7 +2489,9 @@ export default function ProjectPage() {
         setIpDeleted(new Set());
         // Load content-optimization and humanization settings from already-fetched project settings.
         if (settings) {
-          setOptProfile(settings.content_optimization_profile || "none");
+          const raw = (settings.content_optimization_profile || "none").trim();
+          const parsed = raw.split(",").map((s) => s.trim()).filter(Boolean);
+          setOptProfiles(parsed.length > 0 ? parsed : ["none"]);
           if (settings.humanization_settings) setHumanizeSettings({ ...{ auto_humanize: true, target_ai_pct: 6.0, strength_preset: "medium", max_passes: 6 }, ...settings.humanization_settings });
         }
       } catch (e) {
@@ -3602,6 +3605,7 @@ export default function ProjectPage() {
 
   async function savePrompts() {
     setError(null);
+    setPromptsSaveSuccess(false);
     setPromptsSaving(true);
     try {
       // WRITING: deletes
@@ -3648,11 +3652,23 @@ export default function ProjectPage() {
         await api.setDefaultImagePrompt(projectId, newIpDefault);
       }
 
-      // Save content optimization profile and humanization settings
-      await api.updateProjectSettings(projectId, {
-        content_optimization_profile: optProfile,
+      // Save content optimization profiles and humanization settings
+      const profileValue = optProfiles.includes("none") || optProfiles.length === 0
+        ? "none"
+        : optProfiles.join(",");
+      const savedSettings = await api.updateProjectSettings(projectId, {
+        content_optimization_profile: profileValue,
         humanization_settings: humanizeSettings,
       });
+      // Sync local state from authoritative backend response
+      if (savedSettings) {
+        const rawProfile = (savedSettings.content_optimization_profile || "none").trim();
+        const parsedProfiles = rawProfile.split(",").map((s) => s.trim()).filter(Boolean);
+        setOptProfiles(parsedProfiles.length > 0 ? parsedProfiles : ["none"]);
+        if (savedSettings.humanization_settings) {
+          setHumanizeSettings((h) => ({ ...h, ...savedSettings.humanization_settings }));
+        }
+      }
 
       // Refresh from backend for canonical ids/defaults
       const [wp2, ip2] = await Promise.all([
@@ -3667,6 +3683,7 @@ export default function ProjectPage() {
       setIpDefault(ip2.default_id || "");
       setWpDeleted(new Set());
       setIpDeleted(new Set());
+      setPromptsSaveSuccess(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save prompts");
     } finally {
@@ -8254,7 +8271,7 @@ export default function ProjectPage() {
               <button
                 className={styles.button}
                 type="button"
-                onClick={savePrompts}
+                onClick={() => { setPromptsSaveSuccess(false); void savePrompts(); }}
                 disabled={promptsSaving || promptsLoading}
               >
                 {promptsSaving ? "Saving…" : "Save changes"}
@@ -8441,54 +8458,74 @@ export default function ProjectPage() {
 
             {/* ── Content Optimization Profile ── */}
             <section className={styles.card} style={{ marginTop: 24 }}>
-              <div style={{ marginBottom: 12 }}>
+              <div style={{ marginBottom: 14 }}>
                 <p className={styles.sectionKicker} style={{ marginBottom: 4 }}>Generation</p>
                 <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Content Optimization Profile</h3>
                 <p className={styles.muted} style={{ marginTop: 6, fontSize: 13 }}>
-                  Injects structural requirements into the AI system prompt for every article in this project.
+                  Injects structural requirements into the AI system prompt for every article in this project. Select one or more — select <strong>None</strong> to use standard generation.
                 </p>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 10 }}>
                 {([
-                  { value: "none",  label: "None",   desc: "Standard generation, human voice first" },
-                  { value: "seo",   label: "SEO",    desc: "Keyword hierarchy, structured headings" },
-                  { value: "aeo",   label: "AEO",    desc: "FAQ sections, featured-snippet format" },
-                  { value: "geo",   label: "GEO",    desc: "Entity-rich, AI-retrieval optimised" },
-                  { value: "eeat",  label: "E-E-A-T",desc: "Experience, expertise, authority, trust" },
-                ] as { value: string; label: string; desc: string }[]).map(({ value, label, desc }) => (
-                  <label
-                    key={value}
-                    style={{
-                      display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px",
-                      borderRadius: 10, cursor: "pointer",
-                      border: optProfile === value
-                        ? "1.5px solid var(--aa-accent, #d97757)"
-                        : "1px solid rgba(255,255,255,0.10)",
-                      background: optProfile === value
-                        ? "color-mix(in oklab, var(--aa-accent, #d97757) 10%, transparent)"
-                        : "transparent",
-                    }}
-                  >
-                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <input
-                        type="radio"
-                        name="content-opt-profile"
-                        value={value}
-                        checked={optProfile === value}
-                        onChange={() => setOptProfile(value)}
-                        style={{ accentColor: "var(--aa-accent, #d97757)" }}
-                      />
-                      <span style={{ fontWeight: 700, fontSize: 13 }}>{label}</span>
-                    </span>
-                    <span className={styles.muted} style={{ fontSize: 11, paddingLeft: 22 }}>{desc}</span>
-                  </label>
-                ))}
+                  { value: "none",  label: "None",    desc: "Standard generation, human voice first" },
+                  { value: "seo",   label: "SEO",     desc: "Keyword hierarchy, structured headings" },
+                  { value: "aeo",   label: "AEO",     desc: "FAQ sections, featured-snippet format" },
+                  { value: "geo",   label: "GEO",     desc: "Entity-rich, AI-retrieval optimised" },
+                  { value: "eeat",  label: "E-E-A-T", desc: "Experience, expertise, authority, trust" },
+                ] as { value: string; label: string; desc: string }[]).map(({ value, label, desc }) => {
+                  const checked = optProfiles.includes(value);
+                  return (
+                    <label
+                      key={value}
+                      style={{
+                        display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px",
+                        borderRadius: 10, cursor: "pointer",
+                        border: checked
+                          ? "1.5px solid var(--aa-accent, #d97757)"
+                          : "1px solid rgba(255,255,255,0.10)",
+                        background: checked
+                          ? "color-mix(in oklab, var(--aa-accent, #d97757) 10%, transparent)"
+                          : "transparent",
+                        transition: "border-color 0.15s, background 0.15s",
+                      }}
+                    >
+                      <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            if (value === "none") {
+                              setOptProfiles(["none"]);
+                              return;
+                            }
+                            setOptProfiles((prev) => {
+                              const withoutNone = prev.filter((v) => v !== "none");
+                              if (withoutNone.includes(value)) {
+                                const next = withoutNone.filter((v) => v !== value);
+                                return next.length === 0 ? ["none"] : next;
+                              }
+                              return [...withoutNone, value];
+                            });
+                          }}
+                          style={{ width: 15, height: 15, accentColor: "var(--aa-accent, #d97757)", cursor: "pointer" }}
+                        />
+                        <span style={{ fontWeight: 700, fontSize: 13 }}>{label}</span>
+                      </span>
+                      <span className={styles.muted} style={{ fontSize: 11, paddingLeft: 23 }}>{desc}</span>
+                    </label>
+                  );
+                })}
               </div>
+              {!optProfiles.includes("none") && optProfiles.length > 0 && (
+                <p style={{ fontSize: 11, marginTop: 10, opacity: 0.65 }}>
+                  Active: {optProfiles.map((p) => p.toUpperCase()).join(" + ")} — all selected profiles are injected into every generation.
+                </p>
+              )}
             </section>
 
-            {/* ── Humanization Guardrail Settings ── */}
+            {/* ── Humanization Settings ── */}
             <section className={styles.card} style={{ marginTop: 16 }}>
-              <div style={{ marginBottom: 14 }}>
+              <div style={{ marginBottom: 16 }}>
                 <p className={styles.sectionKicker} style={{ marginBottom: 4 }}>Humanization</p>
                 <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Humanization Settings</h3>
                 <p className={styles.muted} style={{ marginTop: 6, fontSize: 13 }}>
@@ -8497,83 +8534,150 @@ export default function ProjectPage() {
               </div>
 
               {/* Auto-humanize toggle */}
-              <label style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18, cursor: "pointer" }}>
+              <label style={{
+                display: "flex", alignItems: "center", gap: 12, marginBottom: 20,
+                cursor: "pointer", padding: "10px 14px", borderRadius: 10,
+                border: humanizeSettings.auto_humanize
+                  ? "1.5px solid var(--aa-accent, #d97757)"
+                  : "1px solid rgba(255,255,255,0.10)",
+                background: humanizeSettings.auto_humanize
+                  ? "color-mix(in oklab, var(--aa-accent, #d97757) 8%, transparent)"
+                  : "transparent",
+                transition: "border-color 0.15s, background 0.15s",
+              }}>
                 <input
                   type="checkbox"
                   checked={humanizeSettings.auto_humanize}
                   onChange={(e) => setHumanizeSettings((h) => ({ ...h, auto_humanize: e.target.checked }))}
-                  style={{ width: 16, height: 16, accentColor: "var(--aa-accent, #d97757)" }}
+                  style={{ width: 16, height: 16, accentColor: "var(--aa-accent, #d97757)", cursor: "pointer", flexShrink: 0 }}
                 />
-                <span style={{ fontSize: 13, fontWeight: 600 }}>
-                  Automatically humanize content after generation
-                </span>
+                <div>
+                  <span style={{ fontSize: 13, fontWeight: 600, display: "block" }}>
+                    Auto-humanize after generation
+                  </span>
+                  <span className={styles.muted} style={{ fontSize: 11 }}>
+                    Rewrites content to reduce AI-detection signals on every generation
+                  </span>
+                </div>
               </label>
 
-              {/* AI score target */}
-              <div style={{ marginBottom: 14 }}>
-                <p style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, opacity: 0.85 }}>AI score target</p>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                  {([
-                    { label: "Under 5% (strict)", value: 5 },
-                    { label: "Under 8% (standard)", value: 8 },
-                    { label: "Under 12% (light)", value: 12 },
-                    { label: "Disabled", value: 50 },
-                  ] as { label: string; value: number }[]).map(({ label, value }) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setHumanizeSettings((h) => ({ ...h, target_ai_pct: value }))}
-                      style={{
-                        padding: "6px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer",
-                        fontWeight: humanizeSettings.target_ai_pct === value ? 700 : 400,
-                        border: humanizeSettings.target_ai_pct === value
-                          ? "1.5px solid var(--aa-accent, #d97757)"
-                          : "1px solid rgba(255,255,255,0.15)",
-                        background: humanizeSettings.target_ai_pct === value
-                          ? "color-mix(in oklab, var(--aa-accent, #d97757) 12%, transparent)"
-                          : "transparent",
-                        color: "inherit",
-                      }}
-                    >
-                      {label}
-                    </button>
-                  ))}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                {/* AI score target */}
+                <div>
+                  <p style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, opacity: 0.85 }}>AI score target</p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {([
+                      { label: "Under 5%", sub: "strict", value: 5 },
+                      { label: "Under 8%", sub: "standard", value: 8 },
+                      { label: "Under 12%", sub: "light", value: 12 },
+                      { label: "Disabled", sub: "no rewriting", value: 50 },
+                    ] as { label: string; sub: string; value: number }[]).map(({ label, sub, value }) => {
+                      const active = humanizeSettings.target_ai_pct === value;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setHumanizeSettings((h) => ({ ...h, target_ai_pct: value }))}
+                          style={{
+                            display: "flex", alignItems: "center", justifyContent: "space-between",
+                            padding: "7px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                            fontWeight: active ? 700 : 400, textAlign: "left",
+                            border: active
+                              ? "1.5px solid var(--aa-accent, #d97757)"
+                              : "1px solid rgba(255,255,255,0.12)",
+                            background: active
+                              ? "color-mix(in oklab, var(--aa-accent, #d97757) 12%, transparent)"
+                              : "transparent",
+                            color: "inherit", transition: "border-color 0.15s, background 0.15s",
+                          }}
+                        >
+                          <span>{label}</span>
+                          <span style={{ opacity: 0.55, fontSize: 10, fontWeight: 400 }}>{sub}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Strength preset */}
+                <div>
+                  <p style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, opacity: 0.85 }}>Rewriting strength</p>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {([
+                      { label: "Light",      value: "light",      desc: "Minimal changes" },
+                      { label: "Medium",     value: "medium",     desc: "Balanced (default)" },
+                      { label: "Aggressive", value: "aggressive", desc: "Maximum rewriting" },
+                    ] as { label: string; value: string; desc: string }[]).map(({ label, value, desc }) => {
+                      const active = humanizeSettings.strength_preset === value;
+                      return (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setHumanizeSettings((h) => ({ ...h, strength_preset: value }))}
+                          style={{
+                            display: "flex", alignItems: "center", justifyContent: "space-between",
+                            padding: "7px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                            fontWeight: active ? 700 : 400, textAlign: "left",
+                            border: active
+                              ? "1.5px solid var(--aa-accent, #d97757)"
+                              : "1px solid rgba(255,255,255,0.12)",
+                            background: active
+                              ? "color-mix(in oklab, var(--aa-accent, #d97757) 12%, transparent)"
+                              : "transparent",
+                            color: "inherit", transition: "border-color 0.15s, background 0.15s",
+                          }}
+                        >
+                          <span>{label}</span>
+                          <span style={{ opacity: 0.55, fontSize: 10, fontWeight: 400 }}>{desc}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
-              {/* Strength preset */}
-              <div style={{ marginBottom: 14 }}>
-                <p style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, opacity: 0.85 }}>Rewriting strength</p>
-                <div style={{ display: "flex", gap: 8 }}>
-                  {([
-                    { label: "Light",      value: "light",      desc: "Minimal changes" },
-                    { label: "Medium",     value: "medium",     desc: "Balanced (default)" },
-                    { label: "Aggressive", value: "aggressive", desc: "Maximum rewriting" },
-                  ] as { label: string; value: string; desc: string }[]).map(({ label, value, desc }) => (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setHumanizeSettings((h) => ({ ...h, strength_preset: value }))}
-                      style={{
-                        flex: 1, padding: "8px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
-                        display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
-                        fontWeight: humanizeSettings.strength_preset === value ? 700 : 400,
-                        border: humanizeSettings.strength_preset === value
-                          ? "1.5px solid var(--aa-accent, #d97757)"
-                          : "1px solid rgba(255,255,255,0.15)",
-                        background: humanizeSettings.strength_preset === value
-                          ? "color-mix(in oklab, var(--aa-accent, #d97757) 12%, transparent)"
-                          : "transparent",
-                        color: "inherit",
-                      }}
-                    >
-                      <span>{label}</span>
-                      <span className={styles.muted} style={{ fontSize: 10, fontWeight: 400 }}>{desc}</span>
-                    </button>
-                  ))}
+              {/* Passes control — only visible when auto-humanize is on */}
+              {humanizeSettings.auto_humanize && (
+                <div style={{ marginTop: 16 }}>
+                  <p style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, opacity: 0.85 }}>
+                    Max rewriting passes
+                    <span className={styles.muted} style={{ fontWeight: 400, marginLeft: 8 }}>
+                      ({humanizeSettings.max_passes} pass{humanizeSettings.max_passes === 1 ? "" : "es"})
+                    </span>
+                  </p>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <input
+                      type="range"
+                      min={1}
+                      max={10}
+                      value={humanizeSettings.max_passes}
+                      onChange={(e) => setHumanizeSettings((h) => ({ ...h, max_passes: parseInt(e.target.value, 10) }))}
+                      style={{ flex: 1, accentColor: "var(--aa-accent, #d97757)", cursor: "pointer" }}
+                    />
+                    <span style={{ fontSize: 12, fontWeight: 700, minWidth: 18, textAlign: "right" }}>
+                      {humanizeSettings.max_passes}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span className={styles.muted} style={{ fontSize: 10 }}>1 (faster)</span>
+                    <span className={styles.muted} style={{ fontSize: 10 }}>10 (thorough)</span>
+                  </div>
                 </div>
-              </div>
+              )}
             </section>
+
+            {/* Save success banner */}
+            {promptsSaveSuccess && (
+              <div style={{
+                marginTop: 12, padding: "10px 14px", borderRadius: 8, fontSize: 13,
+                background: "color-mix(in oklab, #22c55e 12%, transparent)",
+                border: "1px solid color-mix(in oklab, #22c55e 40%, transparent)",
+                color: "inherit", display: "flex", alignItems: "center", gap: 8,
+              }}>
+                <span style={{ color: "#22c55e", fontWeight: 700 }}>✓</span>
+                Settings saved successfully.
+              </div>
+            )}
 
           </div>
             {showPromptModal ? (() => {

@@ -133,18 +133,22 @@ async def _handle_article_generate(payload: dict) -> None:
     if not pid or not aid or not uid:
         return
 
+    dedup = f"gen:{pid}:{aid}"
+
     user = await run_sync(st.get_user_by_id, uid) if hasattr(st, "get_user_by_id") else None
     if not isinstance(user, dict):
         users = await run_sync(st.load_users)
         user = next((u for u in (users or []) if isinstance(u, dict) and (u.get("id") or "") == uid), None)
     if not isinstance(user, dict):
         log.warning("article_generate job missing user id=%s", uid)
+        await clear_dedup(dedup)
         return
 
     proj = await run_sync(_gen_project_reader(st), pid) if hasattr(st, "get_project_by_id") else None
     if not isinstance(proj, dict):
         err = "Project not found — cannot generate article."
         await _persist_article_generation_error(st, aid, err)
+        await clear_dedup(dedup)
         raise RuntimeError(err)
 
     # Auto-create default prompts so generation doesn't fail with
@@ -159,6 +163,7 @@ async def _handle_article_generate(payload: dict) -> None:
     if not isinstance(row, dict):
         err = "Article not found — it may have been deleted."
         await _persist_article_generation_error(st, aid, err)
+        await clear_dedup(dedup)
         raise RuntimeError(err)
 
     await publish_pipeline_status(aid, MSG_WORKER_START, STAGE_WORKER_START)
@@ -202,6 +207,8 @@ async def _handle_article_generate(payload: dict) -> None:
             err_msg = str(exc) or "Generation failed — check server logs."
         await _persist_article_generation_error(st, aid, err_msg)
         raise
+    finally:
+        await clear_dedup(dedup)
 
 
 async def _handle_image_regenerate(payload: dict) -> None:
@@ -212,19 +219,24 @@ async def _handle_image_regenerate(payload: dict) -> None:
     if not pid or not aid or not uid:
         return
 
+    dedup = f"img:{pid}:{aid}"
+
     user = await run_sync(st.get_user_by_id, uid) if hasattr(st, "get_user_by_id") else None
     if not isinstance(user, dict):
         users = await run_sync(st.load_users)
         user = next((u for u in (users or []) if isinstance(u, dict) and (u.get("id") or "") == uid), None)
     if not isinstance(user, dict):
+        await clear_dedup(dedup)
         return
 
     proj = await run_sync(_gen_project_reader(st), pid) if hasattr(st, "get_project_by_id") else None
     if not isinstance(proj, dict):
+        await clear_dedup(dedup)
         raise RuntimeError("Project not found")
 
     row = await run_sync(st.get_article, project_id=pid, article_id=aid)
     if not isinstance(row, dict):
+        await clear_dedup(dedup)
         raise RuntimeError("Article not found")
 
     await publish_pipeline_status(aid, MSG_WORKER_START, STAGE_WORKER_START)
@@ -259,6 +271,8 @@ async def _handle_image_regenerate(payload: dict) -> None:
         await publish_pipeline_error(aid, f"Image regeneration failed: {err_msg[:300]}")
         await _persist_article_generation_error(st, aid, err_msg[:500])
         raise
+    finally:
+        await clear_dedup(dedup)
 
 
 async def _handle_cluster_generate_all(payload: dict) -> None:

@@ -97,7 +97,7 @@ class ProjectSettingsUpdate(BaseModel):
     shopify_client_id: str | None = Field(default=None, max_length=256)
     shopify_client_secret: str | None = Field(default=None, max_length=5000)
     shopify_access_token: str | None = Field(default=None, max_length=5000)
-    content_optimization_profile: str | None = Field(default=None, max_length=16)
+    content_optimization_profile: str | None = Field(default=None, max_length=64)
     humanization_settings: HumanizationSettingsUpdate | None = None
 
 

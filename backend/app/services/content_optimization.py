@@ -71,10 +71,12 @@ VALID_PROFILES: frozenset[str] = frozenset({"none", "seo", "aeo", "geo", "eeat"}
 
 def build_optimization_profile_block(profile: str | None) -> str:
     """
-    Return the system-prompt block for the given optimization profile.
+    Return the system-prompt block(s) for the given optimization profile string.
 
+    Accepts a single profile ("seo") or a comma-separated list ("seo,aeo").
     Returns an empty string for ``"none"`` or unknown values so the caller can
     unconditionally concatenate the result without branching.
     """
-    key = (profile or "none").strip().lower()
-    return _BLOCKS.get(key, "")
+    keys = [k.strip().lower() for k in (profile or "none").split(",") if k.strip()]
+    parts = [_BLOCKS[k] for k in keys if k in _BLOCKS]
+    return "\n".join(parts)

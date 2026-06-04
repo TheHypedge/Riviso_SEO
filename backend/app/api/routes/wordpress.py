@@ -725,12 +725,24 @@ async def update_project_settings(
             shopify_creds_changed = True
         updates["shopify_shop"] = url
 
-    # Content optimization profile
+    # Content optimization profile — accepts single ("seo") or comma-separated ("seo,aeo")
     if payload.content_optimization_profile is not None:
         from app.services.content_optimization import VALID_PROFILES
-        val = (payload.content_optimization_profile or "none").strip().lower()
-        if val not in VALID_PROFILES:
-            raise HTTPException(status_code=400, detail=f"Invalid content_optimization_profile. Must be one of: {sorted(VALID_PROFILES)}")
+        raw = (payload.content_optimization_profile or "none").strip().lower()
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if not parts:
+            parts = ["none"]
+        if "none" in parts:
+            # "none" is exclusive — deselects all other profiles
+            val = "none"
+        else:
+            invalid = [p for p in parts if p not in VALID_PROFILES]
+            if invalid:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid profile(s): {invalid}. Must be from: {sorted(VALID_PROFILES)}",
+                )
+            val = ",".join(dict.fromkeys(parts))  # deduplicate, preserve order
         updates["content_optimization_profile"] = val
 
     # Humanization settings — merge-patch so callers can update a single field
