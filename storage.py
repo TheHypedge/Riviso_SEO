@@ -2101,21 +2101,19 @@ def _derive_article_listing_status(a: dict[str, Any]) -> str:
     wp_last = str(a.get("wp_last_wp_status") or "").strip().lower()
     has_post = _article_wp_post_present(a)
     shopify_published = bool((a.get("shopify_link") or "").strip() or a.get("shopify_article_id"))
-    if raw == "published" or wp_last == "publish":
+    # WordPress live-publish signal overrides status ONLY when the user has not
+    # explicitly set status to "pending" or "draft". Those values are treated as
+    # deliberate workflow overrides (e.g. bulk status change) and take priority.
+    if raw == "published" or (wp_last == "publish" and raw not in {"pending", "draft"}):
         return "published"
     if shopify_published:
         return "published"
-    if wp_last == "draft" and has_post:
+    if wp_last == "draft" and has_post and raw not in {"pending"}:
         return "draft"
     if wp_sched:
         if has_post and wp_last == "publish":
             return "published"
         return "scheduled"
-    if has_post and raw == "pending" and wp_last in {"publish", "draft"}:
-        # WP REST API has confirmed a live status — trust it over a stale local
-        # `status` field. When wp_last is empty the user has explicitly set the
-        # status (e.g. via bulk change); honour that value directly.
-        return "draft" if wp_last == "draft" else "published"
     return raw
 
 

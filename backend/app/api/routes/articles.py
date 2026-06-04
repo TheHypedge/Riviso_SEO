@@ -239,24 +239,19 @@ def _derive_listing_status(a: dict) -> str:
     has_post = _wp_post_present(a)
     shopify_published = bool((a.get("shopify_link") or "").strip() or a.get("shopify_article_id"))
 
-    # DB explicitly published → always show published (even if wp_link/wp_post_id missing; data can be inconsistent).
-    if raw == "published" or wp_last == "publish":
+    # WordPress live-publish signal overrides status ONLY when the user has not
+    # explicitly set status to "pending" or "draft". Those values are deliberate
+    # workflow overrides (e.g. bulk status change) and take priority over wp_last.
+    if raw == "published" or (wp_last == "publish" and raw not in {"pending", "draft"}):
         return "published"
     if shopify_published:
         return "published"
-    if wp_last == "draft" and has_post:
+    if wp_last == "draft" and has_post and raw != "pending":
         return "draft"
     if wp_sched:
-        # Stale schedule row but post already live as publish.
         if has_post and wp_last == "publish":
             return "published"
         return "scheduled"
-    if has_post and raw == "pending" and wp_last in {"publish", "draft"}:
-        # WP REST API confirms the article's live status — trust it over the
-        # stale local `status` field (older Flask paths never wrote `status`).
-        # If wp_last is empty the user has explicitly set status="pending" via
-        # a bulk action; trust that value instead of overriding with "published".
-        return "draft" if wp_last == "draft" else "published"
     return raw
 
 
