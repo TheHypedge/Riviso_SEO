@@ -3377,6 +3377,7 @@ export default function ProjectPage() {
 
   async function bulkChangeStatus(newStatus: "pending" | "draft" | "published") {
     if (selectedIds.length === 0) return;
+    const count = selectedIds.length;
     setError(null);
     try {
       await api.bulkChangeStatus(projectId, selectedIds, newStatus);
@@ -3385,6 +3386,9 @@ export default function ProjectPage() {
       );
       setSelected({});
       setSelectedMeta({});
+      setShowBulkPopup(false);
+      setBulkMode("root");
+      setNotice(`${count} article${count === 1 ? "" : "s"} marked as ${newStatus}.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Bulk status update failed");
     }
