@@ -1363,7 +1363,8 @@ export default function ArticleEditPage() {
           const syncedImageUrl = refreshed.image_url || generatedImageUrl;
           setGeneratedImageUrl(syncedImageUrl);
           setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
-          if (refreshed.wp_rest_base) setWpPostType(refreshed.wp_rest_base);
+          // Do NOT reset wpPostType from article.wp_rest_base — keep the project default
+          // so the Post Type selector reflects the project setting, not the historical value.
           setNotice(`${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`);
         },
         { initialMessage: "Publishing to WordPress — connecting to live pipeline stream…" },
@@ -1408,7 +1409,7 @@ export default function ArticleEditPage() {
       const syncedImageUrl = refreshed.image_url || generatedImageUrl;
       setGeneratedImageUrl(syncedImageUrl);
       setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
-      if (refreshed.wp_rest_base) setWpPostType(refreshed.wp_rest_base);
+      // Do NOT reset wpPostType from article.wp_rest_base — keep the project default.
       let noticeText = `${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`;
       if (res.featured_image_uploaded === false && hasFeaturedImage) {
         noticeText += "\nFeatured image was not uploaded to WordPress — check upload permissions on your WP user.";

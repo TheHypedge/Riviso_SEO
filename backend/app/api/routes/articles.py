@@ -2855,7 +2855,12 @@ async def update_wordpress_post(
     status_in = (wp_status or a.get("wp_last_wp_status") or "publish").strip().lower()
     if status_in not in {"draft", "publish"}:
         raise HTTPException(status_code=400, detail="Invalid wp_status (must be draft or publish)")
-    rest_base = (post_type or a.get("wp_rest_base") or "posts").strip() or "posts"
+    # For UPDATE: always use the article's stored wp_rest_base — that is the REST
+    # collection where the WP post actually lives. WordPress REST API does not support
+    # changing post type on existing posts; using a different endpoint (e.g. /pages/ for
+    # a post published as /posts/) returns 404.  Post-type changes only take effect on
+    # fresh publishes.
+    rest_base = (a.get("wp_rest_base") or "posts").strip() or "posts"
     cat_ids = _parse_wp_category_ids(category_ids)
 
     title = (a.get("title") or "").strip()
