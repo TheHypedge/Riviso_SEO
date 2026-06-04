@@ -771,6 +771,8 @@ export type ArticleOperationQueuedResponse = {
   job_id: string;
   article_id: string;
   message: string;
+  /** Server-side timestamp when the job was enqueued (YYYY-MM-DD HH:MM:SS UTC). */
+  queued_at?: string | null;
 };
 
 export type ArticleGenerationStatus = {
@@ -786,6 +788,12 @@ export type ArticleGenerationStatus = {
 
 export type ArticleGenerationWaitOptions = {
   previousGeneratedAt?: string | null;
+  /**
+   * Server-side timestamp from the 202 queued_at field (same format as generated_at).
+   * When set, the poll resolves when generated_at >= queuedAt, which is reliable even
+   * for articles where generated_at was null/empty before this generation run.
+   */
+  queuedAt?: string | null;
   expectImage?: boolean;
   intervalMs?: number;
   maxWaitMs?: number;
@@ -2459,6 +2467,7 @@ export const api = {
     opts?: ArticleGenerationWaitOptions,
   ): Promise<ArticleDetail> {
     const previousGeneratedAt = (opts?.previousGeneratedAt || "").trim();
+    const queuedAt = (opts?.queuedAt || "").trim();
     const expectImage = !!opts?.expectImage;
     const pollOpts = { skipGlobalLoading: true as const };
 
@@ -2470,8 +2479,22 @@ export const api = {
         if (genErr) throw new ApiError(genErr, 500, { code: "generation_failed" });
 
         const genAt = (status.generated_at || "").trim();
-        const generationFinished =
-          status.has_body && (!previousGeneratedAt || !genAt || genAt !== previousGeneratedAt);
+
+        let generationFinished: boolean;
+        if (queuedAt) {
+          // Reliable path: backend gave us a queued_at timestamp.
+          // Both queuedAt and genAt use "YYYY-MM-DD HH:MM:SS" — string >= is chronological.
+          // Generation always completes after queuing, so genAt >= queuedAt is the signal.
+          generationFinished = status.has_body && !!genAt && genAt >= queuedAt;
+        } else if (previousGeneratedAt) {
+          // Regeneration path: wait for a non-empty genAt that's different from before.
+          // Never short-circuit on empty genAt — that would return stale content.
+          generationFinished = status.has_body && !!genAt && genAt !== previousGeneratedAt;
+        } else {
+          // First generation: just wait for body to exist (no baseline to compare against).
+          generationFinished = status.has_body;
+        }
+
         if (!generationFinished) return false;
         if (expectImage && !status.has_featured_image) return false;
         return true;
@@ -2564,7 +2587,7 @@ export const api = {
     },
     opts?: ArticleGenerationWaitOptions & { previousGeneratedAt?: string | null },
   ) {
-    const { previousGeneratedAt, expectImage, intervalMs, maxWaitMs, skipGlobalLoading, noWait, ...fetchOpts } = opts ?? {};
+    const { previousGeneratedAt, queuedAt, expectImage, intervalMs, maxWaitMs, skipGlobalLoading, noWait, ...fetchOpts } = opts ?? {};
     const res = await apiFetch<
       | {
           ok: boolean;
@@ -2596,6 +2619,7 @@ export const api = {
       }
       const art = await api.waitForArticleGenerationComplete(projectId, articleId, {
         previousGeneratedAt,
+        queuedAt: (res as ArticleOperationQueuedResponse).queued_at ?? undefined,
         expectImage: expectImage ?? !!payload.generate_image,
         intervalMs,
         maxWaitMs,
