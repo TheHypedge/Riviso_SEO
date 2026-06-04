@@ -190,11 +190,20 @@ def build_generation_messages(
     sys = (
         HUMAN_FIRST_SYSTEM_ANCHOR
         + human_guardrail
-        + "Return ONLY a JSON object with exactly these keys and no others: "
+        + "\n\nCONTENT STRUCTURE REQUIREMENTS (non-negotiable — apply to every article):\n"
+        "- Use ## H2 headings for every main section (minimum 3 H2 sections required).\n"
+        "- Use ### H3 sub-headings when a section has 2 or more distinct sub-topics.\n"
+        "- Use bullet points (- item) for any list of 3 or more parallel items, tips, or features.\n"
+        "- Use numbered lists (1. step) for sequential processes or step-by-step instructions.\n"
+        "- Use **bold** for 2–4 key terms, statistics, or critical phrases per article.\n"
+        "- Keep paragraphs to 2–4 sentences. Long text must be broken into bullets or sub-sections.\n"
+        "\nUSER PROMPT AUTHORITY: The writing instructions provided in the user message are MANDATORY "
+        "content requirements for this specific article. Follow them precisely and completely — they "
+        "define the article's angle, tone, sections, and specific content that must be included.\n"
+        "\nReturn ONLY a JSON object with exactly these keys and no others: "
         '"article_markdown", "meta_title", "meta_description".\n'
         "Do not add commentary, explanations, or keys such as title, body, keywords, or choices.\n"
-        "article_markdown must sound human-written first; SEO formatting second.\n"
-        "Use headings and lists only where a human editor naturally would.\n"
+        "article_markdown must be well-structured with the required headings and lists, written in natural human voice.\n"
         "Meta title must be <= 60 chars if possible. Meta description <= 155 chars if possible.\n"
         "STRICT OUTPUT RULES — article_markdown MUST contain ONLY the article body:\n"
         "- Do NOT include 'Meta Title:', 'Meta Description:', 'SEO Title:' or any meta block inside article_markdown.\n"
@@ -221,9 +230,11 @@ def build_generation_messages(
         f"Article title: {title}\n"
         f"Target keywords: {', '.join(keywords)}\n"
         f"Focus keyphrase: {focus_keyphrase}\n\n"
-        f"Prompt:\n{up}\n\n"
-        "Final check before JSON: every paragraph must pass as human on an AI detector—"
-        "uneven rhythm, concrete details, no template closers or hype phrases.\n"
+        f"Writing instructions (MANDATORY — follow every requirement below):\n{up}\n\n"
+        "Before writing: confirm the article will include minimum 3 H2 sections, bullet points "
+        "for any list of 3+ items, and numbered lists for any step-by-step content. "
+        "Every paragraph must read as human-written — concrete details, uneven rhythm, "
+        "no AI-template phrases. Output the JSON object now.\n"
     )
     if platform_mapping and pc:
         user = f"{user}\n\n{pc}\n"

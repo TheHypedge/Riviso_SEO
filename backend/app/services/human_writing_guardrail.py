@@ -66,9 +66,10 @@ AI_DETECTOR_BANNED_PHRASES: tuple[str, ...] = (
 )
 
 HUMAN_FIRST_SYSTEM_ANCHOR = (
-    "PRIMARY DIRECTIVE (overrides all other style hints): Write body copy that independent "
-    "AI detectors classify as human-written. Natural voice beats polish. SEO structure is "
-    "secondary to sounding like a real person with experience—not a brand content bot.\n\n"
+    "PRIMARY DIRECTIVE: Write body copy that reads as human-written under AI detectors. "
+    "Use natural, specific voice and concrete details — not generic AI blog phrasing. "
+    "Well-structured articles with H2/H3 headings, bullet points, and numbered lists ARE "
+    "human writing; avoid structure only when it adds no value, not as a default.\n\n"
 )
 
 HUMAN_WRITING_GUARDRAIL_TEMPLATE = """
@@ -91,11 +92,18 @@ Supporting keywords (weave lightly): {supporting_keywords}
 - Allow one mild opinion or hesitation per section ("honestly", "I'd skip", "most people overthink this").
 - Name concrete details: fabric weight, fit at shoulders, wedding vs office, humidity, dry-clean cost—not abstract "style statements".
 
-### Structure
-- Open with a real situation or mistake—not a definition, not "In today's world".
-- Headings must sound like a human editor wrote them (plain, specific). No "Practical Occasions for X" formula titles unless unavoidable.
-- Do NOT end with a salesy CTA paragraph ("Start with…", "watch how it transforms", "elevate your wardrobe", "effortless charm").
-- Conclusions: 2–4 calm sentences. No hype, no recap bullet list, no "in conclusion" opener.
+### Structure (mandatory — apply to every article)
+- Divide the article into at least 3 main sections using ## H2 headings.
+- Use ### H3 sub-headings when a section contains 2 or more distinct sub-topics.
+- Use a bullet list (- item) for any group of 3 or more parallel items, features, tips, or options.
+- Use a numbered list (1. step) for any sequential process, how-to steps, or ranked items.
+- Use **bold** for 2–4 key terms, statistics, or critical phrases per article.
+- Keep body paragraphs to 2–4 sentences. Break longer content into bullets or a sub-section.
+- Open each section with a direct sentence — not "In this section…" or "Here we discuss…".
+- Open the article with a real situation, concrete problem, or specific observation — not a definition and not "In today's world".
+- Headings must be plain and specific (not formulaic). Bad: "Practical Occasions for X". Good: "When to Wear a Kurta at Work".
+- Do NOT end with a salesy CTA paragraph ("Start with…", "watch how it transforms", "elevate your wardrobe").
+- Conclusions: 2–4 calm sentences. No hype, no "in conclusion" opener, no bullet recap.
 
 ### Forbidden patterns (never use — detectors flag these)
 {forbidden_phrase_bullets}
