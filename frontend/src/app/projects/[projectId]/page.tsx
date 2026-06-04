@@ -3656,19 +3656,11 @@ export default function ProjectPage() {
       const profileValue = optProfiles.includes("none") || optProfiles.length === 0
         ? "none"
         : optProfiles.join(",");
-      const savedSettings = await api.updateProjectSettings(projectId, {
+      await api.updateProjectSettings(projectId, {
         content_optimization_profile: profileValue,
         humanization_settings: humanizeSettings,
       });
-      // Sync local state from authoritative backend response
-      if (savedSettings) {
-        const rawProfile = (savedSettings.content_optimization_profile || "none").trim();
-        const parsedProfiles = rawProfile.split(",").map((s) => s.trim()).filter(Boolean);
-        setOptProfiles(parsedProfiles.length > 0 ? parsedProfiles : ["none"]);
-        if (savedSettings.humanization_settings) {
-          setHumanizeSettings((h) => ({ ...h, ...savedSettings.humanization_settings }));
-        }
-      }
+      // Local state is already the source of truth — no state sync from response needed.
 
       // Refresh from backend for canonical ids/defaults
       const [wp2, ip2] = await Promise.all([
