@@ -149,6 +149,11 @@ class ArticleDetailResponse(ArticlePublic):
     """Full editor payload including HTML body and meta."""
 
     article: str = ""
+    generated_at: str | None = Field(
+        default=None,
+        description="UTC timestamp of the last successful generation — used by the frontend "
+        "poll to detect when a regeneration has produced fresh content.",
+    )
     meta_title: str | None = None
     meta_description: str | None = None
     image_url: str | None = None

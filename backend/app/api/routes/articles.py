@@ -531,6 +531,7 @@ def _to_detail_response(
             image_url=image_url,
             has_featured_image=has_featured_image,
             article=(article.get("article") or ""),
+            generated_at=(article.get("generated_at") or None),
             meta_title=(article.get("meta_title") or "").strip() or None,
             meta_description=(article.get("meta_description") or "").strip() or None,
             featured_image_regeneration_count=regen["used"],
