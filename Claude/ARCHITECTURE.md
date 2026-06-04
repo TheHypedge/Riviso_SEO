@@ -273,22 +273,24 @@ Secret: `SECRET_KEY` env var
 
 ## Deployment Architecture
 
-### Production VPS (Hostinger)
-- Single VPS node
-- Docker Compose manages 4 service containers
-- Nginx reverse proxy (port 80 → backend:8000, frontend:3000)
-- Redis runs as 5th service in docker-compose (local, not Atlas)
-- TLS termination at Cloudflare / host edge (nginx receives X-Forwarded-Proto)
+### Production Infrastructure
+- **Frontend**: Vercel (`app.riviso.com`) — Next.js deployed on Vercel, not on VPS
+- **Backend**: Hostinger VPS (`api.riviso.cloud`) — Docker Compose, 5 services
+- **TLS**: Cloudflare/edge terminates SSL → forwards plain HTTP to VPS port 80 with `X-Forwarded-Proto: https`
+- **Database**: MongoDB Atlas (external managed service, not on VPS)
 
-### Docker Services
+Vercel's Next.js proxy rewrites `/api/*` → `https://api.riviso.cloud/api/*` server-side, so browser cookies work correctly (same-origin from the browser's perspective).
+
+### Docker Services (VPS)
 ```yaml
+nginx:     Nginx 1.27   port 80 → backend:8000  (API gateway, gzip, HSTS, timeouts)
 backend:   FastAPI API  (ENABLE_SCHEDULER=0, ENABLE_GENERATION_WORKER=0)  768MB / 1 CPU
 worker:    Queue worker (ENABLE_GENERATION_WORKER=1, ENABLE_SCHEDULER=0)  1024MB / 1 CPU
 scheduler: APScheduler  (ENABLE_SCHEDULER=1, ENABLE_GENERATION_WORKER=0)  512MB / 0.5 CPU
-redis:     Redis 7       (appendonly yes)                                  default
-frontend:  Next.js 16   (profile: full)                                   512MB / 0.5 CPU
-nginx:     Nginx 1.27   (profile: full)                                   default
+redis:     Redis 7       (appendonly yes, local only)
 ```
+
+**Removed from VPS**: `frontend` (now Vercel), `postgres` (dormant — MongoDB Atlas is primary DB)
 
 Healthchecks:
 - `backend`: HTTP GET `/api/health` → 200
