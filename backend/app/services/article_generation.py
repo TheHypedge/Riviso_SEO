@@ -214,7 +214,9 @@ def build_generation_messages(
         "- Keep paragraphs to 2–4 sentences. Long text must be broken into bullets or sub-sections.\n"
         "\nUSER PROMPT AUTHORITY: The writing instructions provided in the user message are MANDATORY "
         "content requirements for this specific article. Follow them precisely and completely — they "
-        "define the article's angle, tone, sections, and specific content that must be included.\n"
+        "define the article's angle, tone, and focus. IMPORTANT: writing instructions are ADDITIVE "
+        "to any Content Optimization Profile requirements specified above. Both sets of requirements "
+        "must be satisfied simultaneously — do not let one override the other.\n"
         "\nReturn ONLY a JSON object with exactly these keys and no others: "
         '"article_markdown", "meta_title", "meta_description".\n'
         "Do not add commentary, explanations, or keys such as title, body, keywords, or choices.\n"
@@ -240,15 +242,26 @@ def build_generation_messages(
         focus_keyphrase=focus_keyphrase,
     ).strip()
 
+    # Remind the model of active optimization profile requirements in the user message
+    # so both the system prompt and user message reinforce the same structural rules.
+    opt_reminder = ""
+    if opt_block:
+        profile_names = [p.strip().upper() for p in (content_optimization_profile or "").split(",") if p.strip() and p.strip().lower() != "none"]
+        if profile_names:
+            opt_reminder = (
+                f"\nREMINDER — Content Optimization Profile active: {', '.join(profile_names)}. "
+                "All structural requirements from this profile (FAQ sections, keyword placement, "
+                "entity density, authority signals, etc.) MUST appear in the article. "
+                "These are non-negotiable in addition to the writing instructions above.\n"
+            )
+
     user = (
         f"Article title: {title}\n"
         f"Target keywords: {', '.join(keywords)}\n"
         f"Focus keyphrase: {focus_keyphrase}\n\n"
-        f"Writing instructions (MANDATORY — follow every requirement below):\n{up}\n\n"
-        "Before writing: confirm the article will include minimum 3 H2 sections, bullet points "
-        "for any list of 3+ items, and numbered lists for any step-by-step content. "
-        "Every paragraph must read as human-written — concrete details, uneven rhythm, "
-        "no AI-template phrases. Output the JSON object now.\n"
+        f"Writing instructions (MANDATORY — follow every requirement below):\n{up}\n"
+        f"{opt_reminder}\n"
+        "Output the JSON object now.\n"
     )
     if platform_mapping and pc:
         user = f"{user}\n\n{pc}\n"

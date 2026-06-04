@@ -260,20 +260,26 @@ async def execute_article_generation(
         "meta_title": gen["meta_title"],
         "meta_description": gen["meta_description"],
         "generated_at": gen["generated_at"],
-        "image_url": image_url,
+        # image_url is NOT set here by default — it is only written when a new
+        # image was successfully generated so we never erase an existing image.
         "status": "draft"
         if ((row.get("status") or "pending").strip().lower() != "published")
         else (row.get("status") or "published"),
     }
     if generate_image and image_url:
+        # New image generated successfully — write it
+        updates["image_url"] = image_url
         updates["featured_image_generated_at"] = gen.get("generated_at") or ""
         updates["featured_image_source"] = "generated"
         updates["featured_image_prompt_id"] = (resolved_image or {}).get("id") or ""
         updates["featured_image_model"] = (gen.get("models") or {}).get("image") or ""
     elif generate_image and not image_url:
+        # Image was requested but failed (e.g. API error) — keep existing image,
+        # only clear the metadata fields to avoid stale prompt/model attribution
         updates["featured_image_generated_at"] = ""
         updates["featured_image_source"] = ""
         updates["featured_image_prompt_id"] = ""
+    # generate_image=False → touch no image fields; existing image is preserved
     if platform_extras.get("shopify_mapped_products"):
         updates["shopify_mapped_products"] = platform_extras.get("shopify_mapped_products")
     elif gen.get("shopify_mapped_products"):
