@@ -1631,6 +1631,8 @@ async def generate_article_and_image(
     }
 
     if should_use_async_queue():
+        from datetime import datetime, timezone
+        queued_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         job_id = enqueue_article_generation_job(
             project_id=project_id,
             article_id=aid,
@@ -1648,6 +1650,7 @@ async def generate_article_and_image(
                 "status": "queued",
                 "job_id": job_id,
                 "article_id": aid,
+                "queued_at": queued_at,
                 "message": "Article generation queued.",
             },
         )
