@@ -185,6 +185,13 @@ HTTP POST /generate
 
 ---
 
+## Architecture: Frontend on Vercel, Backend on VPS
+
+- **Frontend** (`app.riviso.com`) → Vercel. Set `BACKEND_URL=https://api.riviso.cloud` in Vercel env vars.
+- **Backend** (`api.riviso.cloud`) → Hostinger VPS. Docker Compose runs: nginx, backend, worker, scheduler, redis.
+- Next.js on Vercel proxies `/api/*` → `api.riviso.cloud/api/*` server-side — cookies work correctly.
+- `COOKIE_DOMAIN` must stay empty on VPS (proxy-cookie rule, see constraint #2).
+
 ## Deploy Checklist
 
 ```bash
@@ -193,12 +200,12 @@ git add <files>
 git commit -m "..."
 git push origin development
 
-# On VPS (via Hostinger terminal or SSH)
+# On VPS (via Hostinger terminal)
 cd /var/www/riviso
-git pull origin development
-docker compose build --no-cache
+git fetch origin && git reset --hard origin/development
+docker compose build --no-cache backend worker scheduler
 docker compose up -d
-docker compose ps          # verify all containers healthy
+docker compose ps          # all 5 containers: nginx / backend / worker / scheduler / redis
 docker compose logs --tail=30 backend
 docker compose logs --tail=30 worker
 ```
