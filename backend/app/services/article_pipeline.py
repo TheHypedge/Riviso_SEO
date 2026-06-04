@@ -115,6 +115,8 @@ async def execute_article_generation(
     focus_keyphrase_override: str | None = None,
     mapped_products: list[dict] | None = None,
     mapped_pages: list[dict] | None = None,
+    humanization_settings: dict | None = None,
+    content_optimization_profile: str | None = None,
 ) -> dict:
     """
     Run the same steps as ``POST /projects/{id}/articles/{article_id}/generate``.
@@ -168,6 +170,8 @@ async def execute_article_generation(
         else None,
     )
 
+    _opt_profile = (content_optimization_profile or proj.get("content_optimization_profile") or "none")
+
     token_estimate = estimate_bundle_tokens(
         title=title,
         keywords=keywords,
@@ -178,6 +182,7 @@ async def execute_article_generation(
         product_context=platform_extras.get("product_context"),
         generate_image=generate_image,
         image_prompt_text=(resolved_image or {}).get("text") or None,
+        content_optimization_profile=_opt_profile,
     )
 
     plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
@@ -223,6 +228,7 @@ async def execute_article_generation(
             wordpress_mapped_pages=platform_extras.get("wp_mapped_pages"),
             generate_image=generate_image,
             image_prompt_text=(resolved_image or {}).get("text") or None,
+            content_optimization_profile=_opt_profile,
         )
     except HTTPException:
         if quota_consumed and hasattr(st, "refund_article_usage"):
@@ -276,21 +282,32 @@ async def execute_article_generation(
         updates["wp_mapped_pages"] = platform_extras.get("wp_mapped_pages")
     elif gen.get("wp_mapped_pages"):
         updates["wp_mapped_pages"] = gen.get("wp_mapped_pages")
-    # Post-generation humanization: full-document pass to strip AI-template rhythm/phrasing.
+    # Post-generation humanization — respects per-project humanization_settings.
     try:
+        _hset = humanization_settings if humanization_settings is not None else (proj.get("humanization_settings") or {})
+        _auto_humanize   = bool(_hset.get("auto_humanize", True))
+        _target_ai_pct   = float(_hset.get("target_ai_pct") or 6.0)
+        _max_passes      = int(_hset.get("max_passes") or 6)
+        _preset          = str(_hset.get("strength_preset") or "medium").lower()
+        _preset_strength = {"light": 0.60, "aggressive": 0.88}
+        _init_strength   = _preset_strength.get(_preset, 0.78)
+
         md_body = (updates.get("article") or "").strip()
-        if md_body:
+        if md_body and _auto_humanize:
             await publish_pipeline_status(article_id, MSG_HUMANIZE, STAGE_HUMANIZATION)
             protected = protected_terms_from_article({**row, **updates})
             human = await execute_structural_humanization(
                 md=md_body,
                 full_document=True,
                 protected_terms=protected,
-                max_passes=6,
+                max_passes=_max_passes,
+                target_ai_pct=_target_ai_pct,
+                initial_strength=_init_strength,
             )
             hm = (human.get("humanized_markdown") or "").strip()
             if hm:
                 updates["article"] = hm
+        # AI-score audit runs regardless of auto_humanize so the score is always stored.
         auditor = AIDetectionAuditor()
         audit2 = auditor.audit_markdown(updates.get("article") or "")
         updates["integrity_ai_percentage"] = audit2.get("ai_percentage")

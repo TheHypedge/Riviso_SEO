@@ -1016,6 +1016,11 @@ export default function ProjectPage() {
   const [ipDefault, setIpDefault] = useState<string>("");
   const [wpDeleted, setWpDeleted] = useState<Set<string>>(new Set());
   const [ipDeleted, setIpDeleted] = useState<Set<string>>(new Set());
+  // Content optimization profile & humanization settings (saved via savePrompts)
+  const [optProfile, setOptProfile] = useState<string>("none");
+  const [humanizeSettings, setHumanizeSettings] = useState<{
+    auto_humanize: boolean; target_ai_pct: number; strength_preset: string; max_passes: number;
+  }>({ auto_humanize: true, target_ai_pct: 6.0, strength_preset: "medium", max_passes: 6 });
   const [showPromptModal, setShowPromptModal] = useState<null | { kind: "writing" | "image"; id: string }>(null);
   const [draftName, setDraftName] = useState("");
   const [draftText, setDraftText] = useState("");
@@ -2481,6 +2486,11 @@ export default function ProjectPage() {
         setIpDefault(ip.default_id || "");
         setWpDeleted(new Set());
         setIpDeleted(new Set());
+        // Load content-optimization and humanization settings from already-fetched project settings.
+        if (settings) {
+          setOptProfile(settings.content_optimization_profile || "none");
+          if (settings.humanization_settings) setHumanizeSettings({ ...{ auto_humanize: true, target_ai_pct: 6.0, strength_preset: "medium", max_passes: 6 }, ...settings.humanization_settings });
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load prompts");
       } finally {
@@ -3637,6 +3647,12 @@ export default function ProjectPage() {
       if (newIpDefault && newIpDefault !== (imagePrompts?.default_id || "")) {
         await api.setDefaultImagePrompt(projectId, newIpDefault);
       }
+
+      // Save content optimization profile and humanization settings
+      await api.updateProjectSettings(projectId, {
+        content_optimization_profile: optProfile,
+        humanization_settings: humanizeSettings,
+      });
 
       // Refresh from backend for canonical ids/defaults
       const [wp2, ip2] = await Promise.all([
@@ -8411,6 +8427,143 @@ export default function ProjectPage() {
                 </div>
               </section>
             </div>
+
+            {/* ── Content Optimization Profile ── */}
+            <section className={styles.card} style={{ marginTop: 24 }}>
+              <div style={{ marginBottom: 12 }}>
+                <p className={styles.sectionKicker} style={{ marginBottom: 4 }}>Generation</p>
+                <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Content Optimization Profile</h3>
+                <p className={styles.muted} style={{ marginTop: 6, fontSize: 13 }}>
+                  Injects structural requirements into the AI system prompt for every article in this project.
+                </p>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
+                {([
+                  { value: "none",  label: "None",   desc: "Standard generation, human voice first" },
+                  { value: "seo",   label: "SEO",    desc: "Keyword hierarchy, structured headings" },
+                  { value: "aeo",   label: "AEO",    desc: "FAQ sections, featured-snippet format" },
+                  { value: "geo",   label: "GEO",    desc: "Entity-rich, AI-retrieval optimised" },
+                  { value: "eeat",  label: "E-E-A-T",desc: "Experience, expertise, authority, trust" },
+                ] as { value: string; label: string; desc: string }[]).map(({ value, label, desc }) => (
+                  <label
+                    key={value}
+                    style={{
+                      display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px",
+                      borderRadius: 10, cursor: "pointer",
+                      border: optProfile === value
+                        ? "1.5px solid var(--aa-accent, #d97757)"
+                        : "1px solid rgba(255,255,255,0.10)",
+                      background: optProfile === value
+                        ? "color-mix(in oklab, var(--aa-accent, #d97757) 10%, transparent)"
+                        : "transparent",
+                    }}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <input
+                        type="radio"
+                        name="content-opt-profile"
+                        value={value}
+                        checked={optProfile === value}
+                        onChange={() => setOptProfile(value)}
+                        style={{ accentColor: "var(--aa-accent, #d97757)" }}
+                      />
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>{label}</span>
+                    </span>
+                    <span className={styles.muted} style={{ fontSize: 11, paddingLeft: 22 }}>{desc}</span>
+                  </label>
+                ))}
+              </div>
+            </section>
+
+            {/* ── Humanization Guardrail Settings ── */}
+            <section className={styles.card} style={{ marginTop: 16 }}>
+              <div style={{ marginBottom: 14 }}>
+                <p className={styles.sectionKicker} style={{ marginBottom: 4 }}>Humanization</p>
+                <h3 className={styles.sectionTitle} style={{ margin: 0 }}>Humanization Settings</h3>
+                <p className={styles.muted} style={{ marginTop: 6, fontSize: 13 }}>
+                  Controls how aggressively generated content is rewritten to reduce AI-detection signals.
+                </p>
+              </div>
+
+              {/* Auto-humanize toggle */}
+              <label style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 18, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={humanizeSettings.auto_humanize}
+                  onChange={(e) => setHumanizeSettings((h) => ({ ...h, auto_humanize: e.target.checked }))}
+                  style={{ width: 16, height: 16, accentColor: "var(--aa-accent, #d97757)" }}
+                />
+                <span style={{ fontSize: 13, fontWeight: 600 }}>
+                  Automatically humanize content after generation
+                </span>
+              </label>
+
+              {/* AI score target */}
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, opacity: 0.85 }}>AI score target</p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {([
+                    { label: "Under 5% (strict)", value: 5 },
+                    { label: "Under 8% (standard)", value: 8 },
+                    { label: "Under 12% (light)", value: 12 },
+                    { label: "Disabled", value: 50 },
+                  ] as { label: string; value: number }[]).map(({ label, value }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setHumanizeSettings((h) => ({ ...h, target_ai_pct: value }))}
+                      style={{
+                        padding: "6px 12px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                        fontWeight: humanizeSettings.target_ai_pct === value ? 700 : 400,
+                        border: humanizeSettings.target_ai_pct === value
+                          ? "1.5px solid var(--aa-accent, #d97757)"
+                          : "1px solid rgba(255,255,255,0.15)",
+                        background: humanizeSettings.target_ai_pct === value
+                          ? "color-mix(in oklab, var(--aa-accent, #d97757) 12%, transparent)"
+                          : "transparent",
+                        color: "inherit",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Strength preset */}
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, opacity: 0.85 }}>Rewriting strength</p>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {([
+                    { label: "Light",      value: "light",      desc: "Minimal changes" },
+                    { label: "Medium",     value: "medium",     desc: "Balanced (default)" },
+                    { label: "Aggressive", value: "aggressive", desc: "Maximum rewriting" },
+                  ] as { label: string; value: string; desc: string }[]).map(({ label, value, desc }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setHumanizeSettings((h) => ({ ...h, strength_preset: value }))}
+                      style={{
+                        flex: 1, padding: "8px 10px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                        display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+                        fontWeight: humanizeSettings.strength_preset === value ? 700 : 400,
+                        border: humanizeSettings.strength_preset === value
+                          ? "1.5px solid var(--aa-accent, #d97757)"
+                          : "1px solid rgba(255,255,255,0.15)",
+                        background: humanizeSettings.strength_preset === value
+                          ? "color-mix(in oklab, var(--aa-accent, #d97757) 12%, transparent)"
+                          : "transparent",
+                        color: "inherit",
+                      }}
+                    >
+                      <span>{label}</span>
+                      <span className={styles.muted} style={{ fontSize: 10, fontWeight: 400 }}>{desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+
           </div>
             {showPromptModal ? (() => {
               const promptKindCap = showPromptModal.kind === "writing"

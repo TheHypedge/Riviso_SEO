@@ -703,6 +703,8 @@ class TopicClusterService:
                         generate_image=generate_image,
                         focus_keyphrase_override=None,
                         mapped_products=mapped_products,
+                        humanization_settings=proj.get("humanization_settings"),
+                        content_optimization_profile=proj.get("content_optimization_profile"),
                     )
                 if generate_image:
                     img_url = ((gen_result.get("generated") or {}).get("image_url") or "").strip()

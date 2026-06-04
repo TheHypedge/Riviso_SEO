@@ -235,6 +235,8 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
                 focus_keyphrase_override=(art.get("focus_keyphrase") or "").strip() or None,
                 mapped_products=mapped_products if isinstance(mapped_products, list) else None,
                 mapped_pages=mapped_pages if isinstance(mapped_pages, list) else None,
+                humanization_settings=proj.get("humanization_settings"),
+                content_optimization_profile=proj.get("content_optimization_profile"),
             )
         elif generate_image and needs_image:
             await execute_featured_image_regeneration(

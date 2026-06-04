@@ -1665,6 +1665,8 @@ async def generate_article_and_image(
             focus_keyphrase_override=payload.focus_keyphrase,
             mapped_products=mapped_products_payload,
             mapped_pages=mapped_pages_payload,
+            humanization_settings=proj.get("humanization_settings"),
+            content_optimization_profile=proj.get("content_optimization_profile"),
         )
 
 
@@ -1818,17 +1820,24 @@ async def humanize_article_integrity(
     Returns original + humanized + before/after audit for UI.
     """
     st = get_legacy_storage_module()
-    await _require_project_access(st=st, user=user, project_id=project_id)
+    proj = await _require_project_access(st=st, user=user, project_id=project_id)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     md_body = ((payload.markdown if payload and payload.markdown else None) or a.get("article") or "").strip()
     await publish_pipeline_status(article_id, MSG_HUMANIZE, STAGE_HUMANIZATION)
     auditor = AIDetectionAuditor()
     audit_before = auditor.audit_markdown(md_body)
+    # Respect per-project humanization settings for on-demand pass (max_passes capped at 5 for UX speed).
+    _hset = proj.get("humanization_settings") or {} if isinstance(proj, dict) else {}
+    _target = float(_hset.get("target_ai_pct") or 6.0)
+    _preset = str(_hset.get("strength_preset") or "medium").lower()
+    _init_str = {"light": 0.60, "aggressive": 0.88}.get(_preset, 0.78)
     res = await execute_structural_humanization(
         md=md_body,
         protected_terms=protected_terms_from_article(a),
         full_document=True,
-        max_passes=5,
+        max_passes=min(int(_hset.get("max_passes") or 6), 5),
+        target_ai_pct=_target,
+        initial_strength=_init_str,
     )
     human_md = (res.get("humanized_markdown") or "").strip()
     audit_after = auditor.audit_markdown(human_md or md_body)

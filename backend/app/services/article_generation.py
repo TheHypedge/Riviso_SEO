@@ -14,6 +14,7 @@ from app.services.content_sanitizer import (
     sanitize_meta_title,
 )
 from app.services.openai_client import OpenAIClient
+from app.services.content_optimization import build_optimization_profile_block
 from app.services.generation_blocklist import format_banned_phrases_for_prompt
 from app.services.human_writing_guardrail import (
     HUMAN_FIRST_SYSTEM_ANCHOR,
@@ -65,6 +66,7 @@ def estimate_bundle_tokens(
     generate_image: bool,
     image_prompt_text: str | None = None,
     max_completion_tokens: int = 6_000,
+    content_optimization_profile: str | None = None,
 ) -> int:
     """
     Canonical token budget for article + optional custom image prompt.
@@ -82,6 +84,7 @@ def estimate_bundle_tokens(
         product_context=product_context,
         shopify_product_mapping="Shopify product context" in (product_context or ""),
         wordpress_content_mapping="WordPress internal page" in (product_context or ""),
+        content_optimization_profile=content_optimization_profile,
     )
     estimate = estimate_generation_token_budget(
         system_prompt=sys,
@@ -143,6 +146,7 @@ def build_generation_messages(
     product_context: str | None = None,
     shopify_product_mapping: bool = False,
     wordpress_content_mapping: bool = False,
+    content_optimization_profile: str | None = None,
 ) -> tuple[str, str]:
     """Build (system, user) chat payloads — single source of truth for token estimation and generation."""
     bi = (brand_identity or "").strip()
@@ -201,6 +205,7 @@ def build_generation_messages(
         "- Do NOT output code, poetry, scripts, or conversational text outside the JSON object."
         f"{format_ai_detector_banned_phrases_for_prompt()}"
         f"{format_banned_phrases_for_prompt()}"
+        f"{build_optimization_profile_block(content_optimization_profile)}"
         f"{flavor}"
         f"{product_rules}"
     )
@@ -237,6 +242,7 @@ def estimate_tokens_for_generation_bundle(
     generate_image: bool,
     image_prompt_text: str | None = None,
     max_completion_tokens: int = 6_000,
+    content_optimization_profile: str | None = None,
     **extra_kwargs: Any,
 ) -> int:
     """
@@ -262,6 +268,7 @@ def estimate_tokens_for_generation_bundle(
         generate_image=generate_image,
         image_prompt_text=image_prompt_text,
         max_completion_tokens=max_completion_tokens,
+        content_optimization_profile=content_optimization_profile,
     )
 
 
@@ -279,6 +286,7 @@ async def generate_article_bundle(
     reference_image_url: str | None = None,
     shopify_mapped_products: list[dict[str, str]] | None = None,
     wordpress_mapped_pages: list[dict[str, str]] | None = None,
+    content_optimization_profile: str | None = None,
     **extra_kwargs: Any,
 ) -> dict:
     """
@@ -337,6 +345,7 @@ async def generate_article_bundle(
         product_context=product_context,
         shopify_product_mapping=shopify_mapping or bool(shopify_for_injection),
         wordpress_content_mapping=wp_mapping or bool(wp_for_injection),
+        content_optimization_profile=content_optimization_profile,
     )
 
     obj = await client.chat_json(model=settings.openai_text_model, system=sys, user=user)
