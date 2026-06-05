@@ -195,8 +195,6 @@ async def _handle_article_generate(payload: dict) -> None:
                 focus_keyphrase_override=payload.get("focus_keyphrase"),
                 mapped_products=mapped_products_list,
                 mapped_pages=mapped_pages_list,
-                humanization_settings=proj.get("humanization_settings"),
-                content_optimization_profile=proj.get("content_optimization_profile"),
             )
     except Exception as exc:
         from fastapi import HTTPException as FastAPIHTTPException

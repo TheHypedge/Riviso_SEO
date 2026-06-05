@@ -2,24 +2,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-# ---------------------------------------------------------------------------
-# Humanization guardrail settings (per-project)
-# ---------------------------------------------------------------------------
-
-class HumanizationSettings(BaseModel):
-    """Per-project humanization control.  Stored in project.humanization_settings."""
-    auto_humanize: bool = True
-    target_ai_pct: float = Field(default=6.0, ge=0.0, le=50.0)
-    strength_preset: str = "medium"   # "light" | "medium" | "aggressive"
-    max_passes: int = Field(default=6, ge=1, le=10)
-
-
-class HumanizationSettingsUpdate(BaseModel):
-    auto_humanize: bool | None = None
-    target_ai_pct: float | None = Field(default=None, ge=0.0, le=50.0)
-    strength_preset: str | None = None
-    max_passes: int | None = Field(default=None, ge=1, le=10)
-
 
 class ProjectSettingsPublic(BaseModel):
     id: str
@@ -73,11 +55,6 @@ class ProjectSettingsPublic(BaseModel):
     default_wp_category_ids: list[int] = Field(default_factory=list)
     gsc_property_url: str | None = None
     gsc_index_on_publish: bool = True
-    # Content optimization profile — injects structural instructions into the
-    # generation system prompt for SEO / AEO / GEO / E-E-A-T structured output.
-    content_optimization_profile: str = "none"
-    # Humanization guardrail settings.
-    humanization_settings: HumanizationSettings = Field(default_factory=HumanizationSettings)
 
 
 class ProjectSettingsUpdate(BaseModel):
@@ -97,8 +74,6 @@ class ProjectSettingsUpdate(BaseModel):
     shopify_client_id: str | None = Field(default=None, max_length=256)
     shopify_client_secret: str | None = Field(default=None, max_length=5000)
     shopify_access_token: str | None = Field(default=None, max_length=5000)
-    content_optimization_profile: str | None = Field(default=None, max_length=64)
-    humanization_settings: HumanizationSettingsUpdate | None = None
 
 
 class WordpressVerifyRequest(BaseModel):

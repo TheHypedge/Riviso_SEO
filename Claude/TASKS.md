@@ -1,6 +1,6 @@
 # TASKS.md — Current Work Items
 
-_Last updated: 2026-06-04_
+_Last updated: 2026-06-05_
 
 ---
 
@@ -62,6 +62,8 @@ _Last updated: 2026-06-04_
 
 ## Completed (Recent)
 
+- [x] Removed Content Optimization Profile (SEO/AEO/GEO/E-E-A-T) from generation pipeline and UI — user writing prompt is now the highest-priority directive; no more system-injected structural overrides
+- [x] Removed Humanization Settings UI — post-generation humanization pass is disabled by default; on-demand humanize in the editor still works at fixed defaults
 - [x] Content Optimization Profiles (SEO/AEO/GEO/E-E-A-T) — commit `0a556a2`
 - [x] Configurable Humanization Guardrails — same commit
 - [x] `generation_error` persistence on worker failure — same commit

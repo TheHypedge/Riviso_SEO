@@ -14,7 +14,6 @@ from app.services.content_sanitizer import (
     sanitize_meta_title,
 )
 from app.services.openai_client import OpenAIClient
-from app.services.content_optimization import build_optimization_profile_block
 from app.services.generation_blocklist import format_banned_phrases_for_prompt
 from app.services.human_writing_guardrail import (
     HUMAN_FIRST_SYSTEM_ANCHOR,
@@ -66,7 +65,6 @@ def estimate_bundle_tokens(
     generate_image: bool,
     image_prompt_text: str | None = None,
     max_completion_tokens: int = 6_000,
-    content_optimization_profile: str | None = None,
 ) -> int:
     """
     Canonical token budget for article + optional custom image prompt.
@@ -84,7 +82,6 @@ def estimate_bundle_tokens(
         product_context=product_context,
         shopify_product_mapping="Shopify product context" in (product_context or ""),
         wordpress_content_mapping="WordPress internal page" in (product_context or ""),
-        content_optimization_profile=content_optimization_profile,
     )
     estimate = estimate_generation_token_budget(
         system_prompt=sys,
@@ -146,7 +143,6 @@ def build_generation_messages(
     product_context: str | None = None,
     shopify_product_mapping: bool = False,
     wordpress_content_mapping: bool = False,
-    content_optimization_profile: str | None = None,
 ) -> tuple[str, str]:
     """Build (system, user) chat payloads — single source of truth for token estimation and generation."""
     bi = (brand_identity or "").strip()
@@ -187,23 +183,8 @@ def build_generation_messages(
             "- Do not invent posts, slugs, or URLs that are not in the context.\n"
         )
 
-    # Build optimization profile block first — it must appear at the TOP so the model
-    # sees its structural requirements before any other instruction.
-    opt_block = build_optimization_profile_block(content_optimization_profile)
-    if opt_block:
-        opt_section = (
-            "=== CONTENT OPTIMIZATION PROFILE: MANDATORY STRUCTURAL REQUIREMENTS ===\n"
-            "These requirements MUST be satisfied exactly as described. They take priority over "
-            "all other writing style guidelines. Do not omit any required section or format.\n"
-            + opt_block
-            + "=== END CONTENT OPTIMIZATION REQUIREMENTS — all rules above are non-negotiable ===\n\n"
-        )
-    else:
-        opt_section = ""
-
     sys = (
-        opt_section
-        + HUMAN_FIRST_SYSTEM_ANCHOR
+        HUMAN_FIRST_SYSTEM_ANCHOR
         + human_guardrail
         + "\n\nCONTENT STRUCTURE REQUIREMENTS (non-negotiable — apply to every article):\n"
         "- Use ## H2 headings for every main section (minimum 3 H2 sections required).\n"
@@ -212,11 +193,9 @@ def build_generation_messages(
         "- Use numbered lists (1. step) for sequential processes or step-by-step instructions.\n"
         "- Use **bold** for 2–4 key terms, statistics, or critical phrases per article.\n"
         "- Keep paragraphs to 2–4 sentences. Long text must be broken into bullets or sub-sections.\n"
-        "\nUSER PROMPT AUTHORITY: The writing instructions provided in the user message are MANDATORY "
-        "content requirements for this specific article. Follow them precisely and completely — they "
-        "define the article's angle, tone, and focus. IMPORTANT: writing instructions are ADDITIVE "
-        "to any Content Optimization Profile requirements specified above. Both sets of requirements "
-        "must be satisfied simultaneously — do not let one override the other.\n"
+        "\nUSER PROMPT AUTHORITY: The writing instructions in the user message are the HIGHEST PRIORITY "
+        "directive for this article. Follow them precisely and completely — they define the article's "
+        "angle, tone, structure, and focus. All other system requirements are subordinate to the user's prompt.\n"
         "\nReturn ONLY a JSON object with exactly these keys and no others: "
         '"article_markdown", "meta_title", "meta_description".\n'
         "Do not add commentary, explanations, or keys such as title, body, keywords, or choices.\n"
@@ -242,26 +221,12 @@ def build_generation_messages(
         focus_keyphrase=focus_keyphrase,
     ).strip()
 
-    # Remind the model of active optimization profile requirements in the user message
-    # so both the system prompt and user message reinforce the same structural rules.
-    opt_reminder = ""
-    if opt_block:
-        profile_names = [p.strip().upper() for p in (content_optimization_profile or "").split(",") if p.strip() and p.strip().lower() != "none"]
-        if profile_names:
-            opt_reminder = (
-                f"\nREMINDER — Content Optimization Profile active: {', '.join(profile_names)}. "
-                "All structural requirements from this profile (FAQ sections, keyword placement, "
-                "entity density, authority signals, etc.) MUST appear in the article. "
-                "These are non-negotiable in addition to the writing instructions above.\n"
-            )
-
     user = (
         f"Article title: {title}\n"
         f"Target keywords: {', '.join(keywords)}\n"
         f"Focus keyphrase: {focus_keyphrase}\n\n"
         f"Writing instructions (MANDATORY — follow every requirement below):\n{up}\n"
-        f"{opt_reminder}\n"
-        "Output the JSON object now.\n"
+        "\nOutput the JSON object now.\n"
     )
     if platform_mapping and pc:
         user = f"{user}\n\n{pc}\n"
@@ -280,7 +245,6 @@ def estimate_tokens_for_generation_bundle(
     generate_image: bool,
     image_prompt_text: str | None = None,
     max_completion_tokens: int = 6_000,
-    content_optimization_profile: str | None = None,
     **extra_kwargs: Any,
 ) -> int:
     """
@@ -293,6 +257,7 @@ def estimate_tokens_for_generation_bundle(
         image_prompt_text = extra_kwargs.pop("image_prompt_text")
     else:
         extra_kwargs.pop("image_prompt_text", None)
+    extra_kwargs.pop("content_optimization_profile", None)
     if extra_kwargs:
         log.debug("estimate_tokens_for_generation_bundle ignored keys: %s", sorted(extra_kwargs.keys()))
     return estimate_bundle_tokens(
@@ -306,7 +271,6 @@ def estimate_tokens_for_generation_bundle(
         generate_image=generate_image,
         image_prompt_text=image_prompt_text,
         max_completion_tokens=max_completion_tokens,
-        content_optimization_profile=content_optimization_profile,
     )
 
 
@@ -324,7 +288,6 @@ async def generate_article_bundle(
     reference_image_url: str | None = None,
     shopify_mapped_products: list[dict[str, str]] | None = None,
     wordpress_mapped_pages: list[dict[str, str]] | None = None,
-    content_optimization_profile: str | None = None,
     **extra_kwargs: Any,
 ) -> dict:
     """
@@ -338,6 +301,8 @@ async def generate_article_bundle(
         image_prompt_text = extra_kwargs.pop("image_prompt_text")
     else:
         extra_kwargs.pop("image_prompt_text", None)
+    extra_kwargs.pop("content_optimization_profile", None)
+    extra_kwargs.pop("humanization_settings", None)
     image_prompt_text = (str(image_prompt_text).strip() if image_prompt_text is not None else "") or None
     if extra_kwargs:
         log.debug("generate_article_bundle ignored keys: %s", sorted(extra_kwargs.keys()))
@@ -383,7 +348,6 @@ async def generate_article_bundle(
         product_context=product_context,
         shopify_product_mapping=shopify_mapping or bool(shopify_for_injection),
         wordpress_content_mapping=wp_mapping or bool(wp_for_injection),
-        content_optimization_profile=content_optimization_profile,
     )
 
     obj = await client.chat_json(model=settings.openai_text_model, system=sys, user=user)

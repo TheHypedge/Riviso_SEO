@@ -286,15 +286,6 @@ export type ProjectSettings = {
   default_wp_category_ids?: number[];
   gsc_property_url?: string | null;
   gsc_index_on_publish?: boolean;
-  /** Content optimization profile injected into generation system prompt. */
-  content_optimization_profile?: "none" | "seo" | "aeo" | "geo" | "eeat" | string;
-  /** Per-project humanization guardrail settings. */
-  humanization_settings?: {
-    auto_humanize: boolean;
-    target_ai_pct: number;
-    strength_preset: "light" | "medium" | "aggressive";
-    max_passes: number;
-  };
 };
 
 export type GscStatus = {
@@ -1882,13 +1873,6 @@ export const api = {
       shopify_client_id: string;
       shopify_client_secret: string;
       shopify_access_token: string;
-      content_optimization_profile: string;
-      humanization_settings: Partial<{
-        auto_humanize: boolean;
-        target_ai_pct: number;
-        strength_preset: string;
-        max_passes: number;
-      }>;
     }>,
   ) {
     return apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, { method: "PATCH", body: JSON.stringify(patch) });

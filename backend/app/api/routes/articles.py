@@ -1667,8 +1667,6 @@ async def generate_article_and_image(
             focus_keyphrase_override=payload.focus_keyphrase,
             mapped_products=mapped_products_payload,
             mapped_pages=mapped_pages_payload,
-            humanization_settings=proj.get("humanization_settings"),
-            content_optimization_profile=proj.get("content_optimization_profile"),
         )
 
 
@@ -1828,18 +1826,13 @@ async def humanize_article_integrity(
     await publish_pipeline_status(article_id, MSG_HUMANIZE, STAGE_HUMANIZATION)
     auditor = AIDetectionAuditor()
     audit_before = auditor.audit_markdown(md_body)
-    # Respect per-project humanization settings for on-demand pass (max_passes capped at 5 for UX speed).
-    _hset = proj.get("humanization_settings") or {} if isinstance(proj, dict) else {}
-    _target = float(_hset.get("target_ai_pct") or 6.0)
-    _preset = str(_hset.get("strength_preset") or "medium").lower()
-    _init_str = {"light": 0.60, "aggressive": 0.88}.get(_preset, 0.78)
     res = await execute_structural_humanization(
         md=md_body,
         protected_terms=protected_terms_from_article(a),
         full_document=True,
-        max_passes=min(int(_hset.get("max_passes") or 6), 5),
-        target_ai_pct=_target,
-        initial_strength=_init_str,
+        max_passes=5,
+        target_ai_pct=6.0,
+        initial_strength=0.78,
     )
     human_md = (res.get("humanized_markdown") or "").strip()
     audit_after = auditor.audit_markdown(human_md or md_body)
