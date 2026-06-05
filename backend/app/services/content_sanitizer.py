@@ -72,7 +72,11 @@ _BANNED_SECTION_HEADINGS: tuple[re.Pattern[str], ...] = tuple(
         r"^\s*#{1,6}\s*(?:meta\s*title|meta\s*description|seo\s*meta(?:data)?|seo\s*information|seo\s*details)\s*$",
         r"^\s*#{1,6}\s*(?:keywords?|tags?|categor(?:y|ies)|focus\s*keyphrase|focus\s*keyword)\s*$",
         r"^\s*#{1,6}\s*(?:ai[\s\-]*(?:suggested|recommended)\s*keywords?|suggested\s*keywords?|recommended\s*keywords?)\s*$",
-        r"^\s*#{1,6}\s*.+\(\s*(?:aeo|geo|llm)[\s\-]*optimiz(?:ed|ing)?",
+        # Strip SEO-meta section headings that label AI metadata blocks (e.g. "## Keywords (AEO Optimized)").
+        # Uses \s+ (not \s*) so the lookahead is anchored at the first word — \s* shifts position
+        # past the space and the negative lookahead then silently passes on " Frequently".
+        # Negative lookahead protects FAQ headings ("## FAQ (AEO Optimized)" must never be stripped).
+        r"^\s*#{1,6}\s+(?!faq\b|frequently\s+asked\b).+\(\s*(?:aeo|geo|llm)[\s\-]*optimiz(?:ed|ing)?",
     )
 )
 
