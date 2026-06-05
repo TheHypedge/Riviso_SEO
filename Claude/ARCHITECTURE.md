@@ -129,10 +129,14 @@ All backend calls go through `frontend/src/lib/api.ts`:
 Services own business logic and have no FastAPI imports:
 
 **Generation pipeline:**
-- `article_generation.py` — builds OpenAI prompts, calls GPT-4.1-mini, parses JSON response
-- `article_pipeline.py` — orchestrates: quota check → generate → humanize → persist → SSE stream
-- `integrity_engine.py` — multi-pass humanization via `execute_structural_humanization()`
-- `content_optimization.py` — injects SEO/AEO/GEO/E-E-A-T system-prompt blocks
+- `article_generation.py` — builds OpenAI prompts, calls GPT-4.1-mini, parses JSON response.
+  User writing prompt is the highest-priority directive; no system-level structural overrides.
+- `article_pipeline.py` — orchestrates: quota check → generate → AI audit → persist → SSE stream.
+  Auto-humanization pass is disabled; post-generation step only stores the AI-score audit.
+- `integrity_engine.py` — multi-pass humanization via `execute_structural_humanization()`.
+  **Only called from the on-demand editor humanize route** — not in the auto-generation flow.
+- `content_optimization.py` — SEO/AEO/GEO/E-E-A-T profile blocks. **Not used** — no longer
+  imported by `article_generation.py`. Kept for reference.
 - `generation_queue.py` — Redis-backed job queue with dedup + in-process fallback
 - `generation_worker.py` — async worker consuming the queue
 - `pipeline_streamer.py` — publishes SSE pipeline stage events
@@ -275,22 +279,26 @@ Secret: `SECRET_KEY` env var
 
 ### Production Infrastructure
 - **Frontend**: Vercel (`app.riviso.com`) — Next.js deployed on Vercel, not on VPS
-- **Backend**: Hostinger VPS (`api.riviso.cloud`) — Docker Compose, 5 services
-- **TLS**: Cloudflare/edge terminates SSL → forwards plain HTTP to VPS port 80 with `X-Forwarded-Proto: https`
+- **Backend**: Hostinger VPS (`api.riviso.cloud`) — Docker Compose, 4 active services
+- **TLS**: Host-level nginx with Certbot (`/etc/nginx/sites-enabled/api.riviso.cloud`) terminates
+  SSL on port 443 and proxies to `http://127.0.0.1:8000`. This is **not** the Docker nginx container.
 - **Database**: MongoDB Atlas (external managed service, not on VPS)
 
 Vercel's Next.js proxy rewrites `/api/*` → `https://api.riviso.cloud/api/*` server-side, so browser cookies work correctly (same-origin from the browser's perspective).
 
 ### Docker Services (VPS)
 ```yaml
-nginx:     Nginx 1.27   port 80 → backend:8000  (API gateway, gzip, HSTS, timeouts)
-backend:   FastAPI API  (ENABLE_SCHEDULER=0, ENABLE_GENERATION_WORKER=0)  768MB / 1 CPU
-worker:    Queue worker (ENABLE_GENERATION_WORKER=1, ENABLE_SCHEDULER=0)  1024MB / 1 CPU
-scheduler: APScheduler  (ENABLE_SCHEDULER=1, ENABLE_GENERATION_WORKER=0)  512MB / 0.5 CPU
+backend:   FastAPI API  (ENABLE_SCHEDULER=0, ENABLE_GENERATION_WORKER=0)  port 8000 → host
+worker:    Queue worker (ENABLE_GENERATION_WORKER=1, ENABLE_SCHEDULER=0)
+scheduler: APScheduler  (ENABLE_SCHEDULER=1, ENABLE_GENERATION_WORKER=0)
 redis:     Redis 7       (appendonly yes, local only)
 ```
 
-**Removed from VPS**: `frontend` (now Vercel), `postgres` (dormant — MongoDB Atlas is primary DB)
+**Orphaned in docker-compose.yml** (do not try to fix or use):
+- `nginx` — port 80 is held by host nginx; Docker nginx container fails to start. The host-level
+  nginx at `/etc/nginx/sites-enabled/api.riviso.cloud` is the real gateway.
+- `frontend` — now on Vercel
+- `postgres` — dormant, MongoDB Atlas is primary DB
 
 Healthchecks:
 - `backend`: HTTP GET `/api/health` → 200

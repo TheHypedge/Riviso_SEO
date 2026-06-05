@@ -148,10 +148,21 @@ HTTP POST /generate
   → worker picks up job
   → execute_article_generation() in article_pipeline.py
   → generate_article_bundle_safe() in article_generation.py
-  → execute_structural_humanization() in integrity_engine.py
+  → AI-score audit (integrity_engine.py) — stored, no rewriting
   → persist to MongoDB
   → pipeline SSE stream updated at each stage
 ```
+
+**Key generation design decisions (2026-06-05):**
+- Content Optimization Profile (SEO/AEO/GEO/E-E-A-T) has been **removed** from the pipeline.
+  `content_optimization.py` still exists but is no longer imported or called anywhere.
+- Post-generation auto-humanization pass is **disabled by default**. The on-demand humanize
+  button in the article editor still calls `execute_structural_humanization()` at fixed defaults
+  (5 passes, 6% target, medium strength).
+- **User writing prompt is the highest-priority directive.** The system prompt in
+  `build_generation_messages()` explicitly states all other requirements are subordinate to it.
+  Do not re-add optimization profile injections or mark any block as higher priority than
+  the user prompt — that was the root cause of prompts being ignored.
 
 ---
 
@@ -162,7 +173,8 @@ HTTP POST /generate
 | `backend/app/core/deps.py` | JWT auth resolution — wrong change breaks all protected routes |
 | `backend/app/core/security.py` | JWT sign/verify — changing algorithm invalidates all sessions |
 | `backend/app/services/generation_queue.py` | Redis queue semantics — dedup TTL and semaphore bounds |
-| `backend/app/services/integrity_engine.py` | Humanization pipeline — parameter defaults are backward-compat contracts |
+| `backend/app/services/integrity_engine.py` | Humanization pipeline — called only from the on-demand editor humanize route; not in auto-generation flow |
+| `backend/app/services/content_optimization.py` | Optimization profile blocks — **not used** in generation. Do not re-import into article_generation.py without explicit user request |
 | `database.py` (repo root) | Pymongo pool config — pool size / idle timeout tuned for Atlas tier |
 | `frontend/src/lib/api.ts` | RIVISO_APP_HOSTS set — wrong values cause auth loop in production |
 
@@ -188,24 +200,30 @@ HTTP POST /generate
 ## Architecture: Frontend on Vercel, Backend on VPS
 
 - **Frontend** (`app.riviso.com`) → Vercel. Set `BACKEND_URL=https://api.riviso.cloud` in Vercel env vars.
-- **Backend** (`api.riviso.cloud`) → Hostinger VPS. Docker Compose runs: nginx, backend, worker, scheduler, redis.
+- **Backend** (`api.riviso.cloud`) → Hostinger VPS. Docker Compose runs: backend, worker, scheduler, redis.
 - Next.js on Vercel proxies `/api/*` → `api.riviso.cloud/api/*` server-side — cookies work correctly.
 - `COOKIE_DOMAIN` must stay empty on VPS (proxy-cookie rule, see constraint #2).
+
+### VPS Nginx (host-level, not Docker)
+The **host-level nginx** (`/etc/nginx/sites-enabled/api.riviso.cloud`) is the actual TLS gateway:
+- Certbot manages SSL on port 443
+- Proxies to `http://127.0.0.1:8000` (Docker backend's exposed port)
+- The Docker `nginx` container in `docker-compose.yml` is **orphaned/unused** — port 80 is held
+  by host nginx. Do not attempt to start or fix it; it is not in the traffic path.
 
 ## Deploy Checklist
 
 ```bash
-# On local machine
+# Working directory is /var/www/riviso (we are on the VPS)
 git add <files>
 git commit -m "..."
-git push origin development
+git push origin main
 
-# On VPS (via Hostinger terminal)
-cd /var/www/riviso
-git fetch origin && git reset --hard origin/development
+# Rebuild and restart affected containers
 docker compose build --no-cache backend worker scheduler
 docker compose up -d
-docker compose ps          # all 5 containers: nginx / backend / worker / scheduler / redis
+docker compose ps          # backend / worker / scheduler / redis should be healthy
 docker compose logs --tail=30 backend
 docker compose logs --tail=30 worker
+# nginx container will show as restarting — this is expected and harmless (host nginx is the gateway)
 ```

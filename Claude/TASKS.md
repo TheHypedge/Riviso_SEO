@@ -9,7 +9,6 @@ _Last updated: 2026-06-05_
 | # | Task | File(s) | Priority |
 |---|------|---------|----------|
 | T-01 | Restore admin MongoDB account `iamakhileshsoni@gmail.com` | Atlas console (external) | High |
-| T-02 | Deploy latest `development` branch to VPS | VPS: `git pull && docker compose build && docker compose up -d` | High |
 | T-03 | Monitor featured image regeneration after permissions fix | `backend/app/services/shopify_article_image.py`, worker logs | Medium |
 | T-04 | Wire `generation_error` display in article list UI | `frontend/src/app/projects/[projectId]/page.tsx` | Medium |
 
@@ -19,6 +18,7 @@ _Last updated: 2026-06-05_
 
 | # | Item | Notes |
 |---|------|-------|
+| TD-00 | Docker nginx container in `docker-compose.yml` is orphaned | Host nginx (`/etc/nginx/sites-enabled/api.riviso.cloud`) is the real TLS gateway. The Docker nginx entry fails to bind port 80 and should be removed from `docker-compose.yml` |
 | TD-01 | PostgreSQL is configured but unused | `docker-compose.yml` runs postgres; Alembic migrations exist; MongoDB is primary. Plan: either migrate or remove the dead service |
 | TD-02 | `storage.py` (repo root) is 4,800+ lines of flat dict functions | Repository layer (`backend/app/repositories/`) started as typed facade. Migrate route handlers to use repositories over time |
 | TD-03 | No `from __future__ import annotations` in route files | Already removed. Enforce via linter rule or code comment to prevent accidental re-addition |
