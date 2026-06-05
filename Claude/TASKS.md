@@ -46,6 +46,7 @@ _Last updated: 2026-06-05_
 | B-10 | Regenerate modal had no prompt selectors; user couldn't change writing/image prompt before regenerating | Fixed (commit 45ab143) — Writing prompt, image prompt, and generate image selectors added directly inside the regeneration confirmation modal. | Deploy to VPS |
 | B-11 | Curation "Generate selected" froze UI for 50+ min (serial loop, no skipGlobalLoading, 10-min wait per article) | Fixed (commit 45ab143) — Parallel `Promise.allSettled()` with `noWait:true`; modal closes immediately with "queued" message. Added `noWait` option to `api.generateArticle()`. | Deploy to VPS |
 | B-12 | Cluster generate modal stayed open showing "Generating…" for entire batch duration | Fixed (commit 45ab143) — Modal closes immediately after dispatching; generation continues in background. | Deploy to VPS |
+| B-13 | Generated articles were short, lacked depth, no FAQ section | Fixed — system prompt now requires min 1,500 words, min 4 H2 sections, and a mandatory FAQ section (AEO/GEO optimized). Default writing prompt upgraded to request 1,500–2,500 word in-depth content. User prompt authority preserved. | Deploy to VPS |
 
 ---
 
@@ -62,6 +63,7 @@ _Last updated: 2026-06-05_
 
 ## Completed (Recent)
 
+- [x] Generation depth + FAQ/AEO/GEO — system prompt now requires min 1,500 words + FAQ section; default writing prompt upgraded (2026-06-05)
 - [x] Removed Content Optimization Profile (SEO/AEO/GEO/E-E-A-T) from generation pipeline and UI — user writing prompt is now the highest-priority directive; no more system-injected structural overrides
 - [x] Removed Humanization Settings UI — post-generation humanization pass is disabled by default; on-demand humanize in the editor still works at fixed defaults
 - [x] Content Optimization Profiles (SEO/AEO/GEO/E-E-A-T) — commit `0a556a2`

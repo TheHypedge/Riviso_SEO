@@ -30,7 +30,7 @@ from app.services.seo_guardrails import (
 log = logging.getLogger(__name__)
 
 # Bump when generation/token-estimate signatures change; surfaced on /api/health for deploy checks.
-GENERATION_REVISION = "2026-05-29-zero-ai-detector-guardrail"
+GENERATION_REVISION = "2026-06-05-depth-faq-aeo-geo"
 
 @lru_cache(maxsize=16)
 def _callable_param_names(fn: Callable[..., Any]) -> frozenset[str]:
@@ -187,15 +187,28 @@ def build_generation_messages(
         HUMAN_FIRST_SYSTEM_ANCHOR
         + human_guardrail
         + "\n\nCONTENT STRUCTURE REQUIREMENTS (non-negotiable — apply to every article):\n"
-        "- Use ## H2 headings for every main section (minimum 3 H2 sections required).\n"
+        "- Use ## H2 headings for every main section (minimum 4 H2 sections required).\n"
         "- Use ### H3 sub-headings when a section has 2 or more distinct sub-topics.\n"
         "- Use bullet points (- item) for any list of 3 or more parallel items, tips, or features.\n"
         "- Use numbered lists (1. step) for sequential processes or step-by-step instructions.\n"
         "- Use **bold** for 2–4 key terms, statistics, or critical phrases per article.\n"
         "- Keep paragraphs to 2–4 sentences. Long text must be broken into bullets or sub-sections.\n"
+        "\n\nCONTENT DEPTH REQUIREMENTS (apply unless the user's writing instructions specify otherwise):\n"
+        "- Write a comprehensive, in-depth article — minimum 1,500 words of substantive content.\n"
+        "- Cover the topic fully: explain what it is, why it matters, how it works, common mistakes, and best practices.\n"
+        "- Each H2 section must have meaningful depth — at least 2–4 paragraphs or equivalent structured content.\n"
+        "- Include concrete details: numbers, named processes, comparisons, or specific examples — not vague generalities.\n"
+        "- Do not pad with repetition; every paragraph must add new information or a new angle.\n"
+        "\n\nFAQ SECTION — AEO + GEO OPTIMIZATION (apply unless the user's writing instructions specify otherwise):\n"
+        "- Include a ## Frequently Asked Questions section near the end, placed before the conclusion.\n"
+        "- Write 4–6 Q&A pairs. Questions must mirror real user search queries (how to, what is, why, best, vs).\n"
+        "- Each answer: 2–4 direct sentences — written to be cited by AI answer engines (Google AI Overview, Perplexity, ChatGPT).\n"
+        "- At least one answer should include a short numbered process or bullet list for featured-snippet eligibility.\n"
+        "- Do NOT write vague FAQ answers — each must be specific, factual, and standalone-readable.\n"
         "\nUSER PROMPT AUTHORITY: The writing instructions in the user message are the HIGHEST PRIORITY "
         "directive for this article. Follow them precisely and completely — they define the article's "
-        "angle, tone, structure, and focus. All other system requirements are subordinate to the user's prompt.\n"
+        "angle, tone, structure, depth, and focus. All other system requirements (including depth and FAQ) "
+        "are subordinate to the user's prompt and should be adjusted or skipped if the user instructs it.\n"
         "\nReturn ONLY a JSON object with exactly these keys and no others: "
         '"article_markdown", "meta_title", "meta_description".\n'
         "Do not add commentary, explanations, or keys such as title, body, keywords, or choices.\n"

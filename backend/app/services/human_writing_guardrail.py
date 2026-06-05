@@ -93,7 +93,7 @@ Supporting keywords (weave lightly): {supporting_keywords}
 - Name concrete details: fabric weight, fit at shoulders, wedding vs office, humidity, dry-clean cost—not abstract "style statements".
 
 ### Structure (mandatory — apply to every article)
-- Divide the article into at least 3 main sections using ## H2 headings.
+- Divide the article into at least 4 main sections using ## H2 headings.
 - Use ### H3 sub-headings when a section contains 2 or more distinct sub-topics.
 - Use a bullet list (- item) for any group of 3 or more parallel items, features, tips, or options.
 - Use a numbered list (1. step) for any sequential process, how-to steps, or ranked items.

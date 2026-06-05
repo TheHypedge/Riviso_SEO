@@ -163,6 +163,12 @@ HTTP POST /generate
   `build_generation_messages()` explicitly states all other requirements are subordinate to it.
   Do not re-add optimization profile injections or mark any block as higher priority than
   the user prompt — that was the root cause of prompts being ignored.
+- **Depth + FAQ/AEO/GEO are system-level defaults** injected into every generation via
+  `build_generation_messages()`. System prompt requires: minimum 1,500 words, minimum 4 H2 sections,
+  a `## Frequently Asked Questions` section (4–6 Q&A pairs written for AI answer engines).
+  These defaults are overridable by the user's writing prompt (USER PROMPT AUTHORITY).
+  Default writing prompt (`_DEFAULT_WRITING_PROMPT_TEXT` in `prompts.py`) also requests
+  1,500–2,500 word in-depth content with FAQ — applied to new projects on first load.
 
 ---
 
