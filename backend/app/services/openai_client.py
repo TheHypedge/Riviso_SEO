@@ -75,15 +75,18 @@ class OpenAIClient:
         return out
 
     async def chat_json(self, *, model: str, system: str, user: str) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": 0.6,
             "response_format": {"type": "json_object"},
         }
+        # GPT-5.x only accepts the default temperature (1); earlier models default to 1 too,
+        # but accepted 0.6 for slightly more focused output. Skip for gpt-5 family.
+        if not model.startswith("gpt-5"):
+            payload["temperature"] = 0.6
         # Long SEO articles can exceed 60s; keep below client/proxy long-operation budgets (see frontend LONG_API_TIMEOUT_MS).
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=180.0)) as client:
             res = await client.post("https://api.openai.com/v1/chat/completions", headers=self._headers(), json=payload)
