@@ -31,6 +31,7 @@ from app.services.platform_generation import resolve_platform_generation_extras
 from app.services.shopify_product_pipeline import is_shopify_project
 from app.services.wordpress_content_pipeline import is_wordpress_project
 from app.services.cluster_internal_link_service import resolve_cluster_mapped_pages
+from app.services.context_links import apply_context_links_markdown
 from app.services.pipeline_streamer import (
     MSG_FEATURED_IMAGE,
     MSG_GENERATION_COMPLETE,
@@ -249,8 +250,21 @@ async def execute_article_generation(
         st.consume_llm_generation_tokens(uid, token_estimate)
 
     image_url = (gen.get("image_url") or "").strip()
+
+    # Inject context links into the generated Markdown before persisting.
+    # All generation workflow paths (manual, worker queue, scheduler, topic cluster)
+    # reach this point, so this is the single mandatory application site.
+    _ctx_items = [
+        {"label": (x.get("label") or "").strip(), "url": (x.get("url") or "").strip()}
+        for x in (proj.get("context_links") or [])
+        if isinstance(x, dict)
+        and (x.get("label") or "").strip()
+        and (x.get("url") or "").strip()
+    ]
+    _article_md = apply_context_links_markdown(gen["article"], _ctx_items)
+
     updates = {
-        "article": gen["article"],
+        "article": _article_md,
         "meta_title": gen["meta_title"],
         "meta_description": gen["meta_description"],
         "generated_at": gen["generated_at"],
@@ -325,7 +339,7 @@ async def execute_article_generation(
             "models": gen.get("models"),
         },
         "generated": {
-            "article": gen["article"],
+            "article": _article_md,
             "meta_title": gen["meta_title"],
             "meta_description": gen["meta_description"],
             "image_url": gen.get("image_url"),
