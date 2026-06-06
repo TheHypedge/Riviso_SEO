@@ -28,14 +28,23 @@
   --aa-success: #5db872;
   --aa-warning: #d4a017;
   --aa-error: #c64545;
+  --aa-info: #7090c8;
 
   /* Radii */
   --aa-r-xs: 4px;
   --aa-r-sm: 6px;
   --aa-r-md: 8px;
-  --aa-r-lg: 4px;
+  --aa-r-lg: 12px;
   --aa-r-xl: 16px;
   --aa-r-pill: 9999px;
+
+  /* Semantic z-index scale */
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-modal-bg: 300;
+  --z-modal: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
 
   /* Spacing (4px base) */
   --aa-s-xxs: 4px;
@@ -176,6 +185,18 @@ html {
 @keyframes aaSpin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aaAuthGlow {
+    animation: none;
+  }
+  .aaLoadingRing,
+  .aaLoadingRing2 {
+    animation: none;
+    border-top-color: var(--aa-primary);
+    border-right-color: transparent;
   }
 }
 

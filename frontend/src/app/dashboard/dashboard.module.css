@@ -17,7 +17,7 @@
 
   /* Keep accents consistent */
   --aa-primary: #d97757;
-  --aa-primary-active: color-mix(in oklab, #d97757, #ffffff 14%);
+  --aa-primary-active: color-mix(in oklab, #d97757, #000 14%);
 
   /* Make any legacy-mapped vars resolve to dark */
   --background: var(--aa-canvas);
@@ -223,7 +223,7 @@
 
 .tableScroll {
   overflow-x: auto;
-  border-radius: var(--aa-radius-panel, 14px);
+  border-radius: var(--aa-r-lg);
   border: 1px solid var(--aa-hairline-soft);
 }
 
@@ -477,7 +477,7 @@
 }
 
 .wsOverviewPipelineCard {
-  border-top: 3px solid #8ba4ff;
+  border-top: 3px solid var(--aa-info);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -580,7 +580,7 @@
 }
 
 .wsOverviewPanel_scheduled {
-  border-top: 3px solid #f5c842;
+  border-top: 3px solid var(--aa-warning);
 }
 
 .wsOverviewPanel_published {
@@ -592,7 +592,7 @@
 }
 
 .wsOverviewPanel_draft {
-  border-top: 3px solid #8ba4ff;
+  border-top: 3px solid var(--aa-info);
 }
 
 .wsOverviewPanelHead {
@@ -673,7 +673,7 @@
 
 .wsOverviewThDate {
   width: 124px;
-  text-align: right !important;
+  text-align: right;
 }
 
 .wsOverviewTableRow {
@@ -848,12 +848,12 @@
 
 .wsChartTooltip {
   --tip-bg: #222228;
-  --tip-ink: #ffffff;
+  --tip-ink: var(--aa-on-dark, #faf9f5);
   --tip-label: #e8e8ee;
-  --tip-muted: #c4c4cc;
+  --tip-muted: var(--aa-on-dark-soft, #c4c4cc);
   --tip-border: rgba(255, 255, 255, 0.28);
   position: fixed;
-  z-index: 10000;
+  z-index: var(--z-tooltip, 600);
   width: 252px;
   pointer-events: none;
   filter: drop-shadow(0 14px 36px rgba(0, 0, 0, 0.72));
@@ -880,7 +880,7 @@
   font-size: 13px;
   font-weight: 700;
   line-height: 1.35;
-  color: var(--tip-ink) !important;
+  color: var(--tip-ink);
   letter-spacing: 0.01em;
 }
 
@@ -907,13 +907,13 @@
   font-size: 12px;
   font-weight: 500;
   line-height: 1.35;
-  color: var(--tip-label) !important;
+  color: var(--tip-label);
   text-align: left;
   vertical-align: middle;
 }
 
 .wsChartTooltipMetric span:last-child {
-  color: var(--tip-label) !important;
+  color: var(--tip-label);
 }
 
 .wsChartTooltipValue {
@@ -921,7 +921,7 @@
   font-size: 14px;
   font-weight: 800;
   line-height: 1.2;
-  color: var(--tip-ink) !important;
+  color: var(--tip-ink);
   text-align: right;
   vertical-align: middle;
   font-variant-numeric: tabular-nums;
@@ -946,15 +946,13 @@
 .wsChartTooltipFooterLabel {
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--tip-muted) !important;
+  color: var(--tip-muted);
 }
 
 .wsChartTooltipFooterValue {
   font-size: 16px;
   font-weight: 800;
-  color: var(--tip-ink) !important;
+  color: var(--tip-ink);
   font-variant-numeric: tabular-nums;
 }
 
@@ -988,7 +986,7 @@
 }
 
 .wsChartTooltipSwatchScheduled {
-  box-shadow: 0 0 0 1px color-mix(in oklab, #f5c842, #000 35%);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--aa-warning), #000 35%);
 }
 
 /* Dashboard link color must not bleed into chart tooltips */
@@ -997,17 +995,8 @@
   text-decoration: none;
 }
 
-.dashboardDark .wsChartTooltip th,
-.dashboardDark .wsChartTooltip td,
-.dashboardDark .wsChartTooltip time,
-.dashboardDark .wsChartTooltip span,
-.dashboardDark .wsChartTooltip footer,
-.dashboardDark .wsChartTooltip caption {
-  color: inherit;
-}
-
 .dashboardDark .wsChartTooltip a {
-  color: var(--tip-ink) !important;
+  color: var(--tip-ink);
 }
 
 /* Overview readiness gate (maps page.module overviewReadiness* keys) */
@@ -1036,17 +1025,23 @@
 .overviewReadinessProgressFill {
   display: block;
   height: 100%;
+  width: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--aa-primary), color-mix(in oklab, var(--aa-primary), #fff 24%));
-  transition: width 0.35s ease;
+  transform-origin: left;
+  transition: transform 0.35s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overviewReadinessProgressFill {
+    transition: none;
+  }
 }
 
 .overviewReadinessKicker {
   margin: 0 0 8px;
   font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 700;
   color: var(--aa-muted);
 }
 

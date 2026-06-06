@@ -3525,11 +3525,11 @@
 }
 
 .sidebarTitle {
-  font-weight: 800;
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  font-weight: 700;
+  font-size: 11px;
   color: var(--aa-muted);
   margin-bottom: 10px;
+  padding: 0 6px;
 }
 
 /* Brand row pinned to the top of every sidebar. The image is transparent
@@ -3934,6 +3934,31 @@
   outline-offset: 3px;
 }
 
+.projectCardLink {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1.25;
+  word-break: break-word;
+  text-decoration: none;
+  outline: none;
+}
+
+.projectCardLink::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 16px;
+}
+
+.projectCardLink:focus-visible::after {
+  outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 36%);
+  outline-offset: 3px;
+}
+
 .projectCardTop {
   display: flex;
   justify-content: space-between;
@@ -3952,11 +3977,12 @@
 .projectMenuWrap {
   position: relative;
   flex: 0 0 auto;
+  z-index: 1;
 }
 
 .projectMenuButton {
-  width: 34px;
-  height: 34px;
+  width: 44px;
+  height: 44px;
   border-radius: 999px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 15%);
   background: color-mix(in oklab, var(--aa-surface-card), transparent 4%);
@@ -6904,6 +6930,53 @@
   cursor: not-allowed;
 }
 
+.platformPickerGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 400px) {
+  .platformPickerGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.platformPickerCard {
+  padding: 16px;
+  border: 1px solid var(--aa-hairline);
+  border-radius: 10px;
+  text-align: left;
+  background: var(--aa-surface-card);
+}
+
+.platformPickerTitle {
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--aa-body-strong);
+  margin-bottom: 6px;
+}
+
+.btnDanger {
+  border: 0;
+  border-radius: var(--aa-r-md);
+  padding: 12px 20px;
+  height: 40px;
+  font-weight: 700;
+  background: var(--aa-error);
+  color: #fff;
+  cursor: pointer;
+}
+
+.btnDanger:hover {
+  background: color-mix(in oklab, var(--aa-error), #000 12%);
+}
+
+.btnDanger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .wpUpdateButtonActive {
   box-shadow:
     0 0 0 3px color-mix(in oklab, var(--aa-primary) 50%, transparent),
@@ -7508,9 +7581,7 @@ a.secondary {
 .overviewReadinessKicker {
   margin: 0 0 8px;
   font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 700;
   color: var(--aa-muted);
 }
 

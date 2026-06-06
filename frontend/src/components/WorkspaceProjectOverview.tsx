@@ -17,8 +17,8 @@ const DISPLAY_LIMIT = 6;
 const PIPELINE_META = [
   { key: "published" as const, label: "Recently posted", color: "var(--aa-primary, #d97757)" },
   { key: "pending" as const, label: "Pending", color: "#c8ccd4" },
-  { key: "upcoming_scheduled" as const, label: "Upcoming scheduled", color: "#f5c842" },
-  { key: "draft" as const, label: "Drafts", color: "#8ba4ff" },
+  { key: "upcoming_scheduled" as const, label: "Upcoming scheduled", color: "var(--aa-warning, #d4a017)" },
+  { key: "draft" as const, label: "Drafts", color: "var(--aa-info, #7090c8)" },
 ] as const;
 
 function buildChartStyleMap(styles: Record<string, string>): Record<string, string> {

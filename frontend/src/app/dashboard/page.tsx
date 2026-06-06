@@ -31,6 +31,7 @@ import {
 } from "@/lib/api";
 import { cachedProjectsAgeMs, loadCachedProjects, saveCachedProjects } from "@/lib/projectsCache";
 import { connectionErrorMessage, isAuthError, isNetworkError } from "@/lib/networkErrors";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 
 type DashSection = "overview" | "projects" | "users" | "limits" | "profile";
 
@@ -106,6 +107,8 @@ export default function DashboardPage() {
   const [shopifyClientSecret, setShopifyClientSecret] = useState("");
   const [shopifyVerify, setShopifyVerify] = useState<{ ok: boolean; message: string } | null>(null);
   const [shopifyConnecting, setShopifyConnecting] = useState(false);
+  const [deleteUserTarget, setDeleteUserTarget] = useState<{ id: string; name: string } | null>(null);
+  const [wpPluginError, setWpPluginError] = useState<string | null>(null);
 
   // Admin modules
   const [users, setUsers] = useState<AdminUserPublic[]>([]);
@@ -175,6 +178,13 @@ export default function DashboardPage() {
 
   const token = useMemo(() => getAccessToken(), []);
   const isAdmin = (meRole || "").trim().toLowerCase() === "admin";
+
+  const addProjectTrapRef = useFocusTrap(showAddProject);
+  const shopifyConnectTrapRef = useFocusTrap(showShopifyConnect && !!shopifyProject);
+  const wpConnectTrapRef = useFocusTrap(showWpConnect && !!wpProject);
+  const userDetailsTrapRef = useFocusTrap(!!(userDetailsLoading || userDetails));
+  const workspaceTrapRef = useFocusTrap(!!(userWorkspaceLoading || userWorkspace));
+  const deleteUserTrapRef = useFocusTrap(!!deleteUserTarget);
 
   function normalizePlatform(p: ProjectPublic | null | undefined): ProjectPlatform {
     const raw = ((p?.platform || "") as string).trim().toLowerCase();
@@ -508,6 +518,11 @@ export default function DashboardPage() {
     setShopifyVerify(null);
   }
 
+  function closeWpConnect() {
+    setShowWpConnect(false);
+    setWpPluginError(null);
+  }
+
   async function refreshProjectInList(projectId: string) {
     try {
       const fresh = await api.getProject(projectId, { skipGlobalLoading: true });
@@ -611,14 +626,20 @@ export default function DashboardPage() {
     setUserWorkspaceLoading(false);
   }
 
-  async function deleteUser(userId: string) {
-    if (!confirm("Deactivate and mark this user as deleted? Their projects/articles stay retained for account history and retargeting.")) return;
+  function promptDeleteUser(user: AdminUserPublic) {
+    setDeleteUserTarget({ id: user.id, name: user.full_name || user.email });
+  }
+
+  async function confirmDeleteUser() {
+    if (!deleteUserTarget) return;
     setError(null);
     try {
-      await api.adminDeleteUser(userId);
-      setUsers((prev) => prev.filter((u) => u.id !== userId));
+      await api.adminDeleteUser(deleteUserTarget.id);
+      setUsers((prev) => prev.filter((u) => u.id !== deleteUserTarget.id));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to delete user");
+      setError(e instanceof Error ? e.message : "Failed to deactivate user");
+    } finally {
+      setDeleteUserTarget(null);
     }
   }
 
@@ -773,7 +794,7 @@ export default function DashboardPage() {
               <span className={styles.sidebarBrandText}>Riviso</span>
             </Link>
             <div className={styles.sidebarNavMain}>
-              <div className={styles.sidebarTitle}>{isAdmin ? "ADMIN" : "WORKSPACE"}</div>
+              <div className={styles.sidebarTitle}>{isAdmin ? "Admin" : "Workspace"}</div>
               <div className={styles.navGroup}>
                 <button
                   type="button"
@@ -815,7 +836,7 @@ export default function DashboardPage() {
             </div>
 
             <div className={styles.sidebarFooter}>
-              <div className={styles.sidebarTitle}>ACCOUNT</div>
+              <div className={styles.sidebarTitle}>Account</div>
               <div className={styles.navGroup} style={{ marginBottom: 0 }}>
                 <button
                   type="button"
@@ -867,12 +888,14 @@ export default function DashboardPage() {
           </aside>
 
           <section className={styles.contentCol}>
-            {error ? <div className={styles.error}>{error}</div> : null}
-            {!isOnline ? (
-              <div className={styles.error} style={{ marginBottom: 12 }}>
-                You are offline. Data below may be outdated until Wi‑Fi is restored.
-              </div>
-            ) : null}
+            <div role="status" aria-live="polite" aria-atomic="true">
+              {error ? <div className={styles.error}>{error}</div> : null}
+              {!isOnline ? (
+                <div className={styles.error} style={{ marginBottom: 12 }}>
+                  You are offline. Data below may be outdated until your connection is restored.
+                </div>
+              ) : null}
+            </div>
             {dataMayBeStale && isOnline && !error ? (
               <div className={styles.muted} style={{ marginBottom: 12, fontSize: 13, lineHeight: 1.5 }}>
                 Showing last known project list
@@ -957,22 +980,17 @@ export default function DashboardPage() {
                   ) : (
                   <div className={styles.grid}>
                     {projects.map((p) => (
-                      <div
+                      <article
                         key={p.id}
                         className={styles.projectCard}
-                        role="link"
-                        tabIndex={0}
-                        onClick={() => router.push(`/projects/${p.id}`)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            router.push(`/projects/${p.id}`);
-                          }
-                        }}
-                        aria-label={`Open project ${p.name}`}
                       >
                         <div className={styles.projectCardTop}>
-                          <div className={styles.projectTitle}>{p.name}</div>
+                          <Link
+                            href={`/projects/${p.id}`}
+                            className={styles.projectCardLink}
+                          >
+                            {p.name}
+                          </Link>
                           <div className={styles.projectMenuWrap}>
                             <button
                               type="button"
@@ -980,8 +998,7 @@ export default function DashboardPage() {
                               aria-label={`Project actions for ${p.name}`}
                               aria-haspopup="menu"
                               aria-expanded={projectMenuOpen === p.id ? "true" : "false"}
-                              onClick={(e) => {
-                                e.stopPropagation();
+                              onClick={() => {
                                 setProjectMenuOpen((cur) => (cur === p.id ? null : p.id));
                               }}
                             >
@@ -1052,7 +1069,7 @@ export default function DashboardPage() {
                             </>
                           )}
                         </div>
-                      </div>
+                      </article>
                     ))}
                   </div>
                   )}
@@ -1092,6 +1109,7 @@ export default function DashboardPage() {
                                 value={u.full_name || ""}
                                 onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, full_name: e.target.value } : x)))}
                                 placeholder="—"
+                                aria-label="Full name"
                               />
                             </td>
                             <td className={`${styles.td} ${styles.tdMuted}`}>{u.email}</td>
@@ -1100,6 +1118,7 @@ export default function DashboardPage() {
                                 className={styles.select}
                                 value={u.role}
                                 onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, role: e.target.value } : x)))}
+                                aria-label="Role"
                               >
                                 <option value="user">User</option>
                                 <option value="admin">Admin</option>
@@ -1111,6 +1130,7 @@ export default function DashboardPage() {
                                 value={u.subscription_type || ""}
                                 onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, subscription_type: e.target.value } : x)))}
                                 placeholder="beta"
+                                aria-label="Subscription type"
                               />
                             </td>
                             <td className={styles.td}>
@@ -1134,7 +1154,7 @@ export default function DashboardPage() {
                                 <button className={`${styles.miniBtn} ${styles.miniPrimary}`} type="button" onClick={() => saveUser(u)}>
                                   Save
                                 </button>
-                                <button className={`${styles.miniBtn} ${styles.miniDanger}`} type="button" onClick={() => deleteUser(u.id)}>
+                                <button className={`${styles.miniBtn} ${styles.miniDanger}`} type="button" onClick={() => promptDeleteUser(u)}>
                                   Deactivate
                                 </button>
                               </div>
@@ -1174,7 +1194,7 @@ export default function DashboardPage() {
                 <div className={`${styles.card} ${styles.cardWide}`}>
                   <div className={styles.sectionHead}>
                     <div>
-                      <h2 style={{ margin: 0, color: "#fff" }}>Create new plan</h2>
+                      <h2 style={{ margin: 0 }}>Create new plan</h2>
                       <div className={styles.muted}>Key must be unique (letters/numbers/underscore).</div>
                     </div>
                     <button className={styles.button} type="button" onClick={createPlan} disabled={!newPlanKey.trim()}>
@@ -1633,7 +1653,7 @@ export default function DashboardPage() {
       {showAddProject ? (
         <>
           <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={closeAddProject} />
-          <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Add project">
+          <div ref={addProjectTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Add project">
             <div className={styles.modalHead}>
               <h3 className={styles.modalTitle}>
                 {addProjectStep === "form" ? "Add project" : "Which platform is your site on?"}
@@ -1666,33 +1686,17 @@ export default function DashboardPage() {
                     Choose how this project connects. Shopify projects only show Shopify settings; WordPress
                     projects only show WordPress settings.
                   </p>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    <div
-                      style={{
-                        padding: 16,
-                        border: "1px solid var(--button-secondary-border)",
-                        borderRadius: 10,
-                        textAlign: "left",
-                      }}
-                    >
-                      <div style={{ fontWeight: 800, fontSize: 15, color: "#21759b", marginBottom: 6 }}>WordPress</div>
+                  <div className={styles.platformPickerGrid}>
+                    <div className={styles.platformPickerCard}>
+                      <div className={styles.platformPickerTitle}>WordPress</div>
                       <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45 }}>
                         Plugin + application password. Use the button below: Create WordPress project.
                       </div>
                     </div>
-                    <div
-                      style={{
-                        padding: 16,
-                        border: "1px solid rgba(150, 191, 72, 0.5)",
-                        borderRadius: 10,
-                        textAlign: "left",
-                        background: "color-mix(in oklab, #96bf48 10%, transparent)",
-                      }}
-                    >
-                      <div style={{ fontWeight: 800, fontSize: 15, color: "#5f7f1a", marginBottom: 6 }}>Shopify</div>
+                    <div className={styles.platformPickerCard}>
+                      <div className={styles.platformPickerTitle}>Shopify</div>
                       <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45 }}>
-                        Connect with your shop URL + Admin API token (custom app). Use the button below: Create Shopify
-                        project.
+                        Connect with your shop URL + Admin API token (custom app). Use the button below: Create Shopify project.
                       </div>
                     </div>
                   </div>
@@ -1751,7 +1755,7 @@ export default function DashboardPage() {
       {showShopifyConnect && shopifyProject ? (
         <>
           <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={closeShopifyConnect} />
-          <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Connect Shopify store">
+          <div ref={shopifyConnectTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Connect Shopify store">
             <div className={styles.modalHead}>
               <h3 className={styles.modalTitle}>Connect Shopify — {shopifyProject.name}</h3>
               <button type="button" className={styles.iconButton} aria-label="Close" onClick={closeShopifyConnect}>
@@ -1863,18 +1867,18 @@ export default function DashboardPage() {
 
       {showWpConnect && wpProject ? (
         <>
-          <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setShowWpConnect(false)} />
-          <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Connect WordPress">
+          <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={closeWpConnect} />
+          <div ref={wpConnectTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Connect WordPress" aria-describedby="wp-connect-desc">
             <div className={styles.modalHead}>
               <h3 className={styles.modalTitle}>Connect your WordPress site</h3>
-              <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowWpConnect(false)}>
+              <button type="button" className={styles.iconButton} aria-label="Close" onClick={closeWpConnect}>
                 <Icon.X className={styles.icon20} />
               </button>
             </div>
             <div className={styles.modalBody}>
-              <div className={styles.muted} style={{ fontSize: 13, lineHeight: 1.5 }}>
+              <div id="wp-connect-desc" className={styles.muted} style={{ fontSize: 13, lineHeight: 1.5 }}>
                 Next, connect your WordPress website so we can publish generated articles. Add your WordPress username and
-                an Application Password (Users → Profile → Application Passwords).
+                an Application Password (Users &rarr; Profile &rarr; Application Passwords).
               </div>
 
               <label className={styles.label}>
@@ -1897,11 +1901,11 @@ export default function DashboardPage() {
                   className={styles.btnSecondary}
                   type="button"
                   onClick={async () => {
+                    setWpPluginError(null);
                     try {
                       await downloadWordpressPlugin(wpSettings?.plugin_download_url);
                     } catch (e) {
-                      const msg = e instanceof Error ? e.message : "Could not download plugin.";
-                      window.alert(msg);
+                      setWpPluginError(e instanceof Error ? e.message : "Could not download plugin.");
                     }
                   }}
                 >
@@ -1929,6 +1933,12 @@ export default function DashboardPage() {
                 </button>
               </div>
 
+              {wpPluginError ? (
+                <div role="alert" className={styles.error} style={{ fontSize: 13, marginTop: 8 }}>
+                  {wpPluginError}
+                </div>
+              ) : null}
+
               {wpVerify ? (
                 <div className={wpVerify.ok ? styles.muted : styles.error} style={{ fontSize: 13, whiteSpace: "pre-wrap" }}>
                   {wpVerify.message}
@@ -1936,7 +1946,7 @@ export default function DashboardPage() {
               ) : null}
             </div>
             <div className={styles.modalFooter}>
-              <button type="button" className={styles.btnSecondary} onClick={() => setShowWpConnect(false)}>
+              <button type="button" className={styles.btnSecondary} onClick={closeWpConnect}>
                 Cancel
               </button>
               <button
@@ -1944,7 +1954,7 @@ export default function DashboardPage() {
                 type="button"
                 disabled={!wpVerify?.ok}
                 onClick={() => {
-                  setShowWpConnect(false);
+                  closeWpConnect();
                   router.push(`/projects/${wpProject.id}`);
                 }}
               >
@@ -1966,7 +1976,7 @@ export default function DashboardPage() {
               setUserDetailsLoading(false);
             }}
           />
-          <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="User details">
+          <div ref={userDetailsTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="User details">
             <div className={styles.modalHead}>
               <h3 className={styles.modalTitle}>User details</h3>
               <div className={dashStyles.modalHeadActions}>
@@ -2060,7 +2070,7 @@ export default function DashboardPage() {
       {userWorkspaceLoading || userWorkspace ? (
         <>
           <button type="button" className={styles.modalBackdrop} aria-label="Close workspace" onClick={closeUserWorkspace} />
-          <div className={`${styles.modalPanel} ${dashStyles.workspaceModal}`} role="dialog" aria-modal="true" aria-label="User workspace">
+          <div ref={workspaceTrapRef} className={`${styles.modalPanel} ${dashStyles.workspaceModal}`} role="dialog" aria-modal="true" aria-label="User workspace">
             <div className={styles.modalHead}>
               <h3 className={styles.modalTitle}>
                 {userWorkspace ? `Workspace — ${userWorkspace.email}` : userWorkspaceLoading ? "Loading workspace…" : "Workspace"}
@@ -2168,6 +2178,41 @@ export default function DashboardPage() {
                   </div>
                 </>
               ) : null}
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      {deleteUserTarget ? (
+        <>
+          <button type="button" className={styles.modalBackdrop} aria-label="Cancel" onClick={() => setDeleteUserTarget(null)} />
+          <div
+            ref={deleteUserTrapRef}
+            className={styles.modalPanel}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm deactivation"
+            aria-describedby="delete-user-desc"
+          >
+            <div className={styles.modalHead}>
+              <h3 className={styles.modalTitle}>Deactivate user?</h3>
+              <button type="button" className={styles.iconButton} aria-label="Cancel" onClick={() => setDeleteUserTarget(null)}>
+                <Icon.X className={styles.icon20} />
+              </button>
+            </div>
+            <div className={styles.modalBody}>
+              <p id="delete-user-desc" className={styles.muted} style={{ margin: 0 }}>
+                Deactivating <strong>{deleteUserTarget.name}</strong> will mark their account as deleted. Their projects and articles are retained for account history.
+              </p>
+              {error ? <p className={styles.error} style={{ marginTop: 10 }}>{error}</p> : null}
+            </div>
+            <div className={styles.modalFooter}>
+              <button type="button" className={styles.btnSecondary} onClick={() => setDeleteUserTarget(null)}>
+                Cancel
+              </button>
+              <button type="button" className={styles.btnDanger} onClick={() => void confirmDeleteUser()}>
+                Deactivate user
+              </button>
             </div>
           </div>
         </>

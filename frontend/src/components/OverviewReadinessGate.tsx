@@ -16,7 +16,7 @@ export function OverviewReadinessGate(props: {
         <div className={styles.overviewReadinessProgress} aria-hidden="true">
           <span
             className={styles.overviewReadinessProgressFill}
-            style={{ width: `${readiness.progressPercent}%` }}
+            style={{ transform: `scaleX(${readiness.progressPercent / 100})` }}
           />
         </div>
         <p className={styles.overviewReadinessKicker}>Overview preview</p>
