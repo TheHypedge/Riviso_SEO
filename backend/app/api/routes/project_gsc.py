@@ -381,3 +381,225 @@ async def analytics(
         "top_pages": top_pages,
         "markers": markers,
     }
+
+
+# ---------------------------------------------------------------------------
+# Search Analytics — Feature 2: GSC Insights (pages, queries, countries, sources)
+# ---------------------------------------------------------------------------
+
+# ISO 3166-1 alpha-3 → (display name, alpha-2) for flag emoji derivation.
+_COUNTRY_MAP: dict[str, tuple[str, str]] = {
+    "gbr": ("United Kingdom", "GB"), "usa": ("United States", "US"),
+    "ind": ("India", "IN"), "can": ("Canada", "CA"),
+    "aus": ("Australia", "AU"), "deu": ("Germany", "DE"),
+    "fra": ("France", "FR"), "irl": ("Ireland", "IE"),
+    "pak": ("Pakistan", "PK"), "bel": ("Belgium", "BE"),
+    "nld": ("Netherlands", "NL"), "sgp": ("Singapore", "SG"),
+    "zaf": ("South Africa", "ZA"), "nga": ("Nigeria", "NG"),
+    "ken": ("Kenya", "KE"), "esp": ("Spain", "ES"),
+    "ita": ("Italy", "IT"), "phl": ("Philippines", "PH"),
+    "nzl": ("New Zealand", "NZ"), "mys": ("Malaysia", "MY"),
+    "bgd": ("Bangladesh", "BD"), "lka": ("Sri Lanka", "LK"),
+    "are": ("UAE", "AE"), "sau": ("Saudi Arabia", "SA"),
+    "bra": ("Brazil", "BR"), "mex": ("Mexico", "MX"),
+    "arg": ("Argentina", "AR"), "jpn": ("Japan", "JP"),
+    "chn": ("China", "CN"), "kor": ("South Korea", "KR"),
+    "swe": ("Sweden", "SE"), "nor": ("Norway", "NO"),
+    "dnk": ("Denmark", "DK"), "fin": ("Finland", "FI"),
+    "pol": ("Poland", "PL"), "ukr": ("Ukraine", "UA"),
+    "tur": ("Turkey", "TR"), "rus": ("Russia", "RU"),
+    "idn": ("Indonesia", "ID"), "tha": ("Thailand", "TH"),
+    "vnm": ("Vietnam", "VN"), "gha": ("Ghana", "GH"),
+    "uga": ("Uganda", "UG"), "tza": ("Tanzania", "TZ"),
+    "eth": ("Ethiopia", "ET"), "egy": ("Egypt", "EG"),
+    "mar": ("Morocco", "MA"), "prt": ("Portugal", "PT"),
+    "grc": ("Greece", "GR"), "cze": ("Czech Republic", "CZ"),
+    "hun": ("Hungary", "HU"), "rou": ("Romania", "RO"),
+    "bgr": ("Bulgaria", "BG"), "hrv": ("Croatia", "HR"),
+    "svk": ("Slovakia", "SK"), "svn": ("Slovenia", "SI"),
+    "est": ("Estonia", "EE"), "lva": ("Latvia", "LV"),
+    "ltu": ("Lithuania", "LT"), "isl": ("Iceland", "IS"),
+    "chl": ("Chile", "CL"), "col": ("Colombia", "CO"),
+    "per": ("Peru", "PE"), "ven": ("Venezuela", "VE"),
+    "ury": ("Uruguay", "UY"), "pry": ("Paraguay", "PY"),
+}
+
+
+def _alpha2_to_flag(code: str) -> str:
+    """Convert ISO 3166-1 alpha-2 country code to Unicode flag emoji."""
+    c = (code or "").strip().upper()
+    if len(c) != 2 or not c.isalpha():
+        return ""
+    return chr(0x1F1E6 + ord(c[0]) - ord("A")) + chr(0x1F1E6 + ord(c[1]) - ord("A"))
+
+
+def _normalise_country(raw: str) -> dict[str, str]:
+    """Return display name and flag for a GSC alpha-3 country code."""
+    key = (raw or "").strip().lower()
+    name, alpha2 = _COUNTRY_MAP.get(key, (key.upper(), ""))
+    return {"country_code": key, "country_name": name, "flag": _alpha2_to_flag(alpha2)}
+
+
+def _change_pct(current: float, previous: float) -> float | None:
+    """Percentage change; None when there is no previous baseline."""
+    if previous <= 0:
+        return None
+    return round((current - previous) / previous * 100, 1)
+
+
+def _build_comparison_rows(
+    current_rows: list[dict],
+    prev_rows: list[dict],
+    key_field: str,
+    limit: int = 25,
+) -> list[dict]:
+    """
+    Merge current-period and previous-period rows on ``key_field`` and annotate
+    each row with ``prev_clicks``, ``change_pct``, and ``trend``.
+    """
+    prev_map = {r.get(key_field, ""): int(r.get("clicks") or 0) for r in prev_rows}
+    out = []
+    for r in current_rows[:limit]:
+        key = r.get(key_field, "")
+        cur_clicks = int(r.get("clicks") or 0)
+        prv_clicks = prev_map.get(key, 0)
+        chg = _change_pct(cur_clicks, prv_clicks)
+        trend = "neutral"
+        if chg is not None:
+            trend = "up" if chg > 0 else ("down" if chg < 0 else "neutral")
+        out.append({
+            key_field: key,
+            "clicks": cur_clicks,
+            "impressions": int(r.get("impressions") or 0),
+            "ctr": float(r.get("ctr") or 0.0),
+            "position": float(r.get("position") or 0.0),
+            "prev_clicks": prv_clicks,
+            "change_pct": chg,
+            "trend": trend,
+        })
+    return out
+
+
+@router.get("/insights")
+async def insights(
+    project_id: str,
+    days: int = 28,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    GSC Insights panel data — comparable to Google's own Insights page.
+
+    Returns headline click/impression totals for the current window and the
+    immediately preceding window of the same length, plus:
+    - ``pages``  — top pages by clicks with change vs previous period
+    - ``queries`` — top search queries with change vs previous period
+    - ``countries`` — clicks by country (current period)
+    - ``traffic_sources`` — web vs image vs video vs news search types
+    """
+    from datetime import datetime, timedelta
+    from app.services.google_console_service import GoogleConsoleService, _normalise_property_for_query
+    from app.services.to_thread import run_sync
+
+    st = get_legacy_storage_module()
+    proj = _require_project(st=st, user=user, project_id=project_id)
+
+    if not (proj.get("gsc_property_url") or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Search Console property is not linked for this project. Open Tools → Search Console.",
+        )
+
+    try:
+        svc = GoogleConsoleService(st=st, project=proj)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e) or "Analytics service is not available") from e
+
+    d = max(7, min(int(days or 28), 365))
+    today = datetime.utcnow()
+    end_iso = today.strftime("%Y-%m-%d")
+    start_iso = (today - timedelta(days=d)).strftime("%Y-%m-%d")
+    prev_end = (today - timedelta(days=d + 1)).strftime("%Y-%m-%d")
+    prev_start = (today - timedelta(days=d * 2 + 1)).strftime("%Y-%m-%d")
+
+    try:
+        # All queries fire concurrently via asyncio
+        import asyncio
+        (
+            cur_series,
+            prev_series,
+            cur_pages,
+            prev_pages,
+            cur_queries,
+            prev_queries,
+            cur_countries,
+            image_rows,
+        ) = await asyncio.gather(
+            svc.query_traffic_totals(start_date=start_iso, end_date=end_iso),
+            svc.query_traffic_totals(start_date=prev_start, end_date=prev_end),
+            svc.query_by_dimension(start_date=start_iso, end_date=end_iso, dimension="page", limit=50),
+            svc.query_by_dimension(start_date=prev_start, end_date=prev_end, dimension="page", limit=50),
+            svc.query_by_dimension(start_date=start_iso, end_date=end_iso, dimension="query", limit=50),
+            svc.query_by_dimension(start_date=prev_start, end_date=prev_end, dimension="query", limit=50),
+            svc.query_by_dimension(start_date=start_iso, end_date=end_iso, dimension="country", limit=10),
+            svc.query_by_dimension(
+                start_date=start_iso, end_date=end_iso, dimension="page",
+                limit=10, search_type="IMAGE"
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e) or "Insights query failed") from e
+
+    # Headline comparison
+    headline = {
+        "clicks": {
+            "value": int(cur_series.get("clicks") or 0),
+            "prev": int(prev_series.get("clicks") or 0),
+            "change_pct": _change_pct(
+                float(cur_series.get("clicks") or 0),
+                float(prev_series.get("clicks") or 0),
+            ),
+        },
+        "impressions": {
+            "value": int(cur_series.get("impressions") or 0),
+            "prev": int(prev_series.get("impressions") or 0),
+            "change_pct": _change_pct(
+                float(cur_series.get("impressions") or 0),
+                float(prev_series.get("impressions") or 0),
+            ),
+        },
+    }
+
+    # Pages with comparison
+    pages = _build_comparison_rows(cur_pages, prev_pages, "page", limit=25)
+
+    # Queries with comparison
+    queries = _build_comparison_rows(cur_queries, prev_queries, "query", limit=25)
+
+    # Countries — add display name + flag + share %
+    total_clicks = max(1, sum(int(r.get("clicks") or 0) for r in cur_countries))
+    countries = []
+    for r in cur_countries[:10]:
+        c = _normalise_country(r.get("country", ""))
+        clicks = int(r.get("clicks") or 0)
+        countries.append({
+            **c,
+            "clicks": clicks,
+            "share_pct": round(clicks / total_clicks * 100, 1),
+        })
+
+    # Additional traffic sources — image search
+    image_clicks = sum(int(r.get("clicks") or 0) for r in image_rows)
+    traffic_sources = []
+    if image_clicks > 0:
+        traffic_sources.append({"source": "Image search", "source_type": "image", "clicks": image_clicks})
+
+    return {
+        "property_url": (proj.get("gsc_property_url") or "").strip() or None,
+        "period": {"start_date": start_iso, "end_date": end_iso, "days": d},
+        "prev_period": {"start_date": prev_start, "end_date": prev_end, "days": d},
+        "headline": headline,
+        "pages": pages,
+        "queries": queries,
+        "countries": countries,
+        "traffic_sources": traffic_sources,
+    }

@@ -373,6 +373,64 @@ export type GscAnalyticsResponse = {
   markers: GscAnalyticsMarker[];
 };
 
+// --- GSC Insights (Feature 2) -----------------------------------------------
+
+export type GscInsightsHeadlineStat = {
+  value: number;
+  prev: number;
+  change_pct: number | null;
+};
+
+export type GscInsightsPage = {
+  page: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+  prev_clicks: number;
+  change_pct: number | null;
+  trend: "up" | "down" | "neutral";
+};
+
+export type GscInsightsQuery = {
+  query: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+  prev_clicks: number;
+  change_pct: number | null;
+  trend: "up" | "down" | "neutral";
+};
+
+export type GscInsightsCountry = {
+  country_code: string;
+  country_name: string;
+  flag: string;
+  clicks: number;
+  share_pct: number;
+};
+
+export type GscInsightsTrafficSource = {
+  source: string;
+  source_type: string;
+  clicks: number;
+};
+
+export type GscInsightsResponse = {
+  property_url?: string | null;
+  period: { start_date: string; end_date: string; days: number };
+  prev_period: { start_date: string; end_date: string; days: number };
+  headline: {
+    clicks: GscInsightsHeadlineStat;
+    impressions: GscInsightsHeadlineStat;
+  };
+  pages: GscInsightsPage[];
+  queries: GscInsightsQuery[];
+  countries: GscInsightsCountry[];
+  traffic_sources: GscInsightsTrafficSource[];
+};
+
 /* --- Feature 2: Topic Cluster (foundations) ------------------------------ */
 
 export type TopicClusterPillar = {
@@ -2922,6 +2980,14 @@ export const api = {
     }
     return apiFetch<GscAnalyticsResponse>(
       `/api/projects/${projectId}/gsc/analytics?${qs.toString()}`,
+    );
+  },
+
+  async gscProjectInsights(projectId: string, opts: { days?: number } = {}) {
+    const qs = new URLSearchParams();
+    qs.set("days", String(opts.days ?? 28));
+    return apiFetch<GscInsightsResponse>(
+      `/api/projects/${projectId}/gsc/insights?${qs.toString()}`,
     );
   },
 

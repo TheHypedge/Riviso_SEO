@@ -120,12 +120,14 @@ class GoogleConsoleService:
         dimensions: list[str],
         row_limit: int = 1000,
         filters: Iterable[dict[str, Any]] | None = None,
+        search_type: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         Low-level wrapper that returns the raw ``rows`` array from the API.
 
         Always pass ``dataState="all"`` so the dashboard can show the latest 2-3 days of
         partial data (Google delays ~3 days for "final"). The frontend can label these.
+        ``search_type`` accepts "WEB" (default), "IMAGE", "VIDEO", "NEWS", "DISCOVER".
         """
         site, _host = _normalise_property_for_query(self.property_url)
         url = GSC_SEARCH_ANALYTICS_URL_TPL.format(site=quote(site, safe=""))
@@ -138,6 +140,8 @@ class GoogleConsoleService:
         }
         if filters:
             body["dimensionFilterGroups"] = [{"filters": list(filters)}]
+        if search_type:
+            body["type"] = search_type.upper()
 
         token = await self._access_token()
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -251,6 +255,54 @@ class GoogleConsoleService:
         out = out[: max(1, min(int(limit or 25), 200))]
         self._cache_put(cache_key, out)
         return out
+
+    async def query_by_dimension(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        dimension: str,
+        limit: int = 100,
+        search_type: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Generic dimension query — returns rows sorted by clicks descending.
+        ``dimension`` is any valid GSC dimension: ``"page"``, ``"query"``, ``"country"``,
+        ``"device"``, ``"searchAppearance"``.
+        """
+        cache_key = (self.project.get("id"), dimension, start_date, end_date, search_type)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached[:limit]
+        rows = await self._search_analytics_query(
+            start_date=start_date,
+            end_date=end_date,
+            dimensions=[dimension],
+            row_limit=min(max(int(limit or 25) * 4, 100), 1000),
+            search_type=search_type,
+        )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            keys = r.get("keys") or []
+            if not keys:
+                continue
+            out.append({
+                dimension: str(keys[0]),
+                "clicks": int(r.get("clicks") or 0),
+                "impressions": int(r.get("impressions") or 0),
+                "ctr": float(r.get("ctr") or 0.0),
+                "position": float(r.get("position") or 0.0),
+            })
+        out.sort(key=lambda x: x.get("clicks") or 0, reverse=True)
+        self._cache_put(cache_key, out)
+        return out[:limit]
+
+    async def query_traffic_totals(self, *, start_date: str, end_date: str) -> dict[str, Any]:
+        """Aggregate totals for an explicit window (used for Insights comparison period)."""
+        rows = await self._search_analytics_query(
+            start_date=start_date, end_date=end_date, dimensions=["date"]
+        )
+        return self.aggregate_totals(rows)
 
     # ------------------------------------------------------------ aggregates
 
