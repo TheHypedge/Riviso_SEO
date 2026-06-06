@@ -19,3 +19,6 @@ data/
 *.db
 venv/
 REVIEW.md
+# gitleaks binary (downloaded by security workflow — not part of the codebase)
+gitleaks
+LICENSE
