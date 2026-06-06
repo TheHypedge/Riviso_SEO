@@ -32,7 +32,8 @@ def test_build_generation_messages_always_includes_guardrail() -> None:
     )
     assert "ZERO-AI-DETECTOR GUARDRAIL" in sys
     assert "PRIMARY DIRECTIVE" in sys
-    assert "Final check before JSON" in user
+    assert "Writing instructions (MANDATORY" in user
+    assert "Output the JSON object now." in user
     assert "Topic: Cooling Fabrics Guide" in sys
     assert "cooling fabrics" in sys
     assert "cotton" in sys

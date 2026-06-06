@@ -36,6 +36,7 @@ jobs:
           FORCE_JSON_STORAGE: "1"
           SECRET_KEY: "ci-test-secret-key-not-used-in-production-0123456789"
           ENVIRONMENT: "test"
+          PYTHONPATH: .
         run: pytest -q
 
   frontend-tests:
