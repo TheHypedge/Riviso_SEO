@@ -1197,11 +1197,29 @@ export default function ProjectPage() {
           api.articleQuota(projectId, { skipGlobalLoading: true }).catch(() => null),
           api.getProject(projectId, { skipGlobalLoading: true }).catch(() => null),
         ]);
-        if (ps) setSettings(ps);
+        if (ps) {
+          setSettings(ps);
+          // Sync local form fields so settingsDirty doesn't report a false
+          // positive before the user has visited the project_settings tab.
+          setSName(ps.name || "");
+          setSWpUser(ps.wp_username || "");
+          const initPass = ps.wp_app_password || "";
+          wpPassLoadedRef.current = normalizePasswordForDirtyCheck(initPass);
+          setSWpPass(initPass);
+          setSWpDefaultPostType((ps.default_wp_rest_base || "posts") as string);
+          setSWpDefaultStatus((ps.default_wp_status || "draft") as "draft" | "publish");
+          setSWpDefaultCategoryIds((ps.default_wp_category_ids || []) as number[]);
+          setSWpInternalLinkAware(Boolean(ps.wp_internal_link_aware_enabled));
+          setSShopifyClientId(ps.shopify_client_id || "");
+          setSShopifyProductAware(Boolean(ps.shopify_product_aware_enabled));
+        }
         if (pm) {
           setProjectMeta(pm);
-          if ((pm.platform || "").toLowerCase() === "shopify") {
-            setSUrl((pm.website_url || "").trim());
+          const plat = resolveProjectPlatform({ settings: ps, meta: pm });
+          if (plat === "shopify") {
+            setSUrl((ps?.website_url || pm.website_url || "").trim());
+          } else if (ps) {
+            setSUrl((ps.wp_site_url || ps.website_url || "").trim());
           }
         }
         setFeatureLimits(limits);
@@ -3890,7 +3908,7 @@ export default function ProjectPage() {
 
   function goTab(next: TabKey) {
     if (next === tab) return;
-    if ((next === "tools" || next === "project_settings") && !confirmLoseChanges()) return;
+    if ((tab === "tools" || tab === "project_settings") && !confirmLoseChanges()) return;
     setTab(next);
     setMobileNavOpen(false);
   }
