@@ -9615,7 +9615,6 @@ export default function ProjectPage() {
                   No analytics data yet for this property.
                 </div>
               )}
-            </div>
 
             </> : null /* end overview sub-tab */}
 
