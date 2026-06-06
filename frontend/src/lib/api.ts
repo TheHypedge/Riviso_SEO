@@ -2860,8 +2860,10 @@ export const api = {
   async gscProjectStatus(projectId: string) {
     return apiFetch<ProjectGscStatus>(`/api/projects/${projectId}/gsc/status`);
   },
-  async gscProjectConnectUrl(projectId: string) {
-    return apiFetch<{ url: string }>(`/api/projects/${projectId}/gsc/connect-url`);
+  async gscProjectConnectUrl(projectId: string, opts?: { origin?: string }) {
+    const origin = opts?.origin || (typeof window !== "undefined" ? window.location.origin : "");
+    const qs = origin ? `?frontend_origin=${encodeURIComponent(origin)}` : "";
+    return apiFetch<{ url: string }>(`/api/projects/${projectId}/gsc/connect-url${qs}`);
   },
   async gscProjectListSites(projectId: string) {
     return apiFetch<GscSite[]>(`/api/projects/${projectId}/gsc/sites`);

@@ -14,6 +14,34 @@ from app.services import gsc
 
 router = APIRouter(prefix="/gsc", tags=["gsc"])
 
+# Validated frontend origins accepted for OAuth redirect.
+# Must match the CORS allowlist in main.py so a forged origin can't hijack the callback.
+_ALLOWED_FRONTEND_ORIGINS: frozenset[str] = frozenset({
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://riviso.com",
+    "https://www.riviso.com",
+    "https://app.riviso.com",
+    "https://riviso.cloud",
+    "https://www.riviso.cloud",
+    "https://app.riviso.cloud",
+})
+
+
+def _validate_frontend_origin(raw: str | None) -> str | None:
+    """Return ``raw`` if it is in the allowed-origins whitelist, else ``None``."""
+    from urllib.parse import urlparse
+    o = (raw or "").strip().rstrip("/")
+    if not o:
+        return None
+    try:
+        parsed = urlparse(o)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        return None
+    return origin if origin in _ALLOWED_FRONTEND_ORIGINS else None
+
+
 def _public_api_url(path: str) -> str:
     """
     Build an absolute URL for Google OAuth redirect_uri.
@@ -80,8 +108,27 @@ async def connect_url(request: Request, user: dict = Depends(get_current_user)) 
     return {"url": url}
 
 
-def _frontend_project_redirect_url(*, project_id: str, ok: bool, message: str | None = None) -> str:
-    base = (str(settings.frontend_base_url) if settings.frontend_base_url else "").strip().rstrip("/")
+def _frontend_project_redirect_url(
+    *,
+    project_id: str,
+    ok: bool,
+    message: str | None = None,
+    origin_override: str | None = None,
+) -> str:
+    """
+    Build the post-OAuth redirect URL for the project Tools tab.
+
+    Priority for the base URL:
+    1. ``origin_override`` — validated frontend origin from the OAuth state token.
+       This is the most reliable source: it's the actual host the user came from,
+       encoded at connect-time, independent of FRONTEND_BASE_URL being correctly set.
+    2. ``FRONTEND_BASE_URL`` env var.
+    3. ``PUBLIC_BASE_URL`` env var (fallback).
+    4. Relative path (same-origin, local dev).
+    """
+    base = _validate_frontend_origin(origin_override) or ""
+    if not base:
+        base = (str(settings.frontend_base_url) if settings.frontend_base_url else "").strip().rstrip("/")
     if not base:
         base = (str(settings.public_base_url) if settings.public_base_url else "").strip().rstrip("/")
     frag = "gsc=connected" if ok else "gsc=error"
@@ -106,12 +153,20 @@ async def oauth_callback(request: Request) -> RedirectResponse:
         return RedirectResponse(_frontend_redirect_url(ok=False, message="Invalid state"), status_code=302)
     uid = (parsed.get("uid") or "").strip()
     pid = (parsed.get("pid") or "").strip()
+    # Validated frontend origin embedded in the state token at connect-time.
+    # Used as the redirect base so the callback reaches app.riviso.com regardless
+    # of how FRONTEND_BASE_URL is configured on the VPS.
+    origin = _validate_frontend_origin(parsed.get("origin"))
 
     redirect_uri = _public_api_url(str(request.url_for("gsc_oauth_callback")))
     try:
         tok = await gsc.exchange_code_for_tokens(code=code, redirect_uri=redirect_uri)
     except Exception:
-        target = _frontend_project_redirect_url(project_id=pid, ok=False, message="Token exchange failed") if pid else _frontend_redirect_url(ok=False, message="Token exchange failed")
+        target = (
+            _frontend_project_redirect_url(project_id=pid, ok=False, message="Token exchange failed", origin_override=origin)
+            if pid
+            else _frontend_redirect_url(ok=False, message="Token exchange failed")
+        )
         return RedirectResponse(target, status_code=302)
 
     access_token = (tok.get("access_token") or "").strip()
@@ -128,14 +183,23 @@ async def oauth_callback(request: Request) -> RedirectResponse:
     if pid:
         # Per-project flow: store the new GSC connection on the project itself.
         if not hasattr(st, "update_project_fields"):
-            return RedirectResponse(_frontend_project_redirect_url(project_id=pid, ok=False, message="Storage missing update_project_fields"), status_code=302)
+            return RedirectResponse(
+                _frontend_project_redirect_url(project_id=pid, ok=False, message="Storage missing update_project_fields", origin_override=origin),
+                status_code=302,
+            )
         proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
         if not isinstance(proj, dict):
-            return RedirectResponse(_frontend_project_redirect_url(project_id=pid, ok=False, message="Project not found"), status_code=302)
+            return RedirectResponse(
+                _frontend_project_redirect_url(project_id=pid, ok=False, message="Project not found", origin_override=origin),
+                status_code=302,
+            )
         # Ensure the same user that started the flow still owns the project.
         owner = (proj.get("owner_user_id") or "").strip()
         if owner and owner != uid:
-            return RedirectResponse(_frontend_project_redirect_url(project_id=pid, ok=False, message="Project owner mismatch"), status_code=302)
+            return RedirectResponse(
+                _frontend_project_redirect_url(project_id=pid, ok=False, message="Project owner mismatch", origin_override=origin),
+                status_code=302,
+            )
         st.update_project_fields(
             pid,
             {
@@ -149,7 +213,10 @@ async def oauth_callback(request: Request) -> RedirectResponse:
                 "gsc_connected_at": now_str,
             },
         )
-        return RedirectResponse(_frontend_project_redirect_url(project_id=pid, ok=True), status_code=302)
+        return RedirectResponse(
+            _frontend_project_redirect_url(project_id=pid, ok=True, origin_override=origin),
+            status_code=302,
+        )
 
     # Legacy user-level flow (kept for backward compat with older clients/tabs).
     if not hasattr(st, "update_user_fields"):
