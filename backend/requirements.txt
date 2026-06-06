@@ -17,7 +17,7 @@ Werkzeug==3.1.8
 email-validator==2.3.0
 pymongo==4.15.5
 motor==3.7.1
-certifi==2026.2.25
+certifi==2026.5.20
 python-multipart==0.0.27
 markdown==3.8.2
 html2text==2024.2.26
