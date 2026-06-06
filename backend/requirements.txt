@@ -7,7 +7,7 @@ python-jose==3.5.0
 passlib[bcrypt]==1.7.4
 sqlalchemy==2.0.43
 asyncpg==0.30.0
-alembic==1.16.5
+alembic==1.18.4
 redis==6.4.0
 httpx==0.28.1
 beautifulsoup4==4.12.3
