@@ -11,6 +11,8 @@ paths = [
   '''(^|/)\.env\.example$''',
   '''(^|/).*\.md$''',
   '''(^|/)backend/tests/''',
+  '''(^|/)data/projects\.json$''',
+  '''(^|/)backend/app/run_background\.py$''',
 ]
 regexes = [
   # CI uses a clearly non-production SECRET_KEY in workflows.
