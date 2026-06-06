@@ -90,13 +90,42 @@ async def status(project_id: str, user: dict = Depends(get_current_user)) -> Pro
 
 
 @router.get("/connect-url")
-async def connect_url(project_id: str, request: Request, user: dict = Depends(get_current_user)) -> dict:
+async def connect_url(
+    project_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+    frontend_origin: str | None = None,
+) -> dict:
+    """
+    Return a Google OAuth authorization URL for this project.
+
+    ``frontend_origin`` — the caller's ``window.location.origin`` (e.g. ``https://app.riviso.com``).
+    When provided and validated, it is baked into the OAuth state token so the callback
+    redirects back to the correct frontend host regardless of how FRONTEND_BASE_URL is set.
+    """
     st = get_legacy_storage_module()
     proj = _require_project(st=st, user=user, project_id=project_id)
     if not gsc_service.oauth_configured():
         raise HTTPException(status_code=400, detail="Google OAuth client is not configured on the backend")
     uid = (user.get("id") or "").strip()
-    state = gsc_service.make_state_token(user_id=uid, project_id=(proj.get("id") or "").strip())
+
+    # Validate the frontend origin against the same allowlist used by CORS.
+    from app.api.routes.gsc import _validate_frontend_origin
+    validated_origin = _validate_frontend_origin(frontend_origin)
+    # Also try to read it from the Origin/Referer header as a fallback.
+    if not validated_origin:
+        for header_name in ("origin", "referer"):
+            raw = (request.headers.get(header_name) or "").strip()
+            if raw:
+                validated_origin = _validate_frontend_origin(raw)
+                if validated_origin:
+                    break
+
+    state = gsc_service.make_state_token(
+        user_id=uid,
+        project_id=(proj.get("id") or "").strip(),
+        origin=validated_origin,
+    )
     redirect_uri = _public_api_url(str(request.url_for("gsc_oauth_callback")))
     url = gsc_service.build_auth_url(redirect_uri=redirect_uri, state=state)
     return {"url": url}
