@@ -4669,6 +4669,10 @@
   cursor: pointer;
   font-size: 12px;
 }
+.miniBtn:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 35%);
+  outline-offset: 2px;
+}
 
 /* ---------------------------------------------------------------------------
  * Analytics / GSC tables — high-contrast pieces designed for the dark cards
@@ -5284,6 +5288,10 @@
 .miniLinkBtn:hover:not(:disabled) {
   background: color-mix(in oklab, var(--aa-surface-card), transparent 35%);
   color: var(--aa-ink);
+}
+.miniLinkBtn:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 35%);
+  outline-offset: 2px;
 }
 .miniLinkBtn:disabled {
   opacity: 0.4;
@@ -6268,6 +6276,11 @@
 .researchSeedChipRemove:hover {
   color: var(--aa-body-strong);
 }
+.researchSeedChipRemove:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 35%);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
 
 .researchFilterBar {
   display: flex;
@@ -6298,11 +6311,22 @@
   color: var(--aa-body-strong);
   border-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
 }
+.researchFilterChip:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 35%);
+  outline-offset: 2px;
+}
 
 .researchFilterChipActive {
   color: var(--aa-body-strong);
   background: color-mix(in oklab, var(--aa-primary), transparent 88%);
   border-color: color-mix(in oklab, var(--aa-primary), transparent 45%);
+}
+
+.researchResultImportedPill {
+  color: color-mix(in oklab, var(--aa-success), #ffffff 24%);
+  background: color-mix(in oklab, var(--aa-success), transparent 84%);
+  border-color: color-mix(in oklab, var(--aa-success), transparent 60%);
+  font-weight: 800;
 }
 
 .researchResultsScroll {
@@ -7574,9 +7598,17 @@ a.secondary {
 .overviewReadinessProgressFill {
   display: block;
   height: 100%;
+  width: 100%;
+  transform-origin: left;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--aa-primary), color-mix(in oklab, var(--aa-primary), #fff 24%));
-  transition: width 0.35s ease;
+  transition: transform 0.35s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overviewReadinessProgressFill {
+    transition: none;
+  }
 }
 
 .overviewReadinessKicker {

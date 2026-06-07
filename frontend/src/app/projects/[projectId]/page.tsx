@@ -17,6 +17,7 @@ import {
 } from "@/components/bulkSchedule/clusterScheduleUtils";
 import type { BulkScheduleSeedRow } from "@/components/bulkSchedule/useBulkScheduleForm";
 import { connectionErrorMessage, isAuthError } from "@/lib/networkErrors";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 import {
   api,
   ApiError,
@@ -635,14 +636,37 @@ export default function ProjectPage() {
     title: string;
     message: string;
   } | null>(null);
+  const websiteConnectionModalTrapRef = useFocusTrap(!!websiteConnectionModal);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsVerify, setSettingsVerify] = useState<import("@/lib/api").WordpressVerifyResponse | null>(null);
   const [settingsVerifying, setSettingsVerifying] = useState(false);
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
+  const confirmDeleteProjectTrapRef = useFocusTrap(confirmDeleteProject);
   const [deletingProject, setDeletingProject] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+
+  // Shared accessible replacement for window.confirm — focus-trapped, themed,
+  // and keyboard-dismissible, so destructive/disruptive actions across every
+  // tab go through one consistent, on-brand confirmation surface.
+  const [confirmPrompt, setConfirmPrompt] = useState<{
+    title: string;
+    body: string;
+    confirmLabel: string;
+    danger?: boolean;
+    onConfirm: () => void;
+  } | null>(null);
+  const confirmPromptTrapRef = useFocusTrap(!!confirmPrompt);
+  function askConfirm(opts: { title: string; body: string; confirmLabel?: string; danger?: boolean; onConfirm: () => void }) {
+    setConfirmPrompt({
+      title: opts.title,
+      body: opts.body,
+      confirmLabel: opts.confirmLabel || "Confirm",
+      danger: opts.danger,
+      onConfirm: opts.onConfirm,
+    });
+  }
 
   async function refreshFeatureLimits() {
     try {
@@ -700,6 +724,7 @@ export default function ProjectPage() {
   const [gscConnecting, setGscConnecting] = useState(false);
   const [gscDisconnecting, setGscDisconnecting] = useState(false);
   const [gscConfirmDisconnect, setGscConfirmDisconnect] = useState(false);
+  const gscDisconnectModalTrapRef = useFocusTrap(gscConfirmDisconnect);
   const [gscMsg, setGscMsg] = useState<string | null>(null);
   const [gscOpenedFromOAuth, setGscOpenedFromOAuth] = useState(false);
   // True when the per-project GSC routes return 404 — almost always means the VPS
@@ -782,6 +807,7 @@ export default function ProjectPage() {
     message: string;
     detail?: string | null;
   } | null>(null);
+  const clusterErrorModalTrapRef = useFocusTrap(!!clusterErrorModal);
   const [researchScheduleModal, setResearchScheduleModal] = useState<
     | {
         kind: "cluster";
@@ -816,6 +842,8 @@ export default function ProjectPage() {
     step: "prompts" | "products";
     busy: boolean;
   } | null>(null);
+  const clusterGeneratePromptModalTrapRef = useFocusTrap(!!clusterGeneratePromptModal);
+  const curationPromptModalTrapRef = useFocusTrap(!!curationPromptModal);
 
   // Flatten every cluster's pillar + topics into a single validation batch so
   // we make at most one network call per cluster set (vs. one per cluster).
@@ -1010,6 +1038,7 @@ export default function ProjectPage() {
     inFileDuplicateTitles: string[];
     wouldCreateCount: number;
   } | null>(null);
+  const researchDupModalTrapRef = useFocusTrap(!!researchImportDupModal);
 
   // Prompts module state (staged edits; saved on demand)
   const [writingPrompts, setWritingPrompts] = useState<PromptListResponse | null>(null);
@@ -1037,6 +1066,7 @@ export default function ProjectPage() {
   const [linkDrafts, setLinkDrafts] = useState<LinkDraft[]>([]);
   const [linkDeleted, setLinkDeleted] = useState<Set<string>>(new Set());
   const [showLinkModal, setShowLinkModal] = useState<null | { id: string }>(null);
+  const linkModalTrapRef = useFocusTrap(!!showLinkModal);
   const [linkPhrase, setLinkPhrase] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [linkSearch, setLinkSearch] = useState("");
@@ -3741,9 +3771,16 @@ export default function ProjectPage() {
   }
 
   function markDeleteLink(id: string) {
-    if (!confirm("Delete this context link? (Will apply when you click Save changes)")) return;
-    setLinkDrafts((p) => p.filter((x) => x.id !== id));
-    setLinkDeleted((s) => new Set([...Array.from(s), id]));
+    askConfirm({
+      title: "Delete this context link?",
+      body: "This removes it from the list. The change applies once you click “Save changes”.",
+      confirmLabel: "Delete link",
+      danger: true,
+      onConfirm: () => {
+        setLinkDrafts((p) => p.filter((x) => x.id !== id));
+        setLinkDeleted((s) => new Set([...Array.from(s), id]));
+      },
+    });
   }
 
   async function saveContextLinks() {
@@ -7573,9 +7610,15 @@ export default function ProjectPage() {
                         <button
                           type="button"
                           className={styles.miniBtn}
-                          onClick={() => {
-                            if (confirm("Clear all seed keywords?")) setResearchSeeds([]);
-                          }}
+                          onClick={() =>
+                            askConfirm({
+                              title: "Clear seed keywords?",
+                              body: `This removes all ${researchSeeds.length} seed keyword${researchSeeds.length === 1 ? "" : "s"} from this project. You can add new ones at any time.`,
+                              confirmLabel: "Clear keywords",
+                              danger: true,
+                              onConfirm: () => setResearchSeeds([]),
+                            })
+                          }
                         >
                           Clear all
                         </button>
@@ -7740,11 +7783,17 @@ export default function ProjectPage() {
                     className={styles.miniBtn}
                     onClick={() => {
                       if (!researchResults.length) return;
-                      if (confirm("Clear all saved research results for this project?")) {
-                        setResearchResults([]);
-                        setResearchSelected(new Set());
-                        setResearchLatestRunId(null);
-                      }
+                      askConfirm({
+                        title: "Clear research results?",
+                        body: `This removes all ${researchResults.length} saved idea${researchResults.length === 1 ? "" : "s"} for this project. Run research again at any time to regenerate ideas.`,
+                        confirmLabel: "Clear results",
+                        danger: true,
+                        onConfirm: () => {
+                          setResearchResults([]);
+                          setResearchSelected(new Set());
+                          setResearchLatestRunId(null);
+                        },
+                      });
                     }}
                   >
                     Clear results
@@ -7775,6 +7824,7 @@ export default function ProjectPage() {
                       <th className={styles.th} style={{ width: 44 }}>
                         <input
                           type="checkbox"
+                          aria-label="Select all importable research ideas"
                           checked={(() => {
                             const sel = filteredResearchResults.filter((r) => !r.imported);
                             return sel.length > 0 && sel.every((r) => researchSelected.has(r.id));
@@ -7826,15 +7876,7 @@ export default function ProjectPage() {
                         </td>
                         <td className={styles.td}>
                           {r.imported ? (
-                            <span
-                              className={styles.pill}
-                              style={{
-                                color: "#0a7a32",
-                                borderColor: "rgba(10, 122, 50, 0.35)",
-                                background: "rgba(10, 122, 50, 0.08)",
-                                fontWeight: 800,
-                              }}
-                            >
+                            <span className={`${styles.pill} ${styles.researchResultImportedPill}`}>
                               Imported
                             </span>
                           ) : (
@@ -7852,7 +7894,7 @@ export default function ProjectPage() {
             {researchImportDupModal ? (
               <>
                 <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setResearchImportDupModal(null)} />
-                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Duplicate articles detected" style={{ maxWidth: 520 }}>
+                <div ref={researchDupModalTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Duplicate articles detected" style={{ maxWidth: 520 }}>
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Duplicate articles detected</h3>
                     <button type="button" className={styles.btnSecondary} onClick={() => setResearchImportDupModal(null)}>
@@ -8703,10 +8745,20 @@ export default function ProjectPage() {
                             <td className={`${styles.td} ${styles.tdMuted}`}>{x.url}</td>
                             <td className={styles.td}>
                               <div className={styles.row}>
-                                <button className={styles.miniBtn} type="button" onClick={() => openLinkModal(x.id)}>
+                                <button
+                                  className={styles.miniBtn}
+                                  type="button"
+                                  onClick={() => openLinkModal(x.id)}
+                                  aria-label={`Edit context link “${x.label || x.url}”`}
+                                >
                                   Edit
                                 </button>
-                                <button className={`${styles.miniBtn} ${styles.miniDanger}`} type="button" onClick={() => markDeleteLink(x.id)}>
+                                <button
+                                  className={`${styles.miniBtn} ${styles.miniDanger}`}
+                                  type="button"
+                                  onClick={() => markDeleteLink(x.id)}
+                                  aria-label={`Delete context link “${x.label || x.url}”`}
+                                >
                                   Delete
                                 </button>
                               </div>
@@ -8754,7 +8806,7 @@ export default function ProjectPage() {
             {showLinkModal ? (
               <>
                 <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setShowLinkModal(null)} />
-                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Context link">
+                <div ref={linkModalTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Context link">
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Add / edit context link</h3>
                     <button type="button" className={styles.btnSecondary} onClick={() => setShowLinkModal(null)}>
@@ -8809,7 +8861,7 @@ export default function ProjectPage() {
 
               {gscMsg ? <div className={styles.error} style={{ marginTop: 10 }}>{gscMsg}</div> : null}
               {gscOpenedFromOAuth && gscStatus?.connected ? (
-                <div className={styles.muted} style={{ marginTop: 10, fontWeight: 700, color: "var(--success-text, #2f7d32)" }}>
+                <div className={styles.muted} style={{ marginTop: 10, fontWeight: 700, color: "var(--aa-success, #16a34a)" }}>
                   Connected{gscStatus?.email ? ` (${gscStatus.email})` : ""}.
                 </div>
               ) : null}
@@ -9403,7 +9455,7 @@ export default function ProjectPage() {
                   aria-label="Close"
                   onClick={() => setGscConfirmDisconnect(false)}
                 />
-                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Disconnect Search Console">
+                <div ref={gscDisconnectModalTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Disconnect Search Console">
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Disconnect Search Console?</h3>
                   </div>
@@ -9423,7 +9475,7 @@ export default function ProjectPage() {
                     </button>
                     <button
                       type="button"
-                      className={`${styles.button} ${styles.miniDanger || ""}`}
+                      className={styles.btnDanger}
                       onClick={disconnectGscForProject}
                       disabled={gscDisconnecting}
                     >
@@ -10130,10 +10182,10 @@ export default function ProjectPage() {
                     type="button"
                     onClick={async () => {
                       try {
-                      await downloadWordpressPlugin(settings?.plugin_download_url);
+                        setError(null);
+                        await downloadWordpressPlugin(settings?.plugin_download_url);
                       } catch (e) {
-                        const msg = e instanceof Error ? e.message : "Could not download plugin.";
-                        window.alert(msg);
+                        setError(e instanceof Error ? e.message : "Could not download plugin.");
                       }
                     }}
                   >
@@ -10247,6 +10299,9 @@ export default function ProjectPage() {
                                     className={styles.chipOption}
                                     data-selected={selected}
                                     data-disabled={disabled}
+                                    aria-pressed={selected}
+                                    disabled={disabled}
+                                    title={disabled ? "Pick up to 5 tones — remove one to add another." : undefined}
                                     onClick={() => {
                                       if (selected) {
                                         setBrandTones((xs) => xs.filter((x) => x !== t.label));
@@ -10331,6 +10386,7 @@ export default function ProjectPage() {
                                   type="button"
                                   className={styles.chipOption}
                                   data-selected={selected}
+                                  aria-pressed={selected}
                                   onClick={() => {
                                     if (selected) {
                                       setAudienceList((xs) => xs.filter((x) => x !== a.label));
@@ -10355,6 +10411,7 @@ export default function ProjectPage() {
                                   className={styles.chipOption}
                                   data-selected={true}
                                   data-removable="true"
+                                  aria-label={`Remove custom audience “${custom}”`}
                                   onClick={() =>
                                     setAudienceList((xs) => xs.filter((x) => x !== custom))
                                   }
@@ -10460,6 +10517,7 @@ export default function ProjectPage() {
                                         type="button"
                                         className={styles.chipOption}
                                         data-selected={selected}
+                                        aria-pressed={selected}
                                         onClick={() => {
                                           if (selected) {
                                             setTargetCountries((xs) =>
@@ -10589,6 +10647,7 @@ export default function ProjectPage() {
                                                       type="button"
                                                       className={styles.chipOption}
                                                       data-selected={selected}
+                                                      aria-pressed={selected}
                                                       onClick={() => {
                                                         if (selected) {
                                                           setTargetCities((xs) =>
@@ -10613,6 +10672,7 @@ export default function ProjectPage() {
                                               className={styles.chipOption}
                                               data-selected={true}
                                               data-removable="true"
+                                              aria-label={`Remove custom city “${city}”`}
                                               onClick={() =>
                                                 setTargetCities((xs) =>
                                                   xs.filter((x) => x !== city),
@@ -10767,7 +10827,7 @@ export default function ProjectPage() {
 
         {confirmDeleteProject ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Confirm delete project">
-            <div className={styles.modalPanel}>
+            <div ref={confirmDeleteProjectTrapRef} className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>Delete project?</h3>
                 <button type="button" className={styles.btnSecondary} onClick={() => (deletingProject ? null : setConfirmDeleteProject(false))}>
@@ -10809,7 +10869,7 @@ export default function ProjectPage() {
             aria-modal="true"
             aria-label={clusterErrorModal.title}
           >
-            <div className={styles.modalPanel}>
+            <div ref={clusterErrorModalTrapRef} className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>{clusterErrorModal.title}</h3>
                 <button
@@ -10973,7 +11033,7 @@ export default function ProjectPage() {
             aria-modal="true"
             aria-label={websiteConnectionModal.title}
           >
-            <div className={styles.modalPanel}>
+            <div ref={websiteConnectionModalTrapRef} className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>{websiteConnectionModal.title}</h3>
                 <button
@@ -11021,7 +11081,7 @@ export default function ProjectPage() {
             aria-modal="true"
             aria-label="Generate curation articles"
           >
-            <div className={styles.modalPanel}>
+            <div ref={curationPromptModalTrapRef} className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>
                   Generate {curationPromptModal.ideaIds.length} selected idea{curationPromptModal.ideaIds.length === 1 ? "" : "s"}
@@ -11162,7 +11222,7 @@ export default function ProjectPage() {
             aria-modal="true"
             aria-label="Generate cluster articles"
           >
-            <div className={styles.modalPanel}>
+            <div ref={clusterGeneratePromptModalTrapRef} className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>
                   {clusterGeneratePromptModal.step === "products"
@@ -11348,6 +11408,51 @@ export default function ProjectPage() {
           onValidationError={setResearchScheduleError}
           onSubmit={submitResearchBulkSchedule}
         />
+
+        {confirmPrompt ? (
+          <>
+            <button
+              type="button"
+              className={styles.modalBackdrop}
+              aria-label="Close"
+              onClick={() => setConfirmPrompt(null)}
+            />
+            <div
+              ref={confirmPromptTrapRef}
+              className={styles.modalPanel}
+              role="dialog"
+              aria-modal="true"
+              aria-label={confirmPrompt.title}
+              style={{ maxWidth: 440 }}
+            >
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>{confirmPrompt.title}</h3>
+                <button type="button" className={styles.btnSecondary} onClick={() => setConfirmPrompt(null)}>
+                  Close
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                <p style={{ marginTop: 0, lineHeight: 1.55 }}>{confirmPrompt.body}</p>
+              </div>
+              <div className={styles.modalFooter}>
+                <button type="button" className={styles.btnSecondary} onClick={() => setConfirmPrompt(null)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={confirmPrompt.danger ? `${styles.miniBtn} ${styles.miniDanger}` : styles.button}
+                  onClick={() => {
+                    const run = confirmPrompt.onConfirm;
+                    setConfirmPrompt(null);
+                    run();
+                  }}
+                >
+                  {confirmPrompt.confirmLabel}
+                </button>
+              </div>
+            </div>
+          </>
+        ) : null}
           </section>
         </div>
       </main>
