@@ -41,6 +41,18 @@
   color: color-mix(in oklab, var(--aa-primary), #fff 30%);
 }
 
+/* The dashboard sidebar has far fewer nav items than the project workspace
+   sidebar, so letting it stretch to fill the column (the global default)
+   strands the account card at the very bottom with a dead gap above it.
+   Size the nav to its content and give the footer a deliberate break instead. */
+.sidebarNavCompact {
+  flex: none;
+}
+
+.sidebarFooterCompact {
+  margin-top: 32px;
+}
+
 .connectedBadge {
   display: inline-flex;
   align-items: center;
@@ -75,6 +87,14 @@
   color: var(--aa-ink);
 }
 
+.cardHeaderTitleGroup {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .cardHeaderRight {
   display: flex;
   align-items: center;
@@ -100,8 +120,9 @@
 
 .planCreateGrid {
   display: grid;
-  grid-template-columns: 180px 1fr 160px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+  align-items: start;
 }
 
 .stackGrid {
@@ -123,12 +144,14 @@
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-top: 10px;
+  align-items: start;
 }
 
 .profileGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+  align-items: start;
 }
 
 .flexBetween {

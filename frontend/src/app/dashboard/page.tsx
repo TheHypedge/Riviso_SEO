@@ -793,7 +793,7 @@ export default function DashboardPage() {
               />
               <span className={styles.sidebarBrandText}>Riviso</span>
             </Link>
-            <div className={styles.sidebarNavMain}>
+            <div className={`${styles.sidebarNavMain} ${dashStyles.sidebarNavCompact}`}>
               <div className={styles.sidebarTitle}>{isAdmin ? "Admin" : "Workspace"}</div>
               <div className={styles.navGroup}>
                 <button
@@ -835,7 +835,7 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className={styles.sidebarFooter}>
+            <div className={`${styles.sidebarFooter} ${dashStyles.sidebarFooterCompact}`}>
               <div className={styles.sidebarTitle}>Account</div>
               <div className={styles.navGroup} style={{ marginBottom: 0 }}>
                 <button
@@ -940,8 +940,28 @@ export default function DashboardPage() {
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
                   <div className={dashStyles.cardHeaderRow}>
-                    <div className={dashStyles.cardHeaderTitle}>Projects</div>
+                    <div className={dashStyles.cardHeaderTitleGroup}>
+                      <div className={dashStyles.cardHeaderTitle}>Projects</div>
+                      <div className={dashStyles.mutedCount}>
+                        {loading
+                          ? "Loading…"
+                          : `${projects.length} total${
+                              lastSyncedAt && !dataMayBeStale
+                                ? ` · synced ${new Date(lastSyncedAt).toLocaleTimeString()}`
+                                : ""
+                            }`}
+                      </div>
+                    </div>
                     <div className={dashStyles.cardHeaderRight}>
+                      <button
+                        type="button"
+                        className={styles.btnSecondary}
+                        disabled={loading || refreshing}
+                        onClick={() => void reloadProjects({ fresh: true })}
+                        title="Fetch latest projects from the server"
+                      >
+                        {loading || refreshing ? "Refreshing…" : "Refresh"}
+                      </button>
                       <button
                         className={styles.button}
                         type="button"
@@ -952,24 +972,6 @@ export default function DashboardPage() {
                       >
                         + Add project
                       </button>
-                      <button
-                        type="button"
-                        className={styles.btnSecondary}
-                        disabled={loading || refreshing}
-                        onClick={() => void reloadProjects({ fresh: true })}
-                        title="Fetch latest projects from the server"
-                      >
-                        {loading || refreshing ? "Refreshing…" : "Refresh"}
-                      </button>
-                      <div className={dashStyles.mutedCount}>
-                        {loading
-                          ? "Loading…"
-                          : `${projects.length} total${
-                              lastSyncedAt && !dataMayBeStale
-                                ? ` · synced ${new Date(lastSyncedAt).toLocaleTimeString()}`
-                                : ""
-                            }`}
-                      </div>
                     </div>
                   </div>
 
