@@ -9511,11 +9511,7 @@ export default function ProjectPage() {
                       className={styles.miniBtn}
                       onClick={() => setPerformanceSubTab(st)}
                       aria-pressed={performanceSubTab === st}
-                      style={{
-                        fontWeight: performanceSubTab === st ? 800 : 600,
-                        background: performanceSubTab === st ? "color-mix(in oklab, var(--aa-primary), transparent 80%)" : undefined,
-                        borderColor: performanceSubTab === st ? "color-mix(in oklab, var(--aa-primary), transparent 50%)" : undefined,
-                      }}
+                      style={{ fontWeight: performanceSubTab === st ? 800 : 600 }}
                     >
                       {st === "overview" ? "Overview" : "Insights"}
                     </button>
@@ -9552,17 +9548,7 @@ export default function ProjectPage() {
                     onClick={() => {
                       setAnalyticsRangePreset(d);
                     }}
-                    style={{
-                      fontWeight: analyticsRangePreset === d ? 800 : 600,
-                      background:
-                        analyticsRangePreset === d
-                          ? "color-mix(in oklab, var(--aa-primary), transparent 80%)"
-                          : undefined,
-                      borderColor:
-                        analyticsRangePreset === d
-                          ? "color-mix(in oklab, var(--aa-primary), transparent 50%)"
-                          : undefined,
-                    }}
+                    style={{ fontWeight: analyticsRangePreset === d ? 800 : 600 }}
                     disabled={analyticsBusy}
                     aria-pressed={analyticsRangePreset === d}
                   >
@@ -9573,17 +9559,7 @@ export default function ProjectPage() {
                   type="button"
                   className={styles.miniBtn}
                   onClick={() => setAnalyticsRangePreset("custom")}
-                  style={{
-                    fontWeight: analyticsRangePreset === "custom" ? 800 : 600,
-                    background:
-                      analyticsRangePreset === "custom"
-                        ? "color-mix(in oklab, var(--aa-primary), transparent 80%)"
-                        : undefined,
-                    borderColor:
-                      analyticsRangePreset === "custom"
-                        ? "color-mix(in oklab, var(--aa-primary), transparent 50%)"
-                        : undefined,
-                  }}
+                  style={{ fontWeight: analyticsRangePreset === "custom" ? 800 : 600 }}
                   disabled={analyticsBusy}
                   aria-pressed={analyticsRangePreset === "custom"}
                 >
@@ -9682,7 +9658,16 @@ export default function ProjectPage() {
                 </>
               ) : (
                 <div className={styles.muted} style={{ fontSize: 13, marginTop: 14 }}>
-                  No analytics data yet for this property.
+                  {!gscStatus?.connected || !gscStatus?.property_url ? (
+                    <>
+                      Connect Search Console to see traffic for this site.{" "}
+                      <button type="button" className={styles.miniBtn} onClick={() => goTab("tools")}>
+                        Open Tools
+                      </button>
+                    </>
+                  ) : (
+                    "No analytics data yet for this range — try a wider window, or check back once Search Console has data for this property."
+                  )}
                 </div>
               )}
 
@@ -9717,7 +9702,7 @@ export default function ProjectPage() {
                                 {stat.value >= 1000 ? `${(stat.value / 1000).toFixed(1)}K` : stat.value.toLocaleString()}
                               </div>
                               {chg !== null ? (
-                                <span style={{ fontSize: 12, fontWeight: 600, color: up ? "var(--aa-success, #22c55e)" : dn ? "var(--aa-danger, #ef4444)" : "var(--aa-muted)" }}>
+                                <span style={{ fontSize: 12, fontWeight: 600, color: up ? "var(--aa-success)" : dn ? "var(--aa-error)" : "var(--aa-muted)" }}>
                                   {up ? "↑" : dn ? "↓" : ""}{Math.abs(chg).toFixed(0)}%
                                 </span>
                               ) : null}
@@ -9737,11 +9722,7 @@ export default function ProjectPage() {
                             <button key={t} type="button" className={styles.miniBtn}
                               onClick={() => setInsightsPagesTab(t)}
                               aria-pressed={insightsPagesTab === t}
-                              style={{
-                                fontWeight: insightsPagesTab === t ? 800 : 500,
-                                background: insightsPagesTab === t ? "color-mix(in oklab, var(--aa-primary), transparent 80%)" : undefined,
-                                borderColor: insightsPagesTab === t ? "color-mix(in oklab, var(--aa-primary), transparent 50%)" : undefined,
-                              }}
+                              style={{ fontWeight: insightsPagesTab === t ? 800 : 500 }}
                             >
                               {t === "top" ? "Top" : t === "up" ? "Trending up" : "Trending down"}
                             </button>
@@ -9776,7 +9757,7 @@ export default function ProjectPage() {
                                   </div>
                                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 16, flexShrink: 0 }}>
                                     {chg !== null ? (
-                                      <span style={{ fontSize: 12, fontWeight: 600, color: up ? "var(--aa-success, #22c55e)" : dn ? "var(--aa-danger, #ef4444)" : "var(--aa-muted)" }}>
+                                      <span style={{ fontSize: 12, fontWeight: 600, color: up ? "var(--aa-success)" : dn ? "var(--aa-error)" : "var(--aa-muted)" }}>
                                         {up ? "↑" : dn ? "↓" : ""}{Math.abs(chg).toFixed(0)}%
                                       </span>
                                     ) : null}
@@ -9799,11 +9780,7 @@ export default function ProjectPage() {
                             <button key={t} type="button" className={styles.miniBtn}
                               onClick={() => setInsightsQueriesTab(t)}
                               aria-pressed={insightsQueriesTab === t}
-                              style={{
-                                fontWeight: insightsQueriesTab === t ? 800 : 500,
-                                background: insightsQueriesTab === t ? "color-mix(in oklab, var(--aa-primary), transparent 80%)" : undefined,
-                                borderColor: insightsQueriesTab === t ? "color-mix(in oklab, var(--aa-primary), transparent 50%)" : undefined,
-                              }}
+                              style={{ fontWeight: insightsQueriesTab === t ? 800 : 500 }}
                             >
                               {t === "top" ? "Top" : t === "up" ? "Trending up" : "Trending down"}
                             </button>
@@ -9832,7 +9809,7 @@ export default function ProjectPage() {
                                   <span style={{ fontSize: 13, fontWeight: 500 }}>{row.query}</span>
                                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: 16 }}>
                                     {chg !== null ? (
-                                      <span style={{ fontSize: 12, fontWeight: 600, color: up ? "var(--aa-success, #22c55e)" : dn ? "var(--aa-danger, #ef4444)" : "var(--aa-muted)" }}>
+                                      <span style={{ fontSize: 12, fontWeight: 600, color: up ? "var(--aa-success)" : dn ? "var(--aa-error)" : "var(--aa-muted)" }}>
                                         {up ? "↑" : dn ? "↓" : ""}{Math.abs(chg).toFixed(0)}%
                                       </span>
                                     ) : null}
@@ -9847,7 +9824,7 @@ export default function ProjectPage() {
                     </div>
 
                     {/* Bottom row: Countries + Traffic sources */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 14, marginTop: 14, alignItems: "start" }}>
+                    <div className={styles.analyticsInsightsGrid}>
                       {/* Top countries */}
                       <div className={`${styles.card} ${styles.cardWide}`}>
                         <h3 style={{ marginTop: 0, marginBottom: 14 }} className={styles.sectionSecondaryTitle}>Top countries</h3>
@@ -9887,9 +9864,16 @@ export default function ProjectPage() {
                   </>
                 ) : (
                   <div className={styles.muted} style={{ fontSize: 13, marginTop: 14 }}>
-                    {gscStatus?.connected && gscStatus?.property_url
-                      ? "Click Refresh to load Insights."
-                      : "Connect Search Console and link a property to see Insights."}
+                    {gscStatus?.connected && gscStatus?.property_url ? (
+                      "Click Refresh to load Insights."
+                    ) : (
+                      <>
+                        Connect Search Console and link a property to see Insights.{" "}
+                        <button type="button" className={styles.miniBtn} onClick={() => goTab("tools")}>
+                          Open Tools
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </>

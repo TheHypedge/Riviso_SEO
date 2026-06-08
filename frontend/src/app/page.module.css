@@ -4673,6 +4673,10 @@
   outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 35%);
   outline-offset: 2px;
 }
+.miniBtn[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--aa-primary), transparent 80%);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
+}
 
 /* ---------------------------------------------------------------------------
  * Analytics / GSC tables — high-contrast pieces designed for the dark cards
@@ -4717,17 +4721,17 @@
 }
 
 /* Anchor styling inside data tables — readable on either light or dark card.
- * Picks a cool accent (cyan-tinted) instead of the warm orange used for nav
- * links so URLs stand out clearly against the surface. */
+ * Ember-tinted to stay on the system's single accent rather than introducing
+ * a second hue for URLs. */
 .tableLink {
-  color: color-mix(in oklab, #60a5fa, var(--text-primary) 18%);
+  color: color-mix(in oklab, var(--aa-primary), #ffffff 22%);
   text-decoration: none;
-  border-bottom: 1px solid color-mix(in oklab, #60a5fa, transparent 65%);
+  border-bottom: 1px solid color-mix(in oklab, var(--aa-primary), transparent 50%);
   word-break: break-all;
 }
 .tableLink:hover {
-  color: #93c5fd;
-  border-bottom-color: #93c5fd;
+  color: color-mix(in oklab, var(--aa-primary), #ffffff 36%);
+  border-bottom-color: color-mix(in oklab, var(--aa-primary), transparent 28%);
 }
 
 /* Zebra-striped rows for analytics & indexing tables — improves scanability. */
@@ -4751,6 +4755,22 @@
     margin-left: 0;
     margin-right: 0;
     width: 100%;
+  }
+}
+
+.analyticsInsightsGrid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 14px;
+  margin-top: 14px;
+  align-items: start;
+}
+@media (max-width: 640px) {
+  .analyticsInsightsGrid {
+    grid-template-columns: 1fr;
+  }
+  .analyticsInsightsGrid > * {
+    min-width: 0;
   }
 }
 
@@ -4808,14 +4828,6 @@
 }
 .analyticsTopPagesTable tbody tr:hover td {
   background: color-mix(in oklab, var(--aa-primary), transparent 86%);
-}
-.analyticsTopPagesTable .tableLink {
-  color: color-mix(in oklab, var(--aa-primary), #ffffff 22%);
-  border-bottom-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
-}
-.analyticsTopPagesTable .tableLink:hover {
-  color: color-mix(in oklab, var(--aa-primary), #ffffff 36%);
-  border-bottom-color: color-mix(in oklab, var(--aa-primary), transparent 28%);
 }
 
 /* ---------------------------------------------------------------------------
