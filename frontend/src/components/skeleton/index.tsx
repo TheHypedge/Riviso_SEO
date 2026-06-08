@@ -189,3 +189,45 @@ export function InlineListSkeleton({ rows = 4 }: { rows?: number }) {
     </div>
   );
 }
+
+/**
+ * Performance & Analysis loading state — KPI tiles plus either a chart
+ * (Overview) or ranked rows (Insights), so the panel keeps its shape while
+ * Search Console data streams in instead of swapping to a bare spinner.
+ */
+export function AnalyticsPanelSkeleton({ variant = "overview" }: { variant?: "overview" | "insights" }) {
+  const tiles = variant === "overview" ? 4 : 2;
+  return (
+    <div className={sk.overviewShell} aria-busy="true" aria-label="Loading performance data">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
+        {Array.from({ length: tiles }).map((_, i) => (
+          <div key={i} className={sk.statCard}>
+            <span className={sk.boneXs} />
+            <span className={sk.boneLg} />
+          </div>
+        ))}
+      </div>
+      {variant === "overview" ? (
+        <div className={sk.panelCard}>
+          <div className={sk.chartArea}>
+            {Array.from({ length: 8 }).map((_, i) => (
+              <span key={i} className={sk.chartBar} />
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div className={sk.feedList}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className={sk.feedRow}>
+              <div className={sk.feedText}>
+                <span className={sk.boneSm} />
+                <span className={sk.boneXs} />
+              </div>
+              <span className={sk.boneXs} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

@@ -412,6 +412,11 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         "default_prompt_id": (d.get("default_prompt_id") or "").strip(),
         "image_prompts": list(d.get("image_prompts") or []),
         "default_image_prompt_id": (d.get("default_image_prompt_id") or "").strip(),
+        # Content Engine V2 — reusable structured-brief presets, the
+        # guided-form successor to the flat "writing prompts" list above.
+        # Net-new and additive; `prompts`/`default_prompt_id` are untouched.
+        "content_brief_templates": list(d.get("content_brief_templates") or []),
+        "default_content_brief_template_id": (d.get("default_content_brief_template_id") or "").strip(),
         "image_style": (d.get("image_style") or "semi_real")[:32],
         "optimize_image_prompt": bool(d.get("optimize_image_prompt", True)),
         "context_links": list(d.get("context_links") or []),
@@ -2141,6 +2146,14 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "focus_keyphrase": (d.get("focus_keyphrase") or "")[:500],
         "meta_title": (d.get("meta_title") or "")[:500],
         "meta_description": (d.get("meta_description") or "")[:2000],
+        # Content Engine V2 — structured guided-form input (see
+        # backend/app/schemas/content_brief.py). `content_brief` is the
+        # committed, generation-ready brief; `content_brief_draft` holds
+        # in-progress wizard edits separately so autosave never clobbers the
+        # last generation-ready brief. Both net-new, additive, nullable —
+        # not consumed by the live generation pipeline yet.
+        "content_brief": d.get("content_brief") if isinstance(d.get("content_brief"), dict) else None,
+        "content_brief_draft": d.get("content_brief_draft") if isinstance(d.get("content_brief_draft"), dict) else None,
         # Generated image can be a data URL (can be large). Keep it for preview + WP publish.
         "image_url": (d.get("image_url") or "")[:3_000_000],
         "generated_at": (d.get("generated_at") or "")[:64],
@@ -2234,6 +2247,8 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
             p["prompts"] = v
         elif k == "image_prompts":
             p["image_prompts"] = v
+        elif k == "content_brief_templates":
+            p["content_brief_templates"] = v
         elif k == "context_links":
             p["context_links"] = v
         elif k in ("brand_tones", "audience", "target_countries", "target_cities"):
@@ -2265,6 +2280,7 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
             "wp_category_ids",
             "default_prompt_id",
             "default_image_prompt_id",
+            "default_content_brief_template_id",
             "image_style",
             "optimize_image_prompt",
             "gsc_property_url",
@@ -2318,6 +2334,10 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
                 a["wp_post_id"] = None
         elif k in ("wp_schedule_batch_index", "wp_schedule_batch_total"):
             a[k] = str(v) if v is not None and v != "" else ""
+        elif k == "content_brief":
+            a["content_brief"] = v if isinstance(v, dict) else None
+        elif k == "content_brief_draft":
+            a["content_brief_draft"] = v if isinstance(v, dict) else None
         elif k in a or k in (
             "id",
             "project_id",
@@ -2404,6 +2424,8 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "default_prompt_id": d.get("default_prompt_id") or "",
         "image_prompts": list(d.get("image_prompts") or []),
         "default_image_prompt_id": d.get("default_image_prompt_id") or "",
+        "content_brief_templates": list(d.get("content_brief_templates") or []),
+        "default_content_brief_template_id": d.get("default_content_brief_template_id") or "",
         "image_style": d.get("image_style") or "semi_real",
         "optimize_image_prompt": bool(d.get("optimize_image_prompt", True)),
         "context_links": list(d.get("context_links") or []),
@@ -2470,6 +2492,8 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
         "focus_keyphrase": d.get("focus_keyphrase") or "",
         "meta_title": d.get("meta_title") or "",
         "meta_description": d.get("meta_description") or "",
+        "content_brief": d.get("content_brief") if isinstance(d.get("content_brief"), dict) else None,
+        "content_brief_draft": d.get("content_brief_draft") if isinstance(d.get("content_brief_draft"), dict) else None,
         "image_url": d.get("image_url") or "",
         "generated_at": d.get("generated_at") or "",
         "posted_at": d.get("posted_at") or "",

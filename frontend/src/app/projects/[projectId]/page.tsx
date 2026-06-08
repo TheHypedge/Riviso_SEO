@@ -3,12 +3,12 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
 import { ArticlesOverview } from "@/components/ArticlesOverview";
-import { ArticlesTableSkeleton, FormFieldsSkeleton, InlineListSkeleton, TextLinesSkeleton } from "@/components/skeleton";
+import { AnalyticsPanelSkeleton, ArticlesTableSkeleton, FormFieldsSkeleton, InlineListSkeleton, TextLinesSkeleton } from "@/components/skeleton";
 import { BulkScheduleForm, type BulkScheduleFormValues } from "@/components/bulkSchedule/BulkScheduleForm";
 import { BulkScheduleModal } from "@/components/bulkSchedule/BulkScheduleModal";
 import {
@@ -453,6 +453,51 @@ function AnalyticsLineChart(props: {
         </circle>
       ))}
     </svg>
+  );
+}
+
+type InsightTrendRow = {
+  key: string;
+  primary: ReactNode;
+  secondary?: ReactNode;
+  clicks: number;
+  changePct: number | null;
+};
+
+/**
+ * Ranked row list shared by the Insights "Your content" and "Queries leading
+ * to your site" panels — one label, one trend chip, one value. Keeping this in
+ * a single place means both panels read identically and a future tweak (e.g.
+ * a new trend state) only has to land once.
+ */
+function InsightTrendRows({ rows, emptyLabel }: { rows: InsightTrendRow[]; emptyLabel: string }) {
+  if (!rows.length) {
+    return <div className={styles.muted} style={{ fontSize: 13 }}>{emptyLabel}</div>;
+  }
+  return (
+    <div className={styles.analyticsRankList}>
+      {rows.map((row) => {
+        const chg = row.changePct;
+        const trend = chg === null ? "flat" : chg > 0 ? "up" : chg < 0 ? "down" : "flat";
+        return (
+          <div key={row.key} className={styles.analyticsRankRow}>
+            <div className={styles.analyticsRankLabel}>
+              {row.primary}
+              {row.secondary}
+            </div>
+            <div className={styles.analyticsRankStats}>
+              {chg !== null ? (
+                <span className={styles.analyticsTrendChip} data-trend={trend}>
+                  {trend === "up" ? "↑" : trend === "down" ? "↓" : ""}
+                  {Math.abs(chg).toFixed(0)}%
+                </span>
+              ) : null}
+              <span className={styles.analyticsRankValue}>{row.clicks.toLocaleString()}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -9490,32 +9535,46 @@ export default function ProjectPage() {
 
 
         {tab === "performance" ? (
-          <>
-            {/* Performance & Analysis — sub-tab navigation */}
+          <div className={styles.analyticsStack}>
+            {/* Header — title, connection state, sub-tab switcher, and the
+                "hero" content (KPIs + chart for Overview, headline KPIs for
+                Insights). Everything below lives in sibling cards so nothing
+                is nested inside another card. */}
             <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
-                <div>
-                  <h2 style={{ marginTop: 0, marginBottom: 4 }} className={`${styles.sectionTitle}`}>
-                    Performance & Analysis
-                  </h2>
-                  <div className={styles.muted} style={{ fontSize: 12 }}>
-                    <code style={{ fontSize: 11 }}>{(analytics?.property_url || gscStatus?.property_url || "—").toString()}</code>
-                  </div>
+              <div className={styles.analyticsHeaderRow}>
+                <div className={styles.analyticsHeaderTitle}>
+                  <h2 className={styles.sectionTitle}>Performance & Analysis</h2>
+                  {analytics?.property_url || gscStatus?.property_url ? (
+                    <div className={styles.analyticsPropertyTag}>
+                      <span className={styles.analyticsPropertyDot} aria-hidden="true" />
+                      <span>
+                        Connected to{" "}
+                        <code className={styles.analyticsPropertyCode}>
+                          {(analytics?.property_url || gscStatus?.property_url || "").toString()}
+                        </code>
+                      </span>
+                    </div>
+                  ) : (
+                    <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
+                      No Search Console property linked to this project yet.
+                    </p>
+                  )}
                 </div>
-                {/* Sub-tab switcher */}
-                <div className={styles.row} style={{ gap: 6 }}>
-                  {(["overview", "insights"] as const).map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      className={styles.miniBtn}
-                      onClick={() => setPerformanceSubTab(st)}
-                      aria-pressed={performanceSubTab === st}
-                      style={{ fontWeight: performanceSubTab === st ? 800 : 600 }}
-                    >
-                      {st === "overview" ? "Overview" : "Insights"}
-                    </button>
-                  ))}
+
+                <div className={styles.analyticsHeaderActions}>
+                  <div className={styles.segmentGroup} aria-label="Performance view">
+                    {(["overview", "insights"] as const).map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        className={styles.miniBtn}
+                        onClick={() => setPerformanceSubTab(st)}
+                        aria-pressed={performanceSubTab === st}
+                      >
+                        {st === "overview" ? "Overview" : "Insights"}
+                      </button>
+                    ))}
+                  </div>
                   {performanceSubTab === "overview" ? (
                     <button type="button" className={styles.miniBtn} onClick={() => reloadAnalytics()} disabled={analyticsBusy}>
                       {analyticsBusy ? "Refreshing…" : "Refresh"}
@@ -9529,45 +9588,41 @@ export default function ProjectPage() {
               </div>
 
               {performanceSubTab === "overview" ? <>
-              {/* Range controls: presets + custom range */}
-              <div
-                className={styles.row}
-                style={{ gap: 8, marginTop: 0, flexWrap: "wrap", alignItems: "center" }}
-              >
-                {[
-                  { d: 7, label: "7d" },
-                  { d: 28, label: "28d" },
-                  { d: 90, label: "90d" },
-                  { d: 180, label: "6m" },
-                  { d: 365, label: "12m" },
-                ].map(({ d, label }) => (
+              {/* Range toolbar: presets + custom range + active window */}
+              <div className={styles.analyticsRangeBar}>
+                <span className={styles.analyticsRangeLabel}>Date range</span>
+                <div className={styles.segmentGroup}>
+                  {[
+                    { d: 7, label: "7d" },
+                    { d: 28, label: "28d" },
+                    { d: 90, label: "90d" },
+                    { d: 180, label: "6m" },
+                    { d: 365, label: "12m" },
+                  ].map(({ d, label }) => (
+                    <button
+                      key={d}
+                      type="button"
+                      className={styles.miniBtn}
+                      onClick={() => setAnalyticsRangePreset(d)}
+                      disabled={analyticsBusy}
+                      aria-pressed={analyticsRangePreset === d}
+                    >
+                      {label}
+                    </button>
+                  ))}
                   <button
-                    key={d}
                     type="button"
                     className={styles.miniBtn}
-                    onClick={() => {
-                      setAnalyticsRangePreset(d);
-                    }}
-                    style={{ fontWeight: analyticsRangePreset === d ? 800 : 600 }}
+                    onClick={() => setAnalyticsRangePreset("custom")}
                     disabled={analyticsBusy}
-                    aria-pressed={analyticsRangePreset === d}
+                    aria-pressed={analyticsRangePreset === "custom"}
                   >
-                    {label}
+                    Custom…
                   </button>
-                ))}
-                <button
-                  type="button"
-                  className={styles.miniBtn}
-                  onClick={() => setAnalyticsRangePreset("custom")}
-                  style={{ fontWeight: analyticsRangePreset === "custom" ? 800 : 600 }}
-                  disabled={analyticsBusy}
-                  aria-pressed={analyticsRangePreset === "custom"}
-                >
-                  Custom…
-                </button>
+                </div>
 
                 {analyticsRangePreset === "custom" ? (
-                  <div className={styles.row} style={{ gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                  <div className={styles.analyticsCustomRange}>
                     <span className={styles.muted} style={{ fontSize: 12 }}>From</span>
                     <input
                       type="date"
@@ -9602,17 +9657,20 @@ export default function ProjectPage() {
                     </button>
                   </div>
                 ) : null}
+
                 {analytics?.range ? (
-                  <span className={styles.muted} style={{ fontSize: 12, marginLeft: "auto" }}>
-                    {analytics.range.start_date} → {analytics.range.end_date} ({analytics.range.days} days)
+                  <span className={styles.analyticsRangeMeta}>
+                    {analytics.range.start_date} → {analytics.range.end_date} · {analytics.range.days} days
                   </span>
                 ) : null}
               </div>
 
               {analyticsErr ? (
-                <div className={styles.error} style={{ marginTop: 14 }}>{analyticsErr}</div>
+                <div className={styles.error} style={{ marginTop: 16 }}>{analyticsErr}</div>
               ) : analyticsBusy && !analytics ? (
-                <div className={styles.muted} style={{ fontSize: 13, marginTop: 14 }}>Loading Search Console data…</div>
+                <div style={{ marginTop: 18 }}>
+                  <AnalyticsPanelSkeleton variant="overview" />
+                </div>
               ) : analytics ? (
                 <>
                   {/* KPI tiles */}
@@ -9621,7 +9679,7 @@ export default function ProjectPage() {
                       display: "grid",
                       gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
                       gap: 12,
-                      marginTop: 16,
+                      marginTop: 18,
                     }}
                   >
                     <div className={styles.kpiTile}>
@@ -9644,7 +9702,7 @@ export default function ProjectPage() {
                   </div>
 
                   {/* Chart — edge-to-edge within the card (horizontal bleed cancels card padding). */}
-                  <div className={styles.analyticsChartBleed} style={{ marginTop: 18 }}>
+                  <div className={styles.analyticsChartBleed} style={{ marginTop: 20 }}>
                     <AnalyticsLineChart series={analytics.series} markers={analytics.markers} />
                     <div className={styles.analyticsChartLegend}>
                       <span className={styles.analyticsLegendSwatch} data-series="clicks" /> Clicks
@@ -9657,233 +9715,216 @@ export default function ProjectPage() {
                   </div>
                 </>
               ) : (
-                <div className={styles.muted} style={{ fontSize: 13, marginTop: 14 }}>
+                <div className={styles.analyticsEmptyState}>
                   {!gscStatus?.connected || !gscStatus?.property_url ? (
                     <>
-                      Connect Search Console to see traffic for this site.{" "}
-                      <button type="button" className={styles.miniBtn} onClick={() => goTab("tools")}>
-                        Open Tools
+                      <p className={styles.analyticsEmptyTitle}>Connect Search Console</p>
+                      <p className={styles.analyticsEmptyBody}>
+                        Link a Search Console property to see clicks, impressions, and ranking position for this site over time.
+                      </p>
+                      <button type="button" className={styles.button} onClick={() => goTab("tools")}>
+                        Open Tools to connect
                       </button>
                     </>
                   ) : (
-                    "No analytics data yet for this range — try a wider window, or check back once Search Console has data for this property."
+                    <>
+                      <p className={styles.analyticsEmptyTitle}>No traffic in this window</p>
+                      <p className={styles.analyticsEmptyBody}>
+                        Try a wider date range, or check back once Search Console has indexed activity for this property.
+                      </p>
+                    </>
                   )}
                 </div>
               )}
+              </> : null /* end overview hero */}
 
-            </> : null /* end overview sub-tab */}
-
-            {/* ------------------------------------------------------------------ */}
-            {/* INSIGHTS sub-tab                                                    */}
-            {/* ------------------------------------------------------------------ */}
-            {performanceSubTab === "insights" ? (
-              <>
+              {performanceSubTab === "insights" ? <>
                 {insightsErr ? (
-                  <div className={styles.error} style={{ marginTop: 14 }}>{insightsErr}</div>
+                  <div className={styles.error} style={{ marginTop: 16 }}>{insightsErr}</div>
                 ) : insightsBusy && !insights ? (
-                  <div className={styles.muted} style={{ fontSize: 13, marginTop: 14 }}>Loading Insights…</div>
+                  <div style={{ marginTop: 18 }}>
+                    <AnalyticsPanelSkeleton variant="insights" />
+                  </div>
                 ) : insights ? (
-                  <>
-                    {/* Headline KPIs */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 14 }}>
-                      {([
-                        { key: "clicks" as const, label: "Clicks" },
-                        { key: "impressions" as const, label: "Impressions" },
-                      ] as const).map(({ key, label }) => {
-                        const stat = insights.headline[key];
-                        const chg = stat.change_pct;
-                        const up = chg !== null && chg > 0;
-                        const dn = chg !== null && chg < 0;
-                        return (
-                          <div key={key} className={styles.kpiTile}>
-                            <div className={styles.kpiLabel}>{label}</div>
-                            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                              <div className={styles.kpiValue}>
-                                {stat.value >= 1000 ? `${(stat.value / 1000).toFixed(1)}K` : stat.value.toLocaleString()}
-                              </div>
-                              {chg !== null ? (
-                                <span style={{ fontSize: 12, fontWeight: 600, color: up ? "var(--aa-success)" : dn ? "var(--aa-error)" : "var(--aa-muted)" }}>
-                                  {up ? "↑" : dn ? "↓" : ""}{Math.abs(chg).toFixed(0)}%
-                                </span>
-                              ) : null}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 18 }}>
+                    {([
+                      { key: "clicks" as const, label: "Clicks" },
+                      { key: "impressions" as const, label: "Impressions" },
+                    ] as const).map(({ key, label }) => {
+                      const stat = insights.headline[key];
+                      const chg = stat.change_pct;
+                      const trend = chg === null ? "flat" : chg > 0 ? "up" : chg < 0 ? "down" : "flat";
+                      return (
+                        <div key={key} className={styles.kpiTile}>
+                          <div className={styles.kpiLabel}>{label}</div>
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                            <div className={styles.kpiValue}>
+                              {stat.value >= 1000 ? `${(stat.value / 1000).toFixed(1)}K` : stat.value.toLocaleString()}
                             </div>
-                            <div className={styles.kpiSub}>vs previous {insights.period.days} days</div>
+                            {chg !== null ? (
+                              <span className={styles.analyticsTrendChip} data-trend={trend}>
+                                {trend === "up" ? "↑" : trend === "down" ? "↓" : ""}
+                                {Math.abs(chg).toFixed(0)}%
+                              </span>
+                            ) : null}
                           </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Your content */}
-                    <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-                      <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                        <h3 style={{ margin: 0 }} className={styles.sectionSecondaryTitle}>Your content</h3>
-                        <div className={styles.row} style={{ gap: 6 }}>
-                          {(["top", "up", "down"] as const).map((t) => (
-                            <button key={t} type="button" className={styles.miniBtn}
-                              onClick={() => setInsightsPagesTab(t)}
-                              aria-pressed={insightsPagesTab === t}
-                              style={{ fontWeight: insightsPagesTab === t ? 800 : 500 }}
-                            >
-                              {t === "top" ? "Top" : t === "up" ? "Trending up" : "Trending down"}
-                            </button>
-                          ))}
+                          <div className={styles.kpiSub}>vs previous {insights.period.days} days</div>
                         </div>
-                      </div>
-                      {(() => {
-                        const sorted = [...insights.pages].filter((p) =>
-                          insightsPagesTab === "top" ? true :
-                          insightsPagesTab === "up" ? (p.change_pct ?? 0) > 0 :
-                          (p.change_pct ?? 0) < 0
-                        ).sort((a, b) =>
-                          insightsPagesTab === "top" ? b.clicks - a.clicks :
-                          insightsPagesTab === "up" ? (b.change_pct ?? 0) - (a.change_pct ?? 0) :
-                          (a.change_pct ?? 0) - (b.change_pct ?? 0)
-                        ).slice(0, 5);
-                        if (!sorted.length) return <div className={styles.muted} style={{ fontSize: 13 }}>No data for this view.</div>;
-                        return (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                            {sorted.map((row) => {
-                              const slug = (() => { try { return new URL(row.page).pathname.replace(/^\/|\/$/g, "") || "/"; } catch { return row.page; } })();
-                              const chg = row.change_pct;
-                              const up = chg !== null && chg > 0;
-                              const dn = chg !== null && chg < 0;
-                              return (
-                                <div key={row.page} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--aa-hairline)" }}>
-                                  <div style={{ flex: 1, minWidth: 0 }}>
-                                    <a href={row.page} target="_blank" rel="noopener noreferrer" className={styles.tableLink} style={{ fontSize: 13, fontWeight: 500, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                      {slug}
-                                    </a>
-                                    <div className={styles.muted} style={{ fontSize: 11, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.page}</div>
-                                  </div>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 16, flexShrink: 0 }}>
-                                    {chg !== null ? (
-                                      <span style={{ fontSize: 12, fontWeight: 600, color: up ? "var(--aa-success)" : dn ? "var(--aa-error)" : "var(--aa-muted)" }}>
-                                        {up ? "↑" : dn ? "↓" : ""}{Math.abs(chg).toFixed(0)}%
-                                      </span>
-                                    ) : null}
-                                    <span style={{ fontSize: 14, fontWeight: 700, minWidth: 28, textAlign: "right" }}>{row.clicks.toLocaleString()}</span>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      })()}
-                    </div>
-
-                    {/* Queries leading to your site */}
-                    <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-                      <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                        <h3 style={{ margin: 0 }} className={styles.sectionSecondaryTitle}>Queries leading to your site</h3>
-                        <div className={styles.row} style={{ gap: 6 }}>
-                          {(["top", "up", "down"] as const).map((t) => (
-                            <button key={t} type="button" className={styles.miniBtn}
-                              onClick={() => setInsightsQueriesTab(t)}
-                              aria-pressed={insightsQueriesTab === t}
-                              style={{ fontWeight: insightsQueriesTab === t ? 800 : 500 }}
-                            >
-                              {t === "top" ? "Top" : t === "up" ? "Trending up" : "Trending down"}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      {(() => {
-                        const sorted = [...insights.queries].filter((q) =>
-                          insightsQueriesTab === "top" ? true :
-                          insightsQueriesTab === "up" ? (q.change_pct ?? 0) > 0 :
-                          (q.change_pct ?? 0) < 0
-                        ).sort((a, b) =>
-                          insightsQueriesTab === "top" ? b.clicks - a.clicks :
-                          insightsQueriesTab === "up" ? (b.change_pct ?? 0) - (a.change_pct ?? 0) :
-                          (a.change_pct ?? 0) - (b.change_pct ?? 0)
-                        ).slice(0, 5);
-                        if (!sorted.length) return <div className={styles.muted} style={{ fontSize: 13 }}>No data for this view.</div>;
-                        return (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                            {sorted.map((row) => {
-                              const chg = row.change_pct;
-                              const up = chg !== null && chg > 0;
-                              const dn = chg !== null && chg < 0;
-                              return (
-                                <div key={row.query} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--aa-hairline)" }}>
-                                  <span style={{ fontSize: 13, fontWeight: 500 }}>{row.query}</span>
-                                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: 16 }}>
-                                    {chg !== null ? (
-                                      <span style={{ fontSize: 12, fontWeight: 600, color: up ? "var(--aa-success)" : dn ? "var(--aa-error)" : "var(--aa-muted)" }}>
-                                        {up ? "↑" : dn ? "↓" : ""}{Math.abs(chg).toFixed(0)}%
-                                      </span>
-                                    ) : null}
-                                    <span style={{ fontSize: 14, fontWeight: 700, minWidth: 28, textAlign: "right" }}>{row.clicks.toLocaleString()}</span>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      })()}
-                    </div>
-
-                    {/* Bottom row: Countries + Traffic sources */}
-                    <div className={styles.analyticsInsightsGrid}>
-                      {/* Top countries */}
-                      <div className={`${styles.card} ${styles.cardWide}`}>
-                        <h3 style={{ marginTop: 0, marginBottom: 14 }} className={styles.sectionSecondaryTitle}>Top countries</h3>
-                        {insights.countries.length === 0 ? (
-                          <div className={styles.muted} style={{ fontSize: 13 }}>No country data available.</div>
-                        ) : (
-                          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                            {insights.countries.slice(0, 5).map((c) => (
-                              <div key={c.country_code} style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto", alignItems: "center", gap: 10 }}>
-                                <span style={{ fontSize: 18 }}>{c.flag || "🌐"}</span>
-                                <span style={{ fontSize: 13, fontWeight: 500 }}>{c.country_name}</span>
-                                <div style={{ width: 80, height: 6, background: "var(--aa-hairline)", borderRadius: 3, overflow: "hidden" }}>
-                                  <div style={{ width: `${c.share_pct}%`, height: "100%", background: "var(--aa-primary)", borderRadius: 3 }} />
-                                </div>
-                                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--aa-muted)", minWidth: 40, textAlign: "right" }}>{c.share_pct.toFixed(0)}%</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Additional traffic sources */}
-                      {insights.traffic_sources.length > 0 ? (
-                        <div className={`${styles.card}`} style={{ minWidth: 200 }}>
-                          <h3 style={{ marginTop: 0, marginBottom: 14 }} className={styles.sectionSecondaryTitle}>Additional traffic sources</h3>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                            {insights.traffic_sources.map((s) => (
-                              <div key={s.source} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 16 }}>
-                                <span style={{ fontSize: 13 }}>{s.source}</span>
-                                <span style={{ fontSize: 14, fontWeight: 700 }}>{s.clicks.toLocaleString()}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : null}
-                    </div>
-                  </>
+                      );
+                    })}
+                  </div>
                 ) : (
-                  <div className={styles.muted} style={{ fontSize: 13, marginTop: 14 }}>
+                  <div className={styles.analyticsEmptyState}>
                     {gscStatus?.connected && gscStatus?.property_url ? (
-                      "Click Refresh to load Insights."
+                      <>
+                        <p className={styles.analyticsEmptyTitle}>Ready when you are</p>
+                        <p className={styles.analyticsEmptyBody}>
+                          Load Insights to see headline trends, your top content, and the queries sending clicks to this site.
+                        </p>
+                        <button type="button" className={styles.button} onClick={() => void reloadInsights()}>
+                          Load Insights
+                        </button>
+                      </>
                     ) : (
                       <>
-                        Connect Search Console and link a property to see Insights.{" "}
-                        <button type="button" className={styles.miniBtn} onClick={() => goTab("tools")}>
-                          Open Tools
+                        <p className={styles.analyticsEmptyTitle}>Connect Search Console</p>
+                        <p className={styles.analyticsEmptyBody}>
+                          Link a property to see which content and queries are driving clicks to this site.
+                        </p>
+                        <button type="button" className={styles.button} onClick={() => goTab("tools")}>
+                          Open Tools to connect
                         </button>
                       </>
                     )}
                   </div>
                 )}
+              </> : null /* end insights hero */}
+            </div>{/* end header card */}
+
+            {performanceSubTab === "insights" && insights ? (
+              <>
+                {/* Your content */}
+                <div className={`${styles.card} ${styles.cardWide}`}>
+                  <div className={styles.analyticsPanelHeadRow}>
+                    <h3 className={styles.sectionSecondaryTitle}>Your content</h3>
+                    <div className={styles.segmentGroup}>
+                      {(["top", "up", "down"] as const).map((t) => (
+                        <button key={t} type="button" className={styles.miniBtn}
+                          onClick={() => setInsightsPagesTab(t)}
+                          aria-pressed={insightsPagesTab === t}
+                        >
+                          {t === "top" ? "Top" : t === "up" ? "Trending up" : "Trending down"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {(() => {
+                    const sorted = [...insights.pages].filter((p) =>
+                      insightsPagesTab === "top" ? true :
+                      insightsPagesTab === "up" ? (p.change_pct ?? 0) > 0 :
+                      (p.change_pct ?? 0) < 0
+                    ).sort((a, b) =>
+                      insightsPagesTab === "top" ? b.clicks - a.clicks :
+                      insightsPagesTab === "up" ? (b.change_pct ?? 0) - (a.change_pct ?? 0) :
+                      (a.change_pct ?? 0) - (b.change_pct ?? 0)
+                    ).slice(0, 5);
+                    const rows: InsightTrendRow[] = sorted.map((row) => {
+                      const slug = (() => { try { return new URL(row.page).pathname.replace(/^\/|\/$/g, "") || "/"; } catch { return row.page; } })();
+                      return {
+                        key: row.page,
+                        primary: (
+                          <a href={row.page} target="_blank" rel="noopener noreferrer" className={styles.tableLink} style={{ fontSize: 13, fontWeight: 500, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {slug}
+                          </a>
+                        ),
+                        secondary: (
+                          <div className={styles.muted} style={{ fontSize: 11, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.page}</div>
+                        ),
+                        clicks: row.clicks,
+                        changePct: row.change_pct,
+                      };
+                    });
+                    return <InsightTrendRows rows={rows} emptyLabel="No data for this view." />;
+                  })()}
+                </div>
+
+                {/* Queries leading to your site */}
+                <div className={`${styles.card} ${styles.cardWide}`}>
+                  <div className={styles.analyticsPanelHeadRow}>
+                    <h3 className={styles.sectionSecondaryTitle}>Queries leading to your site</h3>
+                    <div className={styles.segmentGroup}>
+                      {(["top", "up", "down"] as const).map((t) => (
+                        <button key={t} type="button" className={styles.miniBtn}
+                          onClick={() => setInsightsQueriesTab(t)}
+                          aria-pressed={insightsQueriesTab === t}
+                        >
+                          {t === "top" ? "Top" : t === "up" ? "Trending up" : "Trending down"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {(() => {
+                    const sorted = [...insights.queries].filter((q) =>
+                      insightsQueriesTab === "top" ? true :
+                      insightsQueriesTab === "up" ? (q.change_pct ?? 0) > 0 :
+                      (q.change_pct ?? 0) < 0
+                    ).sort((a, b) =>
+                      insightsQueriesTab === "top" ? b.clicks - a.clicks :
+                      insightsQueriesTab === "up" ? (b.change_pct ?? 0) - (a.change_pct ?? 0) :
+                      (a.change_pct ?? 0) - (b.change_pct ?? 0)
+                    ).slice(0, 5);
+                    const rows: InsightTrendRow[] = sorted.map((row) => ({
+                      key: row.query,
+                      primary: <span style={{ fontSize: 13, fontWeight: 500 }}>{row.query}</span>,
+                      clicks: row.clicks,
+                      changePct: row.change_pct,
+                    }));
+                    return <InsightTrendRows rows={rows} emptyLabel="No data for this view." />;
+                  })()}
+                </div>
+
+                {/* Bottom row: Countries + Traffic sources */}
+                <div className={styles.analyticsInsightsGrid}>
+                  <div className={`${styles.card} ${styles.cardWide}`}>
+                    <h3 style={{ marginTop: 0, marginBottom: 14 }} className={styles.sectionSecondaryTitle}>Top countries</h3>
+                    {insights.countries.length === 0 ? (
+                      <div className={styles.muted} style={{ fontSize: 13 }}>No country data available.</div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                        {insights.countries.slice(0, 5).map((c) => (
+                          <div key={c.country_code} className={styles.analyticsCountryRow}>
+                            <span className={styles.analyticsCountryFlag}>{c.flag || "🌐"}</span>
+                            <span className={styles.analyticsCountryName}>{c.country_name}</span>
+                            <div className={styles.analyticsCountryTrack}>
+                              <div className={styles.analyticsCountryFill} style={{ width: `${c.share_pct}%` }} />
+                            </div>
+                            <span className={styles.analyticsCountryShare}>{c.share_pct.toFixed(0)}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {insights.traffic_sources.length > 0 ? (
+                    <div className={styles.card} style={{ minWidth: 200 }}>
+                      <h3 style={{ marginTop: 0, marginBottom: 14 }} className={styles.sectionSecondaryTitle}>Additional traffic sources</h3>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {insights.traffic_sources.map((s) => (
+                          <div key={s.source} className={styles.analyticsSourceRow}>
+                            <span style={{ fontSize: 13 }}>{s.source}</span>
+                            <span style={{ fontSize: 14, fontWeight: 700 }}>{s.clicks.toLocaleString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               </>
             ) : null}
-            </div>{/* end main performance card */}
 
-            {/* Top pages table — high-contrast version */}
             {performanceSubTab === "overview" && analytics && analytics.top_pages.length > 0 ? (
-              <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-                <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Top pages by clicks</h3>
+              <div className={`${styles.card} ${styles.cardWide}`}>
+                <h3 style={{ marginTop: 0 }} className={styles.sectionSecondaryTitle}>Top pages by clicks</h3>
                 <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>
                   Up to {analytics.top_pages.length} URLs from the linked property, sorted by clicks within the active window.
                 </div>
@@ -9926,7 +9967,7 @@ export default function ProjectPage() {
                 </div>
               </div>
             ) : null}
-          </>
+          </div>
         ) : null}
 
         {tab === "project_settings" ? (

@@ -4831,6 +4831,253 @@
 }
 
 /* ---------------------------------------------------------------------------
+ * Performance & Analysis tab — layout primitives
+ *
+ * Cards stack as siblings (never nested) at a consistent rhythm; the header
+ * card carries the title, connection state, sub-tab switcher and the "hero"
+ * KPI + chart content, mirroring the same shape for both Overview and Insights.
+ * --------------------------------------------------------------------------- */
+
+.analyticsStack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+}
+
+.analyticsHeaderRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--aa-hairline-soft, var(--aa-hairline));
+}
+
+.analyticsHeaderTitle {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.analyticsHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.analyticsPropertyTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--aa-muted);
+  min-width: 0;
+}
+
+.analyticsPropertyDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--aa-success);
+  flex-shrink: 0;
+}
+
+.analyticsPropertyCode {
+  font-size: 12px;
+  font-family: var(--aa-font-mono);
+  color: var(--aa-body);
+  word-break: break-all;
+}
+
+/* Segmented group — visually unifies a row of toggle buttons (sub-tab
+ * switchers, range presets, trend filters) without inventing a new control;
+ * the buttons keep the existing .miniBtn[aria-pressed] vocabulary. */
+.segmentGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline);
+  border-radius: 12px;
+  flex-wrap: wrap;
+}
+.segmentGroup .miniBtn {
+  border: 0;
+  background: transparent;
+  border-radius: 9px;
+}
+.segmentGroup .miniBtn[aria-pressed="true"] {
+  background: var(--aa-surface-card);
+  border-color: transparent;
+  color: var(--aa-ink);
+}
+
+.analyticsRangeBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.analyticsRangeLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-muted);
+}
+
+.analyticsRangeMeta {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--aa-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.analyticsCustomRange {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Empty / disconnected states — explain what's missing and what to do next,
+ * rather than a bare "no data" line. */
+.analyticsEmptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 30px 2px 10px;
+  max-width: 50ch;
+}
+.analyticsEmptyTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--aa-ink);
+}
+.analyticsEmptyBody {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--aa-muted);
+}
+
+/* Panel header row — title + trend filter group, shared by the Insights
+ * "Your content" / "Queries" panels. */
+.analyticsPanelHeadRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* Ranked row list — shared by "Your content" and "Queries leading to your
+ * site"; pairs a label with a trend chip and a value, right-aligned. */
+.analyticsRankList {
+  display: flex;
+  flex-direction: column;
+}
+.analyticsRankRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--aa-hairline);
+}
+.analyticsRankRow:last-child {
+  border-bottom: 0;
+}
+.analyticsRankLabel {
+  flex: 1;
+  min-width: 0;
+}
+.analyticsRankStats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.analyticsRankValue {
+  font-size: 14px;
+  font-weight: 700;
+  min-width: 30px;
+  text-align: right;
+  color: var(--aa-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Trend chip — one visual language for "vs previous period" deltas, used by
+ * headline KPIs, content rows and query rows alike. */
+.analyticsTrendChip {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.analyticsTrendChip[data-trend="up"] { color: var(--aa-success); }
+.analyticsTrendChip[data-trend="down"] { color: var(--aa-error); }
+.analyticsTrendChip[data-trend="flat"] { color: var(--aa-muted); }
+
+/* Top countries — share-of-clicks rows with an inline progress track. */
+.analyticsCountryRow {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+}
+.analyticsCountryFlag {
+  font-size: 18px;
+}
+.analyticsCountryName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--aa-ink);
+}
+.analyticsCountryTrack {
+  width: 80px;
+  height: 6px;
+  background: var(--aa-hairline);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.analyticsCountryFill {
+  height: 100%;
+  background: var(--aa-primary);
+  border-radius: 3px;
+}
+.analyticsCountryShare {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-muted);
+  min-width: 40px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.analyticsSourceRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+@media (max-width: 640px) {
+  .analyticsRangeMeta {
+    margin-left: 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
  * Topical authority — Cluster planner (Feature 2)
  *
  * Designed for the dark project shell (see projectsDark.module.css). All colors
