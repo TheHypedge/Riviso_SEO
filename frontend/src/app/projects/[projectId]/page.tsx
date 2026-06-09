@@ -1152,6 +1152,7 @@ export default function ProjectPage() {
   const [linkSearch, setLinkSearch] = useState("");
   const [linkPage, setLinkPage] = useState(1);
   const [linkDuplicateConflicts, setLinkDuplicateConflicts] = useState<Array<{ phrase: string; conflict: LinkDraft }>>([]);
+  const [linkSaveAttempted, setLinkSaveAttempted] = useState(false);
 
   // Toolbar
   const [q, setQ] = useState("");
@@ -3888,12 +3889,13 @@ export default function ProjectPage() {
     }
   }
 
-  function openLinkModal(id: string) {
+  function openLinkModal(id: string, forceIsNew?: boolean) {
     const row = linkDrafts.find((x) => x.id === id);
     setLinkPhrase(row?.label || "");
     setLinkUrl(row?.url || "");
     setLinkDuplicateConflicts([]);
-    setShowLinkModal({ id, isNew: !!row?.isNew });
+    setLinkSaveAttempted(false);
+    setShowLinkModal({ id, isNew: forceIsNew ?? !!row?.isNew });
   }
 
   function checkPhrasesForDuplicates(
@@ -3933,7 +3935,7 @@ export default function ProjectPage() {
     }
     const tmpId = `new_link_${Date.now()}`;
     setLinkDrafts((p) => [{ id: tmpId, label: "", url: "", isNew: true }, ...p]);
-    openLinkModal(tmpId);
+    openLinkModal(tmpId, true);
   }
 
   function markDeleteLink(id: string) {
@@ -9255,19 +9257,22 @@ export default function ProjectPage() {
               const phraseCount = parsedPhrases.length;
               const hasConflicts = linkDuplicateConflicts.length > 0;
               const conflictPhraseSet = new Set(linkDuplicateConflicts.map((c) => c.phrase.toLowerCase()));
-              const canSave = linkPhrase.trim() && linkUrl.trim() && !hasConflicts;
+              const phraseBlank = !linkPhrase.trim();
+              const urlBlank = !linkUrl.trim();
+              const noValidPhrases = isNewLink && linkPhrase.trim() && phraseCount === 0;
+              const canSave = !phraseBlank && !urlBlank && !hasConflicts && !noValidPhrases;
               return (
                 <>
                   <button
                     type="button"
                     className={styles.modalBackdrop}
                     aria-label="Close"
-                    onClick={() => { setShowLinkModal(null); setLinkDuplicateConflicts([]); }}
+                    onClick={() => { setShowLinkModal(null); setLinkDuplicateConflicts([]); setLinkSaveAttempted(false); }}
                   />
                   <div ref={linkModalTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Context link">
                     <div className={styles.modalHead}>
                       <h3 className={styles.modalTitle}>{isNewLink ? "Add context link(s)" : "Edit context link"}</h3>
-                      <button type="button" className={styles.btnSecondary} onClick={() => { setShowLinkModal(null); setLinkDuplicateConflicts([]); }}>
+                      <button type="button" className={styles.btnSecondary} onClick={() => { setShowLinkModal(null); setLinkDuplicateConflicts([]); setLinkSaveAttempted(false); }}>
                         Close
                       </button>
                     </div>
@@ -9298,7 +9303,11 @@ export default function ProjectPage() {
                         />
                       </label>
 
-                      {isNewLink ? (
+                      {linkSaveAttempted && phraseBlank ? (
+                        <p role="alert" className={styles.error} style={{ fontSize: 13, marginTop: -4 }}>
+                          Phrase cannot be blank.
+                        </p>
+                      ) : isNewLink ? (
                         <p id="link-multi-hint" className={styles.muted} style={{ fontSize: 12, marginTop: -4 }}>
                           Separate multiple phrases with commas — each becomes its own link entry sharing the same URL.
                         </p>
@@ -9362,8 +9371,14 @@ export default function ProjectPage() {
                           value={linkUrl}
                           onChange={(e) => setLinkUrl(e.target.value)}
                           placeholder="https://example.com/page"
+                          aria-invalid={linkSaveAttempted && urlBlank}
                         />
                       </label>
+                      {linkSaveAttempted && urlBlank ? (
+                        <p role="alert" className={styles.error} style={{ fontSize: 13, marginTop: -4 }}>
+                          URL cannot be blank.
+                        </p>
+                      ) : null}
                       {isNewLink && phraseCount > 1 ? (
                         <p className={styles.muted} style={{ fontSize: 12 }}>
                           {phraseCount} link entries will be created, each with this URL. You can edit them individually afterwards.
@@ -9378,15 +9393,16 @@ export default function ProjectPage() {
                       <button
                         type="button"
                         className={styles.btnSecondary}
-                        onClick={() => { setShowLinkModal(null); setLinkDuplicateConflicts([]); }}
+                        onClick={() => { setShowLinkModal(null); setLinkDuplicateConflicts([]); setLinkSaveAttempted(false); }}
                       >
                         Cancel
                       </button>
                       <button
                         className={styles.button}
                         type="button"
-                        disabled={!canSave}
                         onClick={() => {
+                          setLinkSaveAttempted(true);
+                          if (!canSave) return;
                           const id = showLinkModal.id;
                           const freshConflicts = checkPhrasesForDuplicates(linkPhrase, id);
                           if (freshConflicts.length > 0) {
@@ -9407,6 +9423,7 @@ export default function ProjectPage() {
                             setLinkDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, label: linkPhrase.trim(), url } : d)));
                           }
                           setLinkDuplicateConflicts([]);
+                          setLinkSaveAttempted(false);
                           setShowLinkModal(null);
                         }}
                       >
