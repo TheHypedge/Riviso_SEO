@@ -144,7 +144,7 @@ class Settings(BaseSettings):
 
     # OpenAI (generation)
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
-    openai_text_model: str = "gpt-5.5"
+    openai_text_model: str = Field(default="gpt-4.1", validation_alias="OPENAI_TEXT_MODEL")
     openai_image_model: str = "gpt-image-1"
     # 1536-dim, fastest + cheapest tier; used by the cluster-validation engine
     # to detect "intent overlap" between proposed topics and existing content.

@@ -87,8 +87,11 @@ class OpenAIClient:
         # but accepted 0.6 for slightly more focused output. Skip for gpt-5 family.
         if not model.startswith("gpt-5"):
             payload["temperature"] = 0.6
-        # Long SEO articles can exceed 60s; keep below client/proxy long-operation budgets (see frontend LONG_API_TIMEOUT_MS).
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=180.0)) as client:
+        # GPT-5.x reasoning models run an internal thinking phase before the first output token.
+        # The thinking phase on a long article prompt regularly exceeds the old 180s limit.
+        # 600s gives the model up to 10 min to think + generate without a spurious ReadTimeout.
+        read_timeout = 600.0 if model.startswith("gpt-5") else 240.0
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=read_timeout)) as client:
             res = await client.post("https://api.openai.com/v1/chat/completions", headers=self._headers(), json=payload)
         res.raise_for_status()
         data = res.json()
