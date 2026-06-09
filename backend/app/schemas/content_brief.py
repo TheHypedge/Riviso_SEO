@@ -262,6 +262,51 @@ class ContentBrief(BaseModel):
     additional_instructions: str = Field(default="", max_length=20_000, description="§19 Additional Instructions")
 
 
+class PromptTemplateOptions(BaseModel):
+    """Structured options for the Prompts module's guided "Add new prompt" builder.
+
+    A deliberately *separate, slimmer* sibling of ``ContentBrief`` — not a
+    reuse — because this compiles a reusable **prompt template** rather than
+    a per-article brief. The fields that vary per article in ``ContentBrief``
+    (``primary_keyword``, ``secondary_keywords``, ``search_intent``,
+    ``content_goal``) have no place here: the compiled template represents
+    them with the standard ``{article_title}`` / ``{focus_keyphrase}`` /
+    ``{targeting_keywords}`` placeholder tokens instead (see
+    ``compile_prompt_template`` in prompt_template_builder.py), so one
+    template stays reusable across any article.
+
+    Humanization Level / Creativity Level are intentionally absent too — in
+    the V2 design they compile into post-generation orchestration parameters
+    (``HumanizationParams`` / a creativity note), not prompt text, and the
+    legacy pipeline that ``prompts[].text`` actually feeds has no hook to
+    consume either. Surfacing sliders that silently do nothing would mislead
+    the user; they belong here only once that orchestration branch lands.
+    """
+
+    content_type: ContentType = Field(description="Content type")
+    target_audience: str = Field(default="", max_length=300, description="Target audience")
+    industry: Industry = Field(default="Other / general", description="Industry")
+    tone_of_voice: ToneOfVoice = Field(description="Tone of voice")
+    writing_style: WritingStyle = Field(description="Writing style")
+    brand_personality: list[BrandPersonalityTrait] = Field(
+        default_factory=list, max_length=len(BrandPersonalityTrait.__args__),
+        description="Brand personality traits",
+    )
+    content_depth: ContentDepth = Field(description="Content depth")
+    article_length: ArticleLength = Field(description="Article length")
+    eeat_settings: list[EEATOption] = Field(
+        default_factory=list, max_length=len(EEATOption.__args__), description="EEAT additions"
+    )
+    seo_settings: list[SEOOption] = Field(
+        default_factory=list, max_length=len(SEOOption.__args__), description="SEO additions"
+    )
+    content_restrictions: list[ContentRestriction] = Field(
+        default_factory=list, max_length=len(ContentRestriction.__args__), description="Content restrictions"
+    )
+    use_website_data: bool = Field(default=True, description="Fold in brand identity / site / product context")
+    additional_instructions: str = Field(default="", max_length=20_000, description="Additional instructions")
+
+
 class ContentBriefDraft(BaseModel):
     """Loosely-typed autosave shape for in-progress wizard edits.
 

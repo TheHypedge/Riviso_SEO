@@ -2433,6 +2433,13 @@ export const api = {
     return { ok: true as const };
   },
 
+  async compileWritingPromptTemplate(projectId: string, options: Record<string, unknown>) {
+    return apiFetch<{ text: string }>(`/api/projects/${projectId}/prompts/compile-template`, {
+      method: "POST",
+      body: JSON.stringify(options),
+    });
+  },
+
   async listImagePrompts(projectId: string, opts?: ApiFetchOptions) {
     const key = projectId;
     const cached = cacheGet(_cacheImagePrompts, key, 30_000);

@@ -553,6 +553,20 @@ function ValidationBadge({ entry }: { entry?: import("@/hooks/useClusterValidati
   );
 }
 
+// ---------------------------------------------------------------------------
+// Guided prompt builder — static option sets (mirrors content_brief.py Literals)
+// ---------------------------------------------------------------------------
+const PB_CONTENT_TYPES = ["Blog Article","How-To Guide","Listicle","Product Review","Comparison Article","News Article","Case Study","Opinion / Editorial","Press Release","Landing Page Copy","Product Description","Buying Guide","Tutorial","Industry Report Summary","FAQ Page","Glossary / Definition Article","Interview-Style Article"] as const;
+const PB_INDUSTRIES = ["Legal","Healthcare","Finance","Technology / SaaS","E-commerce / Retail","Real Estate","Education","Travel & Hospitality","Marketing & Advertising","Manufacturing","Food & Beverage","Fitness & Wellness","Automotive","Non-profit","Other / general"] as const;
+const PB_TONES = ["Professional","Conversational","Friendly","Authoritative","Witty / humorous","Empathetic","Formal","Inspirational","Technical","Bold / confident"] as const;
+const PB_WRITING_STYLES = ["Narrative / storytelling","Descriptive","Persuasive","Expository / informative","Technical / instructional","Conversational / casual"] as const;
+const PB_BRAND_TRAITS = ["Innovative","Trustworthy","Bold","Friendly","Premium / luxury","Playful","Authoritative","Minimalist","Empathetic","Quirky"] as const;
+const PB_CONTENT_DEPTHS = ["Beginner-friendly overview","Standard / balanced","In-depth / comprehensive","Expert-level / technical"] as const;
+const PB_ARTICLE_LENGTHS = ["Short (600-900 words)","Medium (1,000-1,800 words)","Long (1,800-3,000 words)","Comprehensive (3,000+ words)"] as const;
+const PB_EEAT_OPTIONS = ["Add Expert Opinions","Add Statistics","Add Research","Add Case Studies","Add Real Examples","Add Industry Benchmarks","Add FAQs"] as const;
+const PB_SEO_OPTIONS = ["Generate Meta Title","Generate Meta Description","Generate FAQ Schema","Generate Article Schema","Generate Internal Linking","Optimize for Featured Snippet","Generate Social Snippets","Generate Image Alt Text"] as const;
+const PB_RESTRICTIONS = ["No competitor mentions","No pricing or cost claims","No medical, legal, or financial advice claims","No first-person voice ('I', 'we')","No emojis","No exclamation points","Avoid superlatives ('best', '#1', 'guaranteed')","No fabricated statistics, names, or citations"] as const;
+
 export default function ProjectPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -1103,6 +1117,25 @@ export default function ProjectPage() {
   const [draftName, setDraftName] = useState("");
   const [draftText, setDraftText] = useState("");
   const [draftSetDefault, setDraftSetDefault] = useState(false);
+  // Guided prompt builder state
+  const [promptBuilderMode, setPromptBuilderMode] = useState<"manual" | "guided">("manual");
+  const [builderBuilding, setBuilderBuilding] = useState(false);
+  const [builderError, setBuilderError] = useState("");
+  const [pbContentType, setPbContentType] = useState<string>("Blog Article");
+  const [pbTargetAudience, setPbTargetAudience] = useState("");
+  const [pbIndustry, setPbIndustry] = useState<string>("Other / general");
+  const [pbToneOfVoice, setPbToneOfVoice] = useState<string>("Professional");
+  const [pbWritingStyle, setPbWritingStyle] = useState<string>("Expository / informative");
+  const [pbBrandPersonality, setPbBrandPersonality] = useState<string[]>([]);
+  const [pbContentDepth, setPbContentDepth] = useState<string>("Standard / balanced");
+  const [pbArticleLength, setPbArticleLength] = useState<string>("Medium (1,000-1,800 words)");
+  const [pbEeatSettings, setPbEeatSettings] = useState<string[]>([]);
+  const [pbSeoSettings, setPbSeoSettings] = useState<string[]>([]);
+  const [pbContentRestrictions, setPbContentRestrictions] = useState<string[]>([]);
+  const [pbUseWebsiteData, setPbUseWebsiteData] = useState(true);
+  const [pbAdditionalInstructions, setPbAdditionalInstructions] = useState("");
+  // Delete confirm for prompts (replaces window.confirm)
+  const [deletePromptTarget, setDeletePromptTarget] = useState<{ kind: "writing" | "image"; id: string } | null>(null);
 
   // Context links module state (staged edits; saved on demand)
   type LinkDraft = { id: string; label: string; url: string; isNew?: boolean };
@@ -1112,6 +1145,8 @@ export default function ProjectPage() {
   const [linkDeleted, setLinkDeleted] = useState<Set<string>>(new Set());
   const [showLinkModal, setShowLinkModal] = useState<null | { id: string }>(null);
   const linkModalTrapRef = useFocusTrap(!!showLinkModal);
+  const promptModalTrapRef = useFocusTrap(!!showPromptModal);
+  const deletePromptTrapRef = useFocusTrap(!!deletePromptTarget);
   const [linkPhrase, setLinkPhrase] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [linkSearch, setLinkSearch] = useState("");
@@ -3683,6 +3718,23 @@ export default function ProjectPage() {
     }
   }
 
+  function resetBuilder() {
+    setPbContentType("Blog Article");
+    setPbTargetAudience("");
+    setPbIndustry("Other / general");
+    setPbToneOfVoice("Professional");
+    setPbWritingStyle("Expository / informative");
+    setPbBrandPersonality([]);
+    setPbContentDepth("Standard / balanced");
+    setPbArticleLength("Medium (1,000-1,800 words)");
+    setPbEeatSettings([]);
+    setPbSeoSettings([]);
+    setPbContentRestrictions([]);
+    setPbUseWebsiteData(true);
+    setPbAdditionalInstructions("");
+    setBuilderError("");
+  }
+
   function openPromptModal(kind: "writing" | "image", id: string) {
     const list = kind === "writing" ? wpDrafts : ipDrafts;
     const row = list.find((x) => x.id === id);
@@ -3690,6 +3742,13 @@ export default function ProjectPage() {
     setDraftText(row?.text || "");
     const def = kind === "writing" ? wpDefault : ipDefault;
     setDraftSetDefault(!!id && def === id);
+    // Default to guided mode for new writing prompts, manual for existing ones
+    if (kind === "writing" && !row?.text) {
+      resetBuilder();
+      setPromptBuilderMode("guided");
+    } else {
+      setPromptBuilderMode("manual");
+    }
     setShowPromptModal({ kind, id });
   }
 
@@ -3711,7 +3770,12 @@ export default function ProjectPage() {
   }
 
   function markDeletePrompt(kind: "writing" | "image", id: string) {
-    if (!confirm("Delete this prompt? (Will apply when you click Save changes)")) return;
+    setDeletePromptTarget({ kind, id });
+  }
+
+  function confirmDeletePrompt() {
+    if (!deletePromptTarget) return;
+    const { kind, id } = deletePromptTarget;
     if (kind === "writing") {
       setWpDrafts((p) => p.filter((x) => x.id !== id));
       setWpDeleted((s) => new Set([...Array.from(s), id]));
@@ -3720,6 +3784,36 @@ export default function ProjectPage() {
       setIpDrafts((p) => p.filter((x) => x.id !== id));
       setIpDeleted((s) => new Set([...Array.from(s), id]));
       if (ipDefault === id) setIpDefault("");
+    }
+    setDeletePromptTarget(null);
+  }
+
+  async function buildPromptText() {
+    if (!showPromptModal) return;
+    setBuilderBuilding(true);
+    setBuilderError("");
+    try {
+      const result = await api.compileWritingPromptTemplate(projectId, {
+        content_type: pbContentType,
+        target_audience: pbTargetAudience,
+        industry: pbIndustry,
+        tone_of_voice: pbToneOfVoice,
+        writing_style: pbWritingStyle,
+        brand_personality: pbBrandPersonality,
+        content_depth: pbContentDepth,
+        article_length: pbArticleLength,
+        eeat_settings: pbEeatSettings,
+        seo_settings: pbSeoSettings,
+        content_restrictions: pbContentRestrictions,
+        use_website_data: pbUseWebsiteData,
+        additional_instructions: pbAdditionalInstructions,
+      });
+      setDraftText(result.text);
+      setPromptBuilderMode("manual");
+    } catch (e) {
+      setBuilderError(e instanceof Error ? e.message : "Failed to build prompt text");
+    } finally {
+      setBuilderBuilding(false);
     }
   }
 
@@ -8596,114 +8690,378 @@ export default function ProjectPage() {
               const overLimit = promptCharLimit !== null && draftLen > promptCharLimit;
               const nearLimit = promptCharLimit !== null && !overLimit && draftLen >= Math.max(1, promptCharLimit - Math.max(50, Math.round(promptCharLimit * 0.05)));
               const counterColor = overLimit ? "#ff6b6b" : nearLimit ? "#f59e0b" : undefined;
+              const isWriting = showPromptModal.kind === "writing";
+              const isGuided = isWriting && promptBuilderMode === "guided";
               return (
               <>
                 <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setShowPromptModal(null)} />
-                <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Edit prompt">
+                <div
+                  ref={promptModalTrapRef}
+                  className={styles.modalPanel}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={isWriting ? "Article writing prompt" : "Image prompt"}
+                  style={isGuided ? { width: "min(820px, calc(100% - 24px))" } : undefined}
+                >
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>
-                      {showPromptModal.kind === "writing" ? "Article writing prompt" : "Image prompt"}
+                      {isWriting ? "Article writing prompt" : "Image prompt"}
                     </h3>
                     <button type="button" className={styles.btnSecondary} onClick={() => setShowPromptModal(null)}>
                       Close
                     </button>
                   </div>
-                  <div className={styles.modalBody}>
-                    <label className={styles.label}>
-                      Prompt name
-                      <input className={styles.input} value={draftName} onChange={(e) => setDraftName(e.target.value)} maxLength={200} />
-                    </label>
-                    <label className={styles.label}>
-                      Actual prompt
-                      <textarea
-                        className={styles.textarea}
-                        style={{ minHeight: 240, borderColor: overLimit ? "#ff6b6b" : undefined }}
-                        value={draftText}
-                        maxLength={promptCharLimit ?? undefined}
-                        onChange={(e) => {
-                          const next = e.target.value;
-                          if (promptCharLimit !== null && next.length > promptCharLimit) {
-                            setDraftText(next.slice(0, promptCharLimit));
-                          } else {
-                            setDraftText(next);
-                          }
-                        }}
-                      />
-                    </label>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        fontSize: 11.5,
-                        color: counterColor,
-                        marginTop: -4,
-                      }}
-                      className={counterColor ? undefined : styles.muted}
-                    >
-                      <span>
-                        {promptCharLimit !== null
-                          ? `${draftLen.toLocaleString()} / ${promptCharLimit.toLocaleString()} characters`
-                          : `${draftLen.toLocaleString()} characters`}
-                      </span>
-                      {promptCharLimit !== null ? (
-                        <span>
-                          {overLimit
-                            ? "Exceeds plan limit"
-                            : `${Math.max(0, promptCharLimit - draftLen).toLocaleString()} left`}
-                        </span>
-                      ) : null}
+
+                  {/* Mode tabs — writing prompts only */}
+                  {isWriting ? (
+                    <div className={styles.pbModeTabs} role="tablist" aria-label="Prompt creation mode" style={{ marginBottom: 14 }}>
+                      <button
+                        role="tab"
+                        aria-selected={promptBuilderMode === "manual"}
+                        className={`${styles.pbModeBtn}${promptBuilderMode === "manual" ? ` ${styles.pbModeBtnActive}` : ""}`}
+                        type="button"
+                        onClick={() => setPromptBuilderMode("manual")}
+                      >
+                        Write manually
+                      </button>
+                      <button
+                        role="tab"
+                        aria-selected={promptBuilderMode === "guided"}
+                        className={`${styles.pbModeBtn}${promptBuilderMode === "guided" ? ` ${styles.pbModeBtnActive}` : ""}`}
+                        type="button"
+                        onClick={() => { resetBuilder(); setPromptBuilderMode("guided"); }}
+                      >
+                        Build with options
+                      </button>
                     </div>
-                    {promptCharLimit !== null ? (
-                      <div className={styles.muted} style={{ fontSize: 11, lineHeight: 1.45 }}>
-                        Your {featureLimits?.plan_key || "current"} plan allows up to {promptCharLimit.toLocaleString()} characters per {showPromptModal.kind === "writing" ? "writing" : "image"} prompt.
+                  ) : null}
+
+                  {/* GUIDED BUILDER BODY */}
+                  {isGuided ? (
+                    <div className={styles.modalBody}>
+                      <label className={styles.label}>
+                        Prompt name
+                        <input className={styles.input} value={draftName} onChange={(e) => setDraftName(e.target.value)} maxLength={200} placeholder="e.g. SEO blog — conversational" />
+                      </label>
+
+                      <div className={styles.pbSections}>
+                        {/* Section 1: Content */}
+                        <div className={styles.pbSection}>
+                          <p className={styles.pbSectionTitle}>Content</p>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>Content type</span>
+                            <select className={styles.pbSelect} value={pbContentType} onChange={(e) => setPbContentType(e.target.value)}>
+                              {PB_CONTENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                            </select>
+                          </div>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>Target audience <span style={{ fontWeight: 400, color: "var(--aa-muted)" }}>(optional)</span></span>
+                            <input
+                              className={styles.pbInput}
+                              value={pbTargetAudience}
+                              onChange={(e) => setPbTargetAudience(e.target.value)}
+                              maxLength={300}
+                              placeholder="e.g. Small business owners, first-time buyers"
+                            />
+                          </div>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>Industry</span>
+                            <select className={styles.pbSelect} value={pbIndustry} onChange={(e) => setPbIndustry(e.target.value)}>
+                              {PB_INDUSTRIES.map((i) => <option key={i} value={i}>{i}</option>)}
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Section 2: Voice & Style */}
+                        <div className={styles.pbSection}>
+                          <p className={styles.pbSectionTitle}>Voice & Style</p>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>Tone of voice</span>
+                            <div className={styles.pbRadioRow} role="radiogroup" aria-label="Tone of voice">
+                              {PB_TONES.map((t) => (
+                                <label key={t} className={`${styles.pbRadioChip}${pbToneOfVoice === t ? ` ${styles.pbRadioChipSelected}` : ""}`}>
+                                  <input type="radio" name="pb-tone" value={t} checked={pbToneOfVoice === t} onChange={() => setPbToneOfVoice(t)} />
+                                  {t}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>Writing style</span>
+                            <div className={styles.pbRadioRow} role="radiogroup" aria-label="Writing style">
+                              {PB_WRITING_STYLES.map((s) => (
+                                <label key={s} className={`${styles.pbRadioChip}${pbWritingStyle === s ? ` ${styles.pbRadioChipSelected}` : ""}`}>
+                                  <input type="radio" name="pb-style" value={s} checked={pbWritingStyle === s} onChange={() => setPbWritingStyle(s)} />
+                                  {s}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>Brand personality <span style={{ fontWeight: 400, color: "var(--aa-muted)" }}>(pick any)</span></span>
+                            <div className={styles.pbCheckGrid}>
+                              {PB_BRAND_TRAITS.map((t) => (
+                                <label key={t} className={styles.pbCheckItem}>
+                                  <input
+                                    type="checkbox"
+                                    checked={pbBrandPersonality.includes(t)}
+                                    onChange={(e) => setPbBrandPersonality((prev) => e.target.checked ? [...prev, t] : prev.filter((x) => x !== t))}
+                                  />
+                                  {t}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Section 3: Depth & Length */}
+                        <div className={styles.pbSection}>
+                          <p className={styles.pbSectionTitle}>Depth & Length</p>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>Content depth</span>
+                            <div className={styles.pbRadioRow} role="radiogroup" aria-label="Content depth">
+                              {PB_CONTENT_DEPTHS.map((d) => (
+                                <label key={d} className={`${styles.pbRadioChip}${pbContentDepth === d ? ` ${styles.pbRadioChipSelected}` : ""}`}>
+                                  <input type="radio" name="pb-depth" value={d} checked={pbContentDepth === d} onChange={() => setPbContentDepth(d)} />
+                                  {d}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>Article length</span>
+                            <div className={styles.pbRadioRow} role="radiogroup" aria-label="Article length">
+                              {PB_ARTICLE_LENGTHS.map((l) => (
+                                <label key={l} className={`${styles.pbRadioChip}${pbArticleLength === l ? ` ${styles.pbRadioChipSelected}` : ""}`}>
+                                  <input type="radio" name="pb-length" value={l} checked={pbArticleLength === l} onChange={() => setPbArticleLength(l)} />
+                                  {l}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Section 4: EEAT & SEO */}
+                        <div className={styles.pbSection}>
+                          <p className={styles.pbSectionTitle}>Trust & SEO</p>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>EEAT additions <span style={{ fontWeight: 400, color: "var(--aa-muted)" }}>(pick any)</span></span>
+                            <div className={styles.pbCheckGrid}>
+                              {PB_EEAT_OPTIONS.map((o) => (
+                                <label key={o} className={styles.pbCheckItem}>
+                                  <input
+                                    type="checkbox"
+                                    checked={pbEeatSettings.includes(o)}
+                                    onChange={(e) => setPbEeatSettings((prev) => e.target.checked ? [...prev, o] : prev.filter((x) => x !== o))}
+                                  />
+                                  {o}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>SEO options <span style={{ fontWeight: 400, color: "var(--aa-muted)" }}>(pick any)</span></span>
+                            <div className={styles.pbCheckGrid}>
+                              {PB_SEO_OPTIONS.map((o) => (
+                                <label key={o} className={styles.pbCheckItem}>
+                                  <input
+                                    type="checkbox"
+                                    checked={pbSeoSettings.includes(o)}
+                                    onChange={(e) => setPbSeoSettings((prev) => e.target.checked ? [...prev, o] : prev.filter((x) => x !== o))}
+                                  />
+                                  {o}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Section 5: Guardrails & Data */}
+                        <div className={styles.pbSection}>
+                          <p className={styles.pbSectionTitle}>Guardrails & Data</p>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>Content restrictions <span style={{ fontWeight: 400, color: "var(--aa-muted)" }}>(pick any)</span></span>
+                            <div className={styles.pbCheckGrid}>
+                              {PB_RESTRICTIONS.map((r) => (
+                                <label key={r} className={styles.pbCheckItem}>
+                                  <input
+                                    type="checkbox"
+                                    checked={pbContentRestrictions.includes(r)}
+                                    onChange={(e) => setPbContentRestrictions((prev) => e.target.checked ? [...prev, r] : prev.filter((x) => x !== r))}
+                                  />
+                                  {r}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                          <label className={styles.pbToggleRow}>
+                            <input
+                              type="checkbox"
+                              checked={pbUseWebsiteData}
+                              onChange={(e) => setPbUseWebsiteData(e.target.checked)}
+                              style={{ accentColor: "var(--aa-primary)", flexShrink: 0 }}
+                            />
+                            <span className={styles.pbToggleLabel}>
+                              Use project brand &amp; site context
+                              <span className={styles.pbToggleSub}>Folds in brand identity, site description, and product context when generating</span>
+                            </span>
+                          </label>
+                          <div className={styles.pbField}>
+                            <span className={styles.pbFieldLabel}>Additional instructions <span style={{ fontWeight: 400, color: "var(--aa-muted)" }}>(optional — highest priority)</span></span>
+                            <textarea
+                              className={styles.pbTextarea}
+                              value={pbAdditionalInstructions}
+                              onChange={(e) => setPbAdditionalInstructions(e.target.value)}
+                              maxLength={20000}
+                              rows={3}
+                              placeholder="Anything specific — these instructions take priority over everything above"
+                            />
+                          </div>
+                        </div>
                       </div>
-                    ) : null}
-                    {showPromptModal.kind === "image" ? (
-                      <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
-                        Describe the visual style, composition, lighting, camera, or scene for the
-                        featured image only. Brand identity and niche context are appended automatically
-                        when the image prompt is processed.
+
+                      {builderError ? (
+                        <div role="alert" style={{ fontSize: 12.5, color: "var(--aa-error)", marginTop: 4 }}>{builderError}</div>
+                      ) : null}
+
+                      <div className={styles.modalFooter} style={{ paddingTop: 12 }}>
+                        <button type="button" className={styles.btnSecondary} onClick={() => setShowPromptModal(null)}>
+                          Cancel
+                        </button>
+                        <button
+                          className={styles.button}
+                          type="button"
+                          onClick={() => void buildPromptText()}
+                          disabled={!draftName.trim() || builderBuilding}
+                        >
+                          {builderBuilding ? "Building…" : "Build prompt text →"}
+                        </button>
                       </div>
-                    ) : null}
-                    <label className={styles.checkboxRow}>
-                      <input
-                        type="checkbox"
-                        checked={draftSetDefault}
-                        onChange={(e) => setDraftSetDefault(e.target.checked)}
-                      />
-                      Set as default for this project
-                    </label>
-                  </div>
-                  <div className={styles.modalFooter}>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setShowPromptModal(null)}>
-                      Cancel
-                    </button>
-                    <button
-                      className={styles.button}
-                      type="button"
-                      onClick={() => {
-                        const { kind, id } = showPromptModal;
-                        const text = promptCharLimit !== null ? draftText.slice(0, promptCharLimit) : draftText;
-                        if (kind === "writing") {
-                          setWpDrafts((prev) => prev.map((x) => (x.id === id ? { ...x, name: draftName, text } : x)));
-                          if (draftSetDefault) setWpDefault(id);
-                        } else {
-                          setIpDrafts((prev) => prev.map((x) => (x.id === id ? { ...x, name: draftName, text } : x)));
-                          if (draftSetDefault) setIpDefault(id);
-                        }
-                        setShowPromptModal(null);
-                      }}
-                      disabled={!draftName.trim() || !draftText.trim() || overLimit}
-                      title={overLimit ? `Prompt exceeds the ${promptCharLimit?.toLocaleString()} character limit for your plan.` : undefined}
-                    >
-                      Save prompt
-                    </button>
-                  </div>
+                    </div>
+                  ) : (
+                    /* MANUAL BODY */
+                    <div className={styles.modalBody}>
+                      <label className={styles.label}>
+                        Prompt name
+                        <input className={styles.input} value={draftName} onChange={(e) => setDraftName(e.target.value)} maxLength={200} />
+                      </label>
+                      <label className={styles.label}>
+                        {isWriting && draftText && promptBuilderMode === "manual" && draftText.includes("WRITING GUIDELINES") ? (
+                          <span>
+                            Prompt text
+                            <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: "var(--aa-primary)", background: "color-mix(in oklab, var(--aa-primary), transparent 88%)", border: "1px solid color-mix(in oklab, var(--aa-primary), transparent 60%)", borderRadius: 4, padding: "1px 6px" }}>
+                              Built from options
+                            </span>
+                          </span>
+                        ) : "Prompt text"}
+                        <textarea
+                          className={styles.textarea}
+                          style={{ minHeight: 240, borderColor: overLimit ? "#ff6b6b" : undefined }}
+                          value={draftText}
+                          maxLength={promptCharLimit ?? undefined}
+                          onChange={(e) => {
+                            const next = e.target.value;
+                            if (promptCharLimit !== null && next.length > promptCharLimit) {
+                              setDraftText(next.slice(0, promptCharLimit));
+                            } else {
+                              setDraftText(next);
+                            }
+                          }}
+                        />
+                      </label>
+                      <div
+                        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11.5, color: counterColor, marginTop: -4 }}
+                        className={counterColor ? undefined : styles.muted}
+                      >
+                        <span>
+                          {promptCharLimit !== null
+                            ? `${draftLen.toLocaleString()} / ${promptCharLimit.toLocaleString()} characters`
+                            : `${draftLen.toLocaleString()} characters`}
+                        </span>
+                        {promptCharLimit !== null ? (
+                          <span>{overLimit ? "Exceeds plan limit" : `${Math.max(0, promptCharLimit - draftLen).toLocaleString()} left`}</span>
+                        ) : null}
+                      </div>
+                      {promptCharLimit !== null ? (
+                        <div className={styles.muted} style={{ fontSize: 11, lineHeight: 1.45 }}>
+                          Your {featureLimits?.plan_key || "current"} plan allows up to {promptCharLimit.toLocaleString()} characters per {isWriting ? "writing" : "image"} prompt.
+                        </div>
+                      ) : null}
+                      {!isWriting ? (
+                        <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
+                          Describe the visual style, composition, lighting, camera, or scene for the
+                          featured image only. Brand identity and niche context are appended automatically
+                          when the image prompt is processed.
+                        </div>
+                      ) : null}
+                      <label className={styles.checkboxRow}>
+                        <input type="checkbox" checked={draftSetDefault} onChange={(e) => setDraftSetDefault(e.target.checked)} />
+                        Set as default for this project
+                      </label>
+                      <div className={styles.modalFooter} style={{ padding: 0, marginTop: 4 }}>
+                        <button type="button" className={styles.btnSecondary} onClick={() => setShowPromptModal(null)}>
+                          Cancel
+                        </button>
+                        <button
+                          className={styles.button}
+                          type="button"
+                          onClick={() => {
+                            const { kind, id } = showPromptModal;
+                            const text = promptCharLimit !== null ? draftText.slice(0, promptCharLimit) : draftText;
+                            if (kind === "writing") {
+                              setWpDrafts((prev) => prev.map((x) => (x.id === id ? { ...x, name: draftName, text } : x)));
+                              if (draftSetDefault) setWpDefault(id);
+                            } else {
+                              setIpDrafts((prev) => prev.map((x) => (x.id === id ? { ...x, name: draftName, text } : x)));
+                              if (draftSetDefault) setIpDefault(id);
+                            }
+                            setShowPromptModal(null);
+                          }}
+                          disabled={!draftName.trim() || !draftText.trim() || overLimit}
+                          title={overLimit ? `Prompt exceeds the ${promptCharLimit?.toLocaleString()} character limit for your plan.` : undefined}
+                        >
+                          Save prompt
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </>
               );
             })() : null}
+
+            {/* Delete prompt confirmation modal */}
+            {deletePromptTarget ? (
+              <>
+                <button type="button" className={styles.modalBackdrop} aria-label="Cancel" onClick={() => setDeletePromptTarget(null)} />
+                <div
+                  ref={deletePromptTrapRef}
+                  className={styles.modalPanel}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="delete-prompt-heading"
+                  aria-describedby="delete-prompt-desc"
+                  style={{ maxWidth: 420 }}
+                >
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle} id="delete-prompt-heading">Delete prompt?</h3>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <p id="delete-prompt-desc" style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>
+                      This will remove the prompt from the list. The change applies when you click <strong>Save changes</strong>.
+                    </p>
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setDeletePromptTarget(null)}>
+                      Cancel
+                    </button>
+                    <button type="button" className={`${styles.button} ${styles.btnDanger}`} onClick={confirmDeletePrompt}>
+                      Delete prompt
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
           </>
         ) : null}
 

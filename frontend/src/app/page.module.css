@@ -6906,6 +6906,233 @@
   overflow: hidden;
 }
 
+/* ---------------------------------------------------------------------------
+ * Guided prompt builder — mode tabs + option sections inside the prompt modal
+ * --------------------------------------------------------------------------- */
+
+.pbModeTabs {
+  display: flex;
+  gap: 0;
+  padding: 3px;
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 0%);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-sm);
+}
+
+.pbModeBtn {
+  flex: 1;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  background: transparent;
+  color: var(--aa-muted);
+  transition: background 0.12s ease, color 0.12s ease;
+  line-height: 1.3;
+}
+
+.pbModeBtnActive {
+  background: var(--aa-surface-card);
+  color: var(--aa-body-strong);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+}
+
+.pbSections {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--aa-hairline) transparent;
+}
+
+.pbSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pbSectionTitle {
+  margin: 0 0 2px;
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--aa-primary), #fff 20%);
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 10%);
+}
+
+.pbField {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.pbFieldLabel {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--aa-body-strong);
+  line-height: 1.3;
+}
+
+.pbSelect {
+  width: 100%;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md);
+  background: var(--aa-surface-card);
+  color: var(--aa-body-strong);
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  min-height: 36px;
+}
+
+.pbSelect:focus {
+  border-color: var(--aa-primary);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--aa-primary), transparent 85%);
+}
+
+.pbInput {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md);
+  background: var(--aa-surface-card);
+  color: var(--aa-body-strong);
+  padding: 8px 12px;
+  font-size: 13px;
+  outline: none;
+  min-height: 36px;
+}
+
+.pbInput:focus {
+  border-color: var(--aa-primary);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--aa-primary), transparent 85%);
+}
+
+.pbTextarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md);
+  background: var(--aa-surface-card);
+  color: var(--aa-body-strong);
+  padding: 9px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+.pbTextarea:focus {
+  border-color: var(--aa-primary);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--aa-primary), transparent 85%);
+}
+
+.pbCheckGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 4px;
+}
+
+.pbCheckItem {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--aa-body);
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: var(--aa-r-sm);
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 8%);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 0%);
+  transition: background 0.1s ease, border-color 0.1s ease;
+  line-height: 1.3;
+}
+
+.pbCheckItem:hover {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 45%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 95%);
+}
+
+.pbCheckItem input {
+  accent-color: var(--aa-primary);
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.pbRadioRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pbRadioChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  padding: 5px 11px;
+  border-radius: var(--aa-r-pill);
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 8%);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 0%);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, color 0.1s ease;
+  color: var(--aa-body);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.pbRadioChip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+
+.pbRadioChipSelected {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 20%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 88%);
+  color: var(--aa-body-strong);
+  font-weight: 650;
+}
+
+.pbToggleRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--aa-r-sm);
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 8%);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 0%);
+  cursor: pointer;
+}
+
+.pbToggleLabel {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aa-body-strong);
+  line-height: 1.35;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pbToggleSub {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--aa-muted);
+  line-height: 1.4;
+}
+
 /* Modal detail block (used by the cluster error popup to show per-topic causes
  * without losing the monospace-friendly formatting). */
 .clusterModalDetail {

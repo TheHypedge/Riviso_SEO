@@ -3,11 +3,14 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel
 
 from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
+from app.schemas.content_brief import PromptTemplateOptions
 from app.schemas.prompts import PromptCreate, PromptItem, PromptListResponse, PromptUpdate, SetDefaultRequest
+from app.services.ai.prompt_template_builder import compile_prompt_template
 from app.services.prompt_validation import validate_writing_prompt
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["prompts"])
@@ -209,6 +212,22 @@ async def delete_prompt(project_id: str, prompt_id: str, user: dict = Depends(ge
         updates["default_prompt_id"] = ""
     st.update_project_fields(project_id, updates)
     return Response(status_code=204)
+
+
+class _CompileTemplateResponse(BaseModel):
+    text: str
+
+
+@router.post("/prompts/compile-template", response_model=_CompileTemplateResponse)
+async def compile_writing_prompt_template(
+    project_id: str,
+    payload: PromptTemplateOptions,
+    user: dict = Depends(get_current_user),
+) -> _CompileTemplateResponse:
+    """Compile guided option selections into a reusable prompt text blob."""
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    return _CompileTemplateResponse(text=compile_prompt_template(payload))
 
 
 @router.post("/prompts/default", status_code=200)
