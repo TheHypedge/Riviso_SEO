@@ -124,6 +124,14 @@ function emitPipelineProgress(events: PipelineEvent[], active: boolean) {
   );
 }
 
+// Module-level cancel registry — lets the overlay abort any in-flight pipeline.
+let _activeCancelFn: (() => void) | null = null;
+
+export function cancelActivePipeline(): void {
+  _activeCancelFn?.();
+  _activeCancelFn = null;
+}
+
 export type ArticlePipelineMonitor = {
   start: (initialMessage?: string) => void;
   stop: () => void;
@@ -141,10 +149,22 @@ export function createArticlePipelineMonitor(projectId: string, articleId: strin
     emitPipelineProgress(events, true);
   };
 
+  const doStop = () => {
+    if (!started) return;
+    started = false;
+    _activeCancelFn = null;
+    abort.abort();
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("aa:loading", { detail: { delta: -1 } }));
+      emitPipelineProgress(events, false);
+    }, 700);
+  };
+
   return {
     start(initialMessage?: string) {
       if (started) return;
       started = true;
+      _activeCancelFn = doStop;
       events = [];
       if (initialMessage) {
         push({
@@ -164,15 +184,7 @@ export function createArticlePipelineMonitor(projectId: string, articleId: strin
         /* stream ends on disconnect or Redis offline — overlay still shows polled work */
       });
     },
-    stop() {
-      if (!started) return;
-      started = false;
-      abort.abort();
-      window.setTimeout(() => {
-        window.dispatchEvent(new CustomEvent("aa:loading", { detail: { delta: -1 } }));
-        emitPipelineProgress(events, false);
-      }, 700);
-    },
+    stop: doStop,
   };
 }
 

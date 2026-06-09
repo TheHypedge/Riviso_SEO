@@ -5,6 +5,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import {
   PIPELINE_STAGE_LABELS,
   type PipelineEvent,
+  cancelActivePipeline,
   pipelineStageProgress,
 } from "@/lib/pipelineStream";
 
@@ -80,13 +81,35 @@ export function GlobalLoadingProvider({ children }: { children: React.ReactNode 
   const latest = pipelineEvents[pipelineEvents.length - 1];
   const progressPct = pipelineStageProgress(latest?.stage);
 
+  // Smooth display progress — ticks toward progressPct at ~0.2%/100ms so the bar
+  // never looks frozen during long stages (e.g. openai_dispatch can take 10–60s).
+  const targetPctRef = useRef(0);
+  targetPctRef.current = progressPct;
+  const [displayProgress, setDisplayProgress] = useState(0);
+
+  useEffect(() => {
+    if (!showOverlay) {
+      setDisplayProgress(0);
+      return;
+    }
+    const id = window.setInterval(() => {
+      setDisplayProgress((prev) => {
+        const target = targetPctRef.current;
+        if (prev >= target) return target;
+        const step = Math.max(0.15, (target - prev) * 0.05);
+        return parseFloat(Math.min(target, prev + step).toFixed(1));
+      });
+    }, 100);
+    return () => window.clearInterval(id);
+  }, [showOverlay]);
+
   return (
     <GlobalLoadingContext.Provider value={value}>
       {children}
       <GlobalLoadingOverlay
         open={showOverlay}
         pipelineEvents={pipelineEvents}
-        progressPct={progressPct}
+        progressPct={displayProgress}
         latestStage={latest?.stage || ""}
       />
     </GlobalLoadingContext.Provider>
@@ -163,6 +186,13 @@ function GlobalLoadingOverlay({
               })}
             </div>
           </div>
+          <button
+            type="button"
+            className="aaPipelineCancelBtn"
+            onClick={cancelActivePipeline}
+          >
+            Cancel Generation
+          </button>
         </div>
       </div>
     </div>

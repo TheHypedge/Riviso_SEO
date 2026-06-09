@@ -29,14 +29,22 @@ _EEAT_LINES: dict[str, str] = {
 }
 
 _SEO_LINES: dict[str, str] = {
-    "Generate Meta Title": "Generate a meta title that accurately reflects the article's content and primary keyword.",
-    "Generate Meta Description": "Generate a meta description that accurately summarizes the article and includes the primary keyword.",
-    "Generate FAQ Schema": "Structure any FAQ content so it can be represented as FAQ schema markup (clear question/answer pairs).",
-    "Generate Article Schema": "Ensure the article has a clear headline, author voice, and structure consistent with Article schema markup.",
+    # Output-field hints — explicitly scoped to the JSON fields, never article_markdown.
+    "Generate Meta Title": (
+        "Craft the meta_title output field (separate JSON field, never inside article_markdown) "
+        "to precisely reflect the article and include the primary keyword (≤60 chars where possible)."
+    ),
+    "Generate Meta Description": (
+        "Craft the meta_description output field (separate JSON field, never inside article_markdown) "
+        "to summarize the article and include the primary keyword (≤155 chars where possible)."
+    ),
+    # Article-body structural hints.
+    "Generate FAQ Schema": "Structure any FAQ content as clearly separated question/answer pairs eligible for FAQ schema markup.",
+    "Generate Article Schema": "Ensure the article has a clear headline, defined sections, and structured layout consistent with Article schema.",
     "Generate Internal Linking": "Where natural, reference related topics in a way that supports internal linking.",
-    "Optimize for Featured Snippet": "Include at least one concise, direct-answer passage (40-60 words) positioned to be eligible for a featured snippet.",
-    "Generate Social Snippets": "Include a short summary suitable for sharing on social media, distinct from the meta description.",
-    "Generate Image Alt Text": "Write descriptive, specific alt text for any images that accurately describes their content.",
+    "Optimize for Featured Snippet": "Include at least one concise, direct-answer passage (40–60 words) near the top of a relevant section.",
+    "Generate Social Snippets": "Include a brief, shareable pull-quote callout within the article body (clearly distinct from, and never a substitute for, the meta description).",
+    "Generate Image Alt Text": "Where images would naturally appear, add a bracketed alt-text note in the format: [Image: descriptive alt text here].",
 }
 
 

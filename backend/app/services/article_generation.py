@@ -124,6 +124,19 @@ async def generate_article_bundle_safe(**kwargs: Any) -> dict:
         return await generate_article_bundle(**filtered)
 
 
+def _is_compiled_template(text: str) -> bool:
+    """True when the prompt was compiled by compile_prompt_template() (guided builder).
+
+    Compiled templates begin with "WRITING GUIDELINES" and already encode article
+    length, depth, restrictions, and SEO rules as explicit structured sections.
+    When one is present the legacy hardcoded CONTENT DEPTH REQUIREMENTS and FAQ
+    SECTION blocks in build_generation_messages() are skipped to avoid conflicting
+    with the user's explicit choices (e.g. "Short 600-900 words" vs system's
+    "comprehensive in-depth" default).
+    """
+    return (text or "").lstrip().startswith("WRITING GUIDELINES")
+
+
 def _apply_placeholders(prompt: str, *, title: str, keywords: list[str], focus_keyphrase: str) -> str:
     out = (prompt or "").replace("{article_title}", title)
     out = out.replace("{targeting_keywords}", ", ".join([k for k in keywords if k]))
@@ -183,16 +196,13 @@ def build_generation_messages(
             "- Do not invent posts, slugs, or URLs that are not in the context.\n"
         )
 
-    sys = (
-        HUMAN_FIRST_SYSTEM_ANCHOR
-        + human_guardrail
-        + "\n\nCONTENT STRUCTURE REQUIREMENTS (non-negotiable — apply to every article):\n"
-        "- Use ## H2 headings for every main section (minimum 4 H2 sections required).\n"
-        "- Use ### H3 sub-headings when a section has 2 or more distinct sub-topics.\n"
-        "- Use bullet points (- item) for any list of 3 or more parallel items, tips, or features.\n"
-        "- Use numbered lists (1. step) for sequential processes or step-by-step instructions.\n"
-        "- Use **bold** for 2–4 key terms, statistics, or critical phrases per article.\n"
-        "- Keep paragraphs to 2–4 sentences. Long text must be broken into bullets or sub-sections.\n"
+    is_compiled = _is_compiled_template(writing_prompt_text)
+
+    # CONTENT DEPTH REQUIREMENTS and FAQ SECTION are skipped for compiled templates
+    # because the template already encodes the user's explicit choices for article
+    # length, depth, and FAQ via the guided builder. Keeping both would create
+    # a "comprehensive 5-section" vs "Short 600-900 words" conflict in the prompt.
+    depth_and_faq_blocks = "" if is_compiled else (
         "\n\nCONTENT DEPTH REQUIREMENTS (apply unless the user's writing instructions specify otherwise):\n"
         "- Write a comprehensive, in-depth article. Use at least 5 H2 sections to cover the topic fully.\n"
         "- Every H2 section must contain at least 3 full paragraphs (or 2 paragraphs + 1 structured list). Do not write short, thin sections.\n"
@@ -206,7 +216,20 @@ def build_generation_messages(
         "- Each answer: 2–4 direct sentences — written to be cited by AI answer engines (Google AI Overview, Perplexity, ChatGPT).\n"
         "- At least one answer should include a short numbered process or bullet list for featured-snippet eligibility.\n"
         "- Do NOT write vague FAQ answers — each must be specific, factual, and standalone-readable.\n"
-        "\nUSER PROMPT AUTHORITY: The writing instructions in the user message are the HIGHEST PRIORITY "
+    )
+
+    sys = (
+        HUMAN_FIRST_SYSTEM_ANCHOR
+        + human_guardrail
+        + "\n\nCONTENT STRUCTURE REQUIREMENTS (non-negotiable — apply to every article):\n"
+        "- Use ## H2 headings for every main section (minimum 4 H2 sections required).\n"
+        "- Use ### H3 sub-headings when a section has 2 or more distinct sub-topics.\n"
+        "- Use bullet points (- item) for any list of 3 or more parallel items, tips, or features.\n"
+        "- Use numbered lists (1. step) for sequential processes or step-by-step instructions.\n"
+        "- Use **bold** for 2–4 key terms, statistics, or critical phrases per article.\n"
+        "- Keep paragraphs to 2–4 sentences. Long text must be broken into bullets or sub-sections.\n"
+        + depth_and_faq_blocks
+        + "\nUSER PROMPT AUTHORITY: The writing instructions in the user message are the HIGHEST PRIORITY "
         "directive for this article. Follow them precisely and completely — they define the article's "
         "angle, tone, structure, depth, and focus. All other system requirements (including depth and FAQ) "
         "are subordinate to the user's prompt and should be adjusted or skipped if the user instructs it.\n"
