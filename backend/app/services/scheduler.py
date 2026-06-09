@@ -195,7 +195,10 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
     aid = (art.get("id") or "").strip()
     if not aid:
         raise RuntimeError("Article not found")
-    if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
+    if is_shopify_project(proj):
+        if not (proj.get("shopify_access_token") or "").strip():
+            raise RuntimeError("Shopify store is not connected for this project. Connect Shopify in Project Settings before scheduled generation.")
+    elif (proj.get("wp_verified_status") or "").strip().lower() != "connected":
         raise RuntimeError("Website is not connected for this project. Connect and verify WordPress before scheduled generation.")
 
     pid = (proj.get("id") or job.get("project_id") or "").strip()
@@ -460,6 +463,128 @@ async def publish_article_to_wordpress(*, st=None, proj: dict, article: dict, po
     return created
 
 
+async def publish_article_to_shopify_scheduled(
+    *,
+    st=None,
+    proj: dict,
+    article: dict,
+    blog_id: int | None = None,
+    publish_now: bool = False,
+) -> dict:
+    """Publish (or update) a scheduled article to a Shopify blog."""
+    from app.services.shopify_client import ShopifyClient
+    from app.services.shopify_article_image import (
+        build_shopify_article_image_payload,
+        shopify_article_has_featured_image,
+    )
+    from app.api.routes.articles import _article_markdown_to_html
+
+    shop = (proj.get("shopify_shop") or "").strip()
+    token = (proj.get("shopify_access_token") or "").strip()
+    if not shop or not token:
+        raise RuntimeError("Shopify store is not connected for this project.")
+
+    title = (article.get("title") or "").strip()
+    body = (article.get("article") or "").strip()
+    if not title or not body:
+        raise RuntimeError("Article is not ready to post (missing title/content)")
+
+    client = ShopifyClient(shop=shop, access_token=token)
+
+    # Resolve blog_id: caller → stored on article → first catalog blog → live API.
+    if blog_id is None:
+        stored_bid = article.get("shopify_blog_id")
+        if stored_bid and str(stored_bid).strip().isdigit():
+            blog_id = int(str(stored_bid).strip())
+    if blog_id is None:
+        catalog = proj.get("shopify_catalog") if isinstance(proj.get("shopify_catalog"), dict) else {}
+        blogs = catalog.get("blogs") if isinstance(catalog.get("blogs"), list) else []
+        first = next((b for b in blogs if isinstance(b, dict) and b.get("id")), None)
+        if first and str(first.get("id")).strip().isdigit():
+            blog_id = int(str(first.get("id")).strip())
+    if blog_id is None:
+        try:
+            live_blogs = await client.get_paginated("/blogs.json", resource_key="blogs", max_pages=1)
+            first_live = next((b for b in live_blogs if isinstance(b, dict) and b.get("id")), None)
+            if first_live and str(first_live.get("id")).strip().isdigit():
+                blog_id = int(str(first_live.get("id")).strip())
+        except Exception:
+            pass
+    if blog_id is None:
+        raise RuntimeError(
+            "No Shopify blog found. Add a blog in Shopify Admin → Online Store → Blog posts "
+            "and sync the catalog before scheduling."
+        )
+
+    content_html = _article_markdown_to_html(body)
+    tags = ", ".join([str(x).strip() for x in (article.get("keywords") or []) if str(x).strip()][:20])
+    image_payload = await build_shopify_article_image_payload(article, alt=title)
+
+    article_body: dict = {
+        "title": title[:255],
+        "body_html": content_html,
+        "tags": tags,
+        "published": publish_now,
+    }
+    if image_payload:
+        article_body["image"] = image_payload
+
+    # If this article already has a Shopify ID, update it instead of creating a duplicate.
+    existing_id_raw = article.get("shopify_article_id")
+    existing_id: int | None = int(str(existing_id_raw).strip()) if existing_id_raw and str(existing_id_raw).strip().isdigit() else None
+    existing_blog = article.get("shopify_blog_id")
+    effective_blog_id = int(str(existing_blog).strip()) if existing_blog and str(existing_blog).strip().isdigit() else blog_id
+
+    if existing_id:
+        response = await client.put_json(
+            f"/blogs/{effective_blog_id}/articles/{existing_id}.json",
+            payload={"article": article_body},
+        )
+    else:
+        response = await client.post_json(
+            f"/blogs/{blog_id}/articles.json",
+            payload={"article": article_body},
+        )
+
+    art = response.get("article") if isinstance(response, dict) else None
+    if not isinstance(art, dict):
+        raise RuntimeError("Shopify publish failed: invalid response from Shopify API")
+
+    shopify_article_id = art.get("id") or existing_id
+    if image_payload and shopify_article_id and not shopify_article_has_featured_image(art):
+        try:
+            updated = await client.put_json(
+                f"/blogs/{effective_blog_id}/articles/{shopify_article_id}.json",
+                payload={"article": {"image": image_payload}},
+            )
+            art_upd = updated.get("article") if isinstance(updated, dict) else None
+            if isinstance(art_upd, dict):
+                art = art_upd
+        except Exception:
+            log.warning("Scheduler Shopify: featured image PUT failed article_id=%s", article.get("id"), exc_info=True)
+
+    handle = (art.get("handle") or "").strip()
+    catalog2 = proj.get("shopify_catalog") if isinstance(proj.get("shopify_catalog"), dict) else {}
+    blogs2 = catalog2.get("blogs") if isinstance(catalog2.get("blogs"), list) else []
+    blog_handle = next(
+        ((b.get("handle") or "") for b in blogs2 if isinstance(b, dict) and str(b.get("id") or "") == str(effective_blog_id or blog_id)),
+        "",
+    )
+    base = (proj.get("website_url") or "").strip().rstrip("/") or f"https://{shop}"
+    if not base.startswith("http"):
+        base = f"https://{shop}"
+    link = f"{base}/blogs/{blog_handle}/{handle}" if handle and blog_handle else (
+        f"https://{shop}/admin/blogs/{blog_id}/articles/{shopify_article_id}" if shopify_article_id else ""
+    )
+
+    return {
+        "shopify_article_id": shopify_article_id,
+        "shopify_blog_id": effective_blog_id or blog_id,
+        "shopify_link": link,
+        "status": "published" if publish_now else "draft",
+    }
+
+
 def _parse_job_category_ids(job: dict) -> list[int]:
     cats: list[int] = []
     raw = (job.get("category_ids") or "").strip()
@@ -569,27 +694,51 @@ async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_c
     if not art:
         raise RuntimeError("Article not found")
 
-    existing_wp_post_id = str(art.get("wp_post_id") or "").strip()
-    if existing_wp_post_id:
-        wp_link = str(art.get("wp_link") or job.get("wp_link") or "")[:2000]
-        await _storage(
-            st.update_scheduled_job_fields,
-            jid,
-            {
-                "state": "posted",
-                "wp_post_id": existing_wp_post_id,
-                "wp_link": wp_link,
-                "last_error": "",
-                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            },
-        )
-        return {
-            "ok": True,
-            "status": "posted",
-            "message": "Article is already on WordPress.",
-            "wp_post_id": int(existing_wp_post_id) if existing_wp_post_id.isdigit() else existing_wp_post_id,
-            "wp_link": wp_link or None,
-        }
+    _is_shopify = is_shopify_project(proj)
+    if _is_shopify:
+        existing_shopify_id = str(art.get("shopify_article_id") or "").strip()
+        if existing_shopify_id:
+            shopify_link = str(art.get("shopify_link") or job.get("shopify_link") or "")[:2000]
+            await _storage(
+                st.update_scheduled_job_fields,
+                jid,
+                {
+                    "state": "posted",
+                    "shopify_article_id": existing_shopify_id,
+                    "shopify_link": shopify_link,
+                    "last_error": "",
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+            return {
+                "ok": True,
+                "status": "posted",
+                "message": "Article is already on Shopify.",
+                "shopify_article_id": int(existing_shopify_id) if existing_shopify_id.isdigit() else existing_shopify_id,
+                "shopify_link": shopify_link or None,
+            }
+    else:
+        existing_wp_post_id = str(art.get("wp_post_id") or "").strip()
+        if existing_wp_post_id:
+            wp_link = str(art.get("wp_link") or job.get("wp_link") or "")[:2000]
+            await _storage(
+                st.update_scheduled_job_fields,
+                jid,
+                {
+                    "state": "posted",
+                    "wp_post_id": existing_wp_post_id,
+                    "wp_link": wp_link,
+                    "last_error": "",
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+            return {
+                "ok": True,
+                "status": "posted",
+                "message": "Article is already on WordPress.",
+                "wp_post_id": int(existing_wp_post_id) if existing_wp_post_id.isdigit() else existing_wp_post_id,
+                "wp_link": wp_link or None,
+            }
 
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     if not already_claimed:
@@ -621,27 +770,50 @@ async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_c
             if reloaded:
                 art = reloaded
 
-        post_prep_wp_post_id = str(art.get("wp_post_id") or "").strip()
-        if post_prep_wp_post_id:
-            wp_link = str(art.get("wp_link") or "")[:2000]
-            await _storage(
-                st.update_scheduled_job_fields,
-                jid,
-                {
-                    "state": "posted",
-                    "wp_post_id": post_prep_wp_post_id,
-                    "wp_link": wp_link,
-                    "last_error": "",
-                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                },
-            )
-            return {
-                "ok": True,
-                "status": "posted",
-                "message": "Article is already on WordPress.",
-                "wp_post_id": int(post_prep_wp_post_id) if post_prep_wp_post_id.isdigit() else post_prep_wp_post_id,
-                "wp_link": wp_link or None,
-            }
+        if _is_shopify:
+            post_prep_shopify_id = str(art.get("shopify_article_id") or "").strip()
+            if post_prep_shopify_id:
+                shopify_link = str(art.get("shopify_link") or "")[:2000]
+                await _storage(
+                    st.update_scheduled_job_fields,
+                    jid,
+                    {
+                        "state": "posted",
+                        "shopify_article_id": post_prep_shopify_id,
+                        "shopify_link": shopify_link,
+                        "last_error": "",
+                        "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    },
+                )
+                return {
+                    "ok": True,
+                    "status": "posted",
+                    "message": "Article is already on Shopify.",
+                    "shopify_article_id": int(post_prep_shopify_id) if post_prep_shopify_id.isdigit() else post_prep_shopify_id,
+                    "shopify_link": shopify_link or None,
+                }
+        else:
+            post_prep_wp_post_id = str(art.get("wp_post_id") or "").strip()
+            if post_prep_wp_post_id:
+                wp_link = str(art.get("wp_link") or "")[:2000]
+                await _storage(
+                    st.update_scheduled_job_fields,
+                    jid,
+                    {
+                        "state": "posted",
+                        "wp_post_id": post_prep_wp_post_id,
+                        "wp_link": wp_link,
+                        "last_error": "",
+                        "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                    },
+                )
+                return {
+                    "ok": True,
+                    "status": "posted",
+                    "message": "Article is already on WordPress.",
+                    "wp_post_id": int(post_prep_wp_post_id) if post_prep_wp_post_id.isdigit() else post_prep_wp_post_id,
+                    "wp_link": wp_link or None,
+                }
 
         title = (art.get("title") or "").strip()
         body = (art.get("article") or "").strip()
@@ -649,77 +821,126 @@ async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_c
             raise RuntimeError("Article generation did not finish — title or content is still missing.")
 
         await publish_pipeline_status(aid, MSG_PUBLISH_DISPATCH, STAGE_PUBLISH_DISPATCH)
-        cats = _parse_job_category_ids(job)
-        created = await publish_article_to_wordpress(
-            st=st,
-            proj=proj,
-            article=art,
-            post_type=(job.get("post_type") or "posts"),
-            wp_status=(job.get("wp_status") or "draft"),
-            category_ids=cats,
-        )
 
-        wp_post_id = created.get("id")
-        wp_link = created.get("link") or ""
-        created_wp_status = _normalize_wp_rest_status_local(created.get("status")) or _normalize_wp_rest_status_local(
-            job.get("wp_status")
-        )
-        await _storage(
-            st.update_scheduled_job_fields,
-            jid,
-            {
-                "state": "posted",
-                "wp_post_id": wp_post_id,
-                "wp_link": wp_link,
-                "last_error": "",
-                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            },
-        )
-        await _storage(
-            st.update_article_fields,
-            aid,
-            {
-                "wp_post_id": wp_post_id,
-                "wp_link": wp_link,
-                "wp_rest_base": (job.get("post_type") or "posts"),
-                "wp_last_wp_status": created_wp_status or "draft",
-                "wp_scheduled_at": "",
-                "wp_schedule_error": "",
-                "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                if created_wp_status == "publish"
-                else (art.get("posted_at") or ""),
-                "status": "published" if created_wp_status == "publish" else (art.get("status") or "draft"),
-            },
-        )
-
-        try:
-            await maybe_request_url_inspection(
+        if _is_shopify:
+            shopify_result = await publish_article_to_shopify_scheduled(
                 st=st,
                 proj=proj,
-                live_url=str(wp_link or ""),
-                wp_status=created_wp_status or "",
-                article_id=aid,
+                article=art,
+                publish_now=(job.get("wp_status") or "draft") == "publish",
             )
-        except Exception:
-            pass
-        try:
-            if created_wp_status == "publish":
-                wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
-                asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
-        except Exception:
-            pass
+            shopify_article_id = shopify_result.get("shopify_article_id")
+            shopify_link = shopify_result.get("shopify_link") or ""
+            shopify_pub_status = shopify_result.get("status") or "draft"
+            await _storage(
+                st.update_scheduled_job_fields,
+                jid,
+                {
+                    "state": "posted",
+                    "shopify_article_id": shopify_article_id,
+                    "shopify_link": shopify_link,
+                    "last_error": "",
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+            await _storage(
+                st.update_article_fields,
+                aid,
+                {
+                    "shopify_article_id": shopify_article_id,
+                    "shopify_blog_id": shopify_result.get("shopify_blog_id"),
+                    "shopify_link": shopify_link,
+                    "shopify_scheduled_at": "",
+                    "shopify_schedule_error": "",
+                    "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                    if shopify_pub_status == "published"
+                    else (art.get("posted_at") or ""),
+                    "status": shopify_pub_status,
+                },
+            )
+            msg = "Published to Shopify." if shopify_pub_status == "published" else "Saved to Shopify as draft."
+            if needs_generation:
+                msg = f"Generated content and {msg[0].lower()}{msg[1:]}"
+            await publish_pipeline_status(aid, MSG_PUBLISH_COMPLETE, STAGE_COMPLETE)
+            return {
+                "ok": True,
+                "status": "posted",
+                "message": msg,
+                "shopify_article_id": shopify_article_id,
+                "shopify_link": shopify_link or None,
+            }
+        else:
+            cats = _parse_job_category_ids(job)
+            created = await publish_article_to_wordpress(
+                st=st,
+                proj=proj,
+                article=art,
+                post_type=(job.get("post_type") or "posts"),
+                wp_status=(job.get("wp_status") or "draft"),
+                category_ids=cats,
+            )
 
-        msg = "Published to WordPress." if created_wp_status == "publish" else "Saved to WordPress as draft."
-        if needs_generation:
-            msg = f"Generated content and {msg[0].lower()}{msg[1:]}"
-        await publish_pipeline_status(aid, MSG_PUBLISH_COMPLETE, STAGE_COMPLETE)
-        return {
-            "ok": True,
-            "status": "posted",
-            "message": msg,
-            "wp_post_id": wp_post_id,
-            "wp_link": wp_link or None,
-        }
+            wp_post_id = created.get("id")
+            wp_link = created.get("link") or ""
+            created_wp_status = _normalize_wp_rest_status_local(created.get("status")) or _normalize_wp_rest_status_local(
+                job.get("wp_status")
+            )
+            await _storage(
+                st.update_scheduled_job_fields,
+                jid,
+                {
+                    "state": "posted",
+                    "wp_post_id": wp_post_id,
+                    "wp_link": wp_link,
+                    "last_error": "",
+                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                },
+            )
+            await _storage(
+                st.update_article_fields,
+                aid,
+                {
+                    "wp_post_id": wp_post_id,
+                    "wp_link": wp_link,
+                    "wp_rest_base": (job.get("post_type") or "posts"),
+                    "wp_last_wp_status": created_wp_status or "draft",
+                    "wp_scheduled_at": "",
+                    "wp_schedule_error": "",
+                    "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                    if created_wp_status == "publish"
+                    else (art.get("posted_at") or ""),
+                    "status": "published" if created_wp_status == "publish" else (art.get("status") or "draft"),
+                },
+            )
+
+            try:
+                await maybe_request_url_inspection(
+                    st=st,
+                    proj=proj,
+                    live_url=str(wp_link or ""),
+                    wp_status=created_wp_status or "",
+                    article_id=aid,
+                )
+            except Exception:
+                pass
+            try:
+                if created_wp_status == "publish":
+                    wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
+                    asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
+            except Exception:
+                pass
+
+            msg = "Published to WordPress." if created_wp_status == "publish" else "Saved to WordPress as draft."
+            if needs_generation:
+                msg = f"Generated content and {msg[0].lower()}{msg[1:]}"
+            await publish_pipeline_status(aid, MSG_PUBLISH_COMPLETE, STAGE_COMPLETE)
+            return {
+                "ok": True,
+                "status": "posted",
+                "message": msg,
+                "wp_post_id": wp_post_id,
+                "wp_link": wp_link or None,
+            }
     except Exception as e:
         err = scheduler_error_message(e)
         try:
@@ -1000,57 +1221,99 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                     if not art:
                         raise RuntimeError("Article not found")
 
-                    # Defensive double-post guard: if this article was already
-                    # published to WordPress (e.g., manual "Post Now" raced with
-                    # the scheduler, or a previous attempt succeeded but the
-                    # state write failed), do NOT create a second WP post.
-                    existing_wp_post_id = str(art.get("wp_post_id") or "").strip()
-                    existing_wp_link = str(art.get("wp_link") or "").strip()
-                    if existing_wp_post_id:
-                        log.info(
-                            "Scheduled job=%s skipped re-posting because article id=%s already has wp_post_id=%s.",
-                            jid,
-                            aid,
-                            existing_wp_post_id,
-                        )
-                        await run_sync(
-                            st.update_scheduled_job_fields,
-                            jid,
-                            {
-                                "state": "posted",
-                                "wp_post_id": existing_wp_post_id,
-                                "wp_link": existing_wp_link,
-                                "last_error": "",
-                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                            },
-                        )
-                        continue
+                    _is_shopify_job = is_shopify_project(proj)
+
+                    # Defensive double-post guard: if already published, do NOT create a duplicate.
+                    if _is_shopify_job:
+                        existing_shopify_id = str(art.get("shopify_article_id") or "").strip()
+                        if existing_shopify_id:
+                            log.info(
+                                "Scheduled job=%s skipped re-posting because article id=%s already has shopify_article_id=%s.",
+                                jid,
+                                aid,
+                                existing_shopify_id,
+                            )
+                            await run_sync(
+                                st.update_scheduled_job_fields,
+                                jid,
+                                {
+                                    "state": "posted",
+                                    "shopify_article_id": existing_shopify_id,
+                                    "shopify_link": str(art.get("shopify_link") or "").strip(),
+                                    "last_error": "",
+                                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                                },
+                            )
+                            continue
+                    else:
+                        existing_wp_post_id = str(art.get("wp_post_id") or "").strip()
+                        existing_wp_link = str(art.get("wp_link") or "").strip()
+                        if existing_wp_post_id:
+                            log.info(
+                                "Scheduled job=%s skipped re-posting because article id=%s already has wp_post_id=%s.",
+                                jid,
+                                aid,
+                                existing_wp_post_id,
+                            )
+                            await run_sync(
+                                st.update_scheduled_job_fields,
+                                jid,
+                                {
+                                    "state": "posted",
+                                    "wp_post_id": existing_wp_post_id,
+                                    "wp_link": existing_wp_link,
+                                    "last_error": "",
+                                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                                },
+                            )
+                            continue
 
                     # If article isn't generated yet, generate it now using scheduled prompts/defaults.
                     art = await prepare_article_for_scheduled_job(st=st, jid=jid, proj=proj, art=art, job=j)
 
-                    # Double-check after prep — another worker / manual publish
-                    # might have completed in the meantime.
-                    post_prep_wp_post_id = str(art.get("wp_post_id") or "").strip()
-                    if post_prep_wp_post_id:
-                        log.info(
-                            "Scheduled job=%s skipped re-posting because article id=%s gained wp_post_id=%s during prep.",
-                            jid,
-                            aid,
-                            post_prep_wp_post_id,
-                        )
-                        await run_sync(
-                            st.update_scheduled_job_fields,
-                            jid,
-                            {
-                                "state": "posted",
-                                "wp_post_id": post_prep_wp_post_id,
-                                "wp_link": str(art.get("wp_link") or "")[:2000],
-                                "last_error": "",
-                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                            },
-                        )
-                        continue
+                    # Double-check after prep — another worker / manual publish might have completed.
+                    if _is_shopify_job:
+                        post_prep_shopify_id = str(art.get("shopify_article_id") or "").strip()
+                        if post_prep_shopify_id:
+                            log.info(
+                                "Scheduled job=%s skipped re-posting because article id=%s gained shopify_article_id=%s during prep.",
+                                jid,
+                                aid,
+                                post_prep_shopify_id,
+                            )
+                            await run_sync(
+                                st.update_scheduled_job_fields,
+                                jid,
+                                {
+                                    "state": "posted",
+                                    "shopify_article_id": post_prep_shopify_id,
+                                    "shopify_link": str(art.get("shopify_link") or "")[:2000],
+                                    "last_error": "",
+                                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                                },
+                            )
+                            continue
+                    else:
+                        post_prep_wp_post_id = str(art.get("wp_post_id") or "").strip()
+                        if post_prep_wp_post_id:
+                            log.info(
+                                "Scheduled job=%s skipped re-posting because article id=%s gained wp_post_id=%s during prep.",
+                                jid,
+                                aid,
+                                post_prep_wp_post_id,
+                            )
+                            await run_sync(
+                                st.update_scheduled_job_fields,
+                                jid,
+                                {
+                                    "state": "posted",
+                                    "wp_post_id": post_prep_wp_post_id,
+                                    "wp_link": str(art.get("wp_link") or "")[:2000],
+                                    "last_error": "",
+                                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                                },
+                            )
+                            continue
 
                     # Stay in "posting" (NOT "ready_to_post") so a second
                     # worker can't reclaim the job during this short window.
@@ -1063,91 +1326,132 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                         },
                     )
 
-                    # categories
-                    cats: list[int] = []
-                    raw = (j.get("category_ids") or "").strip()
-                    for part in raw.split(","):
-                        part = part.strip()
-                        if not part:
-                            continue
-                        try:
-                            cats.append(int(part))
-                        except (TypeError, ValueError):
-                            continue
-                    cats = list(dict.fromkeys([x for x in cats if x > 0]))[:50]
-
-                    created = await publish_article_to_wordpress(
-                        st=st,
-                        proj=proj,
-                        article=art,
-                        post_type=(j.get("post_type") or "posts"),
-                        wp_status=(j.get("wp_status") or "draft"),
-                        category_ids=cats,
-                    )
-
-                    wp_post_id = created.get("id")
-                    wp_link = created.get("link") or ""
-                    created_wp_status = _normalize_wp_rest_status_local(created.get("status")) or _normalize_wp_rest_status_local(
-                        j.get("wp_status")
-                    )
-                    await run_sync(
-                        st.update_scheduled_job_fields,
-                        jid,
-                        {
-                            "state": "posted",
-                            "wp_post_id": wp_post_id,
-                            "wp_link": wp_link,
-                            "last_error": "",
-                            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                        },
-                    )
-                    ok_article = await run_sync(
-                        st.update_article_fields,
-                        aid,
-                        {
-                            "wp_post_id": wp_post_id,
-                            "wp_link": wp_link,
-                            "wp_rest_base": (j.get("post_type") or "posts"),
-                            # Use WordPress REST response, not the job's requested status (they can differ).
-                            "wp_last_wp_status": created_wp_status or "draft",
-                            # Once posted, clear schedule marker so UI shows draft/published instead of scheduled.
-                            "wp_scheduled_at": "",
-                            "wp_schedule_error": "",
-                            "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                            if created_wp_status == "publish"
-                            else (art.get("posted_at") or ""),
-                            "status": "published" if created_wp_status == "publish" else (art.get("status") or "draft"),
-                        },
-                    )
-                    if not ok_article:
-                        log.warning(
-                            "Scheduled post wrote job=%s as posted but article id=%s was not found in DB to update (check article_id / project_id).",
-                            jid,
-                            aid,
-                        )
-
-                    # Best-effort: Search Console URL Inspection after live publish.
-                    try:
-                        await maybe_request_url_inspection(
+                    if _is_shopify_job:
+                        shopify_result = await publish_article_to_shopify_scheduled(
                             st=st,
                             proj=proj,
-                            live_url=str(wp_link or ""),
-                            wp_status=created_wp_status or "",
-                            article_id=aid,
+                            article=art,
+                            publish_now=(j.get("wp_status") or "draft") == "publish",
                         )
-                    except Exception:
-                        pass
+                        shopify_article_id = shopify_result.get("shopify_article_id")
+                        shopify_link = shopify_result.get("shopify_link") or ""
+                        shopify_pub_status = shopify_result.get("status") or "draft"
+                        await run_sync(
+                            st.update_scheduled_job_fields,
+                            jid,
+                            {
+                                "state": "posted",
+                                "shopify_article_id": shopify_article_id,
+                                "shopify_link": shopify_link,
+                                "last_error": "",
+                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                            },
+                        )
+                        ok_article = await run_sync(
+                            st.update_article_fields,
+                            aid,
+                            {
+                                "shopify_article_id": shopify_article_id,
+                                "shopify_blog_id": shopify_result.get("shopify_blog_id"),
+                                "shopify_link": shopify_link,
+                                "shopify_scheduled_at": "",
+                                "shopify_schedule_error": "",
+                                "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                                if shopify_pub_status == "published"
+                                else (art.get("posted_at") or ""),
+                                "status": shopify_pub_status,
+                            },
+                        )
+                        if not ok_article:
+                            log.warning(
+                                "Scheduled Shopify post wrote job=%s as posted but article id=%s was not found in DB.",
+                                jid,
+                                aid,
+                            )
+                    else:
+                        # categories
+                        cats: list[int] = []
+                        raw = (j.get("category_ids") or "").strip()
+                        for part in raw.split(","):
+                            part = part.strip()
+                            if not part:
+                                continue
+                            try:
+                                cats.append(int(part))
+                            except (TypeError, ValueError):
+                                continue
+                        cats = list(dict.fromkeys([x for x in cats if x > 0]))[:50]
 
-                    # Best-effort: ping sitemap after live publish for discovery.
-                    try:
-                        if created_wp_status == "publish":
-                            wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
-                            asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
-                    except Exception:
-                        pass
+                        created = await publish_article_to_wordpress(
+                            st=st,
+                            proj=proj,
+                            article=art,
+                            post_type=(j.get("post_type") or "posts"),
+                            wp_status=(j.get("wp_status") or "draft"),
+                            category_ids=cats,
+                        )
+
+                        wp_post_id = created.get("id")
+                        wp_link = created.get("link") or ""
+                        created_wp_status = _normalize_wp_rest_status_local(created.get("status")) or _normalize_wp_rest_status_local(
+                            j.get("wp_status")
+                        )
+                        await run_sync(
+                            st.update_scheduled_job_fields,
+                            jid,
+                            {
+                                "state": "posted",
+                                "wp_post_id": wp_post_id,
+                                "wp_link": wp_link,
+                                "last_error": "",
+                                "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                            },
+                        )
+                        ok_article = await run_sync(
+                            st.update_article_fields,
+                            aid,
+                            {
+                                "wp_post_id": wp_post_id,
+                                "wp_link": wp_link,
+                                "wp_rest_base": (j.get("post_type") or "posts"),
+                                "wp_last_wp_status": created_wp_status or "draft",
+                                "wp_scheduled_at": "",
+                                "wp_schedule_error": "",
+                                "posted_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                                if created_wp_status == "publish"
+                                else (art.get("posted_at") or ""),
+                                "status": "published" if created_wp_status == "publish" else (art.get("status") or "draft"),
+                            },
+                        )
+                        if not ok_article:
+                            log.warning(
+                                "Scheduled post wrote job=%s as posted but article id=%s was not found in DB to update (check article_id / project_id).",
+                                jid,
+                                aid,
+                            )
+
+                        # Best-effort: Search Console URL Inspection after live publish.
+                        try:
+                            await maybe_request_url_inspection(
+                                st=st,
+                                proj=proj,
+                                live_url=str(wp_link or ""),
+                                wp_status=created_wp_status or "",
+                                article_id=aid,
+                            )
+                        except Exception:
+                            pass
+
+                        # Best-effort: ping sitemap after live publish for discovery.
+                        try:
+                            if created_wp_status == "publish":
+                                wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
+                                asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
+                        except Exception:
+                            pass
                 except Exception as e:
                     log.exception("Scheduled job failed jid=%s", jid)
-                    # If the post already exists on WordPress, do not leave the job as failed.
+                    # If the post already succeeded on the platform, do not leave the job as failed.
                     reconciled = False
                     try:
                         arows = await run_sync(st.load_articles_listing_for_project, pid, limit=5000) if hasattr(
@@ -1163,20 +1467,36 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                             ),
                             None,
                         )
-                        wp_id = str((art_now or {}).get("wp_post_id") or j.get("wp_post_id") or "").strip()
-                        if art_now and wp_id:
-                            await run_sync(
-                                st.update_scheduled_job_fields,
-                                jid,
-                                {
-                                    "state": "posted",
-                                    "wp_post_id": wp_id,
-                                    "wp_link": str(art_now.get("wp_link") or j.get("wp_link") or "")[:2000],
-                                    "last_error": "",
-                                    "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-                                },
-                            )
-                            reconciled = True
+                        if art_now and _is_shopify_job:
+                            shopify_id = str((art_now).get("shopify_article_id") or j.get("shopify_article_id") or "").strip()
+                            if shopify_id:
+                                await run_sync(
+                                    st.update_scheduled_job_fields,
+                                    jid,
+                                    {
+                                        "state": "posted",
+                                        "shopify_article_id": shopify_id,
+                                        "shopify_link": str(art_now.get("shopify_link") or j.get("shopify_link") or "")[:2000],
+                                        "last_error": "",
+                                        "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                                    },
+                                )
+                                reconciled = True
+                        elif art_now:
+                            wp_id = str((art_now).get("wp_post_id") or j.get("wp_post_id") or "").strip()
+                            if wp_id:
+                                await run_sync(
+                                    st.update_scheduled_job_fields,
+                                    jid,
+                                    {
+                                        "state": "posted",
+                                        "wp_post_id": wp_id,
+                                        "wp_link": str(art_now.get("wp_link") or j.get("wp_link") or "")[:2000],
+                                        "last_error": "",
+                                        "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                                    },
+                                )
+                                reconciled = True
                     except Exception:
                         pass
                     if not reconciled:

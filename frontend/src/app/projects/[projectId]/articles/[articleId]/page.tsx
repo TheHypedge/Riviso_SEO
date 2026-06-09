@@ -1696,7 +1696,22 @@ export default function ArticleEditPage() {
                     Save
                   </button>
                 ) : null}
-                {showUpdateWordPress ? (
+                {isShopifyProject ? (
+                  <button
+                    type="button"
+                    className={styles.button}
+                    onClick={() => void publishToShopify()}
+                    disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}
+                  >
+                    {shopifyPublishBusy
+                      ? article?.shopify_article_id
+                        ? "Updating…"
+                        : "Publishing…"
+                      : article?.shopify_article_id
+                        ? "Update Shopify"
+                        : "Publish to Shopify"}
+                  </button>
+                ) : showUpdateWordPress ? (
                   <button
                     type="button"
                     className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`}

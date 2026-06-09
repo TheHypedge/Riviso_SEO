@@ -4893,11 +4893,12 @@ export default function ProjectPage() {
         return;
       }
     } else if (action === "schedule") {
-      // Shopify scheduling/publishing is not supported yet; keep guardrail explicit.
-      openWebsiteConnectionPopup(
-        "Shopify projects can generate drafts, but scheduling/publishing is not enabled yet. Export the content or connect WordPress for scheduling.",
-      );
-      return;
+      if (!(settings?.shopify_access_token || "").trim()) {
+        openWebsiteConnectionPopup(
+          "Connect your Shopify store in Project Settings before scheduling articles.",
+        );
+        return;
+      }
     }
     const selected = researchResults.filter((r) => researchSelected.has(r.id) && !r.imported);
     if (!selected.length) {

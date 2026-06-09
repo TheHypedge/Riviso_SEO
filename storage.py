@@ -2203,6 +2203,8 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "shopify_article_id": d.get("shopify_article_id"),
         "shopify_link": (d.get("shopify_link") or "")[:2048],
         "shopify_published_at": (d.get("shopify_published_at") or "")[:64],
+        "shopify_scheduled_at": (d.get("shopify_scheduled_at") or "")[:64],
+        "shopify_schedule_error": d.get("shopify_schedule_error") or "",
         "topic_cluster_id": (d.get("topic_cluster_id") or "")[:64],
         "topic_slot_id": (d.get("topic_slot_id") or "")[:64],
         "topic_role": (d.get("topic_role") or "")[:16],
@@ -2238,6 +2240,8 @@ def _normalize_scheduled_job_dict(d: dict[str, Any]) -> dict[str, Any]:
         "updated_at": (d.get("updated_at") or d.get("created_at") or "")[:64],
         "wp_post_id": str(d.get("wp_post_id") or "")[:32],
         "wp_link": (d.get("wp_link") or "")[:2048],
+        "shopify_article_id": str(d.get("shopify_article_id") or "")[:32],
+        "shopify_link": (d.get("shopify_link") or "")[:2048],
     }
 
 
@@ -2380,6 +2384,8 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "shopify_article_id",
             "shopify_link",
             "shopify_published_at",
+            "shopify_scheduled_at",
+            "shopify_schedule_error",
             "shopify_mapped_products",
             "wp_mapped_pages",
             "topic_cluster_id",

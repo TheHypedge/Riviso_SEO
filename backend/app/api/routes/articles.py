@@ -2660,10 +2660,21 @@ async def publish_to_shopify_blog(
         raise HTTPException(status_code=400, detail="Article title/content is required before publishing")
 
     body = payload or ShopifyPublishRequest()
-    blog_id: int | None = body.blog_id
     publish_now = bool(body.publish)
 
-    # Resolve blog id from synced catalog if needed.
+    # Detect whether this is an update (article already exists on Shopify).
+    existing_shopify_id: int | None = None
+    raw_eid = a.get("shopify_article_id")
+    if raw_eid and str(raw_eid).strip().isdigit():
+        existing_shopify_id = int(str(raw_eid).strip())
+
+    # Resolve target blog_id — prefer the caller's explicit choice, then the
+    # stored value from a previous publish, then the first catalog/live blog.
+    blog_id: int | None = body.blog_id
+    if blog_id is None:
+        stored_bid = a.get("shopify_blog_id")
+        if stored_bid and str(stored_bid).strip().isdigit():
+            blog_id = int(str(stored_bid).strip())
     if blog_id is None:
         catalog = proj.get("shopify_catalog") if isinstance(proj.get("shopify_catalog"), dict) else {}
         blogs = catalog.get("blogs") if isinstance(catalog.get("blogs"), list) else []
@@ -2733,11 +2744,19 @@ async def publish_to_shopify_blog(
         article_body["image"] = image_payload
 
     await publish_pipeline_status(article_id, MSG_PUBLISH_DISPATCH, STAGE_PUBLISH_DISPATCH)
+    is_update = bool(existing_shopify_id)
     try:
-        created = await client.post_json(
-            f"/blogs/{blog_id}/articles.json",
-            payload={"article": article_body},
-        )
+        if is_update:
+            # Update the existing Shopify article — never create a duplicate.
+            response = await client.put_json(
+                f"/blogs/{blog_id}/articles/{existing_shopify_id}.json",
+                payload={"article": article_body},
+            )
+        else:
+            response = await client.post_json(
+                f"/blogs/{blog_id}/articles.json",
+                payload={"article": article_body},
+            )
     except Exception as exc:
         hint = ""
         msg = str(exc)
@@ -2748,11 +2767,11 @@ async def publish_to_shopify_blog(
             )
         raise HTTPException(status_code=502, detail=f"Shopify publish failed: {exc}{hint}") from exc
 
-    art = created.get("article") if isinstance(created, dict) else None
+    art = response.get("article") if isinstance(response, dict) else None
     if not isinstance(art, dict):
         raise HTTPException(status_code=502, detail="Shopify publish failed: invalid response from Shopify")
 
-    shopify_article_id = art.get("id")
+    shopify_article_id = art.get("id") or existing_shopify_id
     if image_payload and shopify_article_id and not shopify_article_has_featured_image(art):
         try:
             updated = await client.put_json(
@@ -2788,10 +2807,14 @@ async def publish_to_shopify_blog(
     }
     await run_sync(st.update_article_fields, article_id, updates)
     await publish_pipeline_status(article_id, MSG_PUBLISH_COMPLETE, STAGE_COMPLETE)
+    if is_update:
+        msg = "Updated on Shopify." if publish_now else "Draft updated on Shopify."
+    else:
+        msg = "Published to Shopify." if publish_now else "Created draft on Shopify."
     return {
         "ok": True,
         "status": "published" if publish_now else "draft",
-        "message": "Published to Shopify." if publish_now else "Created draft on Shopify.",
+        "message": msg,
         "shopify_article_id": shopify_article_id,
         "shopify_blog_id": blog_id,
         "shopify_link": link or None,
