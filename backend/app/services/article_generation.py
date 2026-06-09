@@ -218,12 +218,23 @@ def build_generation_messages(
         "- Do NOT write vague FAQ answers — each must be specific, factual, and standalone-readable.\n"
     )
 
+    # For compiled templates the H2 minimum in the writing instructions already
+    # specifies the correct section count (2-3 for short, 6+ for comprehensive).
+    # Hard-coding "minimum 4 H2 sections" here would force short articles to
+    # exceed their word limit just to satisfy the count.
+    h2_requirement = (
+        "- Use ## H2 headings to structure the article; the number of sections "
+        "should match the target length specified in the writing instructions.\n"
+        if is_compiled else
+        "- Use ## H2 headings for every main section (minimum 4 H2 sections required).\n"
+    )
+
     sys = (
         HUMAN_FIRST_SYSTEM_ANCHOR
         + human_guardrail
         + "\n\nCONTENT STRUCTURE REQUIREMENTS (non-negotiable — apply to every article):\n"
-        "- Use ## H2 headings for every main section (minimum 4 H2 sections required).\n"
-        "- Use ### H3 sub-headings when a section has 2 or more distinct sub-topics.\n"
+        + h2_requirement
+        + "- Use ### H3 sub-headings when a section has 2 or more distinct sub-topics.\n"
         "- Use bullet points (- item) for any list of 3 or more parallel items, tips, or features.\n"
         "- Use numbered lists (1. step) for sequential processes or step-by-step instructions.\n"
         "- Use **bold** for 2–4 key terms, statistics, or critical phrases per article.\n"
