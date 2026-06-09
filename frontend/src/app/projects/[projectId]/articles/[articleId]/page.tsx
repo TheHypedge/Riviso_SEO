@@ -1671,15 +1671,50 @@ export default function ArticleEditPage() {
           <header className={editorStyles.pageHeader}>
             <div className={editorStyles.pageHeaderTop}>
               <div className={editorStyles.pageTitleBlock}>
-                <p className={editorStyles.pageEyebrow}>Article editor</p>
+                <nav className={editorStyles.breadcrumb}>
+                  <button
+                    type="button"
+                    className={editorStyles.backLink}
+                    onClick={() => requestNavigation(`/projects/${params.projectId}`)}
+                  >
+                    ← Project
+                  </button>
+                  <span className={editorStyles.breadcrumbSep}>·</span>
+                  <span className={editorStyles.breadcrumbCurrent}>Article editor</span>
+                </nav>
                 <h1 className={editorStyles.pageTitle}>{displayTitle}</h1>
-                <button
-                  type="button"
-                  className={editorStyles.backLink}
-                  onClick={() => requestNavigation(`/projects/${params.projectId}`)}
-                >
-                  ← Back to project
-                </button>
+              </div>
+
+              <div className={editorStyles.headerActions}>
+                {isDirty ? (
+                  <button
+                    type="button"
+                    className={styles.btnSecondary}
+                    onClick={save}
+                    disabled={editorLocked}
+                  >
+                    Save
+                  </button>
+                ) : null}
+                {showUpdateWordPress ? (
+                  <button
+                    type="button"
+                    className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`}
+                    onClick={() => void updateWordPressPost()}
+                    disabled={!canUpdateWordPress}
+                  >
+                    {wpUpdateBusy ? "Updating…" : "Update article"}
+                  </button>
+                ) : showPublishWordPress ? (
+                  <button
+                    type="button"
+                    className={styles.button}
+                    onClick={publishToLiveSite}
+                    disabled={!canPublish || wpPushBusy}
+                  >
+                    {wpPublishBusy ? "Publishing…" : "Publish"}
+                  </button>
+                ) : null}
               </div>
             </div>
 
@@ -1738,7 +1773,6 @@ export default function ArticleEditPage() {
                     target="_blank"
                     rel="noopener noreferrer"
                     className={editorStyles.liveUrlBtn}
-                    style={{ textDecoration: "none", textAlign: "center" }}
                   >
                     Open live
                   </a>
@@ -1830,18 +1864,8 @@ export default function ArticleEditPage() {
               </div>
               <div className={styles.modalBody}>
                 {isWordPressProject && isClusterArticle && clusterLinkContext ? (
-                  <div
-                    style={{
-                      marginBottom: 12,
-                      padding: "10px 12px",
-                      borderRadius: 10,
-                      border: "1px solid rgba(255,255,255,0.10)",
-                      background: "rgba(255,255,255,0.03)",
-                      fontSize: 12,
-                      lineHeight: 1.55,
-                    }}
-                  >
-                    <div style={{ fontWeight: 800, color: "rgba(255,255,255,0.92)", marginBottom: 6 }}>
+                  <div className={editorStyles.clusterContextCard}>
+                    <div className={editorStyles.clusterContextTitle}>
                       Topic cluster · {clusterRoleLabel} article
                     </div>
                     {clusterLinkContext.auto_link_ready ? (
@@ -1977,42 +2001,22 @@ export default function ArticleEditPage() {
                 </label>
 
                 {/* Featured image choice — prominent Yes/No */}
-                <div style={{ marginTop: 14 }}>
-                  <p style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
+                <div>
+                  <p className={editorStyles.toggleBtnLabel}>
                     Regenerate the Featured Image?
                   </p>
-                  <div style={{ display: "flex", gap: 10 }}>
+                  <div className={editorStyles.toggleRow}>
                     <button
                       type="button"
+                      className={`${editorStyles.toggleBtn} ${generateImage ? editorStyles.toggleBtnActive : ""}`}
                       onClick={() => setGenerateImage(true)}
-                      style={{
-                        flex: 1, padding: "10px 0", borderRadius: 8, fontSize: 13,
-                        cursor: "pointer", fontWeight: generateImage ? 700 : 400,
-                        border: generateImage
-                          ? "1.5px solid var(--aa-accent, #d97757)"
-                          : "1px solid rgba(255,255,255,0.15)",
-                        background: generateImage
-                          ? "color-mix(in oklab, var(--aa-accent, #d97757) 14%, transparent)"
-                          : "transparent",
-                        color: "inherit",
-                      }}
                     >
                       Yes — regenerate image
                     </button>
                     <button
                       type="button"
+                      className={`${editorStyles.toggleBtn} ${!generateImage ? editorStyles.toggleBtnActive : ""}`}
                       onClick={() => setGenerateImage(false)}
-                      style={{
-                        flex: 1, padding: "10px 0", borderRadius: 8, fontSize: 13,
-                        cursor: "pointer", fontWeight: !generateImage ? 700 : 400,
-                        border: !generateImage
-                          ? "1.5px solid var(--aa-accent, #d97757)"
-                          : "1px solid rgba(255,255,255,0.15)",
-                        background: !generateImage
-                          ? "color-mix(in oklab, var(--aa-accent, #d97757) 14%, transparent)"
-                          : "transparent",
-                        color: "inherit",
-                      }}
                     >
                       No — keep existing image
                     </button>
@@ -2570,10 +2574,8 @@ export default function ArticleEditPage() {
 
           <div className={editorStyles.sidebarCol}>
             <div className={editorStyles.sectionCard}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                <h2 className={editorStyles.sectionTitle} style={{ marginBottom: 0 }}>
-                  Integrity
-                </h2>
+              <div className={editorStyles.sectionHeadRow}>
+                <h2 className={editorStyles.sectionTitle}>Integrity</h2>
                 <button
                   type="button"
                   className={styles.btnSecondary}
@@ -2595,7 +2597,7 @@ export default function ArticleEditPage() {
                 <ArticleEditorIntegritySkeleton />
               ) : (
               <>
-              <div style={{ display: "grid", gap: 12, marginTop: 14 }}>
+              <div style={{ display: "grid", gap: 12, marginTop: 2 }}>
                 <IntegrityRing value={100 - aiPct} label="Human score" />
                 <IntegrityRing value={aiPct} label="AI risk" />
               </div>
@@ -2612,14 +2614,14 @@ export default function ArticleEditPage() {
                 </label>
 
                 {highlightAi && flaggedParagraphs.length ? (
-                  <div style={{ display: "grid", gap: 10 }}>
+                  <div className={editorStyles.integrityFlagList}>
                     {flaggedParagraphs.slice(0, 4).map((p) => (
-                      <div key={p.index} style={{ padding: 10, borderRadius: 10, border: "1px solid rgba(255,255,255,0.10)", background: "rgba(217,119,87,0.06)" }}>
-                        <div style={{ fontSize: 12, fontWeight: 800, color: "rgba(255,255,255,0.85)" }}>Paragraph {p.index + 1}</div>
-                        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.62)", marginTop: 6, lineHeight: 1.45 }}>{p.reason}</div>
+                      <div key={p.index} className={editorStyles.integrityFlagCard}>
+                        <div className={editorStyles.integrityFlagLabel}>Paragraph {p.index + 1}</div>
+                        <div className={editorStyles.integrityFlagReason}>{p.reason}</div>
                         {(p.signals as IntegritySignal[] | undefined)?.slice(0, 2).map((sig) => (
-                          <div key={`${p.index}-${sig.label}`} style={{ marginTop: 8, fontSize: 11, lineHeight: 1.4, color: "rgba(255,255,255,0.55)" }}>
-                            <strong style={{ color: "rgba(255,255,255,0.75)" }}>{sig.label}:</strong> {sig.detail}
+                          <div key={`${p.index}-${sig.label}`} className={editorStyles.integrityFlagSignal}>
+                            <span className={editorStyles.integrityFlagSignalLabel}>{sig.label}:</span> {sig.detail}
                           </div>
                         ))}
                       </div>

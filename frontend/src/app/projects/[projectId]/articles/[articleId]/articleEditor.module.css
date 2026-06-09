@@ -9,38 +9,48 @@
 .pageHeader {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   margin-bottom: 20px;
 }
 
 .pageHeaderTop {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px 20px;
+  gap: 10px 16px;
 }
 
 .pageTitleBlock {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
-  flex: 1 1 280px;
+  flex: 1 1 240px;
 }
 
-.pageEyebrow {
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.breadcrumbSep {
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--aa-muted);
-  margin: 0;
+  opacity: 0.45;
+  user-select: none;
+}
+
+.breadcrumbCurrent {
+  font-size: 12px;
+  color: var(--aa-muted);
 }
 
 .pageTitle {
   font-family: var(--aa-font-display, inherit);
-  font-size: clamp(1.35rem, 2.5vw, 1.75rem);
+  font-size: clamp(1.2rem, 2vw, 1.55rem);
   font-weight: 500;
   line-height: 1.2;
   letter-spacing: -0.02em;
@@ -49,23 +59,30 @@
   text-wrap: balance;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .backLink {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  gap: 5px;
+  font-size: 12px;
   font-weight: 600;
-  color: color-mix(in oklab, var(--aa-primary), #fff 22%);
+  color: var(--aa-muted);
   background: none;
   border: 0;
   padding: 0;
   cursor: pointer;
   text-decoration: none;
+  transition: color 0.15s;
 }
 
 .backLink:hover {
-  color: color-mix(in oklab, var(--aa-primary), #fff 38%);
-  text-decoration: underline;
+  color: var(--aa-ink);
 }
 
 .metaBar {
@@ -202,6 +219,11 @@
   background: rgba(255, 255, 255, 0.06);
   color: var(--aa-body-strong);
   cursor: pointer;
+  text-decoration: none;
+  text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .liveUrlBtn:hover {
@@ -287,18 +309,18 @@
 }
 
 .sectionTitle {
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-transform: none;
   color: var(--aa-muted);
-  margin: 0 0 14px;
+  margin: 0 0 12px;
 }
 
 .sectionTitlePrimary {
   font-size: 14px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   text-transform: none;
   color: var(--aa-ink);
   margin: 0 0 14px;
@@ -560,7 +582,112 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--aa-hairline);
+}
+
+/* Integrity — flagged paragraph cards */
+.integrityFlagList {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.integrityFlagCard {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: color-mix(in oklab, var(--aa-accent, #d97757) 6%, transparent);
+}
+
+.integrityFlagLabel {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 4px;
+}
+
+.integrityFlagReason {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
   margin-top: 4px;
+  line-height: 1.45;
+}
+
+.integrityFlagSignal {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.integrityFlagSignalLabel {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Cluster context card inside generate modal */
+.clusterContextCard {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.clusterContextTitle {
+  font-weight: 800;
+  color: rgba(255, 255, 255, 0.92);
+  margin-bottom: 6px;
+}
+
+/* Section header row (title + inline action) */
+.sectionHeadRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.sectionHeadRow .sectionTitle {
+  margin-bottom: 0;
+}
+
+/* Toggle button row (Yes/No style choice inside modals) */
+.toggleRow {
+  display: flex;
+  gap: 10px;
+}
+
+.toggleBtn {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 400;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: inherit;
+  transition: border-color 0.15s, background 0.15s, font-weight 0.1s;
+}
+
+.toggleBtnActive {
+  font-weight: 700;
+  border: 1.5px solid var(--aa-accent, #d97757);
+  background: color-mix(in oklab, var(--aa-accent, #d97757) 14%, transparent);
+}
+
+.toggleBtnLabel {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+  margin-top: 14px;
 }
 
 @media (max-width: 1280px) and (min-width: 981px) {
@@ -621,7 +748,12 @@
 
 @media (max-width: 520px) {
   .pageHeaderTop {
-    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .headerActions {
+    width: 100%;
+    justify-content: flex-end;
   }
 
   .fieldActions :global(.button),
@@ -640,6 +772,13 @@
 
   .wpActions :global(.button) {
     flex: 1 1 auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backLink,
+  .toggleBtn {
+    transition: none;
   }
 }
 
