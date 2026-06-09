@@ -1162,12 +1162,6 @@ export default function ProjectPage() {
   const [profileTz, setProfileTz] = useState<string>("");
   const [profile, setProfile] = useState<import("@/lib/api").ProfilePublic | null>(null);
   const [showMobileFilters, setShowMobileFilters] = useState(false);
-  const [subStatus, setSubStatus] = useState<import("@/lib/api").SubscriptionStatusPublic | null>(null);
-  const [betaBannerClosed, setBetaBannerClosed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem("riviso_beta_banner_closed") === "1";
-  });
-
   // Bulk selection
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
@@ -1482,14 +1476,8 @@ export default function ProjectPage() {
     let cancelled = false;
     (async () => {
       try {
-        const [list, status] = await Promise.all([
-          api.listProjects(),
-          api.getSubscriptionStatus({ skipGlobalLoading: true }).catch(() => null),
-        ]);
-        if (!cancelled) {
-          setProjectsList(list || []);
-          if (status) setSubStatus(status);
-        }
+        const list = await api.listProjects();
+        if (!cancelled) setProjectsList(list || []);
       } catch {
         // Silent — sidebar dropdown gracefully degrades to "current project only".
       }
@@ -5243,13 +5231,6 @@ export default function ProjectPage() {
     }
   }
 
-  function dismissBetaBanner() {
-    setBetaBannerClosed(true);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("riviso_beta_banner_closed", "1");
-    }
-  }
-
   function openWebsiteConnectionPopup(message?: string) {
     setWebsiteConnectionModal({
       title: "Website not connected",
@@ -5405,49 +5386,6 @@ export default function ProjectPage() {
             </div>
           </>
         ) : null}
-
-        {/* Beta / trial countdown banner — shown for beta and trial plan users
-            until dismissed. Sits above the shell so the sidebar height is
-            automatically reduced by the flex layout. */}
-        {(() => {
-          const isBeta = sidebarPlan === "beta" || subStatus?.is_trial_plan;
-          if (!isBeta || betaBannerClosed) return null;
-          const expired = subStatus?.status === "trial_expired";
-          const days = subStatus?.remaining_days ?? null;
-          return (
-            <div className={styles.betaBanner} role="status" aria-live="polite">
-              <span className={styles.betaBannerDot} aria-hidden="true" />
-              <span className={styles.betaBannerText}>
-                {expired ? (
-                  <>
-                    <span className={styles.betaBannerExpired}>Beta access has expired.</span>
-                    {" "}Upgrade your plan to keep generating content.
-                  </>
-                ) : days !== null ? (
-                  <>
-                    Beta access —{" "}
-                    <span className={styles.betaBannerDays}>
-                      {days} day{days !== 1 ? "s" : ""} remaining
-                    </span>
-                    {subStatus?.trial_end_date
-                      ? ` · ends ${formatRenewalDate(subStatus.trial_end_date)}`
-                      : ""}
-                  </>
-                ) : (
-                  "You are on the beta plan."
-                )}
-              </span>
-              <button
-                type="button"
-                className={styles.betaBannerClose}
-                onClick={dismissBetaBanner}
-                aria-label="Dismiss beta notice"
-              >
-                ×
-              </button>
-            </div>
-          );
-        })()}
 
         <div className={styles.shell}>
           {toast ? (
