@@ -1151,6 +1151,7 @@ export default function ProjectPage() {
   const [linkUrl, setLinkUrl] = useState("");
   const [linkSearch, setLinkSearch] = useState("");
   const [linkPage, setLinkPage] = useState(1);
+  const [linkDuplicateConflict, setLinkDuplicateConflict] = useState<LinkDraft | null>(null);
 
   // Toolbar
   const [q, setQ] = useState("");
@@ -3891,7 +3892,14 @@ export default function ProjectPage() {
     const row = linkDrafts.find((x) => x.id === id);
     setLinkPhrase(row?.label || "");
     setLinkUrl(row?.url || "");
+    setLinkDuplicateConflict(null);
     setShowLinkModal({ id });
+  }
+
+  function findDuplicatePhrase(phrase: string, excludeId: string): LinkDraft | null {
+    const normalized = phrase.trim().toLowerCase();
+    if (!normalized) return null;
+    return linkDrafts.find((x) => x.id !== excludeId && (x.label || "").trim().toLowerCase() === normalized) ?? null;
   }
 
   function startAddLink() {
@@ -3923,6 +3931,19 @@ export default function ProjectPage() {
 
   async function saveContextLinks() {
     setError(null);
+    // Guard: detect duplicate phrases before committing to the API.
+    const seen = new Map<string, string>();
+    for (const d of linkDrafts) {
+      const key = (d.label || "").trim().toLowerCase();
+      if (!key) continue;
+      if (seen.has(key)) {
+        setError(
+          `Duplicate phrase detected: "${d.label}" appears more than once. Each phrase must be unique before saving.`
+        );
+        return;
+      }
+      seen.set(key, d.id);
+    }
     setLinksSaving(true);
     try {
       for (const id of Array.from(linkDeleted)) {
@@ -9219,8 +9240,35 @@ export default function ProjectPage() {
                   <div className={styles.modalBody}>
                     <label className={styles.label}>
                       Exact phrase
-                      <input className={styles.input} value={linkPhrase} onChange={(e) => setLinkPhrase(e.target.value)} placeholder="e.g. Supreme Court Lawyers in Chandigarh" />
+                      <input
+                        className={styles.input}
+                        value={linkPhrase}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setLinkPhrase(val);
+                          setLinkDuplicateConflict(findDuplicatePhrase(val, showLinkModal.id));
+                        }}
+                        placeholder="e.g. Supreme Court Lawyers in Chandigarh"
+                        aria-describedby={linkDuplicateConflict ? "link-duplicate-error" : undefined}
+                        aria-invalid={!!linkDuplicateConflict}
+                      />
                     </label>
+                    {linkDuplicateConflict ? (
+                      <div
+                        id="link-duplicate-error"
+                        role="alert"
+                        className={styles.error}
+                        style={{ marginTop: -4, marginBottom: 4, fontSize: 13 }}
+                      >
+                        Duplicate phrase — this exact phrase is already used by another link:
+                        <br />
+                        <strong style={{ wordBreak: "break-all" }}>&ldquo;{linkDuplicateConflict.label}&rdquo;</strong>
+                        {" → "}
+                        <span className={styles.muted} style={{ wordBreak: "break-all" }}>{linkDuplicateConflict.url}</span>
+                        <br />
+                        <span className={styles.muted}>Each phrase must be unique. The same URL can appear on multiple different phrases.</span>
+                      </div>
+                    ) : null}
                     <label className={styles.label}>
                       Link
                       <input className={styles.input} value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://example.com/page" />
@@ -9230,7 +9278,7 @@ export default function ProjectPage() {
                     </div>
                   </div>
                   <div className={styles.modalFooter}>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setShowLinkModal(null)}>
+                    <button type="button" className={styles.btnSecondary} onClick={() => { setShowLinkModal(null); setLinkDuplicateConflict(null); }}>
                       Cancel
                     </button>
                     <button
@@ -9238,10 +9286,16 @@ export default function ProjectPage() {
                       type="button"
                       onClick={() => {
                         const id = showLinkModal.id;
+                        const conflict = findDuplicatePhrase(linkPhrase, id);
+                        if (conflict) {
+                          setLinkDuplicateConflict(conflict);
+                          return;
+                        }
                         setLinkDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, label: linkPhrase, url: linkUrl } : d)));
+                        setLinkDuplicateConflict(null);
                         setShowLinkModal(null);
                       }}
-                      disabled={!linkPhrase.trim() || !linkUrl.trim()}
+                      disabled={!linkPhrase.trim() || !linkUrl.trim() || !!linkDuplicateConflict}
                     >
                       Save link
                     </button>
