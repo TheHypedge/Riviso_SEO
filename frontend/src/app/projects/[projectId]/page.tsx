@@ -1143,7 +1143,7 @@ export default function ProjectPage() {
   const [linksSaving, setLinksSaving] = useState(false);
   const [linkDrafts, setLinkDrafts] = useState<LinkDraft[]>([]);
   const [linkDeleted, setLinkDeleted] = useState<Set<string>>(new Set());
-  const [showLinkModal, setShowLinkModal] = useState<null | { id: string }>(null);
+  const [showLinkModal, setShowLinkModal] = useState<null | { id: string; isNew: boolean }>(null);
   const linkModalTrapRef = useFocusTrap(!!showLinkModal);
   const promptModalTrapRef = useFocusTrap(!!showPromptModal);
   const deletePromptTrapRef = useFocusTrap(!!deletePromptTarget);
@@ -1151,7 +1151,7 @@ export default function ProjectPage() {
   const [linkUrl, setLinkUrl] = useState("");
   const [linkSearch, setLinkSearch] = useState("");
   const [linkPage, setLinkPage] = useState(1);
-  const [linkDuplicateConflict, setLinkDuplicateConflict] = useState<LinkDraft | null>(null);
+  const [linkDuplicateConflicts, setLinkDuplicateConflicts] = useState<Array<{ phrase: string; conflict: LinkDraft }>>([]);
 
   // Toolbar
   const [q, setQ] = useState("");
@@ -3892,14 +3892,34 @@ export default function ProjectPage() {
     const row = linkDrafts.find((x) => x.id === id);
     setLinkPhrase(row?.label || "");
     setLinkUrl(row?.url || "");
-    setLinkDuplicateConflict(null);
-    setShowLinkModal({ id });
+    setLinkDuplicateConflicts([]);
+    setShowLinkModal({ id, isNew: !!row?.isNew });
   }
 
-  function findDuplicatePhrase(phrase: string, excludeId: string): LinkDraft | null {
-    const normalized = phrase.trim().toLowerCase();
-    if (!normalized) return null;
-    return linkDrafts.find((x) => x.id !== excludeId && (x.label || "").trim().toLowerCase() === normalized) ?? null;
+  function checkPhrasesForDuplicates(
+    rawInput: string,
+    excludeId: string,
+  ): Array<{ phrase: string; conflict: LinkDraft }> {
+    const phrases = rawInput.split(",").map((p) => p.trim()).filter(Boolean);
+    const results: Array<{ phrase: string; conflict: LinkDraft }> = [];
+    const seenInBatch = new Map<string, string>();
+    for (const phrase of phrases) {
+      const key = phrase.toLowerCase();
+      const existingConflict = linkDrafts.find(
+        (x) => x.id !== excludeId && (x.label || "").trim().toLowerCase() === key,
+      );
+      if (existingConflict) {
+        results.push({ phrase, conflict: existingConflict });
+      } else if (seenInBatch.has(key)) {
+        results.push({
+          phrase,
+          conflict: { id: "__batch__", label: seenInBatch.get(key)!, url: "(entered above in this batch)", isNew: true },
+        });
+      } else {
+        seenInBatch.set(key, phrase);
+      }
+    }
+    return results;
   }
 
   function startAddLink() {
@@ -3932,17 +3952,17 @@ export default function ProjectPage() {
   async function saveContextLinks() {
     setError(null);
     // Guard: detect duplicate phrases before committing to the API.
-    const seen = new Map<string, string>();
+    const seenPhrases = new Map<string, string>();
     for (const d of linkDrafts) {
       const key = (d.label || "").trim().toLowerCase();
       if (!key) continue;
-      if (seen.has(key)) {
+      if (seenPhrases.has(key)) {
         setError(
           `Duplicate phrase detected: "${d.label}" appears more than once. Each phrase must be unique before saving.`
         );
         return;
       }
-      seen.set(key, d.id);
+      seenPhrases.set(key, d.id);
     }
     setLinksSaving(true);
     try {
@@ -9227,82 +9247,180 @@ export default function ProjectPage() {
               );
             })()}
 
-            {showLinkModal ? (
-              <>
-                <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={() => setShowLinkModal(null)} />
-                <div ref={linkModalTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Context link">
-                  <div className={styles.modalHead}>
-                    <h3 className={styles.modalTitle}>Add / edit context link</h3>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setShowLinkModal(null)}>
-                      Close
-                    </button>
-                  </div>
-                  <div className={styles.modalBody}>
-                    <label className={styles.label}>
-                      Exact phrase
-                      <input
-                        className={styles.input}
-                        value={linkPhrase}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setLinkPhrase(val);
-                          setLinkDuplicateConflict(findDuplicatePhrase(val, showLinkModal.id));
-                        }}
-                        placeholder="e.g. Supreme Court Lawyers in Chandigarh"
-                        aria-describedby={linkDuplicateConflict ? "link-duplicate-error" : undefined}
-                        aria-invalid={!!linkDuplicateConflict}
-                      />
-                    </label>
-                    {linkDuplicateConflict ? (
-                      <div
-                        id="link-duplicate-error"
-                        role="alert"
-                        className={styles.error}
-                        style={{ marginTop: -4, marginBottom: 4, fontSize: 13 }}
+            {showLinkModal ? (() => {
+              const isNewLink = showLinkModal.isNew;
+              const parsedPhrases = isNewLink
+                ? linkPhrase.split(",").map((p) => p.trim()).filter(Boolean)
+                : [linkPhrase.trim()].filter(Boolean);
+              const phraseCount = parsedPhrases.length;
+              const hasConflicts = linkDuplicateConflicts.length > 0;
+              const conflictPhraseSet = new Set(linkDuplicateConflicts.map((c) => c.phrase.toLowerCase()));
+              const canSave = linkPhrase.trim() && linkUrl.trim() && !hasConflicts;
+              return (
+                <>
+                  <button
+                    type="button"
+                    className={styles.modalBackdrop}
+                    aria-label="Close"
+                    onClick={() => { setShowLinkModal(null); setLinkDuplicateConflicts([]); }}
+                  />
+                  <div ref={linkModalTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Context link">
+                    <div className={styles.modalHead}>
+                      <h3 className={styles.modalTitle}>{isNewLink ? "Add context link(s)" : "Edit context link"}</h3>
+                      <button type="button" className={styles.btnSecondary} onClick={() => { setShowLinkModal(null); setLinkDuplicateConflicts([]); }}>
+                        Close
+                      </button>
+                    </div>
+                    <div className={styles.modalBody}>
+                      <label className={styles.label}>
+                        {isNewLink ? "Exact phrase(s)" : "Exact phrase"}
+                        <input
+                          className={styles.input}
+                          value={linkPhrase}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setLinkPhrase(val);
+                            setLinkDuplicateConflicts(checkPhrasesForDuplicates(val, showLinkModal.id));
+                          }}
+                          placeholder={
+                            isNewLink
+                              ? "e.g. Best Lawyers in Delhi, Top Court Lawyers, Legal Experts"
+                              : "e.g. Supreme Court Lawyers in Chandigarh"
+                          }
+                          aria-describedby={
+                            isNewLink
+                              ? "link-multi-hint link-duplicate-errors"
+                              : hasConflicts
+                              ? "link-duplicate-errors"
+                              : undefined
+                          }
+                          aria-invalid={hasConflicts}
+                        />
+                      </label>
+
+                      {isNewLink ? (
+                        <p id="link-multi-hint" className={styles.muted} style={{ fontSize: 12, marginTop: -4 }}>
+                          Separate multiple phrases with commas — each becomes its own link entry sharing the same URL.
+                        </p>
+                      ) : null}
+
+                      {isNewLink && parsedPhrases.length > 0 ? (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, marginBottom: 2 }}>
+                          {parsedPhrases.map((p) => {
+                            const isDupe = conflictPhraseSet.has(p.toLowerCase());
+                            return (
+                              <span
+                                key={p}
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  padding: "2px 10px",
+                                  borderRadius: 99,
+                                  fontSize: 12,
+                                  fontWeight: 500,
+                                  background: isDupe
+                                    ? "color-mix(in srgb, var(--aa-danger, #dc2626) 12%, transparent)"
+                                    : "color-mix(in srgb, var(--aa-accent, #6366f1) 12%, transparent)",
+                                  color: isDupe ? "var(--aa-danger, #dc2626)" : "var(--aa-accent, #6366f1)",
+                                  border: `1px solid ${isDupe ? "color-mix(in srgb, var(--aa-danger, #dc2626) 30%, transparent)" : "color-mix(in srgb, var(--aa-accent, #6366f1) 30%, transparent)"}`,
+                                }}
+                              >
+                                {isDupe ? "⚠ " : null}{p}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+
+                      {hasConflicts ? (
+                        <div
+                          id="link-duplicate-errors"
+                          role="alert"
+                          className={styles.error}
+                          style={{ marginTop: 6, marginBottom: 4, fontSize: 13 }}
+                        >
+                          {linkDuplicateConflicts.map(({ phrase, conflict }) => (
+                            <div key={phrase} style={{ marginBottom: 4 }}>
+                              Duplicate: <strong>&ldquo;{phrase}&rdquo;</strong> already exists
+                              {conflict.id !== "__batch__" ? (
+                                <> — linked to <span style={{ wordBreak: "break-all" }}>{conflict.url}</span></>
+                              ) : (
+                                <> — entered twice in this batch</>
+                              )}
+                            </div>
+                          ))}
+                          <div className={styles.muted} style={{ marginTop: 2 }}>
+                            Each phrase must be unique. The same URL can appear on multiple phrases.
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <label className={styles.label} style={{ marginTop: 8 }}>
+                        Link URL
+                        <input
+                          className={styles.input}
+                          value={linkUrl}
+                          onChange={(e) => setLinkUrl(e.target.value)}
+                          placeholder="https://example.com/page"
+                        />
+                      </label>
+                      {isNewLink && phraseCount > 1 ? (
+                        <p className={styles.muted} style={{ fontSize: 12 }}>
+                          {phraseCount} link entries will be created, each with this URL. You can edit them individually afterwards.
+                        </p>
+                      ) : (
+                        <p className={styles.muted} style={{ fontSize: 12 }}>
+                          Matching is case-insensitive. We&apos;ll link the visible phrase text as it appears in the article.
+                        </p>
+                      )}
+                    </div>
+                    <div className={styles.modalFooter}>
+                      <button
+                        type="button"
+                        className={styles.btnSecondary}
+                        onClick={() => { setShowLinkModal(null); setLinkDuplicateConflicts([]); }}
                       >
-                        Duplicate phrase — this exact phrase is already used by another link:
-                        <br />
-                        <strong style={{ wordBreak: "break-all" }}>&ldquo;{linkDuplicateConflict.label}&rdquo;</strong>
-                        {" → "}
-                        <span className={styles.muted} style={{ wordBreak: "break-all" }}>{linkDuplicateConflict.url}</span>
-                        <br />
-                        <span className={styles.muted}>Each phrase must be unique. The same URL can appear on multiple different phrases.</span>
-                      </div>
-                    ) : null}
-                    <label className={styles.label}>
-                      Link
-                      <input className={styles.input} value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://example.com/page" />
-                    </label>
-                    <div className={styles.muted} style={{ fontSize: 12 }}>
-                      Matching is case-insensitive. We’ll link the visible phrase text as it appears in the article.
+                        Cancel
+                      </button>
+                      <button
+                        className={styles.button}
+                        type="button"
+                        disabled={!canSave}
+                        onClick={() => {
+                          const id = showLinkModal.id;
+                          const freshConflicts = checkPhrasesForDuplicates(linkPhrase, id);
+                          if (freshConflicts.length > 0) {
+                            setLinkDuplicateConflicts(freshConflicts);
+                            return;
+                          }
+                          const url = linkUrl.trim();
+                          if (isNewLink) {
+                            const phrases = linkPhrase.split(",").map((p) => p.trim()).filter(Boolean);
+                            const newDrafts: LinkDraft[] = phrases.map((phrase) => ({
+                              id: `new_link_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                              label: phrase,
+                              url,
+                              isNew: true,
+                            }));
+                            setLinkDrafts((prev) => [...newDrafts, ...prev.filter((d) => d.id !== id)]);
+                          } else {
+                            setLinkDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, label: linkPhrase.trim(), url } : d)));
+                          }
+                          setLinkDuplicateConflicts([]);
+                          setShowLinkModal(null);
+                        }}
+                      >
+                        {isNewLink
+                          ? phraseCount > 1
+                            ? `Add ${phraseCount} links`
+                            : "Add link"
+                          : "Save link"}
+                      </button>
                     </div>
                   </div>
-                  <div className={styles.modalFooter}>
-                    <button type="button" className={styles.btnSecondary} onClick={() => { setShowLinkModal(null); setLinkDuplicateConflict(null); }}>
-                      Cancel
-                    </button>
-                    <button
-                      className={styles.button}
-                      type="button"
-                      onClick={() => {
-                        const id = showLinkModal.id;
-                        const conflict = findDuplicatePhrase(linkPhrase, id);
-                        if (conflict) {
-                          setLinkDuplicateConflict(conflict);
-                          return;
-                        }
-                        setLinkDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, label: linkPhrase, url: linkUrl } : d)));
-                        setLinkDuplicateConflict(null);
-                        setShowLinkModal(null);
-                      }}
-                      disabled={!linkPhrase.trim() || !linkUrl.trim() || !!linkDuplicateConflict}
-                    >
-                      Save link
-                    </button>
-                  </div>
-                </div>
-              </>
-            ) : null}
+                </>
+              );
+            })() : null}
           </>
         ) : null}
 
