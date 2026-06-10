@@ -2326,6 +2326,13 @@ export const api = {
     );
   },
 
+  async syncWpCategories(projectId: string) {
+    return apiFetch<{ ok: boolean; synced: number }>(
+      `/api/projects/${projectId}/articles/sync-wp-categories`,
+      { method: "POST" },
+    );
+  },
+
   async updateArticle(
     projectId: string,
     articleId: string,

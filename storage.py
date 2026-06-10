@@ -3060,6 +3060,26 @@ def get_article_body_text(*, project_id: str, article_id: str) -> str | None:
     return (doc.get("article") or "")
 
 
+def get_published_articles_missing_wp_categories(project_id: str) -> list[dict[str, Any]]:
+    """Return id+wp_post_id for published articles that have a wp_post_id but empty wp_category_ids."""
+    pid = (project_id or "").strip()
+    if not pid or _storage_mode != "mongo":
+        return []
+    query = {
+        "project_id": pid,
+        "$and": [
+            {"wp_post_id": {"$exists": True}},
+            {"wp_post_id": {"$not": {"$in": [None, 0, ""]}}},
+        ],
+        "$or": [
+            {"wp_category_ids": {"$exists": False}},
+            {"wp_category_ids": None},
+            {"wp_category_ids": ""},
+        ],
+    }
+    return list(get_db().articles.find(query, {"_id": 0, "id": 1, "wp_post_id": 1}))
+
+
 def load_articles_by_ids_for_project(project_id: str, article_ids: list[str]) -> dict[str, dict[str, Any]]:
     """Return article rows keyed by id for bulk schedule / batch operations."""
     pid = (project_id or "").strip()

@@ -1634,6 +1634,77 @@ async def batch_update_article_categories(
     return BatchCategoryResponse(ok=True, results=results)
 
 
+@router.post("/sync-wp-categories")
+async def sync_wp_categories_from_live(
+    project_id: str = Path(...),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """
+    Fetches live WP post categories for published articles that have a wp_post_id
+    but no wp_category_ids stored. Called automatically when the articles tab loads.
+    Non-fatal — returns ok:True with synced count even if WP is unreachable.
+    """
+    st = get_legacy_storage_module()
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
+
+    wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
+    wp_username = (proj.get("wp_username") or "").strip()
+    wp_app_password = (proj.get("wp_app_password") or "").replace(" ", "").strip()
+    if not all([wp_site_url, wp_username, wp_app_password]):
+        return {"ok": True, "synced": 0, "message": "WordPress not configured"}
+
+    articles_missing = await run_sync(
+        call_storage, st.get_published_articles_missing_wp_categories, project_id
+    )
+    if not articles_missing:
+        return {"ok": True, "synced": 0}
+
+    wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
+    await wp.ensure_resolved_site_url()
+
+    # Build mapping wp_post_id (int) → article_id
+    wp_id_map: dict[int, str] = {}
+    for a in articles_missing:
+        pid_val = a.get("wp_post_id")
+        try:
+            wp_id_map[int(pid_val)] = a["id"]
+        except (TypeError, ValueError):
+            pass
+
+    if not wp_id_map:
+        return {"ok": True, "synced": 0}
+
+    synced = 0
+    try:
+        # Batch-fetch WP posts using include[] parameter; 100 per request max
+        wp_ids = list(wp_id_map.keys())
+        for i in range(0, len(wp_ids), 100):
+            batch = wp_ids[i : i + 100]
+            include_qs = "&".join(f"include[]={pid_val}" for pid_val in batch)
+            posts = await wp.get_json(
+                f"/wp-json/wp/v2/posts?{include_qs}&per_page=100&_fields=id,categories",
+                timeout=20.0,
+            )
+            if not isinstance(posts, list):
+                continue
+            for post in posts:
+                post_wp_id = post.get("id")
+                cats = post.get("categories")
+                if not post_wp_id or not cats or not isinstance(cats, list):
+                    continue
+                article_id = wp_id_map.get(int(post_wp_id))
+                if not article_id:
+                    continue
+                cat_str = ",".join(str(c) for c in cats if isinstance(c, int))
+                if cat_str:
+                    await run_sync(st.patch_article_fields, article_id, {"wp_category_ids": cat_str})
+                    synced += 1
+    except Exception:
+        pass  # WP unreachable — non-fatal
+
+    return {"ok": True, "synced": synced}
+
+
 # ---------------------------------------------------------------------------
 # Generation, scheduling, publishing, GSC (downstream of CRUD)
 # ---------------------------------------------------------------------------
@@ -2563,6 +2634,14 @@ async def publish_to_live_site(
     if not created_wp_status:
         created_wp_status = (payload["status"] or "").strip().lower()
 
+    # Use WP-returned categories (captures WP default when none were sent explicitly).
+    _wp_cats_back = created.get("categories") if isinstance(created, dict) else None
+    effective_category_ids = (
+        ",".join(str(c) for c in _wp_cats_back if isinstance(c, int))
+        if _wp_cats_back and isinstance(_wp_cats_back, list)
+        else category_ids
+    )
+
     now_str_pub = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     updates: dict = {
         "wp_post_id": wp_post_id,
@@ -2575,8 +2654,8 @@ async def publish_to_live_site(
         # Clear schedule marker so the UI shows published, not scheduled (same as scheduler after post).
         "wp_scheduled_at": "",
         "wp_schedule_error": "",
-        # Persist the category used so the articles list reflects the live WP category.
-        "wp_category_ids": category_ids,
+        # Persist the category WP actually assigned (including WP default when none were sent).
+        "wp_category_ids": effective_category_ids,
     }
     # Cache the WP media ID so subsequent updates don't re-upload the same image.
     if featured_media_id is not None and featured_media_id > 0:
@@ -3031,6 +3110,14 @@ async def update_wordpress_post(
     if not updated_wp_status:
         updated_wp_status = status_in
 
+    # Use WP-returned categories (captures WP default when none were sent explicitly).
+    _wp_cats_back_upd = updated.get("categories") if isinstance(updated, dict) else None
+    effective_category_ids_upd = (
+        ",".join(str(c) for c in _wp_cats_back_upd if isinstance(c, int))
+        if _wp_cats_back_upd and isinstance(_wp_cats_back_upd, list)
+        else category_ids
+    )
+
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     db_updates: dict = {
         "wp_post_id": wp_post_id,
@@ -3040,8 +3127,8 @@ async def update_wordpress_post(
         "wp_synced_at": now_str,
         "posted_at": now_str if updated_wp_status == "publish" else (a.get("posted_at") or ""),
         "status": "published" if updated_wp_status == "publish" else (a.get("status") or "draft"),
-        # Persist the category used so the articles list reflects the live WP category.
-        "wp_category_ids": category_ids,
+        # Persist the category WP actually assigned (including WP default when none were sent).
+        "wp_category_ids": effective_category_ids_upd,
     }
     # Cache the WP media ID so subsequent updates don't re-upload the same image.
     if featured_media_id is not None and featured_media_id > 0:

@@ -1186,6 +1186,7 @@ export default function ProjectPage() {
   const [articleCategoryEdits, setArticleCategoryEdits] = useState<Record<string, string>>({});
   const [categorySaveBusy, setCategorySaveBusy] = useState(false);
   const [categorySaveError, setCategorySaveError] = useState<string | null>(null);
+  const [wpCatsSyncDone, setWpCatsSyncDone] = useState(false);
   const [scheduleWritingPrompts, setScheduleWritingPrompts] = useState<PromptListResponse | null>(null);
   const [scheduleImagePrompts, setScheduleImagePrompts] = useState<PromptListResponse | null>(null);
   const [scheduleWritingPromptId, setScheduleWritingPromptId] = useState<string>("");
@@ -1423,9 +1424,18 @@ export default function ProjectPage() {
   useEffect(() => {
     if (tab !== "articles" || isShopifyProject || wpCatsForSchedule.length > 0 || !projectId) return;
     api.wordpressCategories(projectId, { timeoutMs: 8000 })
-      .then((cats) => setWpCatsForSchedule(cats))
+      .then((cats) => {
+        setWpCatsForSchedule(cats);
+        // After categories load, sync wp_category_ids from live WP for articles that are missing it.
+        if (!wpCatsSyncDone && cats.length > 0) {
+          setWpCatsSyncDone(true);
+          api.syncWpCategories(projectId)
+            .then((res) => { if (res.synced > 0) refreshArticlesList(); })
+            .catch(() => {});
+        }
+      })
       .catch(() => {});
-  }, [tab, projectId, isShopifyProject, wpCatsForSchedule.length]);
+  }, [tab, projectId, isShopifyProject, wpCatsForSchedule.length, wpCatsSyncDone]);
 
   useEffect(() => {
     if (!token || !projectId || tab !== "overview") return;
