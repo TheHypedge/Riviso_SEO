@@ -7,8 +7,13 @@ RUN npm ci
 
 COPY . .
 
+ARG BACKEND_URL=http://backend:8000
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV BACKEND_URL=${BACKEND_URL}
+RUN npm run build
+
 ENV PORT=3000
 EXPOSE 3000
 
-CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", "3000"]
-
+CMD ["npm", "run", "start"]
