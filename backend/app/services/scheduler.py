@@ -910,6 +910,7 @@ async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_c
                     if created_wp_status == "publish"
                     else (art.get("posted_at") or ""),
                     "status": "published" if created_wp_status == "publish" else (art.get("status") or "draft"),
+                    "wp_category_ids": (job.get("category_ids") or ""),
                 },
             )
 
@@ -1421,6 +1422,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                                 if created_wp_status == "publish"
                                 else (art.get("posted_at") or ""),
                                 "status": "published" if created_wp_status == "publish" else (art.get("status") or "draft"),
+                                "wp_category_ids": (j.get("category_ids") or ""),
                             },
                         )
                         if not ok_article:

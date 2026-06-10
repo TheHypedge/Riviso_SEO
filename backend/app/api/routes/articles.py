@@ -426,6 +426,7 @@ def _to_list_item(a: dict) -> ArticleListItem:
         gsc_status=(a.get("gsc_status") or "").strip() or None,
         wp_link=(a.get("wp_link") or "").strip() or None,
         monitor_status=(a.get("monitor_status") or "").strip() or None,
+        wp_category_ids=(a.get("wp_category_ids") or ""),
     )
 
 
@@ -2574,6 +2575,8 @@ async def publish_to_live_site(
         # Clear schedule marker so the UI shows published, not scheduled (same as scheduler after post).
         "wp_scheduled_at": "",
         "wp_schedule_error": "",
+        # Persist the category used so the articles list reflects the live WP category.
+        "wp_category_ids": category_ids,
     }
     # Cache the WP media ID so subsequent updates don't re-upload the same image.
     if featured_media_id is not None and featured_media_id > 0:
@@ -3037,6 +3040,8 @@ async def update_wordpress_post(
         "wp_synced_at": now_str,
         "posted_at": now_str if updated_wp_status == "publish" else (a.get("posted_at") or ""),
         "status": "published" if updated_wp_status == "publish" else (a.get("status") or "draft"),
+        # Persist the category used so the articles list reflects the live WP category.
+        "wp_category_ids": category_ids,
     }
     # Cache the WP media ID so subsequent updates don't re-upload the same image.
     if featured_media_id is not None and featured_media_id > 0:
