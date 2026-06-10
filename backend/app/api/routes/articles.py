@@ -1636,7 +1636,7 @@ async def batch_update_article_categories(
 
 @router.post("/sync-wp-categories")
 async def sync_wp_categories_from_live(
-    project_id: str = Path(...),
+    project_id: str,
     user: dict = Depends(get_current_user),
 ) -> dict:
     """
