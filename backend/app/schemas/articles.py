@@ -22,6 +22,7 @@ class ArticleListItem(BaseModel):
     gsc_status: str | None = Field(default=None, description="For indexing tooltip in the list UI.")
     wp_link: str | None = Field(default=None, description="Live URL when published; enables indexing/monitor actions.")
     monitor_status: str | None = Field(default=None, description="Rank monitor state for refresh actions.")
+    wp_category_ids: str = Field(default="", description="Comma-separated WordPress category IDs assigned to this article.")
 
 
 class ArticleListPageResponse(BaseModel):
@@ -84,6 +85,7 @@ class ArticlePublic(BaseModel):
     )
     wp_modified_at: str | None = Field(default=None, description="Last modified timestamp from WordPress.")
     wp_synced_at: str | None = Field(default=None, description="When Riviso last pulled this post from WordPress.")
+    wp_category_ids: str = Field(default="", description="Comma-separated WordPress category IDs assigned to this article.")
 
 
 class ArticleCreate(BaseModel):
@@ -347,3 +349,24 @@ class BulkScheduleResponse(BaseModel):
     ok: bool = True
     scheduled: int = 0
     failed: list[BulkScheduleFailure] = Field(default_factory=list)
+
+
+class BatchCategoryItem(BaseModel):
+    article_id: str = Field(min_length=1, max_length=100)
+    wp_category_ids: str = Field(default="", max_length=800, description="Comma-separated WP category IDs.")
+
+
+class BatchCategoryRequest(BaseModel):
+    items: list[BatchCategoryItem] = Field(min_length=1, max_length=500)
+
+
+class BatchCategoryResultItem(BaseModel):
+    article_id: str
+    ok: bool
+    wp_synced: bool = False
+    error: str | None = None
+
+
+class BatchCategoryResponse(BaseModel):
+    ok: bool = True
+    results: list[BatchCategoryResultItem] = Field(default_factory=list)

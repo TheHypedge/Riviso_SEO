@@ -2212,6 +2212,7 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         # queries can use the stored flag/status instead of scanning bodies / 20k rows.
         "has_body": bool((d.get("article") or "").strip()),
         "listing_status": _derive_article_listing_status(d),
+        "wp_category_ids": (d.get("wp_category_ids") or "")[:800],
     }
 
 
@@ -2394,6 +2395,7 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "integrity_ai_percentage",
             "integrity_flagged_paragraphs",
             "integrity_last_audited_at",
+            "wp_category_ids",
         ):
             a[k] = v
 

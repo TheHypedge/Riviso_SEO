@@ -102,6 +102,9 @@ from app.schemas.articles import (
     ArticlePublic,
     ArticleTitleRef,
     ArticleUpdateRequest,
+    BatchCategoryRequest,
+    BatchCategoryResponse,
+    BatchCategoryResultItem,
     BulkActionRequest,
     BulkUploadRequest,
     BulkUploadResponse,
@@ -1570,6 +1573,64 @@ async def update_article(
 
     a2 = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     return _to_detail_response(st=st, user=user, article=a2)
+
+
+@router.post("/batch-categories", response_model=BatchCategoryResponse)
+async def batch_update_article_categories(
+    project_id: str,
+    payload: BatchCategoryRequest,
+    user: dict = Depends(get_current_user),
+) -> BatchCategoryResponse:
+    """Save wp_category_ids for multiple articles; syncs to WordPress for published articles."""
+    st = get_legacy_storage_module()
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
+
+    wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
+    wp_username = (proj.get("wp_username") or "").strip()
+    wp_app_password = (proj.get("wp_app_password") or "").replace(" ", "").strip()
+    wp_connected = bool(wp_site_url and wp_username and wp_app_password)
+
+    results: list[BatchCategoryResultItem] = []
+    for item in payload.items:
+        aid = item.article_id.strip()
+        cat_str = (item.wp_category_ids or "").strip()[:800]
+        try:
+            a = await run_sync(call_storage, _get_article_or_404, st=st, project_id=project_id, article_id=aid)
+        except HTTPException:
+            results.append(BatchCategoryResultItem(article_id=aid, ok=False, error="Article not found"))
+            continue
+        except Exception as e:
+            results.append(BatchCategoryResultItem(article_id=aid, ok=False, error=str(e)))
+            continue
+
+        try:
+            await run_sync(st.patch_article_fields, aid, {"wp_category_ids": cat_str})
+        except Exception as e:
+            results.append(BatchCategoryResultItem(article_id=aid, ok=False, error=f"DB update failed: {e}"))
+            continue
+
+        wp_synced = False
+        wp_post_id = _wp_post_id_int(a)
+        if wp_post_id and wp_connected:
+            cat_ids = _parse_wp_category_ids(cat_str)
+            if cat_ids:
+                try:
+                    from app.services.wordpress_publish import update_post_on_wordpress
+                    wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
+                    rest_base = (a.get("wp_rest_base") or "posts").strip() or "posts"
+                    await update_post_on_wordpress(
+                        wp,
+                        post_type=rest_base,
+                        wp_post_id=wp_post_id,
+                        payload={"categories": cat_ids},
+                    )
+                    wp_synced = True
+                except Exception:
+                    pass  # WP sync failure is non-fatal; DB is already saved
+
+        results.append(BatchCategoryResultItem(article_id=aid, ok=True, wp_synced=wp_synced))
+
+    return BatchCategoryResponse(ok=True, results=results)
 
 
 # ---------------------------------------------------------------------------

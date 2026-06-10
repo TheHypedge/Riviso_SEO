@@ -718,6 +718,7 @@ export type ArticleListItem = {
   gsc_status?: string | null;
   wp_link?: string | null;
   monitor_status?: string | null;
+  wp_category_ids?: string;
 };
 
 export type ArticlePublic = {
@@ -2310,6 +2311,19 @@ export const api = {
     cacheSetValue(_cacheArticleBody, articleDetailCacheKey(projectId, articleId), { article: body.article || "" });
     if (imageUrl) cacheSetValue(_cacheFeaturedImage, articleDetailCacheKey(projectId, articleId), { image_url: imageUrl });
     return merged;
+  },
+
+  async updateArticleCategories(
+    projectId: string,
+    items: Array<{ article_id: string; wp_category_ids: string }>,
+  ) {
+    return apiFetch<{ ok: boolean; results: Array<{ article_id: string; ok: boolean; wp_synced: boolean; error?: string | null }> }>(
+      `/api/projects/${projectId}/articles/batch-categories`,
+      {
+        method: "POST",
+        body: JSON.stringify({ items }),
+      },
+    );
   },
 
   async updateArticle(

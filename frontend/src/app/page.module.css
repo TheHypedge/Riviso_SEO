@@ -2151,8 +2151,9 @@
   grid-template-columns:
     36px
     minmax(0, 1.45fr)
+    minmax(0, 0.85fr)
     minmax(0, 0.95fr)
-    minmax(0, 1.1fr)
+    minmax(0, 130px)
     minmax(64px, 88px)
     minmax(0, 148px);
   gap: 10px 12px;
@@ -2182,7 +2183,7 @@
   white-space: nowrap;
 }
 
-.articlesTableHead span:nth-child(6) {
+.articlesTableHead span:nth-child(7) {
   text-align: right;
 }
 
@@ -2263,6 +2264,57 @@
   min-width: 0;
   max-width: 100%;
   overflow: visible;
+}
+
+.articlesTableCategoryCol {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.articlesTableCategorySelect {
+  width: 100%;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--aa-hairline);
+  border-radius: 6px;
+  color: var(--aa-body-strong);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 4px 22px 4px 7px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a09d96' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 10px 6px;
+  transition: border-color 0.15s ease;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.articlesTableCategorySelect:focus {
+  outline: none;
+  border-color: var(--aa-primary);
+}
+
+.articlesTableCategoryDirty {
+  border-color: var(--aa-primary);
+  background-color: rgba(217, 119, 87, 0.08);
+}
+
+.articlesCategorySaveWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.articlesCategorySaveError {
+  font-size: 12px;
+  color: var(--aa-error);
 }
 
 .articlesTableTooltipWrap {
@@ -4141,8 +4193,9 @@
     grid-template-columns:
       32px
       minmax(0, 1.35fr)
+      minmax(0, 0.75fr)
       minmax(0, 0.85fr)
-      minmax(0, 1fr)
+      minmax(0, 110px)
       minmax(64px, 76px)
       minmax(0, 136px);
     gap: 8px 8px;
