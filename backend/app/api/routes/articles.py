@@ -1662,43 +1662,56 @@ async def sync_wp_categories_from_live(
     wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
     await wp.ensure_resolved_site_url()
 
-    # Build mapping wp_post_id (int) → article_id
-    wp_id_map: dict[int, str] = {}
+    default_rest_base = (proj.get("default_wp_rest_base") or "posts").strip() or "posts"
+
+    # Group articles by their rest_base — custom post types (e.g. "articles", "article")
+    # live under /wp-json/wp/v2/{rest_base}, not under the default /wp-json/wp/v2/posts.
+    # wp_id_map: rest_base → { wp_post_id(int) → article_id }
+    wp_id_map: dict[str, dict[int, str]] = {}
     for a in articles_missing:
         pid_val = a.get("wp_post_id")
+        rest_base = (a.get("wp_rest_base") or default_rest_base).strip() or "posts"
         try:
-            wp_id_map[int(pid_val)] = a["id"]
+            wp_id_int = int(pid_val)
         except (TypeError, ValueError):
-            pass
+            continue
+        wp_id_map.setdefault(rest_base, {})[wp_id_int] = a["id"]
 
     if not wp_id_map:
         return {"ok": True, "synced": 0}
 
     synced = 0
     try:
-        # Batch-fetch WP posts using include[] parameter; 100 per request max
-        wp_ids = list(wp_id_map.keys())
-        for i in range(0, len(wp_ids), 100):
-            batch = wp_ids[i : i + 100]
-            include_qs = "&".join(f"include[]={pid_val}" for pid_val in batch)
-            posts = await wp.get_json(
-                f"/wp-json/wp/v2/posts?{include_qs}&per_page=100&_fields=id,categories",
-                timeout=20.0,
-            )
-            if not isinstance(posts, list):
-                continue
-            for post in posts:
-                post_wp_id = post.get("id")
-                cats = post.get("categories")
-                if not post_wp_id or not cats or not isinstance(cats, list):
+        for rest_base, id_map in wp_id_map.items():
+            wp_ids = list(id_map.keys())
+            for i in range(0, len(wp_ids), 100):
+                batch = wp_ids[i : i + 100]
+                seen_wp_ids: set[int] = set()
+                include_qs = "&".join(f"include[]={pid_val}" for pid_val in batch)
+                posts = await wp.get_json(
+                    f"/wp-json/wp/v2/{rest_base}?{include_qs}&per_page=100&_fields=id,categories",
+                    timeout=20.0,
+                )
+                if not isinstance(posts, list):
                     continue
-                article_id = wp_id_map.get(int(post_wp_id))
-                if not article_id:
-                    continue
-                cat_str = ",".join(str(c) for c in cats if isinstance(c, int))
-                if cat_str:
+                for post in posts:
+                    post_wp_id = post.get("id")
+                    cats = post.get("categories")
+                    if not post_wp_id or not isinstance(cats, list):
+                        continue
+                    article_id = id_map.get(int(post_wp_id))
+                    if not article_id:
+                        continue
+                    seen_wp_ids.add(int(post_wp_id))
+                    cat_str = ",".join(str(c) for c in cats if isinstance(c, int))
+                    # "" = synced with no categories; not-None prevents future re-sync
                     await run_sync(st.patch_article_fields, article_id, {"wp_category_ids": cat_str})
                     synced += 1
+                # WP posts not returned (deleted/trashed) — mark as synced with ""
+                for missing_wp_id in set(batch) - seen_wp_ids:
+                    article_id = id_map.get(missing_wp_id)
+                    if article_id:
+                        await run_sync(st.patch_article_fields, article_id, {"wp_category_ids": ""})
     except Exception:
         pass  # WP unreachable — non-fatal
 

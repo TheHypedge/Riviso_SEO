@@ -3074,10 +3074,9 @@ def get_published_articles_missing_wp_categories(project_id: str) -> list[dict[s
         "$or": [
             {"wp_category_ids": {"$exists": False}},
             {"wp_category_ids": None},
-            {"wp_category_ids": ""},
         ],
     }
-    return list(get_db().articles.find(query, {"_id": 0, "id": 1, "wp_post_id": 1}))
+    return list(get_db().articles.find(query, {"_id": 0, "id": 1, "wp_post_id": 1, "wp_rest_base": 1}))
 
 
 def load_articles_by_ids_for_project(project_id: str, article_ids: list[str]) -> dict[str, dict[str, Any]]:
