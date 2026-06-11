@@ -3292,6 +3292,7 @@ _LISTING_PROJECTION_STAGE = {
         "monitor_status": 1,
         "shopify_link": 1,
         "shopify_article_id": 1,
+        "wp_category_ids": 1,
         # Prefer the persisted flag (P4.3); fall back to a body length check only
         # for rows written before the backfill ran.
         "hasBody": {"$ifNull": ["$has_body", {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]}]},
