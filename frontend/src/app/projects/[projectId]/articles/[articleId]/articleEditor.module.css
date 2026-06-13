@@ -6,6 +6,12 @@
   margin: 0 auto;
 }
 
+@media (min-width: 981px) {
+  .pageShell {
+    padding: 24px 24px 48px;
+  }
+}
+
 .pageHeader {
   display: flex;
   flex-direction: column;
@@ -334,7 +340,8 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  min-height: min(72vh, 720px);
+  /* svh = smallest viewport height — stable during mobile scroll, unlike vh */
+  min-height: min(72svh, 720px);
 }
 
 .contentCardBody {
@@ -400,7 +407,7 @@
     color-mix(in srgb, var(--aa-surface-2, #1a1a1a) 85%, var(--aa-accent) 15%) 50%,
     color-mix(in srgb, var(--aa-surface-2, #141414) 92%, var(--aa-accent) 8%) 100%
   );
-  background-size: 200% 200%;
+  /* opacity pulse replaces background-position animation — compositor-only, no paint */
   animation: imageSkeletonBg 2.4s ease-in-out infinite;
 }
 
@@ -452,16 +459,18 @@
 .imageSkeletonShimmer {
   position: absolute;
   inset: 0;
+  /* Sweep uses transform instead of background-position — compositor-only, no paint */
   background: linear-gradient(
     105deg,
     transparent 0%,
-    transparent 35%,
+    transparent 20%,
     color-mix(in srgb, var(--aa-accent) 28%, transparent) 50%,
-    transparent 65%,
+    transparent 80%,
     transparent 100%
   );
-  background-size: 220% 100%;
   animation: imageSkeletonSweep 1.4s linear infinite;
+  will-change: transform;
+  pointer-events: none;
 }
 
 .imageSkeletonContent {
@@ -480,10 +489,10 @@
 @keyframes imageSkeletonBg {
   0%,
   100% {
-    background-position: 0% 50%;
+    opacity: 0.88;
   }
   50% {
-    background-position: 100% 50%;
+    opacity: 1;
   }
 }
 
@@ -512,11 +521,12 @@
 }
 
 @keyframes imageSkeletonSweep {
+  /* translateX replaces background-position — runs on the compositor thread */
   0% {
-    background-position: 220% 0;
+    transform: translateX(-100%);
   }
   100% {
-    background-position: -220% 0;
+    transform: translateX(100%);
   }
 }
 
@@ -555,6 +565,7 @@
   border-top-color: var(--aa-accent);
   border-right-color: color-mix(in srgb, var(--aa-accent) 55%, transparent);
   animation: imageSpin 0.75s linear infinite;
+  will-change: transform;
 }
 
 @keyframes imageSpin {
@@ -779,6 +790,14 @@
   .backLink,
   .toggleBtn {
     transition: none;
+  }
+
+  .imageSkeleton,
+  .imageSkeletonPulse,
+  .imageSkeletonShimmer,
+  .imageSkeletonBars span,
+  .imageSpinner {
+    animation: none;
   }
 }
 

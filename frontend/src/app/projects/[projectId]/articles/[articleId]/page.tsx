@@ -359,10 +359,22 @@ export default function ArticleEditPage() {
       setFlaggedParagraphs([]);
       return;
     }
-    const timer = window.setTimeout(() => {
-      applyIntegrityResult(auditMarkdown(md), { autoHighlight: false });
-    }, 450);
-    return () => window.clearTimeout(timer);
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    const run = () => applyIntegrityResult(auditMarkdown(md), { autoHighlight: false });
+    let idleId: number | null = null;
+    let timerId: number | null = null;
+    if (typeof w.requestIdleCallback === "function") {
+      idleId = w.requestIdleCallback(run, { timeout: 2000 });
+    } else {
+      timerId = window.setTimeout(run, 450);
+    }
+    return () => {
+      if (idleId !== null && typeof w.cancelIdleCallback === "function") w.cancelIdleCallback(idleId);
+      if (timerId !== null) window.clearTimeout(timerId);
+    };
   }, [body, applyIntegrityResult]);
 
   const isDirty = useMemo(() => {

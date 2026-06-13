@@ -50,6 +50,9 @@ export type ArticleRichEditorProps = {
 
 export function ArticleRichEditor({ value, onChange, placeholder, contentRevision = 0 }: ArticleRichEditorProps) {
   const syncingFromParent = useRef(false);
+  // Track the last markdown we sent to the parent so the sync useEffect can skip
+  // the expensive htmlToMarkdown(editor.getHTML()) comparison on every keystroke.
+  const lastSentMd = useRef<string>((value || "").trim());
   const [blockFormat, setBlockFormat] = useState<BlockFormat>("paragraph");
 
   const extensions = useMemo(
@@ -91,6 +94,7 @@ export function ArticleRichEditor({ value, onChange, placeholder, contentRevisio
       },
       onUpdate: ({ editor: ed }) => {
         const md = htmlToMarkdown(ed.getHTML());
+        lastSentMd.current = md; // record what we told the parent
         syncingFromParent.current = true;
         setBlockFormat(activeBlockFormat(ed));
         onChange(md);
@@ -105,10 +109,12 @@ export function ArticleRichEditor({ value, onChange, placeholder, contentRevisio
   useEffect(() => {
     if (!editor) return;
     const incomingMd = (value || "").trim();
-    const currentMd = htmlToMarkdown(editor.getHTML()).trim();
-    if (incomingMd === currentMd) return;
+    // Fast path: value is what we just sent from this editor — no need to call
+    // setContent or run the expensive htmlToMarkdown(getHTML()) comparison.
+    if (incomingMd === lastSentMd.current.trim()) return;
     syncingFromParent.current = true;
     editor.commands.setContent(markdownToArticleHtml(value), { emitUpdate: false });
+    lastSentMd.current = incomingMd;
     queueMicrotask(() => {
       syncingFromParent.current = false;
       setBlockFormat(activeBlockFormat(editor));

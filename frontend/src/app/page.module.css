@@ -659,7 +659,7 @@
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
-    -webkit-overflow-scrolling: touch;
+    /* -webkit-overflow-scrolling: touch removed — deprecated, causes stickiness/stacking glitches */
   }
 
   /* Don't shrink stacked sections — let contentCol scroll instead of clipping rows. */
