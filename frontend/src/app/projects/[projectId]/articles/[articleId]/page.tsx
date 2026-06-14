@@ -18,12 +18,9 @@ import {
   invalidateArticleDetailCache,
   PromptListResponse,
 } from "@/lib/api";
-import { ArticleEditorIntegritySkeleton, ArticleEditorSkeleton } from "@/components/ArticleEditorSkeleton";
-import { ArticleIntegrityBody } from "@/components/ArticleIntegrityBody";
-import { IntegrityHumanizeCompare } from "@/components/IntegrityHumanizeCompare";
+import { ArticleEditorSkeleton } from "@/components/ArticleEditorSkeleton";
 import { ArticleReadonlyBody } from "@/components/ArticleReadonlyBody";
 import { LazyArticleImage } from "@/components/LazyArticleImage";
-import { auditMarkdown, type IntegrityFlag, type IntegritySignal } from "@/lib/rivisoLinguistics";
 import { readArticleEditorCache, writeArticleEditorCache } from "@/lib/articleEditorCache";
 import { articleEditorPath, formatArticleLoadError } from "@/lib/articlePaths";
 import { connectionErrorMessage, isDatabaseUnavailable } from "@/lib/networkErrors";
@@ -45,49 +42,6 @@ import type { MappedWordPressPage } from "@/lib/wordpressPageMapping";
 import { resolveFeaturedImageFileForWordPress } from "@/lib/featuredImageFile";
 import { formatShopifyBlogOptionLabel, SHOPIFY_BLOG_CHANNEL_HELP } from "@/lib/shopifyBlogLabel";
 
-function clampPct(n: number) {
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(100, n));
-}
-
-function IntegrityRing({ value, label }: { value: number; label: string }) {
-  const pct = clampPct(value);
-  const r = 18;
-  const c = 2 * Math.PI * r;
-  const dash = (pct / 100) * c;
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-      <svg width="44" height="44" viewBox="0 0 44 44" aria-label={label}>
-        <circle cx="22" cy="22" r={r} fill="none" stroke="rgba(255,255,255,0.10)" strokeWidth="4" />
-        <circle
-          cx="22"
-          cy="22"
-          r={r}
-          fill="none"
-          stroke="rgba(217,119,87,0.95)"
-          strokeWidth="4"
-          strokeLinecap="round"
-          strokeDasharray={`${dash} ${c - dash}`}
-          transform="rotate(-90 22 22)"
-        />
-      </svg>
-      <div style={{ display: "grid", gap: 2 }}>
-        <div
-          style={{
-            fontSize: 12,
-            fontWeight: 800,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            color: "rgba(255,255,255,0.62)",
-          }}
-        >
-          {label}
-        </div>
-        <div style={{ fontSize: 16, fontWeight: 800, color: "rgba(255,255,255,0.94)" }}>{Math.round(pct)}%</div>
-      </div>
-    </div>
-  );
-}
 
 const ArticleRichEditor = dynamic(
   () => import("@/components/ArticleRichEditor").then((m) => m.ArticleRichEditor),
@@ -312,24 +266,8 @@ export default function ArticleEditPage() {
       !!(projectSettings?.shopify_verified_at || "").trim()
     : (projectSettings?.wp_verified_status || "").trim().toLowerCase() === "connected";
 
-  // Integrity dashboard
-  const [integrityLoading, setIntegrityLoading] = useState(false);
-  const [aiPct, setAiPct] = useState<number>(0);
-  const [flaggedParagraphs, setFlaggedParagraphs] = useState<IntegrityFlag[]>([]);
-  const [highlightAi, setHighlightAi] = useState(false);
-  const [humanizeBusy, setHumanizeBusy] = useState(false);
-  const [showIntegrityModal, setShowIntegrityModal] = useState(false);
-  const [integrityOriginal, setIntegrityOriginal] = useState("");
-  const [integrityHumanized, setIntegrityHumanized] = useState("");
-  const [integrityRewritten, setIntegrityRewritten] = useState<
-    { index: number; before: string; after: string }[]
-  >([]);
-  const [integrityAiBefore, setIntegrityAiBefore] = useState<number | null>(null);
-  const [integrityAiAfter, setIntegrityAiAfter] = useState<number | null>(null);
   const [editorRevision, setEditorRevision] = useState(0);
 
-  const flaggedIndices = useMemo(() => flaggedParagraphs.map((p) => p.index), [flaggedParagraphs]);
-  const canHumanize = body.trim().length >= 40;
   const isPublishedArticle = articleStatus === "published";
 
   const hasGeneratedContent = useMemo(
@@ -341,41 +279,6 @@ export default function ArticleEditPage() {
       !!(article?.generated_at || "").trim(),
     [article?.generated_at, body, generatedImageUrl, metaDesc, metaTitle],
   );
-
-  const applyIntegrityResult = useCallback(
-    (res: { ai_percentage: number; flagged_paragraphs?: IntegrityFlag[] }, opts?: { autoHighlight?: boolean }) => {
-      setAiPct(clampPct(res.ai_percentage));
-      const flags = (res.flagged_paragraphs || []) as IntegrityFlag[];
-      setFlaggedParagraphs(flags);
-      if (opts?.autoHighlight !== false && flags.length) setHighlightAi(true);
-    },
-    [],
-  );
-
-  useEffect(() => {
-    const md = body.trim();
-    if (!md) {
-      setAiPct(0);
-      setFlaggedParagraphs([]);
-      return;
-    }
-    const w = window as unknown as {
-      requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
-      cancelIdleCallback?: (id: number) => void;
-    };
-    const run = () => applyIntegrityResult(auditMarkdown(md), { autoHighlight: false });
-    let idleId: number | null = null;
-    let timerId: number | null = null;
-    if (typeof w.requestIdleCallback === "function") {
-      idleId = w.requestIdleCallback(run, { timeout: 2000 });
-    } else {
-      timerId = window.setTimeout(run, 450);
-    }
-    return () => {
-      if (idleId !== null && typeof w.cancelIdleCallback === "function") w.cancelIdleCallback(idleId);
-      if (timerId !== null) window.clearTimeout(timerId);
-    };
-  }, [body, applyIntegrityResult]);
 
   const isDirty = useMemo(() => {
     if (!editorBaseline) return false;
@@ -503,47 +406,6 @@ export default function ArticleEditPage() {
     };
   }, [isWordPressProject, params.projectId, token]);
 
-  const applyStoredIntegrity = useCallback(
-    (a: ArticleDetail) => {
-      const storedPct = a.integrity_ai_percentage;
-      const storedFlags = a.integrity_flagged_paragraphs;
-      if (storedPct != null && Array.isArray(storedFlags) && storedFlags.length) {
-        applyIntegrityResult(
-          { ai_percentage: Number(storedPct), flagged_paragraphs: storedFlags as IntegrityFlag[] },
-          { autoHighlight: true },
-        );
-        return;
-      }
-      setAiPct(0);
-      setFlaggedParagraphs([]);
-    },
-    [applyIntegrityResult],
-  );
-
-  const scheduleIntegrityAudit = useCallback(
-    (articleMd: string, a?: ArticleDetail | null) => {
-      const md = articleMd.trim();
-      if (!md) {
-        setAiPct(0);
-        setFlaggedParagraphs([]);
-        return;
-      }
-      const run = () => {
-        applyIntegrityResult(auditMarkdown(md), { autoHighlight: false });
-        if (a) applyStoredIntegrity(a);
-      };
-      const w = window as unknown as {
-        requestIdleCallback?: (cb: () => void, opts?: { timeout?: number }) => number;
-      };
-      if (typeof w.requestIdleCallback === "function") {
-        w.requestIdleCallback(run, { timeout: 2500 });
-      } else {
-        window.setTimeout(run, 0);
-      }
-    },
-    [applyIntegrityResult, applyStoredIntegrity],
-  );
-
   const loadFeaturedImageFromApi = useCallback(
     async (opts?: { force?: boolean }) => {
       const articleKey = `${params.projectId}:${params.articleId}`;
@@ -618,9 +480,8 @@ export default function ArticleEditPage() {
       // Disk-backed image: keep any already-loaded URL; dedicated effect fetches once.
       // Post type is NOT synced from article.wp_rest_base here — ensureWpMetaLoaded
       // always sets it from the project's current default_wp_rest_base.
-      applyStoredIntegrity(a);
     },
-    [applyStoredIntegrity, params.projectId, params.articleId],
+    [params.projectId, params.articleId],
   );
 
   const applyArticleBody = useCallback(
@@ -640,9 +501,8 @@ export default function ArticleEditPage() {
         }),
       );
       setEditorRevision((r) => r + 1);
-      scheduleIntegrityAudit(bodyText, shell);
     },
-    [scheduleIntegrityAudit],
+    [],
   );
 
   const hydrateEditorFromArticle = useCallback(
@@ -1440,38 +1300,6 @@ export default function ArticleEditPage() {
     }
   }
 
-  async function runHumanization() {
-    if (!body.trim()) return;
-    setHumanizeBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      await runWithArticlePipelineMonitor(
-        params.projectId,
-        params.articleId,
-        async () => {
-          const res = await api.humanizeArticleIntegrity(params.projectId, params.articleId, body, {
-            timeoutMs: 120_000,
-            skipGlobalLoading: true,
-          });
-          setIntegrityOriginal(res.original_markdown || body);
-          setIntegrityHumanized(res.humanized_markdown || body);
-          setIntegrityRewritten(res.rewritten || []);
-          setIntegrityAiBefore(res.before?.ai_percentage ?? null);
-          setIntegrityAiAfter(res.after?.ai_percentage ?? null);
-          if (res.after) applyIntegrityResult(res.after);
-          setHighlightAi(true);
-          setShowIntegrityModal(true);
-        },
-        { initialMessage: "Running structural humanization — connecting to live pipeline stream…" },
-      );
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Humanization failed");
-    } finally {
-      setHumanizeBusy(false);
-    }
-  }
-
   async function copyLiveUrl() {
     if (!wpLink) return;
     try {
@@ -2106,86 +1934,6 @@ export default function ArticleEditPage() {
           </div>
         ) : null}
 
-        {showIntegrityModal ? (
-          <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Integrity comparison">
-            <div className={styles.modalPanel} style={{ maxWidth: 1100, width: "min(96vw, 1100px)" }}>
-              <div className={styles.modalHead}>
-                <h3 className={styles.modalTitle}>Review humanized changes</h3>
-                <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setShowIntegrityModal(false)}>
-                  ×
-                </button>
-              </div>
-              <div className={styles.modalBody}>
-                <p className={styles.muted} style={{ margin: "0 0 12px", fontSize: 13, lineHeight: 1.5 }}>
-                  Green highlights show rewritten text. Click <strong>Apply to editor</strong> before copying the full
-                  article so every paragraph is updated—not only the flagged sections.
-                </p>
-                <IntegrityHumanizeCompare
-                  original={integrityOriginal || body}
-                  humanized={integrityHumanized || body}
-                  rewritten={integrityRewritten}
-                  aiBefore={integrityAiBefore}
-                  aiAfter={integrityAiAfter}
-                />
-              </div>
-              <div className={styles.modalFooter}>
-                <button className={styles.btnSecondary} type="button" onClick={() => setShowIntegrityModal(false)}>
-                  Cancel
-                </button>
-                <button
-                  className={styles.button}
-                  type="button"
-                  disabled={!integrityHumanized?.trim()}
-                  onClick={() => {
-                    const next = (integrityHumanized || "").trim();
-                    if (!next) return;
-                    setHighlightAi(false);
-                    setBody(next);
-                    setEditorRevision((k) => k + 1);
-                    applyIntegrityResult(auditMarkdown(next), { autoHighlight: false });
-                    setShowIntegrityModal(false);
-                    setNotice("Humanized article applied to the editor.");
-                    void api
-                      .updateArticle(
-                        params.projectId,
-                        params.articleId,
-                        {
-                          title,
-                          keywords: kwFromString(keywords),
-                          focus_keyphrase: focus,
-                          article: next,
-                          meta_title: metaTitle,
-                          meta_description: metaDesc,
-                        },
-                        { skipGlobalLoading: true, timeoutMs: 30_000 },
-                      )
-                      .then((updated) => {
-                        setArticle(updated);
-                        setEditorBaseline(
-                          baselineFromFields({
-                            title,
-                            keywords,
-                            focus,
-                            body: next,
-                            metaTitle,
-                            metaDesc,
-                            imageUrl: generatedImageUrl,
-                          }),
-                        );
-                      })
-                      .catch((e) => {
-                        setEditorBaseline((prev) => (prev ? { ...prev, body: next } : prev));
-                        if (e instanceof Error) setError(e.message);
-                      });
-                  }}
-                >
-                  Apply to editor
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
-
         {showImageRegenModal ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Regenerate featured image">
             <div className={styles.modalPanel} style={{ maxWidth: 520 }}>
@@ -2578,29 +2326,14 @@ export default function ArticleEditPage() {
                 {bodyLoading ? (
                   <ArticleEditorSkeleton bodyOnly />
                 ) : editorLocked ? (
-                  highlightAi && body.trim() ? (
-                    <ArticleIntegrityBody markdown={body} flaggedIndices={flaggedIndices} />
-                  ) : (
-                    <ArticleReadonlyBody key={editorRevision} markdown={body} />
-                  )
+                  <ArticleReadonlyBody key={editorRevision} markdown={body} />
                 ) : (
-                  <>
-                    <ArticleRichEditor
-                      key={editorRevision}
-                      contentRevision={editorRevision}
-                      value={body}
-                      onChange={setBody}
-                    />
-                    {highlightAi && body.trim() ? (
-                      <div className={styles.integrityHighlightPanel}>
-                        <p className={styles.integrityHighlightBanner} style={{ marginTop: 12 }}>
-                          Flagged passages below use the same layout as your article. Keep editing above; uncheck the
-                          sidebar toggle to hide this preview.
-                        </p>
-                        <ArticleIntegrityBody markdown={body} flaggedIndices={flaggedIndices} />
-                      </div>
-                    ) : null}
-                  </>
+                  <ArticleRichEditor
+                    key={editorRevision}
+                    contentRevision={editorRevision}
+                    value={body}
+                    onChange={setBody}
+                  />
                 )}
               </div>
               {showUpdateWordPress && hasPendingWpChanges ? (
@@ -2614,91 +2347,6 @@ export default function ArticleEditPage() {
           </div>
 
           <div className={editorStyles.sidebarCol}>
-            <div className={editorStyles.sectionCard}>
-              <div className={editorStyles.sectionHeadRow}>
-                <h2 className={editorStyles.sectionTitle}>Integrity</h2>
-                <button
-                  type="button"
-                  className={styles.btnSecondary}
-                  onClick={() => {
-                    setIntegrityLoading(true);
-                    void api
-                      .auditArticleIntegrity(params.projectId, params.articleId, body, { timeoutMs: 8_000 })
-                      .then((res) => applyIntegrityResult(res))
-                      .finally(() => setIntegrityLoading(false));
-                  }}
-                  disabled={integrityLoading || !body.trim()}
-                  title={!body.trim() ? "Generate or add article content to audit integrity" : "Re-run integrity audit"}
-                >
-                  {integrityLoading ? "Auditing…" : "Re-audit"}
-                </button>
-              </div>
-
-              {bodyLoading ? (
-                <ArticleEditorIntegritySkeleton />
-              ) : (
-              <>
-              <div style={{ display: "grid", gap: 12, marginTop: 2 }}>
-                <IntegrityRing value={100 - aiPct} label="Human score" />
-                <IntegrityRing value={aiPct} label="AI risk" />
-              </div>
-
-              <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-                <label className={styles.label} style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>
-                  <input
-                    type="checkbox"
-                    checked={highlightAi}
-                    onChange={(e) => setHighlightAi(e.target.checked)}
-                    disabled={!body.trim()}
-                  />
-                  Highlight AI-like content in article
-                </label>
-
-                {highlightAi && flaggedParagraphs.length ? (
-                  <div className={editorStyles.integrityFlagList}>
-                    {flaggedParagraphs.slice(0, 4).map((p) => (
-                      <div key={p.index} className={editorStyles.integrityFlagCard}>
-                        <div className={editorStyles.integrityFlagLabel}>Paragraph {p.index + 1}</div>
-                        <div className={editorStyles.integrityFlagReason}>{p.reason}</div>
-                        {(p.signals as IntegritySignal[] | undefined)?.slice(0, 2).map((sig) => (
-                          <div key={`${p.index}-${sig.label}`} className={editorStyles.integrityFlagSignal}>
-                            <span className={editorStyles.integrityFlagSignalLabel}>{sig.label}:</span> {sig.detail}
-                          </div>
-                        ))}
-                      </div>
-                    ))}
-                    {flaggedParagraphs.length > 4 ? (
-                      <div className={styles.muted} style={{ fontSize: 12 }}>
-                        +{flaggedParagraphs.length - 4} more flagged paragraphs
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                <button
-                  type="button"
-                  className={`${styles.button} ${canHumanize ? styles.wpUpdateButtonActive : ""}`}
-                  onClick={() => void runHumanization()}
-                  disabled={humanizeBusy || !body.trim() || !canHumanize}
-                  title={
-                    !canHumanize
-                      ? "Add more article content to humanize"
-                      : "Paraphrase the entire article (all industries)"
-                  }
-                >
-                  {humanizeBusy ? "Humanizing…" : isPublishedArticle ? "Humanize →" : "Apply Structural Humanization"}
-                </button>
-                {isPublishedArticle && canHumanize ? (
-                  <p className={styles.muted} style={{ fontSize: 12, margin: 0, lineHeight: 1.45 }}>
-                    Works on published articles. Review changes in the comparison modal, apply to the editor, then use
-                    Update article to push to WordPress.
-                  </p>
-                ) : null}
-              </div>
-              </>
-              )}
-            </div>
-
             <div className={editorStyles.sectionCard}>
               <h2 className={editorStyles.sectionTitle}>Featured image</h2>
               <div className={styles.articleImageFrame}>
