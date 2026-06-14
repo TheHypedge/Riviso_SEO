@@ -814,6 +814,7 @@ export type ArticleDetail = ArticlePublic & {
   topic_slot_id?: string | null;
   topic_role?: string | null;
   cluster_link_context?: ClusterLinkContext | null;
+  generate_image?: boolean | null;
 };
 
 export type ArticleOperationQueuedResponse = {

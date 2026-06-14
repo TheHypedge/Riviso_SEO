@@ -399,25 +399,25 @@ export default function ArticleEditPage() {
 
   const requestNavigation = useCallback(
     (href: string) => {
-      if (hasUnsavedChanges) {
+      if (editorBaseline !== null && hasUnsavedChanges) {
         setPendingLeaveHref(href);
         setLeaveConfirmOpen(true);
         return;
       }
       router.push(href);
     },
-    [hasUnsavedChanges, router],
+    [editorBaseline, hasUnsavedChanges, router],
   );
 
   useEffect(() => {
-    if (!hasUnsavedChanges) return;
+    if (!editorBaseline || !hasUnsavedChanges) return;
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
-  }, [hasUnsavedChanges]);
+  }, [editorBaseline, hasUnsavedChanges]);
 
   function showWebsiteConnectionErrorIfNeeded(e: unknown) {
     if (e instanceof ApiError && e.detail && typeof e.detail === "object" && !Array.isArray(e.detail)) {
@@ -605,6 +605,7 @@ export default function ArticleEditPage() {
       setFocus(a.focus_keyphrase || "");
       setMetaTitle(a.meta_title || "");
       setMetaDesc(a.meta_description || "");
+      setGenerateImage(a.generate_image ?? true);
       const inlineImage = (a.image_url || "").trim();
       if (inlineImage) {
         setGeneratedImageUrl(inlineImage);
@@ -1723,7 +1724,7 @@ export default function ArticleEditPage() {
                         ? "Update Shopify"
                         : "Publish to Shopify"}
                   </button>
-                ) : showUpdateWordPress ? (
+                ) : showUpdateWordPress && hasPendingWpChanges ? (
                   <button
                     type="button"
                     className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`}
@@ -2336,7 +2337,7 @@ export default function ArticleEditPage() {
                 </h3>
               </div>
               <div className={styles.modalBody} style={{ display: "grid", gap: 10 }}>
-                <p style={{ margin: 0, lineHeight: 1.55, fontSize: 14 }}>
+                <p style={{ margin: 0, lineHeight: 1.55, fontSize: 14, color: "var(--aa-ink)" }}>
                   You have unsaved changes on this article. If you leave now, your edits will be lost and will not be
                   pushed to WordPress.
                 </p>
