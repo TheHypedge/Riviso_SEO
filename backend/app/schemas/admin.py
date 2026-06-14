@@ -110,6 +110,18 @@ class PlanPublic(BaseModel):
     extra: dict[str, Any] | None = None
 
 
+class AdminBulkUserUpdateItem(BaseModel):
+    user_id: str
+    role: str | None = None
+    subscription_type: str | None = None
+    full_name: str | None = None
+
+
+class AdminBulkUserUpdateResult(BaseModel):
+    updated: list[AdminUserPublic]
+    errors: list[dict[str, str]]
+
+
 class PlanUpsert(BaseModel):
     name: str | None = None
     is_default: bool | None = None

@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { DashboardNavIcon } from "@/components/DashboardNavIcon";
@@ -110,9 +110,16 @@ export default function DashboardPage() {
   const [deleteUserTarget, setDeleteUserTarget] = useState<{ id: string; name: string } | null>(null);
   const [wpPluginError, setWpPluginError] = useState<string | null>(null);
 
-  // Admin modules
-  const [users, setUsers] = useState<AdminUserPublic[]>([]);
+  // Admin modules — users
+  const [savedUsers, setSavedUsers] = useState<AdminUserPublic[]>([]);
+  const [userEdits, setUserEdits] = useState<Record<string, { role?: string; subscription_type?: string; full_name?: string }>>({});
   const [usersLoading, setUsersLoading] = useState(false);
+  const [usersSaving, setUsersSaving] = useState(false);
+  const [usersSuccessMsg, setUsersSuccessMsg] = useState<string | null>(null);
+  const usersSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showUsersLeaveModal, setShowUsersLeaveModal] = useState(false);
+  const [usersLeavePending, setUsersLeavePending] = useState<(() => void) | null>(null);
+  const usersLeaveModalTrapRef = useFocusTrap(showUsersLeaveModal);
   const [userDetails, setUserDetails] = useState<AdminUserDetails | null>(null);
   const [userDetailsLoading, setUserDetailsLoading] = useState(false);
   const [userWorkspace, setUserWorkspace] = useState<AdminWorkspaceResponse | null>(null);
@@ -151,6 +158,14 @@ export default function DashboardPage() {
     if (!uniq.includes("UTC")) uniq.push("UTC");
     return uniq;
   }, [browserTimeZone]);
+
+  const users = useMemo(
+    () => savedUsers.map((u) => ({ ...u, ...(userEdits[u.id] ?? {}) })),
+    [savedUsers, userEdits],
+  );
+
+  const usersDirty = useMemo(() => Object.keys(userEdits).length > 0, [userEdits]);
+  const usersDirtyCount = useMemo(() => Object.keys(userEdits).length, [userEdits]);
 
   const plansDirty = useMemo(
     () => plansFingerprint(plans) !== plansFingerprint(savedPlans),
@@ -239,13 +254,22 @@ export default function DashboardPage() {
     return true;
   }
 
-  function goSection(next: DashSection) {
+  const doGoSection = useCallback((next: DashSection) => {
     const target = canAccessSection(next) ? next : "projects";
     setSection(target);
     setMobileNavOpen(false);
     router.push(
       target === "projects" ? "/dashboard" : target === "overview" ? "/dashboard?section=overview" : `/dashboard?section=${target}`,
     );
+  }, [canAccessSection, router]);
+
+  function goSection(next: DashSection) {
+    if (section === "users" && usersDirty) {
+      setUsersLeavePending(() => () => doGoSection(next));
+      setShowUsersLeaveModal(true);
+      return;
+    }
+    doGoSection(next);
   }
 
   const Icon = {
@@ -438,7 +462,8 @@ export default function DashboardPage() {
         if (section === "users" && isAdmin) {
           setUsersLoading(true);
           const items = await api.adminListUsers();
-          setUsers(items);
+          setSavedUsers(items);
+          setUserEdits({});
         } else if (section === "limits" && isAdmin) {
           setPlansLoading(true);
           const items = await api.adminListPlans();
@@ -461,6 +486,16 @@ export default function DashboardPage() {
       }
     })();
   }, [browserTimeZone, isAdmin, section, token]);
+
+  useEffect(() => {
+    if (!usersDirty || section !== "users") return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [usersDirty, section]);
 
   useEffect(() => {
     if (section !== "profile") return;
@@ -575,19 +610,55 @@ export default function DashboardPage() {
     router.replace("/");
   }
 
-  async function saveUser(u: AdminUserPublic) {
+  function updateUserField(userId: string, field: "role" | "subscription_type" | "full_name", value: string) {
+    const original = savedUsers.find((u) => u.id === userId);
+    setUserEdits((prev) => {
+      const existing = prev[userId] ?? {};
+      const next = { ...existing, [field]: value };
+      // If the new value matches the original, drop that field from edits
+      if (original && original[field] === value) {
+        delete next[field];
+      }
+      if (Object.keys(next).length === 0) {
+        const { [userId]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [userId]: next };
+    });
+  }
+
+  function discardUserChanges() {
+    setUserEdits({});
+  }
+
+  function showUsersSuccess(msg: string) {
+    if (usersSuccessTimerRef.current) clearTimeout(usersSuccessTimerRef.current);
+    setUsersSuccessMsg(msg);
+    usersSuccessTimerRef.current = setTimeout(() => setUsersSuccessMsg(null), 4000);
+  }
+
+  async function saveAllUsers() {
+    if (!usersDirty || usersSaving) return;
     setError(null);
+    setUsersSaving(true);
     try {
-      const updated = await api.adminUpdateUser(u.id, {
-        role: u.role,
-        subscription_type: u.subscription_type || "",
-        full_name: u.full_name || "",
-        phone: u.phone || "",
-        timezone: u.timezone || "",
+      const items = Object.entries(userEdits).map(([user_id, edits]) => ({ user_id, ...edits }));
+      const res = await api.adminBulkUpdateUsers(items);
+      setSavedUsers((prev) => {
+        const byId = new Map(res.updated.map((u) => [u.id, u]));
+        return prev.map((u) => byId.get(u.id) ?? u);
       });
-      setUsers((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+      setUserEdits({});
+      const errCount = res.errors.length;
+      showUsersSuccess(
+        errCount > 0
+          ? `${res.updated.length} user${res.updated.length !== 1 ? "s" : ""} saved — ${errCount} failed`
+          : `${res.updated.length} user${res.updated.length !== 1 ? "s" : ""} saved successfully`,
+      );
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save user");
+      setError(e instanceof Error ? e.message : "Failed to save users");
+    } finally {
+      setUsersSaving(false);
     }
   }
 
@@ -635,7 +706,8 @@ export default function DashboardPage() {
     setError(null);
     try {
       await api.adminDeleteUser(deleteUserTarget.id);
-      setUsers((prev) => prev.filter((u) => u.id !== deleteUserTarget.id));
+      setSavedUsers((prev) => prev.filter((u) => u.id !== deleteUserTarget.id));
+      setUserEdits((prev) => { const { [deleteUserTarget.id]: _, ...rest } = prev; return rest; });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to deactivate user");
     } finally {
@@ -1082,9 +1154,49 @@ export default function DashboardPage() {
             {section === "users" && isAdmin ? (
               <>
                 <div className={styles.intro}>
-                  <h1>Manage users</h1>
-                  <p>View users, change roles, and change subscription plans.</p>
+                  <div className={styles.sectionHead}>
+                    <div>
+                      <h1 style={{ margin: 0 }}>Manage users</h1>
+                      <p style={{ marginBottom: 0 }}>
+                        Change roles and subscription plans. Changes are staged until you save.
+                      </p>
+                    </div>
+                    <div className={dashStyles.usersToolbar}>
+                      {usersDirty ? (
+                        <span className={dashStyles.usersUnsavedBadge} aria-live="polite">
+                          <span className={dashStyles.usersUnsavedDot} aria-hidden="true" />
+                          {usersDirtyCount} unsaved {usersDirtyCount === 1 ? "change" : "changes"}
+                        </span>
+                      ) : null}
+                      {usersDirty ? (
+                        <button
+                          type="button"
+                          className={`${styles.miniBtn}`}
+                          onClick={discardUserChanges}
+                          disabled={usersSaving}
+                        >
+                          Discard
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className={`${styles.button} ${!usersDirty ? dashStyles.usersSaveBtnDisabled : ""}`}
+                        onClick={() => void saveAllUsers()}
+                        disabled={!usersDirty || usersSaving}
+                        aria-disabled={!usersDirty}
+                      >
+                        {usersSaving ? "Saving…" : "Save changes"}
+                      </button>
+                    </div>
+                  </div>
                 </div>
+
+                {/* Success toast */}
+                {usersSuccessMsg ? (
+                  <div className={dashStyles.usersSuccessToast} role="status" aria-live="polite">
+                    ✓ {usersSuccessMsg}
+                  </div>
+                ) : null}
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
                   {usersLoading ? <DetailPanelSkeleton /> : null}
@@ -1103,70 +1215,108 @@ export default function DashboardPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {users.map((u) => (
-                          <tr key={u.id}>
-                            <td className={styles.td}>
-                              <input
-                                className={styles.inputSmall}
-                                value={u.full_name || ""}
-                                onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, full_name: e.target.value } : x)))}
-                                placeholder="—"
-                                aria-label="Full name"
-                              />
-                            </td>
-                            <td className={`${styles.td} ${styles.tdMuted}`}>{u.email}</td>
-                            <td className={styles.td}>
-                              <select
-                                className={styles.select}
-                                value={u.role}
-                                onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, role: e.target.value } : x)))}
-                                aria-label="Role"
-                              >
-                                <option value="user">User</option>
-                                <option value="admin">Admin</option>
-                              </select>
-                            </td>
-                            <td className={styles.td}>
-                              <input
-                                className={styles.inputSmall}
-                                value={u.subscription_type || ""}
-                                onChange={(e) => setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, subscription_type: e.target.value } : x)))}
-                                placeholder="beta"
-                                aria-label="Subscription type"
-                              />
-                            </td>
-                            <td className={styles.td}>
-                              <span className={styles.pill}>{u.account_status || "active"}</span>
-                            </td>
-                            <td className={styles.td}>
-                              <div className={dashStyles.workspaceCell}>
-                                <span className={styles.muted}>{u.total_projects ?? 0}</span>
-                                <button className={styles.miniBtn} type="button" onClick={() => openUserWorkspace(u.id)}>
-                                  Open
+                        {users.map((u) => {
+                          const isDirty = !!userEdits[u.id];
+                          return (
+                            <tr key={u.id} className={isDirty ? dashStyles.usersDirtyRow : undefined}>
+                              <td className={styles.td}>
+                                <input
+                                  className={styles.inputSmall}
+                                  value={u.full_name || ""}
+                                  onChange={(e) => updateUserField(u.id, "full_name", e.target.value)}
+                                  placeholder="—"
+                                  aria-label="Full name"
+                                />
+                              </td>
+                              <td className={`${styles.td} ${styles.tdMuted}`}>{u.email}</td>
+                              <td className={styles.td}>
+                                <select
+                                  className={styles.select}
+                                  value={u.role}
+                                  onChange={(e) => updateUserField(u.id, "role", e.target.value)}
+                                  aria-label="Role"
+                                >
+                                  <option value="user">User</option>
+                                  <option value="admin">Admin</option>
+                                </select>
+                              </td>
+                              <td className={styles.td}>
+                                <select
+                                  className={styles.select}
+                                  value={u.subscription_type || ""}
+                                  onChange={(e) => updateUserField(u.id, "subscription_type", e.target.value)}
+                                  aria-label="Subscription plan"
+                                >
+                                  <option value="">— Unassigned —</option>
+                                  {plans.map((p) => (
+                                    <option key={p.key} value={p.key}>
+                                      {p.name || p.key}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className={styles.td}>
+                                <span className={styles.pill}>{u.account_status || "active"}</span>
+                              </td>
+                              <td className={styles.td}>
+                                <div className={dashStyles.workspaceCell}>
+                                  <span className={styles.muted}>{u.total_projects ?? 0}</span>
+                                  <button className={styles.miniBtn} type="button" onClick={() => openUserWorkspace(u.id)}>
+                                    Open
+                                  </button>
+                                </div>
+                              </td>
+                              <td className={styles.td}>
+                                <button className={styles.miniBtn} type="button" onClick={() => viewUserDetails(u.id)}>
+                                  View details
                                 </button>
-                              </div>
-                            </td>
-                            <td className={styles.td}>
-                              <button className={styles.miniBtn} type="button" onClick={() => viewUserDetails(u.id)}>
-                                View details
-                              </button>
-                            </td>
-                            <td className={styles.td}>
-                              <div className={styles.row}>
-                                <button className={`${styles.miniBtn} ${styles.miniPrimary}`} type="button" onClick={() => saveUser(u)}>
-                                  Save
-                                </button>
+                              </td>
+                              <td className={styles.td}>
                                 <button className={`${styles.miniBtn} ${styles.miniDanger}`} type="button" onClick={() => promptDeleteUser(u)}>
                                   Deactivate
                                 </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   ) : null}
                 </div>
+
+                {/* Leave confirmation modal */}
+                {showUsersLeaveModal ? (
+                  <div className={styles.modalOverlay} role="dialog" aria-modal="true" aria-labelledby="users-leave-title" aria-describedby="users-leave-desc">
+                    <div className={styles.modal} ref={usersLeaveModalTrapRef}>
+                      <h2 id="users-leave-title" className={styles.modalTitle}>Unsaved changes</h2>
+                      <p id="users-leave-desc" className={styles.modalBody} style={{ color: "var(--aa-ink)" }}>
+                        You have {usersDirtyCount} unsaved {usersDirtyCount === 1 ? "change" : "changes"}. Leaving this page will discard all modifications.
+                      </p>
+                      <div className={styles.modalActions}>
+                        <button
+                          type="button"
+                          className={styles.button}
+                          onClick={() => setShowUsersLeaveModal(false)}
+                          autoFocus
+                        >
+                          Continue editing
+                        </button>
+                        <button
+                          type="button"
+                          className={`${styles.miniBtn} ${styles.miniDanger}`}
+                          onClick={() => {
+                            setShowUsersLeaveModal(false);
+                            setUserEdits({});
+                            usersLeavePending?.();
+                            setUsersLeavePending(null);
+                          }}
+                        >
+                          Discard changes
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </>
             ) : null}
 

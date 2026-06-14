@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from app.core.deps import require_admin
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.admin import (
+    AdminBulkUserUpdateItem,
+    AdminBulkUserUpdateResult,
     AdminUserDetails,
     AdminUserPublic,
     AdminUserStats,
@@ -134,6 +136,63 @@ async def update_user(user_id: str, payload: AdminUserUpdate, _: dict = Depends(
         except Exception:
             nproj = 0
     return _user_to_public(u, total_projects=nproj)
+
+
+@router.post("/users/bulk-update", response_model=AdminBulkUserUpdateResult)
+async def bulk_update_users(
+    items: list[AdminBulkUserUpdateItem],
+    admin: dict = Depends(require_admin),
+) -> AdminBulkUserUpdateResult:
+    st = get_legacy_storage_module()
+    updated: list[AdminUserPublic] = []
+    errors: list[dict[str, str]] = []
+
+    for item in items:
+        uid = (item.user_id or "").strip()
+        if not uid:
+            errors.append({"user_id": item.user_id, "error": "user_id is required"})
+            continue
+        patch: dict = {}
+        if item.role is not None:
+            patch["role"] = item.role
+        if item.subscription_type is not None:
+            patch["subscription_type"] = item.subscription_type
+        if item.full_name is not None:
+            patch["full_name"] = item.full_name
+        if not patch:
+            continue
+        prev = st.get_user_by_id(uid)
+        if not prev:
+            errors.append({"user_id": uid, "error": "User not found"})
+            continue
+        ok = st.update_user_fields(uid, patch)
+        if not ok:
+            errors.append({"user_id": uid, "error": "Update failed"})
+            continue
+        u = st.get_user_by_id(uid)
+        if not u:
+            errors.append({"user_id": uid, "error": "User not found after update"})
+            continue
+        if (
+            "subscription_type" in patch
+            and (patch.get("subscription_type") or "").strip().lower()
+            != (prev.get("subscription_type") or "").strip().lower()
+        ):
+            from app.services.email_dispatch import dispatch_plan_notification_email
+
+            plans = st.load_plans() or {}
+            plan_key = (patch.get("subscription_type") or "").strip().lower()
+            plan_name = (plans.get(plan_key) or {}).get("name") if isinstance(plans.get(plan_key), dict) else plan_key
+            dispatch_plan_notification_email(to=(u.get("email") or "").strip(), plan_name=str(plan_name or plan_key))
+        nproj = 0
+        if hasattr(st, "project_ids_for_owner"):
+            try:
+                nproj = len(st.project_ids_for_owner(uid) or [])
+            except Exception:
+                nproj = 0
+        updated.append(_user_to_public(u, total_projects=nproj))
+
+    return AdminBulkUserUpdateResult(updated=updated, errors=errors)
 
 
 @router.delete("/users/{user_id}", status_code=204)

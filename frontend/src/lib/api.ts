@@ -3224,6 +3224,14 @@ export const api = {
   ) {
     return apiFetch<AdminUserPublic>(`/api/admin/users/${userId}`, { method: "PATCH", body: JSON.stringify(patch) });
   },
+  async adminBulkUpdateUsers(
+    items: Array<{ user_id: string; role?: string; subscription_type?: string; full_name?: string }>,
+  ) {
+    return apiFetch<{ updated: AdminUserPublic[]; errors: Array<{ user_id: string; error: string }> }>(
+      "/api/admin/users/bulk-update",
+      { method: "POST", body: JSON.stringify(items) },
+    );
+  },
   async adminGetUserDetails(userId: string) {
     return apiFetch<AdminUserDetails>(`/api/admin/users/${userId}/details`);
   },

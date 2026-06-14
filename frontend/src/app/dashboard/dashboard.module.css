@@ -1215,3 +1215,70 @@
   white-space: nowrap;
 }
 
+/* ─── Manage Users — bulk-save UX ──────────────────────────────────────────── */
+
+.usersToolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.usersUnsavedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-warning, #d4a017);
+  padding: 5px 12px 5px 8px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--aa-warning, #d4a017), transparent 86%);
+  border: 1px solid color-mix(in oklab, var(--aa-warning, #d4a017), transparent 70%);
+  white-space: nowrap;
+}
+
+.usersUnsavedDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--aa-warning, #d4a017);
+  flex-shrink: 0;
+}
+
+.usersSaveBtnDisabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.usersDirtyRow {
+  background: color-mix(in oklab, var(--aa-primary, #d97757), transparent 92%);
+  outline: 1px solid color-mix(in oklab, var(--aa-primary, #d97757), transparent 72%);
+  outline-offset: -1px;
+}
+
+.usersSuccessToast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--aa-success, #5db872), transparent 88%);
+  border: 1px solid color-mix(in oklab, var(--aa-success, #5db872), transparent 65%);
+  color: var(--aa-success, #5db872);
+  font-size: 13px;
+  font-weight: 600;
+  animation: usersToastIn 0.18s ease-out;
+}
+
+@keyframes usersToastIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usersSuccessToast {
+    animation: none;
+  }
+}
+
