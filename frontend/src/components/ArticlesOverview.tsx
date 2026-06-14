@@ -1,18 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ArticlesOverviewChart } from "@/components/ArticlesOverviewChart";
-import { OverviewStatCarousel } from "@/components/OverviewStatCarousel";
 import { OverviewReadinessGate } from "@/components/OverviewReadinessGate";
 import { OverviewPageSkeleton } from "@/components/skeleton";
-import type { ArticlePublic, GscAnalyticsSeriesPoint, ScheduledJobPublic } from "@/lib/api";
+import type { ArticlePublic, GscAnalyticsTotals, ScheduledJobPublic } from "@/lib/api";
 import { articleEditorPath } from "@/lib/articlePaths";
 import { evaluateProjectOverviewReadiness } from "@/lib/overviewReadiness";
 import {
   buildArticleActivityBarSeries,
-  cartItems,
+  computeInsights,
   computeOverviewStats,
   formatOverviewDate,
   pendingItems,
@@ -22,17 +21,32 @@ import {
   type OverviewListItem,
 } from "@/lib/articlesOverview";
 
-type ArticlesOverviewProps = {
-  projectId: string;
-  styles: Record<string, string>;
-  articles: ArticlePublic[];
-  scheduledJobs: ScheduledJobPublic[];
-  titleByArticleId: Record<string, string>;
-  selectedIds: string[];
-  gscSeries?: GscAnalyticsSeriesPoint[] | null;
-  loading?: boolean;
-  onViewList: (status?: string) => void;
-};
+const RANGE_OPTIONS: { days: ArticlesOverviewRange; label: string; ariaLabel: string }[] = [
+  { days: 1, label: "24H", ariaLabel: "Last 24 hours" },
+  { days: 7, label: "7D", ariaLabel: "Last 7 days" },
+  { days: 28, label: "28D", ariaLabel: "Last 28 days" },
+  { days: 90, label: "3M", ariaLabel: "Last 3 months" },
+];
+
+function useLastUpdatedLabel(ts: number | null | undefined): string {
+  const [label, setLabel] = useState("—");
+
+  useEffect(() => {
+    if (!ts) { setLabel("—"); return; }
+    const tick = () => {
+      const diff = Math.floor((Date.now() - ts) / 1000);
+      if (diff < 10) setLabel("Just now");
+      else if (diff < 60) setLabel(`${diff}s ago`);
+      else if (diff < 3600) setLabel(`${Math.floor(diff / 60)}m ago`);
+      else setLabel(`${Math.floor(diff / 3600)}h ago`);
+    };
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => clearInterval(id);
+  }, [ts]);
+
+  return label;
+}
 
 function FeaturedThumb(props: {
   imageUrl: string | null | undefined;
@@ -83,12 +97,7 @@ function OverviewPanel(props: {
   return (
     <section className={styles.articlesOverviewPanel}>
       <header className={styles.articlesOverviewPanelHead}>
-        <h3 className={styles.articlesOverviewPanelTitle}>
-          <span className={styles.articlesOverviewPanelIcon} aria-hidden="true">
-            ◷
-          </span>
-          {title}
-        </h3>
+        <h3 className={styles.articlesOverviewPanelTitle}>{title}</h3>
         {onViewAll ? (
           <button type="button" className={styles.articlesOverviewPanelLink} onClick={onViewAll}>
             View all
@@ -128,6 +137,20 @@ function OverviewPanel(props: {
   );
 }
 
+type ArticlesOverviewProps = {
+  projectId: string;
+  styles: Record<string, string>;
+  articles: ArticlePublic[];
+  scheduledJobs: ScheduledJobPublic[];
+  titleByArticleId: Record<string, string>;
+  selectedIds: string[];
+  gscTotals?: GscAnalyticsTotals | null;
+  loading?: boolean;
+  lastRefreshedAt?: number | null;
+  onViewList: (status?: string) => void;
+  onRefresh?: () => void;
+};
+
 export function ArticlesOverview(props: ArticlesOverviewProps) {
   const {
     projectId,
@@ -135,12 +158,28 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
     articles,
     scheduledJobs,
     titleByArticleId,
-    selectedIds,
     loading,
+    gscTotals,
+    lastRefreshedAt,
     onViewList,
+    onRefresh,
   } = props;
 
   const [chartRange, setChartRange] = useState<ArticlesOverviewRange>(28);
+  const refreshingRef = useRef(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const lastUpdatedLabel = useLastUpdatedLabel(lastRefreshedAt);
+
+  const handleRefresh = useCallback(() => {
+    if (refreshingRef.current || !onRefresh) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    onRefresh();
+    setTimeout(() => {
+      refreshingRef.current = false;
+      setRefreshing(false);
+    }, 1500);
+  }, [onRefresh]);
 
   const stats = useMemo(
     () => computeOverviewStats(articles, scheduledJobs, chartRange),
@@ -157,36 +196,7 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
     [articles, scheduledJobs, chartRange],
   );
 
-  const statCards = useMemo(
-    () => [
-      {
-        value: stats.publishedInRange,
-        label: `Published · last ${chartRange} day${chartRange === 1 ? "" : "s"}`,
-        onClick: () => onViewList("published"),
-      },
-      {
-        value: stats.pending,
-        label: "Pending",
-        onClick: () => onViewList("pending"),
-      },
-      {
-        value: stats.scheduledJobs,
-        label: "Scheduled jobs",
-        onClick: () => onViewList("scheduled"),
-      },
-      {
-        value: stats.draft,
-        label: "Drafts",
-        onClick: () => onViewList("draft"),
-      },
-      {
-        value: stats.total,
-        label: "Total articles",
-        onClick: () => onViewList(""),
-      },
-    ],
-    [stats, chartRange, onViewList],
-  );
+  const insights = useMemo(() => computeInsights(articles, chartRange), [articles, chartRange]);
 
   const upcoming = useMemo(
     () => upcomingScheduledItems(scheduledJobs, titleByArticleId, 5),
@@ -194,8 +204,6 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
   );
   const published = useMemo(() => recentPublishedItems(articles, 5), [articles]);
   const pending = useMemo(() => pendingItems(articles, 5), [articles]);
-  const cart = useMemo(() => cartItems(articles, selectedIds, 8), [articles, selectedIds]);
-
   const draftItems = useMemo(
     () =>
       articles
@@ -210,6 +218,8 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
         .slice(0, 5),
     [articles],
   );
+
+  const rangeLabel = RANGE_OPTIONS.find((r) => r.days === chartRange)?.ariaLabel ?? `Last ${chartRange} days`;
 
   if (loading) {
     return (
@@ -230,75 +240,224 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
     );
   }
 
+  const hasGsc = gscTotals && (gscTotals.clicks > 0 || gscTotals.impressions > 0);
+
   return (
     <div className={styles.articlesOverviewShell}>
       <div className={styles.articlesOverview}>
-        <OverviewStatCarousel trackClassName={styles.articlesOverviewStatGrid} ariaLabel="Project overview statistics">
-          {statCards.map((card) => (
-            <button
-              key={card.label}
-              type="button"
-              className={styles.articlesOverviewStatCard}
-              onClick={card.onClick}
-              role="listitem"
-            >
-              <span className={styles.articlesOverviewStatValue}>{card.value.toLocaleString()}</span>
-              <span className={styles.articlesOverviewStatLabel}>{card.label}</span>
-            </button>
-          ))}
-        </OverviewStatCarousel>
 
-        <div className={styles.articlesOverviewMainGrid}>
-          <section className={styles.articlesOverviewChartCard}>
-            <div className={styles.articlesOverviewChartHead}>
-              <div>
-                <h3 className={styles.articlesOverviewChartTitle}>Activity</h3>
-                <p className={styles.articlesOverviewChartSub}>
-                  Published, pending, and scheduled activity by day
-                </p>
-              </div>
-              <div className={styles.articlesOverviewRangeTabs} role="tablist" aria-label="Chart range">
-                {(
-                  [
-                    [28, "LAST 28 DAYS"],
-                    [7, "LAST 7 DAYS"],
-                    [1, "LAST 24 HOURS"],
-                  ] as const
-                ).map(([days, label]) => (
-                  <button
-                    key={days}
-                    type="button"
-                    role="tab"
-                    aria-selected={chartRange === days}
-                    className={`${styles.articlesOverviewRangeBtn} ${chartRange === days ? styles.articlesOverviewRangeBtnActive : ""}`}
-                    onClick={() => setChartRange(days)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <ArticlesOverviewChart
-              series={chartSeries}
-              label="Article published, pending, and scheduled by day"
-              styles={styles}
-            />
-          </section>
-
-          <OverviewPanel
-            styles={styles}
-            title="Upcoming scheduled articles"
-            items={upcoming}
-            empty="No upcoming schedules. Schedule articles from the list or bulk actions."
-            projectId={projectId}
-            onViewAll={() => onViewList("scheduled")}
-          />
+        {/* ── Header row ── */}
+        <div className={styles.articlesOverviewHeader}>
+          <div className={styles.articlesOverviewHeaderLeft}>
+            <h2 className={styles.articlesOverviewTitle}>Overview</h2>
+            <span className={styles.articlesOverviewLastUpdated} aria-live="polite">
+              Updated {lastUpdatedLabel}
+            </span>
+          </div>
+          <div className={styles.articlesOverviewHeaderRight}>
+            {onRefresh ? (
+              <button
+                type="button"
+                className={styles.articlesOverviewRefreshBtn}
+                onClick={handleRefresh}
+                disabled={refreshing}
+                aria-label="Refresh overview data"
+              >
+                <span className={refreshing ? styles.articlesOverviewRefreshIconSpin : styles.articlesOverviewRefreshIcon} aria-hidden="true">↻</span>
+                {refreshing ? "Refreshing…" : "Refresh"}
+              </button>
+            ) : null}
+          </div>
         </div>
 
+        {/* ── Range selector ── */}
+        <div className={styles.articlesOverviewRangeBar} role="group" aria-label="Date range">
+          {RANGE_OPTIONS.map(({ days, label, ariaLabel }) => (
+            <button
+              key={days}
+              type="button"
+              aria-pressed={chartRange === days}
+              aria-label={ariaLabel}
+              className={`${styles.articlesOverviewRangeBtn} ${chartRange === days ? styles.articlesOverviewRangeBtnActive : ""}`}
+              onClick={() => setChartRange(days)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── KPI row (range-filtered) ── */}
+        <div className={styles.articlesOverviewSectionLabel} aria-hidden="true">{rangeLabel}</div>
+        <div
+          className={styles.articlesOverviewStatGrid}
+          role="list"
+          aria-label={`Project statistics for ${rangeLabel}`}
+        >
+          <button
+            type="button"
+            className={`${styles.articlesOverviewStatCard} ${styles.articlesOverviewStatCardPublished}`}
+            onClick={() => onViewList("published")}
+            role="listitem"
+          >
+            <span className={styles.articlesOverviewStatValue}>{stats.publishedInRange.toLocaleString()}</span>
+            <span className={styles.articlesOverviewStatLabel}>Published</span>
+            {insights.velocityPct !== null ? (
+              <span
+                className={styles.articlesOverviewStatDelta}
+                data-trend={insights.velocityPct > 0 ? "up" : insights.velocityPct < 0 ? "down" : "flat"}
+              >
+                {insights.velocityPct > 0 ? "▲" : insights.velocityPct < 0 ? "▼" : "—"}{" "}
+                {Math.abs(insights.velocityPct)}%
+              </span>
+            ) : null}
+          </button>
+
+          <button
+            type="button"
+            className={styles.articlesOverviewStatCard}
+            onClick={() => onViewList("pending")}
+            role="listitem"
+          >
+            <span className={styles.articlesOverviewStatValue}>{stats.pending.toLocaleString()}</span>
+            <span className={styles.articlesOverviewStatLabel}>Pending</span>
+            <span className={styles.articlesOverviewStatSub}>Awaiting publish</span>
+          </button>
+
+          <button
+            type="button"
+            className={styles.articlesOverviewStatCard}
+            onClick={() => onViewList("scheduled")}
+            role="listitem"
+          >
+            <span className={styles.articlesOverviewStatValue}>{stats.scheduledJobs.toLocaleString()}</span>
+            <span className={styles.articlesOverviewStatLabel}>Scheduled</span>
+            <span className={styles.articlesOverviewStatSub}>Upcoming jobs</span>
+          </button>
+
+          <button
+            type="button"
+            className={styles.articlesOverviewStatCard}
+            onClick={() => onViewList("draft")}
+            role="listitem"
+          >
+            <span className={styles.articlesOverviewStatValue}>{stats.draft.toLocaleString()}</span>
+            <span className={styles.articlesOverviewStatLabel}>Drafts</span>
+            <span className={styles.articlesOverviewStatSub}>In progress</span>
+          </button>
+
+          <button
+            type="button"
+            className={styles.articlesOverviewStatCard}
+            onClick={() => onViewList("")}
+            role="listitem"
+          >
+            <span className={styles.articlesOverviewStatValue}>{stats.total.toLocaleString()}</span>
+            <span className={styles.articlesOverviewStatLabel}>Total articles</span>
+            <span className={styles.articlesOverviewStatSub}>All time</span>
+          </button>
+        </div>
+
+        {/* ── All-time row ── */}
+        <div className={styles.articlesOverviewSectionLabel} aria-hidden="true">All time</div>
+        <div className={styles.articlesOverviewAllTimeRow} role="list" aria-label="All-time project totals">
+          <div className={styles.articlesOverviewAllTimeCard} role="listitem">
+            <span className={styles.articlesOverviewAllTimeValue}>{stats.totalPublished.toLocaleString()}</span>
+            <span className={styles.articlesOverviewAllTimeLabel}>Published</span>
+          </div>
+          <div className={styles.articlesOverviewAllTimeCard} role="listitem">
+            <span className={styles.articlesOverviewAllTimeValue}>{stats.total.toLocaleString()}</span>
+            <span className={styles.articlesOverviewAllTimeLabel}>Articles</span>
+          </div>
+          {hasGsc ? (
+            <>
+              <div className={styles.articlesOverviewAllTimeCard} role="listitem">
+                <span className={styles.articlesOverviewAllTimeValue}>{(gscTotals.clicks ?? 0).toLocaleString()}</span>
+                <span className={styles.articlesOverviewAllTimeLabel}>Clicks (28d)</span>
+              </div>
+              <div className={styles.articlesOverviewAllTimeCard} role="listitem">
+                <span className={styles.articlesOverviewAllTimeValue}>{(gscTotals.impressions ?? 0).toLocaleString()}</span>
+                <span className={styles.articlesOverviewAllTimeLabel}>Impressions (28d)</span>
+              </div>
+              <div className={styles.articlesOverviewAllTimeCard} role="listitem">
+                <span className={styles.articlesOverviewAllTimeValue}>
+                  {gscTotals.ctr != null ? `${(gscTotals.ctr * 100).toFixed(1)}%` : "—"}
+                </span>
+                <span className={styles.articlesOverviewAllTimeLabel}>Avg CTR (28d)</span>
+              </div>
+            </>
+          ) : (
+            <div className={styles.articlesOverviewAllTimeCard} style={{ opacity: 0.45 }} role="listitem">
+              <span className={styles.articlesOverviewAllTimeValue}>—</span>
+              <span className={styles.articlesOverviewAllTimeLabel}>GSC not connected</span>
+            </div>
+          )}
+        </div>
+
+        {/* ── Activity chart ── */}
+        <section className={styles.articlesOverviewChartCard}>
+          <div className={styles.articlesOverviewChartHead}>
+            <div>
+              <h3 className={styles.articlesOverviewChartTitle}>Publishing Activity</h3>
+              <p className={styles.articlesOverviewChartSub}>Published, pending, and scheduled articles by day</p>
+            </div>
+          </div>
+          <ArticlesOverviewChart
+            series={chartSeries}
+            label="Article activity by day"
+            styles={styles}
+          />
+        </section>
+
+        {/* ── Insights row ── */}
+        {(insights.velocityPct !== null || insights.bestDayOfWeek || insights.contentOpportunity > 0) ? (
+          <div className={styles.articlesOverviewInsightsRow} aria-label="Publishing insights">
+            {insights.velocityPct !== null ? (
+              <div
+                className={styles.articlesOverviewInsightCard}
+                data-trend={insights.velocityPct >= 0 ? "up" : "down"}
+              >
+                <span className={styles.articlesOverviewInsightIcon} aria-hidden="true">
+                  {insights.velocityPct >= 0 ? "▲" : "▼"}
+                </span>
+                <span className={styles.articlesOverviewInsightValue}>
+                  {insights.velocityPct >= 0 ? "+" : ""}{insights.velocityPct}%
+                </span>
+                <span className={styles.articlesOverviewInsightLabel}>Publishing velocity</span>
+                <span className={styles.articlesOverviewInsightSub}>
+                  {insights.publishedCurrent} published vs {insights.publishedPrev} prior period
+                </span>
+              </div>
+            ) : null}
+
+            {insights.bestDayOfWeek ? (
+              <div className={styles.articlesOverviewInsightCard}>
+                <span className={styles.articlesOverviewInsightIcon} aria-hidden="true">★</span>
+                <span className={styles.articlesOverviewInsightValue}>{insights.bestDayOfWeek}</span>
+                <span className={styles.articlesOverviewInsightLabel}>Best publishing day</span>
+                <span className={styles.articlesOverviewInsightSub}>
+                  {insights.bestDayCount} article{insights.bestDayCount !== 1 ? "s" : ""} published
+                </span>
+              </div>
+            ) : null}
+
+            {insights.contentOpportunity > 0 ? (
+              <div className={styles.articlesOverviewInsightCard}>
+                <span className={styles.articlesOverviewInsightIcon} aria-hidden="true">◎</span>
+                <span className={styles.articlesOverviewInsightValue}>{insights.contentOpportunity}</span>
+                <span className={styles.articlesOverviewInsightLabel}>Content opportunity</span>
+                <span className={styles.articlesOverviewInsightSub}>
+                  Draft{insights.contentOpportunity !== 1 ? "s" : ""} ready to publish
+                </span>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* ── Bottom panels ── */}
         <div className={styles.articlesOverviewPanelsGrid}>
           <OverviewPanel
             styles={styles}
-            title="Recently published articles"
+            title="Recently published"
             items={published}
             empty="No published articles yet."
             projectId={projectId}
@@ -307,23 +466,19 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
           />
           <OverviewPanel
             styles={styles}
-            title="Pending articles"
-            items={pending}
-            empty="No pending articles — everything is in progress or published."
+            title="Upcoming scheduled"
+            items={upcoming}
+            empty="No upcoming schedules."
             projectId={projectId}
-            onViewAll={() => onViewList("pending")}
+            onViewAll={() => onViewList("scheduled")}
           />
           <OverviewPanel
             styles={styles}
-            title="Selection cart"
-            items={cart}
-            empty={
-              selectedIds.length
-                ? "Selected articles are not loaded in overview cache."
-                : "No articles selected. Select rows in the list to stage bulk actions."
-            }
+            title="Pending review"
+            items={pending}
+            empty="No pending articles."
             projectId={projectId}
-            onViewAll={() => onViewList("")}
+            onViewAll={() => onViewList("pending")}
           />
           <OverviewPanel
             styles={styles}

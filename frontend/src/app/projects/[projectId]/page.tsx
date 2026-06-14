@@ -636,9 +636,9 @@ export default function ProjectPage() {
   );
   const [overviewArticles, setOverviewArticles] = useState<ArticlePublic[]>([]);
   const [overviewScheduledJobs, setOverviewScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
-  // P2.8: the overview GSC chart reads the shared `analytics` state (28-day window
-  // fetched once on mount) instead of keeping a separate, duplicate-fetched series.
   const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewRefreshKey, setOverviewRefreshKey] = useState(0);
+  const [overviewRefreshedAt, setOverviewRefreshedAt] = useState<number | null>(null);
 
   // Single helper that mutates ``window.location`` query params and asks the
   // App Router to replace the URL without scrolling. ``null``/empty values
@@ -1500,9 +1500,7 @@ export default function ProjectPage() {
         if (cancelled) return;
         setOverviewArticles(articles || []);
         setOverviewScheduledJobs(jobs || []);
-        // P2.8: GSC analytics for the 28-day window is already fetched once by the
-        // bootstrap effect into `analytics` — the overview chart now reads that
-        // shared state (see `gscSeries` prop) instead of issuing a duplicate fetch.
+        setOverviewRefreshedAt(Date.now());
       } catch {
         if (!cancelled) {
           setOverviewArticles([]);
@@ -1515,7 +1513,7 @@ export default function ProjectPage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, token, tab]);
+  }, [projectId, token, tab, overviewRefreshKey]);
 
   useEffect(() => {
     if (!token || !projectId || tab !== "tools") return;
@@ -5807,8 +5805,10 @@ export default function ProjectPage() {
             scheduledJobs={overviewScheduledJobs}
             titleByArticleId={articleTitlesById}
             selectedIds={selectedIds}
-            gscSeries={analytics?.series ?? null}
+            gscTotals={analytics?.totals ?? null}
             loading={overviewLoading}
+            lastRefreshedAt={overviewRefreshedAt}
+            onRefresh={() => setOverviewRefreshKey((k) => k + 1)}
             onViewList={goToArticlesFromOverview}
           />
         ) : tab === "products" ? (

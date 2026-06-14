@@ -1,6 +1,6 @@
 import type { ArticlePublic, GscAnalyticsSeriesPoint, ScheduledJobPublic } from "@/lib/api";
 
-export type ArticlesOverviewRange = 28 | 7 | 1;
+export type ArticlesOverviewRange = 1 | 7 | 28 | 90;
 
 export type ArticlesOverviewStats = {
   publishedInRange: number;
@@ -9,6 +9,16 @@ export type ArticlesOverviewStats = {
   scheduledArticles: number;
   scheduledJobs: number;
   total: number;
+  totalPublished: number;
+};
+
+export type OverviewInsights = {
+  velocityPct: number | null;
+  publishedCurrent: number;
+  publishedPrev: number;
+  bestDayOfWeek: string | null;
+  bestDayCount: number;
+  contentOpportunity: number;
 };
 
 export type OverviewListItem = {
@@ -95,6 +105,8 @@ export function computeOverviewStats(
     return parseMs(j.run_at) >= now - 86_400_000;
   });
 
+  const totalPublished = articles.filter((a) => (a.status || "").toLowerCase() === "published").length;
+
   return {
     publishedInRange,
     pending,
@@ -102,7 +114,54 @@ export function computeOverviewStats(
     scheduledArticles,
     scheduledJobs: scheduledJobsUpcoming.length,
     total: articles.length,
+    totalPublished,
   };
+}
+
+const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
+
+export function computeInsights(
+  articles: ArticlePublic[],
+  rangeDays: ArticlesOverviewRange,
+): OverviewInsights {
+  const rangeMs = rangeDays * 86_400_000;
+  const now = Date.now();
+  const currentStart = now - rangeMs;
+  const prevStart = now - 2 * rangeMs;
+
+  let publishedCurrent = 0;
+  let publishedPrev = 0;
+  const dowCounts: Record<number, number> = {};
+
+  for (const a of articles) {
+    if ((a.status || "").toLowerCase() !== "published") continue;
+    const ms = parseMs(a.posted_at || a.updated_at || a.created_at);
+    if (!ms) continue;
+    if (ms >= currentStart) publishedCurrent++;
+    else if (ms >= prevStart) publishedPrev++;
+    const dow = new Date(ms).getUTCDay();
+    dowCounts[dow] = (dowCounts[dow] || 0) + 1;
+  }
+
+  const velocityPct =
+    publishedPrev > 0
+      ? Math.round(((publishedCurrent - publishedPrev) / publishedPrev) * 100)
+      : publishedCurrent > 0
+        ? null
+        : null;
+
+  let bestDayOfWeek: string | null = null;
+  let bestDayCount = 0;
+  for (const [dow, count] of Object.entries(dowCounts)) {
+    if (count > bestDayCount) {
+      bestDayCount = count;
+      bestDayOfWeek = DOW_NAMES[Number(dow)] ?? null;
+    }
+  }
+
+  const contentOpportunity = articles.filter((a) => (a.status || "").toLowerCase() === "draft").length;
+
+  return { velocityPct, publishedCurrent, publishedPrev, bestDayOfWeek, bestDayCount, contentOpportunity };
 }
 
 export type ArticlesOverviewDayPoint = {
