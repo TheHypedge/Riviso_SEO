@@ -461,9 +461,15 @@ export default function DashboardPage() {
       try {
         if (section === "users" && isAdmin) {
           setUsersLoading(true);
-          const items = await api.adminListUsers();
-          setSavedUsers(items);
+          setPlansLoading(true);
+          const [userItems, planItems] = await Promise.all([
+            api.adminListUsers(),
+            api.adminListPlans(),
+          ]);
+          setSavedUsers(userItems);
           setUserEdits({});
+          setPlans(planItems);
+          setSavedPlans(planItems);
         } else if (section === "limits" && isAdmin) {
           setPlansLoading(true);
           const items = await api.adminListPlans();
