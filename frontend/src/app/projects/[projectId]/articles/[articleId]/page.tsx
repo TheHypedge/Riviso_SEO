@@ -240,6 +240,7 @@ export default function ArticleEditPage() {
 
   // Regenerate confirmation
   const [showRegenConfirm, setShowRegenConfirm] = useState(false);
+  const [regenImageChoice, setRegenImageChoice] = useState(true);
   const [showImageRegenModal, setShowImageRegenModal] = useState(false);
   const [regenPromptSource, setRegenPromptSource] = useState<"saved" | "custom">("saved");
   const [regenPromptId, setRegenPromptId] = useState("");
@@ -908,7 +909,7 @@ export default function ArticleEditPage() {
         ? "supporting cluster"
         : "cluster";
 
-  async function startGenerateFlow(opts?: { regenerate?: boolean }) {
+  async function startGenerateFlow(opts?: { regenerate?: boolean; generateImageOverride?: boolean }) {
     if (isShopifyProject || isWordPressProject) {
       if (isWordPressProject) {
         const ctx = await ensureClusterLinkContext();
@@ -934,6 +935,7 @@ export default function ArticleEditPage() {
       return;
     }
     if (hasGeneratedContent) {
+      setRegenImageChoice(generateImage);
       setShowRegenConfirm(true);
       return;
     }
@@ -943,7 +945,7 @@ export default function ArticleEditPage() {
   async function doGenerate(
     mappedProductsOverride?: MappedShopifyProduct[],
     mappedPagesOverride?: MappedWordPressPage[],
-    opts?: { regenerate?: boolean; skipPlatformMapping?: boolean },
+    opts?: { regenerate?: boolean; skipPlatformMapping?: boolean; generateImageOverride?: boolean },
   ) {
     if (!isShopifyProject && !isWordPressProject && !websiteConnected) {
       setWebsiteConnectionModal(true);
@@ -981,13 +983,13 @@ export default function ArticleEditPage() {
               writing_prompt_id: writingPromptId || null,
               image_prompt_id: imagePromptId || null,
               focus_keyphrase: focus || null,
-              generate_image: generateImage,
+              generate_image: opts?.generateImageOverride ?? generateImage,
               mapped_products: isShopifyProject ? pickedProducts : undefined,
               mapped_pages: isWordPressProject ? pickedPages : undefined,
             },
             {
               previousGeneratedAt: article?.generated_at ?? null,
-              expectImage: generateImage,
+              expectImage: opts?.generateImageOverride ?? generateImage,
               skipGlobalLoading: true,
             },
           );
@@ -1821,13 +1823,17 @@ export default function ArticleEditPage() {
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Regenerate article">
             <div className={styles.modalPanel}>
               <div className={styles.modalHead}>
-                <div className={styles.modalTitle}>Regenerate article?</div>
+                <h3 className={styles.modalTitle}>Regenerate article?</h3>
               </div>
-              <div className={styles.modalBody}>
-                <p style={{ margin: "0 0 16px", lineHeight: 1.55 }}>
-                  This runs a fresh generation using your selected prompts. The current article body and meta will be replaced.{" "}
-                  <strong>Save anything you need before continuing.</strong>
+              <div className={styles.modalBody} style={{ display: "grid", gap: 16 }}>
+                <p style={{ margin: 0, lineHeight: 1.6, fontSize: 14, color: "var(--aa-ink)" }}>
+                  Generate a fresh version of this article using the selected prompts. This will replace the current
+                  article content and SEO metadata. Any unsaved edits will be lost. Save your work before continuing.
+                  {regenImageChoice && (
+                    <>{" "}<span style={{ opacity: 0.75 }}>A new featured image will also be generated and replace the current image.</span></>
+                  )}
                 </p>
+
                 <label className={styles.label}>
                   Writing prompt
                   <select
@@ -1841,13 +1847,42 @@ export default function ArticleEditPage() {
                     ))}
                   </select>
                 </label>
-                <label className={styles.label}>
+
+                {/* Featured image choice — radio buttons, isolated from global generateImage state */}
+                <div style={{ display: "grid", gap: 8 }}>
+                  <span className={styles.label} style={{ marginBottom: 0 }}>Featured image</span>
+                  <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 14, color: "var(--aa-ink)" }}>
+                    <input
+                      type="radio"
+                      name="regenImage"
+                      checked={regenImageChoice}
+                      onChange={() => setRegenImageChoice(true)}
+                    />
+                    Generate a new image
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 14, color: "var(--aa-ink)" }}>
+                    <input
+                      type="radio"
+                      name="regenImage"
+                      checked={!regenImageChoice}
+                      onChange={() => setRegenImageChoice(false)}
+                    />
+                    Keep existing image
+                  </label>
+                  <p className={styles.muted} style={{ fontSize: 12, margin: 0, lineHeight: 1.45 }}>
+                    {regenImageChoice
+                      ? "A new featured image will be generated after the article is written."
+                      : "Your current featured image will remain unchanged. Only the article content will be regenerated."}
+                  </p>
+                </div>
+
+                <label className={styles.label} style={{ opacity: regenImageChoice ? 1 : 0.45 }}>
                   Image prompt
                   <select
                     className={styles.input}
                     value={imagePromptId}
                     onChange={(e) => setImagePromptId(e.target.value)}
-                    disabled={!generateImage}
+                    disabled={!regenImageChoice}
                   >
                     <option value="">Project default</option>
                     {(imagePrompts?.items || []).map((p) => (
@@ -1855,34 +1890,6 @@ export default function ArticleEditPage() {
                     ))}
                   </select>
                 </label>
-
-                {/* Featured image choice — prominent Yes/No */}
-                <div>
-                  <p className={editorStyles.toggleBtnLabel}>
-                    Regenerate the Featured Image?
-                  </p>
-                  <div className={editorStyles.toggleRow}>
-                    <button
-                      type="button"
-                      className={`${editorStyles.toggleBtn} ${generateImage ? editorStyles.toggleBtnActive : ""}`}
-                      onClick={() => setGenerateImage(true)}
-                    >
-                      Yes — regenerate image
-                    </button>
-                    <button
-                      type="button"
-                      className={`${editorStyles.toggleBtn} ${!generateImage ? editorStyles.toggleBtnActive : ""}`}
-                      onClick={() => setGenerateImage(false)}
-                    >
-                      No — keep existing image
-                    </button>
-                  </div>
-                  {!generateImage && (
-                    <p className={styles.muted} style={{ fontSize: 11, marginTop: 6 }}>
-                      Your current featured image will not be changed.
-                    </p>
-                  )}
-                </div>
               </div>
               <div className={styles.modalFooter}>
                 <button className={styles.btnSecondary} type="button" onClick={() => setShowRegenConfirm(false)}>
@@ -1893,7 +1900,7 @@ export default function ArticleEditPage() {
                   type="button"
                   onClick={() => {
                     setShowRegenConfirm(false);
-                    startGenerateFlow({ regenerate: true });
+                    startGenerateFlow({ regenerate: true, generateImageOverride: regenImageChoice });
                   }}
                 >
                   Regenerate
