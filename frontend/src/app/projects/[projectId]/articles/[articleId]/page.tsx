@@ -254,6 +254,7 @@ export default function ArticleEditPage() {
   const [showWpSyncConfirm, setShowWpSyncConfirm] = useState(false);
   const [liveUrlCopied, setLiveUrlCopied] = useState(false);
   const wpAutoSyncKeyRef = useRef<string | null>(null);
+  const toastTimerRef = useRef<number | null>(null);
   const projectPlatform = useMemo(
     () => (projectSettings ? resolveProjectPlatform({ settings: projectSettings }) : null),
     [projectSettings],
@@ -322,6 +323,15 @@ export default function ArticleEditPage() {
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => window.removeEventListener("beforeunload", onBeforeUnload);
   }, [editorBaseline, hasUnsavedChanges]);
+
+  useEffect(() => {
+    if (!notice) return;
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setNotice(null), 5000);
+    return () => {
+      if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    };
+  }, [notice]);
 
   function showWebsiteConnectionErrorIfNeeded(e: unknown) {
     if (e instanceof ApiError && e.detail && typeof e.detail === "object" && !Array.isArray(e.detail)) {
@@ -1613,52 +1623,45 @@ export default function ArticleEditPage() {
             </div>
 
             {isLiveOnWordPress && wpLink ? (
-              <div
-                className={`${editorStyles.liveUrlCard} ${isWpTrashed ? editorStyles.liveUrlCardTrashed : ""}`}
-              >
-                <span className={editorStyles.liveUrlLabel}>
-                  {isWpTrashed ? "WordPress URL" : "Live URL"}
+              <div className={`${editorStyles.liveUrlBar} ${isWpTrashed ? editorStyles.liveUrlBarTrashed : ""}`}>
+                <span className={editorStyles.liveUrlBarLabel}>
+                  {isWpTrashed ? "Trashed" : "Live"}
                 </span>
-                <a href={wpLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlLink}>
+                <a
+                  href={wpLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={editorStyles.liveUrlBarHref}
+                  title={wpLink}
+                >
                   {wpLink}
                 </a>
-                <div className={editorStyles.liveUrlActions}>
-                  <button type="button" className={editorStyles.liveUrlBtn} onClick={() => void copyLiveUrl()}>
-                    {liveUrlCopied ? "Copied" : "Copy link"}
+                <div className={editorStyles.liveUrlBarActions}>
+                  <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void copyLiveUrl()}>
+                    {liveUrlCopied ? "Copied" : "Copy"}
                   </button>
                   <a
                     href={wpLink}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className={editorStyles.liveUrlBtn}
+                    className={editorStyles.liveUrlBarBtn}
                   >
-                    Open live
+                    Open ↗
                   </a>
                   <button
                     type="button"
-                    className={editorStyles.liveUrlBtn}
+                    className={editorStyles.liveUrlBarBtn}
                     onClick={() => void syncFromWordPress()}
                     disabled={wpSyncBusy || !websiteConnected}
                     title="Pull the latest title, body, SEO, and permalink from WordPress"
                   >
-                    {wpSyncBusy ? "Syncing…" : "Sync from WordPress"}
+                    {wpSyncBusy ? "Syncing…" : "Sync"}
                   </button>
                 </div>
-                {isWpTrashed ? (
-                  <p className={editorStyles.liveUrlHint}>
-                    This post is in the WordPress trash. Sync to refresh Riviso, or restore it in WordPress admin.
-                  </p>
-                ) : (
-                  <p className={editorStyles.liveUrlHint}>
-                    Changes made in WordPress are pulled here automatically when you open this article, or use Sync
-                    from WordPress.
-                  </p>
-                )}
               </div>
             ) : null}
           </header>
 
-          <div className={editorStyles.bannerStack}>
           {error ? (
             <div className={`${editorStyles.banner} ${editorStyles.bannerError}`} role="alert">
               <p className={styles.error} style={{ margin: 0 }}>
@@ -1684,14 +1687,6 @@ export default function ArticleEditPage() {
               </div>
             </div>
           ) : null}
-          {notice ? (
-            <div className={`${editorStyles.banner} ${editorStyles.bannerSuccess}`} role="status">
-              <p style={{ margin: 0, lineHeight: 1.55, color: "var(--aa-body-strong)" }}>
-                {noticeWithoutUrl(notice)}
-              </p>
-            </div>
-          ) : null}
-          </div>
 
         {productMapBeforeGenerateOpen ? (
           <div
@@ -2745,6 +2740,22 @@ export default function ArticleEditPage() {
           </div>
           </div>
         </section>
+
+        {notice ? (
+          <div className={editorStyles.toast} role="status" aria-live="polite">
+            <div className={editorStyles.toastInner}>
+              <span className={editorStyles.toastText}>{noticeWithoutUrl(notice)}</span>
+              <button
+                type="button"
+                className={editorStyles.toastClose}
+                aria-label="Dismiss"
+                onClick={() => setNotice(null)}
+              >
+                ×
+              </button>
+            </div>
+          </div>
+        ) : null}
       </main>
     </div>
   );

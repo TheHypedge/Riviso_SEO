@@ -153,87 +153,150 @@
   color: #ff7875;
 }
 
-.liveUrlCard {
+/* Compact live URL bar — replaces the old green liveUrlCard */
+.liveUrlBar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px 14px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(82, 196, 26, 0.28);
-  background: rgba(82, 196, 26, 0.08);
+  gap: 6px 10px;
+  padding: 7px 12px;
+  margin-top: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--aa-hairline);
+  background: rgba(255, 255, 255, 0.03);
 }
 
-.liveUrlCardTrashed {
-  border-color: rgba(255, 77, 79, 0.32);
-  background: rgba(255, 77, 79, 0.08);
+.liveUrlBarTrashed {
+  border-color: rgba(255, 77, 79, 0.25);
+  background: rgba(255, 77, 79, 0.05);
 }
 
-.liveUrlCardTrashed .liveUrlLabel {
-  color: #ff7875;
-}
-
-.liveUrlCardTrashed .liveUrlLink {
-  color: color-mix(in oklab, #ff7875, #fff 20%);
-}
-
-.liveUrlHint {
-  flex: 1 1 100%;
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--aa-muted, rgba(255, 255, 255, 0.55));
-}
-
-.liveUrlLabel {
+.liveUrlBarLabel {
   font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
+  font-weight: 700;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: #95de64;
   flex-shrink: 0;
 }
 
-.liveUrlLink {
-  flex: 1 1 200px;
+.liveUrlBarTrashed .liveUrlBarLabel {
+  color: #ff7875;
+}
+
+.liveUrlBarHref {
+  flex: 1 1 180px;
   min-width: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: color-mix(in oklab, #95de64, #fff 25%);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--aa-muted);
   text-decoration: none;
-  word-break: break-all;
-  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.liveUrlLink:hover {
+.liveUrlBarHref:hover {
+  color: var(--aa-ink);
   text-decoration: underline;
-  color: #b7eb8f;
 }
 
-.liveUrlActions {
+.liveUrlBarActions {
   display: flex;
   flex-shrink: 0;
-  gap: 8px;
+  gap: 6px;
 }
 
-.liveUrlBtn {
-  font-size: 12px;
-  font-weight: 700;
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--aa-body-strong);
+.liveUrlBarBtn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--aa-hairline);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--aa-muted);
   cursor: pointer;
   text-decoration: none;
-  text-align: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  white-space: nowrap;
+  transition: color 0.12s, background 0.12s;
 }
 
-.liveUrlBtn:hover {
-  background: rgba(255, 255, 255, 0.1);
+.liveUrlBarBtn:hover:not(:disabled) {
+  color: var(--aa-ink);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.liveUrlBarBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Toast — fixed bottom-right, auto-dismisses after 5s */
+.toast {
+  position: fixed;
+  bottom: 28px;
+  right: 28px;
+  z-index: var(--z-toast);
+  pointer-events: auto;
+  animation: toastIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toastInner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px 12px 16px;
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--aa-canvas, #0b0b0d), rgba(255, 255, 255, 0.10) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  max-width: 360px;
+  min-width: 200px;
+}
+
+.toastText {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  color: var(--aa-ink);
+}
+
+.toastClose {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--aa-muted);
+  cursor: pointer;
+  margin-top: -1px;
+  transition: color 0.12s;
+}
+
+.toastClose:hover {
+  color: var(--aa-ink);
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
 }
 
 .bannerStack {
