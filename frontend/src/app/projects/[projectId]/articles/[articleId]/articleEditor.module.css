@@ -701,6 +701,37 @@
   margin-top: 14px;
 }
 
+/* ── Wide desktop: sidebars are independently scrollable, sticky panels ── */
+@media (min-width: 1281px) {
+  .sidebarCol {
+    position: sticky;
+    top: 24px;
+    max-height: calc(100svh - 48px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.10) transparent;
+    padding-bottom: 24px;
+  }
+
+  .sidebarCol::-webkit-scrollbar {
+    width: 3px;
+  }
+
+  .sidebarCol::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .sidebarCol::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 2px;
+  }
+
+  .sidebarCol::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.22);
+  }
+}
+
 @media (max-width: 1280px) and (min-width: 981px) {
   .editorLayout {
     grid-template-columns: minmax(260px, 300px) minmax(0, 1fr);

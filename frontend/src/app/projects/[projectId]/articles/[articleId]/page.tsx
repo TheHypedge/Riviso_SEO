@@ -2544,6 +2544,19 @@ export default function ArticleEditPage() {
                   />
                 </div>
               </div>
+              <label className={styles.label} style={{ marginTop: 10 }}>
+                Targeting keywords
+                <input
+                  className={styles.input}
+                  value={keywords}
+                  onChange={(e) => setKeywords(e.target.value)}
+                  disabled={editorLocked}
+                  placeholder="keyword one, keyword two…"
+                />
+              </label>
+              <div className={styles.muted} style={{ fontSize: 12 }}>
+                Comma-separated, 5–10 keywords max.
+              </div>
               </>
               )}
             </div>
@@ -2787,17 +2800,6 @@ export default function ArticleEditPage() {
                   ) : null}
                 </div>
               ) : null}
-            </div>
-
-            <div className={editorStyles.sectionCard}>
-              <h2 className={editorStyles.sectionTitle}>Tags</h2>
-              <label className={styles.label}>
-                Targeting keywords (comma-separated)
-                <input className={styles.input} value={keywords} onChange={(e) => setKeywords(e.target.value)} disabled={editorLocked} />
-              </label>
-              <div className={styles.muted} style={{ fontSize: 12 }}>
-                Tip: keep this focused (5–10 keywords max).
-              </div>
             </div>
 
             <div className={editorStyles.sectionCard}>
@@ -3062,7 +3064,7 @@ export default function ArticleEditPage() {
                             const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
                             setWpCategoryIds(ids);
                           }}
-                          style={{ minHeight: 120 }}
+                          style={{ minHeight: 80 }}
                           disabled={editorLocked}
                         >
                           {wpCategories.map((c) => (
