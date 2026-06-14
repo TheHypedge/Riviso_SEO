@@ -1516,7 +1516,7 @@ export default function ProjectPage() {
   }, [projectId, token, tab, overviewRefreshKey]);
 
   useEffect(() => {
-    if (!token || !projectId || tab !== "tools") return;
+    if (!token || !projectId || (tab !== "tools" && tab !== "performance")) return;
     let cancelled = false;
     (async () => {
       setIndexingArticlesLoading(true);
@@ -2743,7 +2743,7 @@ export default function ProjectPage() {
   // user links / unlinks a property so the table reflects the current property.
   useEffect(() => {
     if (!token) return;
-    if (tab !== "tools") return;
+    if (tab !== "tools" && tab !== "performance") return;
     if (!gscStatus?.connected || !gscStatus?.property_url) {
       setGscSitemaps([]);
       setGscSitemapSuggested("");
@@ -9743,52 +9743,6 @@ export default function ProjectPage() {
 
             {gscStatus?.connected && (gscStatus?.property_url || "").trim() ? (
               <>
-                {/* Feature 1 — GSC ROI summary (full chart lives on Performance & Analysis tab) */}
-                <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-                  <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                    <h3 style={{ marginTop: 0, marginBottom: 0 }} className={`${styles.sectionSecondaryTitle}`}>Performance summary (last 28 days)</h3>
-                    {performanceTabAvailable ? (
-                      <button type="button" className={styles.button} onClick={() => goTab("performance")}>
-                        Open Performance & Analysis →
-                      </button>
-                    ) : null}
-                  </div>
-
-                  {analyticsErr ? (
-                    <div className={styles.error} style={{ marginTop: 10 }}>{analyticsErr}</div>
-                  ) : analyticsBusy && !analytics ? (
-                    <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>
-                      Loading Search Console data…
-                    </div>
-                  ) : analytics ? (
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                        gap: 12,
-                        marginTop: 14,
-                      }}
-                    >
-                      <div className={styles.kpiTile}>
-                        <div className={styles.kpiLabel}>Clicks</div>
-                        <div className={styles.kpiValue}>{(analytics.totals.clicks || 0).toLocaleString()}</div>
-                      </div>
-                      <div className={styles.kpiTile}>
-                        <div className={styles.kpiLabel}>Impressions</div>
-                        <div className={styles.kpiValue}>{(analytics.totals.impressions || 0).toLocaleString()}</div>
-                      </div>
-                      <div className={styles.kpiTile}>
-                        <div className={styles.kpiLabel}>Avg CTR</div>
-                        <div className={styles.kpiValue}>{((analytics.totals.ctr || 0) * 100).toFixed(2)}%</div>
-                      </div>
-                      <div className={styles.kpiTile}>
-                        <div className={styles.kpiLabel}>Avg position</div>
-                        <div className={styles.kpiValue}>{(analytics.totals.position || 0).toFixed(1)}</div>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-
                 {/* Feature 3 — Site Map (Internal Linking ingestion) */}
                 <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
                   <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -9826,383 +9780,15 @@ export default function ProjectPage() {
                   </div>
                 </div>
 
-                <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-                  <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Sitemap submission</h3>
-                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
-                    Register your sitemap once and Google will recrawl it on its own schedule — every
-                    future article gets discovered without per-post action. Sitemap submission is the
-                    officially supported public API for telling Search Console about new URLs.
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "stretch" }}>
-                    <input
-                      type="url"
-                      className={styles.input}
-                      placeholder={gscSitemapSuggested || "https://example.com/sitemap.xml"}
-                      value={sitemapInput}
-                      onChange={(e) => setSitemapInput(e.target.value)}
-                      disabled={sitemapBusy === "submit" || sitemapBusy === "delete"}
-                    />
-                    <button
-                      type="button"
-                      className={styles.button}
-                      onClick={submitProjectSitemap}
-                      disabled={sitemapBusy === "submit" || sitemapBusy === "delete"}
-                    >
-                      {sitemapBusy === "submit" ? "Submitting…" : "Submit sitemap"}
-                    </button>
-                  </div>
-                  <div className={styles.muted} style={{ fontSize: 11, marginTop: 6, lineHeight: 1.45 }}>
-                    Default suggestion is <code>{gscSitemapSuggested || "—"}</code> (the WordPress core
-                    sitemap). If you use Yoast or RankMath the index sitemap usually lives at{" "}
-                    <code>/sitemap_index.xml</code> — paste that URL and submit it instead.
-                  </div>
-
-                  {sitemapMsg ? (
-                    <div className={styles.muted} style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
-                      {sitemapMsg}
-                    </div>
-                  ) : null}
-
-                  <div style={{ marginTop: 16 }}>
-                    <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                      <div style={{ fontWeight: 700 }}>Registered sitemaps</div>
-                      <button
-                        type="button"
-                        className={styles.miniBtn}
-                        onClick={() => reloadProjectSitemaps()}
-                        disabled={sitemapBusy === "load"}
-                      >
-                        {sitemapBusy === "load" ? "Refreshing…" : "Refresh"}
-                      </button>
-                    </div>
-                    {gscSitemaps.length === 0 ? (
-                      <div className={styles.muted} style={{ fontSize: 13 }}>
-                        No sitemaps registered yet. Submit one above to enable automatic discovery.
-                      </div>
-                    ) : (
-                      <div style={{ overflowX: "auto" }}>
-                        <table className={`${styles.table} ${styles.tableZebra}`}>
-                          <thead>
-                            <tr>
-                              <th className={styles.th}>Sitemap URL</th>
-                              <th className={styles.th}>Last submitted</th>
-                              <th className={`${styles.th} ${styles.thNum}`}>Submitted</th>
-                              <th className={`${styles.th} ${styles.thNum}`}>Indexed</th>
-                              <th className={styles.th}>Status</th>
-                              <th className={styles.th} style={{ textAlign: "right" }}>Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {gscSitemaps.map((s) => {
-                              const isDeleting = sitemapBusy === "delete" && sitemapDeletingPath === s.path;
-                              const errs = s.errors || 0;
-                              const warns = s.warnings || 0;
-                              const pillClass = errs > 0
-                                ? `${styles.statusPill} ${styles.pillDanger}`
-                                : warns > 0
-                                ? `${styles.statusPill} ${styles.pillWarn}`
-                                : `${styles.statusPill} ${styles.pillSuccess}`;
-                              const pillLabel = errs > 0
-                                ? `${errs} error${errs === 1 ? "" : "s"}`
-                                : warns > 0
-                                ? `${warns} warning${warns === 1 ? "" : "s"}`
-                                : "OK";
-                              return (
-                                <tr key={s.path}>
-                                  <td className={styles.td} style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    <a href={s.path} target="_blank" rel="noopener noreferrer" className={styles.tableLink}>
-                                      {s.path}
-                                    </a>
-                                  </td>
-                                  <td className={`${styles.td} ${styles.tdMuted}`} style={{ fontSize: 12 }}>
-                                    {s.last_submitted ? new Date(s.last_submitted).toLocaleString() : "—"}
-                                  </td>
-                                  <td className={`${styles.td} ${styles.tdNum}`}>{s.submitted_urls || "—"}</td>
-                                  <td className={`${styles.td} ${styles.tdNum}`}>{s.indexed_urls || "—"}</td>
-                                  <td className={styles.td}>
-                                    <span className={pillClass}>{pillLabel}</span>
-                                  </td>
-                                  <td className={styles.td} style={{ textAlign: "right" }}>
-                                    <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                                      <button
-                                        type="button"
-                                        className={styles.miniBtn}
-                                        onClick={() => {
-                                          setSitemapInput(s.path);
-                                          void submitProjectSitemap();
-                                        }}
-                                        disabled={Boolean(sitemapBusy)}
-                                      >
-                                        Resubmit
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className={`${styles.miniBtn} ${styles.miniDanger}`}
-                                        onClick={() => deleteProjectSitemap(s.path)}
-                                        disabled={Boolean(sitemapBusy)}
-                                      >
-                                        {isDeleting ? "Removing…" : "Remove"}
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-                </div>
               </>
             ) : (
               <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
                 <p className={styles.clusterCardSubtitle} style={{ margin: 0, lineHeight: 1.55 }}>
-                  <strong>Performance summary</strong>, <strong>internal site-map sync</strong>, and <strong>sitemap submission</strong>{" "}
-                  appear here after you connect Google above, pick a Search Console property, and click <strong>Save</strong> so this project is
+                  <strong>Internal site-map sync</strong> appears here after you connect Google above, pick a Search Console property, and click <strong>Save</strong> so this project is
                   fully linked to a verified property.
                 </p>
               </div>
             )}
-
-            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-              <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Existing articles — indexing status</h3>
-              <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
-                <strong>Check</strong> reads the URL’s current coverage from Search Console (read-only).{" "}
-                <strong>Index now</strong> pings Google’s Indexing API (officially supported only for
-                JobPosting / BroadcastEvent — for general articles it’s a discovery hint and is{" "}
-                <em>not</em> reflected in URL Inspection’s history) and pings your sitemap, then opens
-                Search Console’s URL Inspection panel pre-filled with the URL. Pressing{" "}
-                <strong>REQUEST INDEXING</strong> there is the only action that produces the visible
-                &ldquo;Indexing requested&rdquo; entry in Search Console.
-              </div>
-
-              {!gscStatus?.connected || !gscStatus?.property_url ? (
-                <div className={styles.muted} style={{ fontSize: 13 }}>
-                  Connect Google and link a property above to use these actions.
-                </div>
-              ) : (() => {
-                if (indexingArticlesLoading) {
-                  return <TextLinesSkeleton lines={3} />;
-                }
-                const allPublished = indexingArticles;
-                if (!allPublished.length) {
-                  return (
-                    <div className={styles.muted} style={{ fontSize: 13 }}>
-                      No published articles yet. Once an article goes live, it will appear here.
-                    </div>
-                  );
-                }
-
-                const q = indexingSearch.trim().toLowerCase();
-                const filtered = allPublished.filter((a) => {
-                  // Effective coverage: live status from a "Check" if available, else stored gsc_status.
-                  const status = articleIndexStatus[a.id];
-                  const coverage = (status?.coverage_state || a.gsc_status || "").toString().toLowerCase();
-                  if (indexingStatusFilter && coverage !== indexingStatusFilter) return false;
-                  if (!q) return true;
-                  const hay = `${a.title || ""} ${a.wp_link || ""}`.toLowerCase();
-                  return hay.includes(q);
-                });
-
-                const total = filtered.length;
-                const totalPages = Math.max(1, Math.ceil(total / indexingPageSize));
-                const safePage = Math.min(Math.max(1, indexingPage), totalPages);
-                const pageStart = (safePage - 1) * indexingPageSize;
-                const pageRows = filtered.slice(pageStart, pageStart + indexingPageSize);
-
-                // Map a coverage / gsc_status string to a status pill class + label.
-                const pillFor = (coverage: string) => {
-                  const s = (coverage || "").toLowerCase();
-                  if (s === "indexed" || s === "valid")
-                    return { cls: `${styles.statusPill} ${styles.pillSuccess}`, label: "Indexed" };
-                  if (s === "requested" || s === "manual_required" || s === "sitemap_pinged" || s === "index_api_pinged")
-                    return { cls: `${styles.statusPill} ${styles.pillInfo}`, label: "Requested" };
-                  if (s === "inspected")
-                    return { cls: `${styles.statusPill} ${styles.pillInfo}`, label: "Inspected" };
-                  if (s === "error" || s === "failed")
-                    return { cls: `${styles.statusPill} ${styles.pillDanger}`, label: "Error" };
-                  if (s === "pending" || !s)
-                    return { cls: `${styles.statusPill} ${styles.pillNeutral}`, label: "Pending" };
-                  return { cls: `${styles.statusPill} ${styles.pillNeutral}`, label: coverage };
-                };
-
-                return (
-                  <>
-                    <div
-                      className={styles.row}
-                      style={{ gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}
-                    >
-                      <input
-                        className={styles.input}
-                        type="search"
-                        placeholder="Search title or URL…"
-                        value={indexingSearch}
-                        onChange={(e) => {
-                          setIndexingSearch(e.target.value);
-                          setIndexingPage(1);
-                        }}
-                        style={{ maxWidth: 260, height: 36 }}
-                      />
-                      <select
-                        className={styles.input}
-                        value={indexingStatusFilter}
-                        onChange={(e) => {
-                          setIndexingStatusFilter(e.target.value);
-                          setIndexingPage(1);
-                        }}
-                        style={{ maxWidth: 200, height: 36 }}
-                      >
-                        <option value="">All statuses</option>
-                        <option value="pending">Pending</option>
-                        <option value="inspected">Inspected</option>
-                        <option value="requested">Requested</option>
-                        <option value="indexed">Indexed</option>
-                        <option value="manual_required">Manual required</option>
-                      </select>
-                      <select
-                        className={styles.input}
-                        value={String(indexingPageSize)}
-                        onChange={(e) => {
-                          setIndexingPageSize(parseInt(e.target.value, 10) || 10);
-                          setIndexingPage(1);
-                        }}
-                        style={{ maxWidth: 130, height: 36 }}
-                        title="Rows per page"
-                      >
-                        <option value="10">10 / page</option>
-                        <option value="25">25 / page</option>
-                        <option value="50">50 / page</option>
-                        <option value="100">100 / page</option>
-                      </select>
-                      <span className={styles.muted} style={{ fontSize: 12, marginLeft: "auto" }}>
-                        Showing {pageRows.length} of {total} (
-                        {allPublished.length} published)
-                      </span>
-                    </div>
-
-                    <div style={{ overflowX: "auto", border: "1px solid var(--aa-hairline)", borderRadius: 12 }}>
-                      <table className={`${styles.table} ${styles.tableZebra}`} style={{ border: "0" }}>
-                        <thead>
-                          <tr>
-                            <th className={styles.th} style={{ width: "30%" }}>Title</th>
-                            <th className={styles.th} style={{ width: "40%" }}>Live URL</th>
-                            <th className={styles.th} style={{ width: 110 }}>Status</th>
-                            <th className={styles.th} style={{ textAlign: "right" }}>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {pageRows.map((a) => {
-                            const busy = articleIndexBusy[a.id];
-                            const msg = articleIndexMsg[a.id];
-                            const status = articleIndexStatus[a.id];
-                            const result = articleIndexResult[a.id];
-                            const inspectUrl = result?.inspect_panel_url || "";
-                            const coverage = (status?.coverage_state || a.gsc_status || "").toString();
-                            const pill = pillFor(coverage);
-                            return (
-                              <tr key={a.id}>
-                                <td
-                                  className={styles.td}
-                                  style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                                  title={a.title}
-                                >
-                                  {a.title || "(untitled)"}
-                                </td>
-                                <td
-                                  className={styles.td}
-                                  style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                                >
-                                  <a
-                                    href={a.wp_link || "#"}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className={styles.tableLink}
-                                    title={a.wp_link || ""}
-                                  >
-                                    {a.wp_link}
-                                  </a>
-                                </td>
-                                <td className={styles.td}>
-                                  <span className={pill.cls}>{pill.label}</span>
-                                  {msg ? (
-                                    <div className={styles.muted} style={{ fontSize: 11, marginTop: 4, lineHeight: 1.45 }}>
-                                      {msg}
-                                    </div>
-                                  ) : null}
-                                </td>
-                                <td className={styles.td} style={{ textAlign: "right" }}>
-                                  <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                                    <button
-                                      type="button"
-                                      className={styles.miniBtn}
-                                      onClick={() => checkArticleIndexing(a.id)}
-                                      disabled={Boolean(busy)}
-                                    >
-                                      {busy === "check" ? "Checking…" : "Check"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className={`${styles.miniBtn} ${styles.miniPrimary}`}
-                                      onClick={() => requestArticleIndexing(a.id)}
-                                      disabled={Boolean(busy)}
-                                    >
-                                      {busy === "request" ? "Submitting…" : "Index now"}
-                                    </button>
-                                    {inspectUrl ? (
-                                      <a
-                                        href={inspectUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className={styles.miniBtn}
-                                        title="Opens Google Search Console URL Inspection pre-filled with this URL — press REQUEST INDEXING there to actually queue a crawl that shows up in URL Inspection history."
-                                      >
-                                        GSC ↗
-                                      </a>
-                                    ) : null}
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                          {pageRows.length === 0 ? (
-                            <tr>
-                              <td className={`${styles.td} ${styles.tdMuted}`} colSpan={4} style={{ textAlign: "center", padding: 18 }}>
-                                No articles match the current filters.
-                              </td>
-                            </tr>
-                          ) : null}
-                        </tbody>
-                      </table>
-                      <div className={styles.pagerBar}>
-                        <span>
-                          Page {safePage} / {totalPages}
-                        </span>
-                        <div className={styles.row} style={{ gap: 6 }}>
-                          <button
-                            type="button"
-                            className={styles.miniBtn}
-                            onClick={() => setIndexingPage((p) => Math.max(1, p - 1))}
-                            disabled={safePage <= 1}
-                          >
-                            ← Prev
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.miniBtn}
-                            onClick={() => setIndexingPage((p) => Math.min(totalPages, p + 1))}
-                            disabled={safePage >= totalPages}
-                          >
-                            Next →
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
 
             {gscConfirmDisconnect ? (
               <>
@@ -10746,6 +10332,355 @@ export default function ProjectPage() {
                       </div>
                     </div>
                   ) : null}
+                </div>
+              </>
+            ) : null}
+
+            {/* ── GSC TOOLS: Sitemap submission + Indexing status ── */}
+            {gscStatus?.connected && (gscStatus?.property_url || "").trim() ? (
+              <>
+                {/* Sitemap submission */}
+                <div className={`${styles.card} ${styles.cardWide}`}>
+                  <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Sitemap submission</h3>
+                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
+                    Register your sitemap once and Google will recrawl it on its own schedule — every
+                    future article gets discovered without per-post action. Sitemap submission is the
+                    officially supported public API for telling Search Console about new URLs.
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "stretch" }}>
+                    <input
+                      type="url"
+                      className={styles.input}
+                      placeholder={gscSitemapSuggested || "https://example.com/sitemap.xml"}
+                      value={sitemapInput}
+                      onChange={(e) => setSitemapInput(e.target.value)}
+                      disabled={sitemapBusy === "submit" || sitemapBusy === "delete"}
+                    />
+                    <button
+                      type="button"
+                      className={styles.button}
+                      onClick={submitProjectSitemap}
+                      disabled={sitemapBusy === "submit" || sitemapBusy === "delete"}
+                    >
+                      {sitemapBusy === "submit" ? "Submitting…" : "Submit sitemap"}
+                    </button>
+                  </div>
+                  <div className={styles.muted} style={{ fontSize: 11, marginTop: 6, lineHeight: 1.45 }}>
+                    Default suggestion is <code>{gscSitemapSuggested || "—"}</code> (the WordPress core
+                    sitemap). If you use Yoast or RankMath the index sitemap usually lives at{" "}
+                    <code>/sitemap_index.xml</code> — paste that URL and submit it instead.
+                  </div>
+
+                  {sitemapMsg ? (
+                    <div className={styles.muted} style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
+                      {sitemapMsg}
+                    </div>
+                  ) : null}
+
+                  <div style={{ marginTop: 16 }}>
+                    <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <div style={{ fontWeight: 700 }}>Registered sitemaps</div>
+                      <button
+                        type="button"
+                        className={styles.miniBtn}
+                        onClick={() => reloadProjectSitemaps()}
+                        disabled={sitemapBusy === "load"}
+                      >
+                        {sitemapBusy === "load" ? "Refreshing…" : "Refresh"}
+                      </button>
+                    </div>
+                    {gscSitemaps.length === 0 ? (
+                      <div className={styles.muted} style={{ fontSize: 13 }}>
+                        No sitemaps registered yet. Submit one above to enable automatic discovery.
+                      </div>
+                    ) : (
+                      <div style={{ overflowX: "auto" }}>
+                        <table className={`${styles.table} ${styles.tableZebra}`}>
+                          <thead>
+                            <tr>
+                              <th className={styles.th}>Sitemap URL</th>
+                              <th className={styles.th}>Last submitted</th>
+                              <th className={`${styles.th} ${styles.thNum}`}>Submitted</th>
+                              <th className={`${styles.th} ${styles.thNum}`}>Indexed</th>
+                              <th className={styles.th}>Status</th>
+                              <th className={styles.th} style={{ textAlign: "right" }}>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {gscSitemaps.map((s) => {
+                              const isDeleting = sitemapBusy === "delete" && sitemapDeletingPath === s.path;
+                              const errs = s.errors || 0;
+                              const warns = s.warnings || 0;
+                              const pillClass = errs > 0
+                                ? `${styles.statusPill} ${styles.pillDanger}`
+                                : warns > 0
+                                ? `${styles.statusPill} ${styles.pillWarn}`
+                                : `${styles.statusPill} ${styles.pillSuccess}`;
+                              const pillLabel = errs > 0
+                                ? `${errs} error${errs === 1 ? "" : "s"}`
+                                : warns > 0
+                                ? `${warns} warning${warns === 1 ? "" : "s"}`
+                                : "OK";
+                              return (
+                                <tr key={s.path}>
+                                  <td className={styles.td} style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                    <a href={s.path} target="_blank" rel="noopener noreferrer" className={styles.tableLink}>
+                                      {s.path}
+                                    </a>
+                                  </td>
+                                  <td className={`${styles.td} ${styles.tdMuted}`} style={{ fontSize: 12 }}>
+                                    {s.last_submitted ? new Date(s.last_submitted).toLocaleString() : "—"}
+                                  </td>
+                                  <td className={`${styles.td} ${styles.tdNum}`}>{s.submitted_urls || "—"}</td>
+                                  <td className={`${styles.td} ${styles.tdNum}`}>{s.indexed_urls || "—"}</td>
+                                  <td className={styles.td}>
+                                    <span className={pillClass}>{pillLabel}</span>
+                                  </td>
+                                  <td className={styles.td} style={{ textAlign: "right" }}>
+                                    <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                                      <button
+                                        type="button"
+                                        className={styles.miniBtn}
+                                        onClick={() => {
+                                          setSitemapInput(s.path);
+                                          void submitProjectSitemap();
+                                        }}
+                                        disabled={Boolean(sitemapBusy)}
+                                      >
+                                        Resubmit
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className={`${styles.miniBtn} ${styles.miniDanger}`}
+                                        onClick={() => deleteProjectSitemap(s.path)}
+                                        disabled={Boolean(sitemapBusy)}
+                                      >
+                                        {isDeleting ? "Removing…" : "Remove"}
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Existing articles — indexing status */}
+                <div className={`${styles.card} ${styles.cardWide}`}>
+                  <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Existing articles — indexing status</h3>
+                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
+                    <strong>Check</strong> reads the URL&apos;s current coverage from Search Console (read-only).{" "}
+                    <strong>Index now</strong> pings Google&apos;s Indexing API (officially supported only for
+                    JobPosting / BroadcastEvent — for general articles it&apos;s a discovery hint and is{" "}
+                    <em>not</em> reflected in URL Inspection&apos;s history) and pings your sitemap, then opens
+                    Search Console&apos;s URL Inspection panel pre-filled with the URL. Pressing{" "}
+                    <strong>REQUEST INDEXING</strong> there is the only action that produces the visible
+                    &ldquo;Indexing requested&rdquo; entry in Search Console.
+                  </div>
+                  {(() => {
+                    if (indexingArticlesLoading) {
+                      return <TextLinesSkeleton lines={3} />;
+                    }
+                    const allPublished = indexingArticles;
+                    if (!allPublished.length) {
+                      return (
+                        <div className={styles.muted} style={{ fontSize: 13 }}>
+                          No published articles yet. Once an article goes live, it will appear here.
+                        </div>
+                      );
+                    }
+
+                    const q = indexingSearch.trim().toLowerCase();
+                    const filtered = allPublished.filter((a) => {
+                      const status = articleIndexStatus[a.id];
+                      const coverage = (status?.coverage_state || a.gsc_status || "").toString().toLowerCase();
+                      if (indexingStatusFilter && coverage !== indexingStatusFilter) return false;
+                      if (!q) return true;
+                      const hay = `${a.title || ""} ${a.wp_link || ""}`.toLowerCase();
+                      return hay.includes(q);
+                    });
+
+                    const total = filtered.length;
+                    const totalPages = Math.max(1, Math.ceil(total / indexingPageSize));
+                    const safePage = Math.min(Math.max(1, indexingPage), totalPages);
+                    const pageStart = (safePage - 1) * indexingPageSize;
+                    const pageRows = filtered.slice(pageStart, pageStart + indexingPageSize);
+
+                    const pillFor = (coverage: string) => {
+                      const s = (coverage || "").toLowerCase();
+                      if (s === "indexed" || s === "valid")
+                        return { cls: `${styles.statusPill} ${styles.pillSuccess}`, label: "Indexed" };
+                      if (s === "requested" || s === "manual_required" || s === "sitemap_pinged" || s === "index_api_pinged")
+                        return { cls: `${styles.statusPill} ${styles.pillInfo}`, label: "Requested" };
+                      if (s === "inspected")
+                        return { cls: `${styles.statusPill} ${styles.pillInfo}`, label: "Inspected" };
+                      if (s === "error" || s === "failed")
+                        return { cls: `${styles.statusPill} ${styles.pillDanger}`, label: "Error" };
+                      if (s === "pending" || !s)
+                        return { cls: `${styles.statusPill} ${styles.pillNeutral}`, label: "Pending" };
+                      return { cls: `${styles.statusPill} ${styles.pillNeutral}`, label: coverage };
+                    };
+
+                    return (
+                      <>
+                        <div className={styles.row} style={{ gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+                          <input
+                            className={styles.input}
+                            type="search"
+                            placeholder="Search title or URL…"
+                            value={indexingSearch}
+                            onChange={(e) => {
+                              setIndexingSearch(e.target.value);
+                              setIndexingPage(1);
+                            }}
+                            style={{ maxWidth: 260, height: 36 }}
+                          />
+                          <select
+                            className={styles.input}
+                            value={indexingStatusFilter}
+                            onChange={(e) => {
+                              setIndexingStatusFilter(e.target.value);
+                              setIndexingPage(1);
+                            }}
+                            style={{ maxWidth: 200, height: 36 }}
+                          >
+                            <option value="">All statuses</option>
+                            <option value="pending">Pending</option>
+                            <option value="inspected">Inspected</option>
+                            <option value="requested">Requested</option>
+                            <option value="indexed">Indexed</option>
+                            <option value="manual_required">Manual required</option>
+                          </select>
+                          <select
+                            className={styles.input}
+                            value={String(indexingPageSize)}
+                            onChange={(e) => {
+                              setIndexingPageSize(parseInt(e.target.value, 10) || 10);
+                              setIndexingPage(1);
+                            }}
+                            style={{ maxWidth: 130, height: 36 }}
+                            title="Rows per page"
+                          >
+                            <option value="10">10 / page</option>
+                            <option value="25">25 / page</option>
+                            <option value="50">50 / page</option>
+                            <option value="100">100 / page</option>
+                          </select>
+                          <span className={styles.muted} style={{ fontSize: 12, marginLeft: "auto" }}>
+                            Showing {pageRows.length} of {total} ({allPublished.length} published)
+                          </span>
+                        </div>
+
+                        <div style={{ overflowX: "auto", border: "1px solid var(--aa-hairline)", borderRadius: 12 }}>
+                          <table className={`${styles.table} ${styles.tableZebra}`} style={{ border: "0" }}>
+                            <thead>
+                              <tr>
+                                <th className={styles.th} style={{ width: "30%" }}>Title</th>
+                                <th className={styles.th} style={{ width: "40%" }}>Live URL</th>
+                                <th className={styles.th} style={{ width: 110 }}>Status</th>
+                                <th className={styles.th} style={{ textAlign: "right" }}>Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pageRows.map((a) => {
+                                const busy = articleIndexBusy[a.id];
+                                const msg = articleIndexMsg[a.id];
+                                const status = articleIndexStatus[a.id];
+                                const result = articleIndexResult[a.id];
+                                const inspectUrl = result?.inspect_panel_url || "";
+                                const coverage = (status?.coverage_state || a.gsc_status || "").toString();
+                                const pill = pillFor(coverage);
+                                return (
+                                  <tr key={a.id}>
+                                    <td className={styles.td} style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={a.title}>
+                                      {a.title || "(untitled)"}
+                                    </td>
+                                    <td className={styles.td} style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                      <a href={a.wp_link || "#"} target="_blank" rel="noopener noreferrer" className={styles.tableLink} title={a.wp_link || ""}>
+                                        {a.wp_link}
+                                      </a>
+                                    </td>
+                                    <td className={styles.td}>
+                                      <span className={pill.cls}>{pill.label}</span>
+                                      {msg ? (
+                                        <div className={styles.muted} style={{ fontSize: 11, marginTop: 4, lineHeight: 1.45 }}>
+                                          {msg}
+                                        </div>
+                                      ) : null}
+                                    </td>
+                                    <td className={styles.td} style={{ textAlign: "right" }}>
+                                      <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                                        <button
+                                          type="button"
+                                          className={styles.miniBtn}
+                                          onClick={() => checkArticleIndexing(a.id)}
+                                          disabled={Boolean(busy)}
+                                        >
+                                          {busy === "check" ? "Checking…" : "Check"}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className={`${styles.miniBtn} ${styles.miniPrimary}`}
+                                          onClick={() => requestArticleIndexing(a.id)}
+                                          disabled={Boolean(busy)}
+                                        >
+                                          {busy === "request" ? "Submitting…" : "Index now"}
+                                        </button>
+                                        {inspectUrl ? (
+                                          <a
+                                            href={inspectUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className={styles.miniBtn}
+                                            title="Opens Google Search Console URL Inspection pre-filled with this URL — press REQUEST INDEXING there to actually queue a crawl that shows up in URL Inspection history."
+                                          >
+                                            GSC ↗
+                                          </a>
+                                        ) : null}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                              {pageRows.length === 0 ? (
+                                <tr>
+                                  <td className={`${styles.td} ${styles.tdMuted}`} colSpan={4} style={{ textAlign: "center", padding: 18 }}>
+                                    No articles match the current filters.
+                                  </td>
+                                </tr>
+                              ) : null}
+                            </tbody>
+                          </table>
+                          <div className={styles.pagerBar}>
+                            <span>Page {safePage} / {totalPages}</span>
+                            <div className={styles.row} style={{ gap: 6 }}>
+                              <button
+                                type="button"
+                                className={styles.miniBtn}
+                                onClick={() => setIndexingPage((p) => Math.max(1, p - 1))}
+                                disabled={safePage <= 1}
+                              >
+                                ← Prev
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.miniBtn}
+                                onClick={() => setIndexingPage((p) => Math.min(totalPages, p + 1))}
+                                disabled={safePage >= totalPages}
+                              >
+                                Next →
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </>
             ) : null}
