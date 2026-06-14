@@ -4776,35 +4776,80 @@
 
 /* KPI tile shown above the analytics chart. Uses a faint accent border and
  * subtle gradient so the value pops without relying on color alone. */
+.kpiGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
 .kpiTile {
-  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 0%);
-  border-radius: 12px;
-  padding: 12px 14px;
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--aa-primary), transparent 92%) 0%, transparent 60%),
-    color-mix(in oklab, var(--aa-surface-card), transparent 0%);
+  border: 1px solid var(--aa-hairline);
+  border-radius: 14px;
+  padding: 16px 18px;
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 0%);
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
+  position: relative;
+  overflow: hidden;
 }
+.kpiTile::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0.07;
+  pointer-events: none;
+}
+.kpiTile[data-accent="clicks"]::before { background: var(--aa-primary); }
+.kpiTile[data-accent="impressions"]::before { background: #5b9cf6; }
+.kpiTile[data-accent="ctr"]::before { background: #2dd4a7; }
+.kpiTile[data-accent="position"]::before { background: #b97dff; }
 .kpiLabel {
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   font-weight: 700;
-  color: color-mix(in oklab, var(--text-primary), transparent 35%);
+  color: var(--aa-muted);
+}
+.kpiValueRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .kpiValue {
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 800;
-  color: var(--text-primary);
-  line-height: 1.1;
-  letter-spacing: -0.01em;
+  color: var(--aa-ink);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.kpiDelta {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.kpiDelta[data-trend="up"] {
+  color: var(--aa-success);
+  background: color-mix(in oklab, var(--aa-success), transparent 85%);
+}
+.kpiDelta[data-trend="down"] {
+  color: var(--aa-error);
+  background: color-mix(in oklab, var(--aa-error), transparent 85%);
+}
+.kpiDelta[data-trend="flat"] {
+  color: var(--aa-muted);
+  background: color-mix(in oklab, var(--aa-muted), transparent 88%);
 }
 .kpiSub {
   font-size: 11px;
-  color: color-mix(in oklab, var(--text-primary), transparent 50%);
+  color: var(--aa-muted);
+  margin-top: 2px;
 }
 
 /* Anchor styling inside data tables — readable on either light or dark card.
@@ -5161,6 +5206,157 @@
 @media (max-width: 640px) {
   .analyticsRangeMeta {
     margin-left: 0;
+  }
+}
+
+/* Chart series visibility toggle bar */
+.chartSeriesBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 0 var(--aa-s-md) 10px;
+}
+.chartSeriesBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--aa-hairline);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--aa-body);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.chartSeriesBtn[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 30%);
+  border-color: color-mix(in oklab, var(--aa-hairline), transparent 0%);
+}
+.chartSeriesBtn:hover {
+  border-color: var(--aa-body);
+}
+.chartSeriesDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+
+/* Quick insight cards grid */
+.insightCardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.insightCard {
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 0%);
+  border: 1px solid var(--aa-hairline);
+  border-radius: 14px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.insightCardTitle {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--aa-muted);
+}
+.insightCardValue {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--aa-ink);
+  letter-spacing: -0.015em;
+  line-height: 1.1;
+  margin-top: 4px;
+}
+.insightCardDetail {
+  font-size: 12px;
+  color: var(--aa-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+/* Sortable table header */
+.analyticsTableSearch {
+  max-width: 240px;
+  height: 34px;
+  font-size: 13px;
+}
+.analyticsTableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--aa-hairline);
+  border-radius: 12px;
+  margin-top: 12px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.analyticsTableSticky th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 10%);
+  backdrop-filter: blur(6px);
+}
+.thSortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.thSortable:hover {
+  color: var(--aa-ink);
+  background: color-mix(in oklab, var(--aa-surface-soft), transparent 0%);
+}
+.thSortLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.thSortIcon {
+  font-size: 10px;
+  opacity: 0.55;
+}
+.thSortable[aria-sort="ascending"] .thSortIcon,
+.thSortable[aria-sort="descending"] .thSortIcon {
+  opacity: 1;
+  color: var(--aa-primary);
+}
+
+/* Top pages table row: 48px min-height, hover state */
+.analyticsPageRow td {
+  min-height: 48px;
+  height: 48px;
+}
+.analyticsPageRow:hover td {
+  background: color-mix(in oklab, var(--aa-primary), transparent 90%);
+}
+
+@media (max-width: 640px) {
+  .insightCardGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .kpiGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .analyticsTableSearch {
+    max-width: 100%;
+  }
+}
+@media (max-width: 400px) {
+  .insightCardGrid {
+    grid-template-columns: 1fr;
+  }
+  .kpiGrid {
+    grid-template-columns: 1fr;
   }
 }
 

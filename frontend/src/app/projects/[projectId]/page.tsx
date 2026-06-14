@@ -315,23 +315,26 @@ function makeResearchKey(title: string, focus: string): string {
 function AnalyticsLineChart(props: {
   series: import("@/lib/api").GscAnalyticsSeriesPoint[];
   markers: import("@/lib/api").GscAnalyticsMarker[];
+  height?: number;
+  visible?: { clicks: boolean; impressions: boolean; position: boolean };
 }) {
   const { series, markers } = props;
+  const visible = props.visible ?? { clicks: true, impressions: true, position: false };
   const W = 920;
-  const H = 300;
-  const padL = 48;
-  const padR = 10;
-  const padT = 14;
-  const padB = 40;
+  const H = props.height ?? 420;
+  const padL = 52;
+  const padR = visible.position ? 46 : 12;
+  const padT = 16;
+  const padB = 44;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
 
-  /** Theme tokens — readable on dark project cards and aligned with Riviso brand (coral + cream + gold). */
   const gridStroke = "var(--aa-hairline)";
   const plotOutline = "color-mix(in oklab, var(--aa-hairline), transparent 35%)";
   const axisFill = "var(--aa-muted)";
   const lineClicks = "var(--aa-primary)";
-  const lineImpr = "var(--aa-surface-cream-strong)";
+  const lineImpr = "#5b9cf6";
+  const linePos = "#b97dff";
   const markerLine = "color-mix(in oklab, var(--aa-warning), transparent 22%)";
   const markerDot = "var(--aa-warning)";
   const pointRing = "rgba(255, 255, 255, 0.92)";
@@ -349,17 +352,23 @@ function AnalyticsLineChart(props: {
 
   const maxClicks = Math.max(1, ...series.map((p) => p.clicks || 0));
   const maxImpr = Math.max(1, ...series.map((p) => p.impressions || 0));
+  const maxPos = Math.max(1, ...series.map((p) => p.position || 0));
+  const minPos = Math.min(...series.map((p) => p.position || 0).filter((v) => v > 0));
 
   const yClicks = (v: number) => padT + innerH - (innerH * (v || 0)) / maxClicks;
   const yImpr = (v: number) => padT + innerH - (innerH * (v || 0)) / maxImpr;
+  // For position, lower is better; invert so better = higher on chart
+  const posRange = Math.max(1, maxPos - Math.min(0, minPos - 1));
+  const yPos = (v: number) => padT + innerH - (innerH * (maxPos - (v || maxPos))) / posRange;
 
   const clicksPath = series.map((p, i) => `${i === 0 ? "M" : "L"} ${xIndex(i).toFixed(1)} ${yClicks(p.clicks).toFixed(1)}`).join(" ");
   const imprPath = series.map((p, i) => `${i === 0 ? "M" : "L"} ${xIndex(i).toFixed(1)} ${yImpr(p.impressions).toFixed(1)}`).join(" ");
+  const posPath = series.map((p, i) => `${i === 0 ? "M" : "L"} ${xIndex(i).toFixed(1)} ${yPos(p.position).toFixed(1)}`).join(" ");
 
-  const tickCount = 4;
+  const tickCount = 5;
   const yTicks = Array.from({ length: tickCount + 1 }, (_, i) => Math.round((maxClicks * i) / tickCount));
 
-  const labelEvery = Math.max(1, Math.floor(series.length / 6));
+  const labelEvery = Math.max(1, Math.floor(series.length / 7));
   const xLabels = series
     .map((p, i) => ({ p, i }))
     .filter(({ i }) => i % labelEvery === 0 || i === series.length - 1);
@@ -371,6 +380,12 @@ function AnalyticsLineChart(props: {
     .map((m) => ({ ...m, idx: dateToIndex.get(m.date) }))
     .filter((m) => typeof m.idx === "number") as Array<import("@/lib/api").GscAnalyticsMarker & { idx: number }>;
 
+  // Position right-axis ticks
+  const posTicks = Array.from({ length: tickCount + 1 }, (_, i) => {
+    const v = minPos + ((maxPos - minPos) * i) / tickCount;
+    return Math.round(v * 10) / 10;
+  }).reverse();
+
   return (
     <svg
       viewBox={`0 0 ${W} ${H}`}
@@ -378,14 +393,14 @@ function AnalyticsLineChart(props: {
       preserveAspectRatio="xMidYMid meet"
       role="img"
       aria-label="Search Console traffic over time with article publication markers"
-      style={{ display: "block", width: "100%", height: "auto", maxWidth: "100%", minHeight: 220 }}
+      style={{ display: "block", width: "100%", height: "auto", maxWidth: "100%", minHeight: 240 }}
     >
       <rect x={padL} y={padT} width={innerW} height={innerH} fill="transparent" stroke={plotOutline} strokeWidth={1} />
       {yTicks.map((v, i) => {
         const y = padT + innerH - (innerH * i) / tickCount;
         return (
           <g key={`yt-${i}`}>
-            <line x1={padL} y1={y} x2={W - padR} y2={y} stroke={gridStroke} strokeDasharray="2 4" strokeOpacity={0.95} />
+            <line x1={padL} y1={y} x2={padL + innerW} y2={y} stroke={gridStroke} strokeDasharray="2 4" strokeOpacity={0.85} />
             <text
               x={padL - 8}
               y={y + 4}
@@ -394,16 +409,33 @@ function AnalyticsLineChart(props: {
               fill={axisFill}
               style={{ fontFamily: "var(--aa-font-ui)" }}
             >
-              {v.toLocaleString()}
+              {v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)}k` : v.toLocaleString()}
             </text>
           </g>
+        );
+      })}
+      {visible.position && posTicks.map((v, i) => {
+        const y = padT + innerH - (innerH * (tickCount - i)) / tickCount;
+        return (
+          <text
+            key={`ryt-${i}`}
+            x={padL + innerW + 8}
+            y={y + 4}
+            textAnchor="start"
+            fontSize={10}
+            fill={linePos}
+            fillOpacity={0.8}
+            style={{ fontFamily: "var(--aa-font-ui)" }}
+          >
+            #{v.toFixed(0)}
+          </text>
         );
       })}
       {xLabels.map(({ p, i }) => (
         <text
           key={`xl-${i}`}
           x={xIndex(i)}
-          y={H - 10}
+          y={H - 12}
           textAnchor="middle"
           fontSize={11}
           fill={axisFill}
@@ -425,31 +457,43 @@ function AnalyticsLineChart(props: {
               strokeWidth={1.25}
               strokeDasharray="5 4"
             />
-            <circle cx={x} cy={padT + 7} r={5} fill={markerDot} stroke={pointRing} strokeWidth={1.25}>
+            <circle cx={x} cy={padT + 8} r={5} fill={markerDot} stroke={pointRing} strokeWidth={1.25}>
               <title>{`${m.title || "Article"} — published ${m.date}\n${m.url}`}</title>
             </circle>
           </g>
         );
       })}
-      <path d={imprPath} fill="none" stroke={lineImpr} strokeWidth={2.25} strokeOpacity={0.92} strokeLinecap="round" strokeLinejoin="round" />
-      <path d={clicksPath} fill="none" stroke={lineClicks} strokeWidth={2.75} strokeLinecap="round" strokeLinejoin="round" />
-      {series.map((p, i) => (
+      {visible.impressions && (
+        <path d={imprPath} fill="none" stroke={lineImpr} strokeWidth={2} strokeOpacity={0.85} strokeLinecap="round" strokeLinejoin="round" />
+      )}
+      {visible.clicks && (
+        <path d={clicksPath} fill="none" stroke={lineClicks} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+      )}
+      {visible.position && (
+        <path d={posPath} fill="none" stroke={linePos} strokeWidth={2} strokeOpacity={0.85} strokeLinecap="round" strokeLinejoin="round" />
+      )}
+      {visible.impressions && series.map((p, i) => (
         <circle
           key={`im-${i}`}
           cx={xIndex(i)}
           cy={yImpr(p.impressions)}
-          r={4}
+          r={series.length > 60 ? 2.5 : 3.5}
           fill={lineImpr}
           stroke={pointRing}
           strokeWidth={1}
-          fillOpacity={0.95}
+          fillOpacity={0.9}
         >
           <title>{`${p.date}\nImpressions: ${p.impressions}`}</title>
         </circle>
       ))}
-      {series.map((p, i) => (
-        <circle key={`cl-${i}`} cx={xIndex(i)} cy={yClicks(p.clicks)} r={5.5} fill={lineClicks} stroke={pointRing} strokeWidth={1.35}>
+      {visible.clicks && series.map((p, i) => (
+        <circle key={`cl-${i}`} cx={xIndex(i)} cy={yClicks(p.clicks)} r={series.length > 60 ? 3 : 4.5} fill={lineClicks} stroke={pointRing} strokeWidth={1.25}>
           <title>{`${p.date}\nClicks: ${p.clicks}\nImpressions: ${p.impressions}\nPosition: ${(p.position || 0).toFixed(1)}`}</title>
+        </circle>
+      ))}
+      {visible.position && series.map((p, i) => (
+        <circle key={`pos-${i}`} cx={xIndex(i)} cy={yPos(p.position)} r={series.length > 60 ? 2.5 : 3.5} fill={linePos} stroke={pointRing} strokeWidth={1} fillOpacity={0.9}>
+          <title>{`${p.date}\nAvg position: ${(p.position || 0).toFixed(1)}`}</title>
         </circle>
       ))}
     </svg>
@@ -838,6 +882,12 @@ export default function ProjectPage() {
   // Insights content sub-tabs (pages / queries)
   const [insightsPagesTab, setInsightsPagesTab] = useState<"top" | "up" | "down">("top");
   const [insightsQueriesTab, setInsightsQueriesTab] = useState<"top" | "up" | "down">("top");
+  // Chart series visibility toggles
+  const [chartSeries, setChartSeries] = useState<{ clicks: boolean; impressions: boolean; position: boolean }>({ clicks: true, impressions: true, position: false });
+  // Top pages table: search + sort
+  const [topPagesSearch, setTopPagesSearch] = useState<string>("");
+  const [topPagesSortKey, setTopPagesSortKey] = useState<"clicks" | "impressions" | "ctr" | "position">("clicks");
+  const [topPagesSortDir, setTopPagesSortDir] = useState<"asc" | "desc">("desc");
 
   // ---- Feature 3: Site map (Internal Linking) -------------------------------
   const [siteMap, setSiteMap] = useState<import("@/lib/api").SiteMapListResponse | null>(null);
@@ -10198,10 +10248,7 @@ export default function ProjectPage() {
 
         {tab === "performance" ? (
           <div className={styles.analyticsStack}>
-            {/* Header — title, connection state, sub-tab switcher, and the
-                "hero" content (KPIs + chart for Overview, headline KPIs for
-                Insights). Everything below lives in sibling cards so nothing
-                is nested inside another card. */}
+            {/* ── Header bar: title + connection state + sub-tab + refresh ── */}
             <div className={`${styles.card} ${styles.cardWide}`}>
               <div className={styles.analyticsHeaderRow}>
                 <div className={styles.analyticsHeaderTitle}>
@@ -10218,21 +10265,15 @@ export default function ProjectPage() {
                     </div>
                   ) : (
                     <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
-                      No Search Console property linked to this project yet.
+                      No Search Console property linked yet.
                     </p>
                   )}
                 </div>
-
                 <div className={styles.analyticsHeaderActions}>
                   <div className={styles.segmentGroup} aria-label="Performance view">
                     {(["overview", "insights"] as const).map((st) => (
-                      <button
-                        key={st}
-                        type="button"
-                        className={styles.miniBtn}
-                        onClick={() => setPerformanceSubTab(st)}
-                        aria-pressed={performanceSubTab === st}
-                      >
+                      <button key={st} type="button" className={styles.miniBtn}
+                        onClick={() => setPerformanceSubTab(st)} aria-pressed={performanceSubTab === st}>
                         {st === "overview" ? "Overview" : "Insights"}
                       </button>
                     ))}
@@ -10249,220 +10290,349 @@ export default function ProjectPage() {
                 </div>
               </div>
 
-              {performanceSubTab === "overview" ? <>
-              {/* Range toolbar: presets + custom range + active window */}
-              <div className={styles.analyticsRangeBar}>
-                <span className={styles.analyticsRangeLabel}>Date range</span>
-                <div className={styles.segmentGroup}>
-                  {[
-                    { d: 7, label: "7d" },
-                    { d: 28, label: "28d" },
-                    { d: 90, label: "90d" },
-                    { d: 180, label: "6m" },
-                    { d: 365, label: "12m" },
-                  ].map(({ d, label }) => (
-                    <button
-                      key={d}
-                      type="button"
-                      className={styles.miniBtn}
-                      onClick={() => setAnalyticsRangePreset(d)}
-                      disabled={analyticsBusy}
-                      aria-pressed={analyticsRangePreset === d}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    className={styles.miniBtn}
-                    onClick={() => setAnalyticsRangePreset("custom")}
-                    disabled={analyticsBusy}
-                    aria-pressed={analyticsRangePreset === "custom"}
-                  >
-                    Custom…
-                  </button>
-                </div>
-
-                {analyticsRangePreset === "custom" ? (
-                  <div className={styles.analyticsCustomRange}>
-                    <span className={styles.muted} style={{ fontSize: 12 }}>From</span>
-                    <input
-                      type="date"
-                      className={styles.input}
-                      value={analyticsCustomStart}
-                      onChange={(e) => setAnalyticsCustomStart(e.target.value)}
-                      max={analyticsCustomEnd || undefined}
-                      style={{ height: 36, maxWidth: 170 }}
-                    />
-                    <span className={styles.muted} style={{ fontSize: 12 }}>to</span>
-                    <input
-                      type="date"
-                      className={styles.input}
-                      value={analyticsCustomEnd}
-                      onChange={(e) => setAnalyticsCustomEnd(e.target.value)}
-                      min={analyticsCustomStart || undefined}
-                      max={new Date().toISOString().slice(0, 10)}
-                      style={{ height: 36, maxWidth: 170 }}
-                    />
-                    <button
-                      type="button"
-                      className={styles.button}
-                      onClick={() => reloadAnalytics()}
-                      disabled={
-                        analyticsBusy ||
-                        !analyticsCustomStart ||
-                        !analyticsCustomEnd ||
-                        analyticsCustomStart > analyticsCustomEnd
-                      }
-                    >
-                      Apply
-                    </button>
-                  </div>
-                ) : null}
-
-                {analytics?.range ? (
-                  <span className={styles.analyticsRangeMeta}>
-                    {analytics.range.start_date} → {analytics.range.end_date} · {analytics.range.days} days
-                  </span>
-                ) : null}
-              </div>
-
-              {analyticsErr ? (
-                <div className={styles.error} style={{ marginTop: 16 }}>{analyticsErr}</div>
-              ) : analyticsBusy && !analytics ? (
-                <div style={{ marginTop: 18 }}>
-                  <AnalyticsPanelSkeleton variant="overview" />
-                </div>
-              ) : analytics ? (
+              {/* ── OVERVIEW ── */}
+              {performanceSubTab === "overview" ? (
                 <>
-                  {/* KPI tiles */}
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-                      gap: 12,
-                      marginTop: 18,
-                    }}
-                  >
-                    <div className={styles.kpiTile}>
-                      <div className={styles.kpiLabel}>Clicks</div>
-                      <div className={styles.kpiValue}>{(analytics.totals.clicks || 0).toLocaleString()}</div>
-                      <div className={styles.kpiSub}>{analytics.totals.days_with_data} days with data</div>
+                  {/* Date range segmented control */}
+                  <div className={styles.analyticsRangeBar}>
+                    <div className={styles.segmentGroup} aria-label="Date range">
+                      {([
+                        { d: 7, label: "7d" },
+                        { d: 28, label: "28d" },
+                        { d: 90, label: "90d" },
+                        { d: 180, label: "6m" },
+                        { d: 365, label: "12m" },
+                      ] as const).map(({ d, label }) => (
+                        <button key={d} type="button" className={styles.miniBtn}
+                          onClick={() => setAnalyticsRangePreset(d)}
+                          disabled={analyticsBusy} aria-pressed={analyticsRangePreset === d}>
+                          {label}
+                        </button>
+                      ))}
+                      <button type="button" className={styles.miniBtn}
+                        onClick={() => setAnalyticsRangePreset("custom")}
+                        disabled={analyticsBusy} aria-pressed={analyticsRangePreset === "custom"}>
+                        Custom…
+                      </button>
                     </div>
-                    <div className={styles.kpiTile}>
-                      <div className={styles.kpiLabel}>Impressions</div>
-                      <div className={styles.kpiValue}>{(analytics.totals.impressions || 0).toLocaleString()}</div>
-                    </div>
-                    <div className={styles.kpiTile}>
-                      <div className={styles.kpiLabel}>Avg CTR</div>
-                      <div className={styles.kpiValue}>{((analytics.totals.ctr || 0) * 100).toFixed(2)}%</div>
-                    </div>
-                    <div className={styles.kpiTile}>
-                      <div className={styles.kpiLabel}>Avg position</div>
-                      <div className={styles.kpiValue}>{(analytics.totals.position || 0).toFixed(1)}</div>
-                    </div>
+                    {analyticsRangePreset === "custom" ? (
+                      <div className={styles.analyticsCustomRange}>
+                        <span className={styles.muted} style={{ fontSize: 12 }}>From</span>
+                        <input type="date" className={styles.input} value={analyticsCustomStart}
+                          onChange={(e) => setAnalyticsCustomStart(e.target.value)}
+                          max={analyticsCustomEnd || undefined} style={{ height: 34, maxWidth: 160 }} />
+                        <span className={styles.muted} style={{ fontSize: 12 }}>to</span>
+                        <input type="date" className={styles.input} value={analyticsCustomEnd}
+                          onChange={(e) => setAnalyticsCustomEnd(e.target.value)}
+                          min={analyticsCustomStart || undefined}
+                          max={new Date().toISOString().slice(0, 10)} style={{ height: 34, maxWidth: 160 }} />
+                        <button type="button" className={styles.button} onClick={() => reloadAnalytics()}
+                          disabled={analyticsBusy || !analyticsCustomStart || !analyticsCustomEnd || analyticsCustomStart > analyticsCustomEnd}>
+                          Apply
+                        </button>
+                      </div>
+                    ) : null}
+                    {analytics?.range ? (
+                      <span className={styles.analyticsRangeMeta}>
+                        {analytics.range.start_date} → {analytics.range.end_date} · {analytics.range.days} days
+                      </span>
+                    ) : null}
                   </div>
 
-                  {/* Chart — edge-to-edge within the card (horizontal bleed cancels card padding). */}
-                  <div className={styles.analyticsChartBleed} style={{ marginTop: 20 }}>
-                    <AnalyticsLineChart series={analytics.series} markers={analytics.markers} />
-                    <div className={styles.analyticsChartLegend}>
-                      <span className={styles.analyticsLegendSwatch} data-series="clicks" /> Clicks
-                      <span className={styles.analyticsLegendSwatch} data-series="impr" /> Impressions
-                      <span className={styles.analyticsLegendSwatch} data-series="marker" /> Article published
-                      <span className={styles.analyticsLegendMeta}>
-                        · {analytics.markers.length} article{analytics.markers.length === 1 ? "" : "s"} in this window
-                      </span>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className={styles.analyticsEmptyState}>
-                  {!gscStatus?.connected || !gscStatus?.property_url ? (
+                  {analyticsErr ? (
+                    <div className={styles.error} style={{ marginTop: 16 }}>{analyticsErr}</div>
+                  ) : analyticsBusy && !analytics ? (
+                    <div style={{ marginTop: 18 }}><AnalyticsPanelSkeleton variant="overview" /></div>
+                  ) : analytics ? (
                     <>
-                      <p className={styles.analyticsEmptyTitle}>Connect Search Console</p>
-                      <p className={styles.analyticsEmptyBody}>
-                        Link a Search Console property to see clicks, impressions, and ranking position for this site over time.
-                      </p>
-                      <button type="button" className={styles.button} onClick={() => goTab("tools")}>
-                        Open Tools to connect
-                      </button>
+                      {/* KPI summary cards */}
+                      <div className={styles.kpiGrid}>
+                        {(() => {
+                          const s = analytics.series;
+                          const mid = Math.floor(s.length / 2);
+                          const pct = (a: number, b: number) => b === 0 ? null : Math.round(((a - b) / Math.abs(b)) * 100);
+                          const sumKey = (arr: typeof s, k: "clicks" | "impressions") => arr.reduce((acc, p) => acc + (p[k] || 0), 0);
+                          const avgKey = (arr: typeof s, k: "ctr" | "position") => arr.length === 0 ? 0 : arr.reduce((acc, p) => acc + (p[k] || 0), 0) / arr.length;
+                          const first = mid > 0 ? s.slice(0, mid) : [];
+                          const second = mid > 0 ? s.slice(mid) : [];
+                          const dClicks = mid > 0 ? pct(sumKey(second, "clicks"), sumKey(first, "clicks")) : null;
+                          const dImpr = mid > 0 ? pct(sumKey(second, "impressions"), sumKey(first, "impressions")) : null;
+                          const dCtr = mid > 0 ? pct(avgKey(second, "ctr"), avgKey(first, "ctr")) : null;
+                          const dPos = mid > 0 ? pct(avgKey(second, "position"), avgKey(first, "position")) : null;
+                          const tiles: Array<{ label: string; value: string; delta: number | null; accent: string; sub?: string; invertDelta?: boolean }> = [
+                            { label: "Total clicks", value: (analytics.totals.clicks || 0).toLocaleString(), delta: dClicks, accent: "clicks", sub: `${analytics.totals.days_with_data} days with data` },
+                            { label: "Total impressions", value: (analytics.totals.impressions || 0).toLocaleString(), delta: dImpr, accent: "impressions" },
+                            { label: "Avg CTR", value: `${((analytics.totals.ctr || 0) * 100).toFixed(2)}%`, delta: dCtr, accent: "ctr" },
+                            { label: "Avg position", value: (analytics.totals.position || 0).toFixed(1), delta: dPos, accent: "position", invertDelta: true },
+                          ];
+                          return tiles.map(({ label, value, delta, accent, sub, invertDelta }) => {
+                            const trend = delta === null ? "flat" : (invertDelta ? delta < 0 : delta > 0) ? "up" : (invertDelta ? delta > 0 : delta < 0) ? "down" : "flat";
+                            return (
+                              <div key={label} className={styles.kpiTile} data-accent={accent}>
+                                <div className={styles.kpiLabel}>{label}</div>
+                                <div className={styles.kpiValueRow}>
+                                  <div className={styles.kpiValue}>{value}</div>
+                                  {delta !== null ? (
+                                    <span className={styles.kpiDelta} data-trend={trend}>
+                                      {trend === "up" ? "↑" : trend === "down" ? "↓" : ""}
+                                      {Math.abs(delta)}%
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {sub ? <div className={styles.kpiSub}>{sub}</div> : null}
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+
+                      {/* Chart with series toggles */}
+                      <div className={styles.analyticsChartBleed} style={{ marginTop: 20 }}>
+                        <div className={styles.chartSeriesBar}>
+                          {([
+                            { key: "clicks" as const, label: "Clicks", color: "var(--aa-primary)" },
+                            { key: "impressions" as const, label: "Impressions", color: "#5b9cf6" },
+                            { key: "position" as const, label: "Avg position", color: "#b97dff" },
+                          ]).map(({ key, label, color }) => (
+                            <button
+                              key={key}
+                              type="button"
+                              className={styles.chartSeriesBtn}
+                              aria-pressed={chartSeries[key]}
+                              onClick={() => setChartSeries((prev) => ({ ...prev, [key]: !prev[key] }))}
+                            >
+                              <span className={styles.chartSeriesDot} style={{ background: color, opacity: chartSeries[key] ? 1 : 0.3 }} />
+                              <span style={{ opacity: chartSeries[key] ? 1 : 0.45 }}>{label}</span>
+                            </button>
+                          ))}
+                          {analytics.markers.length > 0 ? (
+                            <span className={styles.analyticsLegendMeta}>
+                              <span className={styles.analyticsLegendSwatch} data-series="marker" style={{ display: "inline-block" }} />
+                              {" "}{analytics.markers.length} article{analytics.markers.length === 1 ? "" : "s"} published
+                            </span>
+                          ) : null}
+                        </div>
+                        <AnalyticsLineChart
+                          series={analytics.series}
+                          markers={analytics.markers}
+                          height={420}
+                          visible={chartSeries}
+                        />
+                      </div>
                     </>
                   ) : (
-                    <>
-                      <p className={styles.analyticsEmptyTitle}>No traffic in this window</p>
-                      <p className={styles.analyticsEmptyBody}>
-                        Try a wider date range, or check back once Search Console has indexed activity for this property.
-                      </p>
-                    </>
+                    <div className={styles.analyticsEmptyState}>
+                      {!gscStatus?.connected || !gscStatus?.property_url ? (
+                        <>
+                          <p className={styles.analyticsEmptyTitle}>Connect Search Console</p>
+                          <p className={styles.analyticsEmptyBody}>
+                            Link a Search Console property to see clicks, impressions, and ranking data for this site.
+                          </p>
+                          <button type="button" className={styles.button} onClick={() => goTab("tools")}>
+                            Open Tools to connect
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <p className={styles.analyticsEmptyTitle}>No traffic in this window</p>
+                          <p className={styles.analyticsEmptyBody}>
+                            Try a wider date range, or check back once Search Console has activity for this property.
+                          </p>
+                        </>
+                      )}
+                    </div>
                   )}
-                </div>
-              )}
-              </> : null /* end overview hero */}
+                </>
+              ) : null}
 
-              {performanceSubTab === "insights" ? <>
-                {insightsErr ? (
-                  <div className={styles.error} style={{ marginTop: 16 }}>{insightsErr}</div>
-                ) : insightsBusy && !insights ? (
-                  <div style={{ marginTop: 18 }}>
-                    <AnalyticsPanelSkeleton variant="insights" />
-                  </div>
-                ) : insights ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 18 }}>
-                    {([
-                      { key: "clicks" as const, label: "Clicks" },
-                      { key: "impressions" as const, label: "Impressions" },
-                    ] as const).map(({ key, label }) => {
-                      const stat = insights.headline[key];
-                      const chg = stat.change_pct;
-                      const trend = chg === null ? "flat" : chg > 0 ? "up" : chg < 0 ? "down" : "flat";
-                      return (
-                        <div key={key} className={styles.kpiTile}>
-                          <div className={styles.kpiLabel}>{label}</div>
-                          <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                            <div className={styles.kpiValue}>
-                              {stat.value >= 1000 ? `${(stat.value / 1000).toFixed(1)}K` : stat.value.toLocaleString()}
+              {/* ── INSIGHTS headline KPIs ── */}
+              {performanceSubTab === "insights" ? (
+                <>
+                  {insightsErr ? (
+                    <div className={styles.error} style={{ marginTop: 16 }}>{insightsErr}</div>
+                  ) : insightsBusy && !insights ? (
+                    <div style={{ marginTop: 18 }}><AnalyticsPanelSkeleton variant="insights" /></div>
+                  ) : insights ? (
+                    <div className={styles.kpiGrid} style={{ marginTop: 18 }}>
+                      {([
+                        { key: "clicks" as const, label: "Total clicks", accent: "clicks" },
+                        { key: "impressions" as const, label: "Total impressions", accent: "impressions" },
+                      ] as const).map(({ key, label, accent }) => {
+                        const stat = insights.headline[key];
+                        const chg = stat.change_pct;
+                        const trend = chg === null ? "flat" : chg > 0 ? "up" : chg < 0 ? "down" : "flat";
+                        return (
+                          <div key={key} className={styles.kpiTile} data-accent={accent}>
+                            <div className={styles.kpiLabel}>{label}</div>
+                            <div className={styles.kpiValueRow}>
+                              <div className={styles.kpiValue}>
+                                {stat.value >= 1000 ? `${(stat.value / 1000).toFixed(1)}K` : stat.value.toLocaleString()}
+                              </div>
+                              {chg !== null ? (
+                                <span className={styles.kpiDelta} data-trend={trend}>
+                                  {trend === "up" ? "↑" : trend === "down" ? "↓" : ""}
+                                  {Math.abs(chg).toFixed(0)}%
+                                </span>
+                              ) : null}
                             </div>
-                            {chg !== null ? (
-                              <span className={styles.analyticsTrendChip} data-trend={trend}>
-                                {trend === "up" ? "↑" : trend === "down" ? "↓" : ""}
-                                {Math.abs(chg).toFixed(0)}%
-                              </span>
-                            ) : null}
+                            <div className={styles.kpiSub}>vs previous {insights.period.days} days</div>
                           </div>
-                          <div className={styles.kpiSub}>vs previous {insights.period.days} days</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className={styles.analyticsEmptyState}>
-                    {gscStatus?.connected && gscStatus?.property_url ? (
-                      <>
-                        <p className={styles.analyticsEmptyTitle}>Ready when you are</p>
-                        <p className={styles.analyticsEmptyBody}>
-                          Load Insights to see headline trends, your top content, and the queries sending clicks to this site.
-                        </p>
-                        <button type="button" className={styles.button} onClick={() => void reloadInsights()}>
-                          Load Insights
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <p className={styles.analyticsEmptyTitle}>Connect Search Console</p>
-                        <p className={styles.analyticsEmptyBody}>
-                          Link a property to see which content and queries are driving clicks to this site.
-                        </p>
-                        <button type="button" className={styles.button} onClick={() => goTab("tools")}>
-                          Open Tools to connect
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
-              </> : null /* end insights hero */}
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className={styles.analyticsEmptyState}>
+                      {gscStatus?.connected && gscStatus?.property_url ? (
+                        <>
+                          <p className={styles.analyticsEmptyTitle}>Ready when you are</p>
+                          <p className={styles.analyticsEmptyBody}>
+                            Load Insights to see headline trends, top content, and the queries driving clicks to this site.
+                          </p>
+                          <button type="button" className={styles.button} onClick={() => void reloadInsights()}>
+                            Load Insights
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <p className={styles.analyticsEmptyTitle}>Connect Search Console</p>
+                          <p className={styles.analyticsEmptyBody}>
+                            Link a property to see which content and queries are driving clicks to this site.
+                          </p>
+                          <button type="button" className={styles.button} onClick={() => goTab("tools")}>
+                            Open Tools to connect
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : null}
             </div>{/* end header card */}
 
+            {/* ── OVERVIEW: Quick insight cards + sortable top pages table ── */}
+            {performanceSubTab === "overview" && analytics && analytics.top_pages.length > 0 ? (
+              <>
+                {/* Quick insight cards */}
+                {(() => {
+                  const pages = analytics.top_pages;
+                  const bestClicks = pages.reduce((a, b) => b.clicks > a.clicks ? b : a, pages[0]);
+                  const bestPos = pages.filter((p) => p.position > 0).reduce((a, b) => b.position < a.position ? b : a, pages.find((p) => p.position > 0) ?? pages[0]);
+                  const lowestCtr = [...pages].filter((p) => p.impressions > 50).sort((a, b) => a.ctr - b.ctr)[0];
+                  const bigOpp = [...pages].filter((p) => p.impressions > 0).sort((a, b) => (b.impressions * (1 - b.ctr)) - (a.impressions * (1 - a.ctr)))[0];
+                  const slug = (url: string) => { try { return new URL(url).pathname.replace(/^\/|\/$/g, "") || "/"; } catch { return url; } };
+                  const cards: Array<{ title: string; value: string; detail: string; url?: string } | null> = [
+                    bestClicks ? { title: "Best page", value: bestClicks.clicks.toLocaleString() + " clicks", detail: slug(bestClicks.url), url: bestClicks.url } : null,
+                    bestPos ? { title: "Best ranking", value: `#${bestPos.position.toFixed(1)}`, detail: slug(bestPos.url), url: bestPos.url } : null,
+                    lowestCtr ? { title: "Lowest CTR", value: `${(lowestCtr.ctr * 100).toFixed(2)}%`, detail: `${lowestCtr.impressions.toLocaleString()} impressions`, url: lowestCtr.url } : null,
+                    bigOpp ? { title: "Biggest opportunity", value: bigOpp.impressions.toLocaleString() + " impressions", detail: `${(bigOpp.ctr * 100).toFixed(2)}% CTR`, url: bigOpp.url } : null,
+                  ];
+                  return (
+                    <div className={styles.insightCardGrid}>
+                      {cards.filter(Boolean).map((c) => c && (
+                        <div key={c.title} className={styles.insightCard}>
+                          <div className={styles.insightCardTitle}>{c.title}</div>
+                          <div className={styles.insightCardValue}>{c.value}</div>
+                          <div className={styles.insightCardDetail} title={c.url}>
+                            {c.url ? (
+                              <a href={c.url} target="_blank" rel="noopener noreferrer" className={styles.tableLink}>{c.detail}</a>
+                            ) : c.detail}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+
+                {/* Top pages table with search + sort */}
+                <div className={`${styles.card} ${styles.cardWide}`}>
+                  <div className={styles.analyticsPanelHeadRow}>
+                    <h3 className={styles.sectionSecondaryTitle} style={{ margin: 0 }}>Top pages</h3>
+                    <input
+                      type="search"
+                      className={`${styles.input} ${styles.analyticsTableSearch}`}
+                      placeholder="Filter by URL…"
+                      value={topPagesSearch}
+                      onChange={(e) => setTopPagesSearch(e.target.value)}
+                    />
+                  </div>
+                  <div className={styles.analyticsTableWrap}>
+                    <table className={`${styles.table} ${styles.tableZebra} ${styles.analyticsTopPagesTable}`} style={{ border: 0 }}>
+                      <thead className={styles.analyticsTableSticky}>
+                        <tr>
+                          <th className={styles.th} style={{ width: "45%" }}>URL</th>
+                          {(["clicks", "impressions", "ctr", "position"] as const).map((col) => (
+                            <th
+                              key={col}
+                              className={`${styles.th} ${styles.thNum} ${styles.thSortable}`}
+                              onClick={() => {
+                                if (topPagesSortKey === col) {
+                                  setTopPagesSortDir((d) => d === "asc" ? "desc" : "asc");
+                                } else {
+                                  setTopPagesSortKey(col);
+                                  setTopPagesSortDir(col === "position" ? "asc" : "desc");
+                                }
+                              }}
+                              aria-sort={topPagesSortKey === col ? (topPagesSortDir === "asc" ? "ascending" : "descending") : "none"}
+                            >
+                              <span className={styles.thSortLabel}>
+                                {col === "ctr" ? "CTR" : col.charAt(0).toUpperCase() + col.slice(1)}
+                                <span className={styles.thSortIcon} aria-hidden="true">
+                                  {topPagesSortKey === col ? (topPagesSortDir === "asc" ? " ▲" : " ▼") : " ⇅"}
+                                </span>
+                              </span>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const q = topPagesSearch.trim().toLowerCase();
+                          const filtered = analytics.top_pages.filter((r) => !q || r.url.toLowerCase().includes(q));
+                          const sorted = [...filtered].sort((a, b) => {
+                            const av = topPagesSortKey === "ctr" ? a.ctr : a[topPagesSortKey];
+                            const bv = topPagesSortKey === "ctr" ? b.ctr : b[topPagesSortKey];
+                            return topPagesSortDir === "asc" ? av - bv : bv - av;
+                          });
+                          if (sorted.length === 0) {
+                            return (
+                              <tr><td className={`${styles.td} ${styles.tdMuted}`} colSpan={5} style={{ textAlign: "center", padding: 20 }}>
+                                No pages match "{topPagesSearch}".
+                              </td></tr>
+                            );
+                          }
+                          return sorted.map((row) => {
+                            const slug = (() => { try { return new URL(row.url).pathname.replace(/^\/|\/$/g, "") || "/"; } catch { return row.url; } })();
+                            return (
+                              <tr key={row.url} className={styles.analyticsPageRow}>
+                                <td className={styles.td} style={{ maxWidth: 0 }}>
+                                  <a href={row.url} target="_blank" rel="noopener noreferrer"
+                                    className={styles.tableLink} title={row.url}
+                                    style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>
+                                    {slug}
+                                  </a>
+                                  <div className={styles.muted} style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 1 }}>
+                                    {row.url}
+                                  </div>
+                                </td>
+                                <td className={`${styles.td} ${styles.tdNum}`}>{row.clicks.toLocaleString()}</td>
+                                <td className={`${styles.td} ${styles.tdNum}`}>{row.impressions.toLocaleString()}</td>
+                                <td className={`${styles.td} ${styles.tdNum}`}>{(row.ctr * 100).toFixed(2)}%</td>
+                                <td className={`${styles.td} ${styles.tdNum}`}>{row.position.toFixed(1)}</td>
+                              </tr>
+                            );
+                          });
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
+                    {analytics.top_pages.length} URLs from the linked property · sorted by {topPagesSortKey}
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            {/* ── INSIGHTS: content + queries + countries ── */}
             {performanceSubTab === "insights" && insights ? (
               <>
                 {/* Your content */}
@@ -10472,9 +10642,7 @@ export default function ProjectPage() {
                     <div className={styles.segmentGroup}>
                       {(["top", "up", "down"] as const).map((t) => (
                         <button key={t} type="button" className={styles.miniBtn}
-                          onClick={() => setInsightsPagesTab(t)}
-                          aria-pressed={insightsPagesTab === t}
-                        >
+                          onClick={() => setInsightsPagesTab(t)} aria-pressed={insightsPagesTab === t}>
                           {t === "top" ? "Top" : t === "up" ? "Trending up" : "Trending down"}
                         </button>
                       ))}
@@ -10495,7 +10663,8 @@ export default function ProjectPage() {
                       return {
                         key: row.page,
                         primary: (
-                          <a href={row.page} target="_blank" rel="noopener noreferrer" className={styles.tableLink} style={{ fontSize: 13, fontWeight: 500, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          <a href={row.page} target="_blank" rel="noopener noreferrer" className={styles.tableLink}
+                            style={{ fontSize: 13, fontWeight: 500, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                             {slug}
                           </a>
                         ),
@@ -10510,16 +10679,14 @@ export default function ProjectPage() {
                   })()}
                 </div>
 
-                {/* Queries leading to your site */}
+                {/* Queries */}
                 <div className={`${styles.card} ${styles.cardWide}`}>
                   <div className={styles.analyticsPanelHeadRow}>
                     <h3 className={styles.sectionSecondaryTitle}>Queries leading to your site</h3>
                     <div className={styles.segmentGroup}>
                       {(["top", "up", "down"] as const).map((t) => (
                         <button key={t} type="button" className={styles.miniBtn}
-                          onClick={() => setInsightsQueriesTab(t)}
-                          aria-pressed={insightsQueriesTab === t}
-                        >
+                          onClick={() => setInsightsQueriesTab(t)} aria-pressed={insightsQueriesTab === t}>
                           {t === "top" ? "Top" : t === "up" ? "Trending up" : "Trending down"}
                         </button>
                       ))}
@@ -10545,7 +10712,7 @@ export default function ProjectPage() {
                   })()}
                 </div>
 
-                {/* Bottom row: Countries + Traffic sources */}
+                {/* Countries + traffic sources */}
                 <div className={styles.analyticsInsightsGrid}>
                   <div className={`${styles.card} ${styles.cardWide}`}>
                     <h3 style={{ marginTop: 0, marginBottom: 14 }} className={styles.sectionSecondaryTitle}>Top countries</h3>
@@ -10566,7 +10733,6 @@ export default function ProjectPage() {
                       </div>
                     )}
                   </div>
-
                   {insights.traffic_sources.length > 0 ? (
                     <div className={styles.card} style={{ minWidth: 200 }}>
                       <h3 style={{ marginTop: 0, marginBottom: 14 }} className={styles.sectionSecondaryTitle}>Additional traffic sources</h3>
@@ -10582,52 +10748,6 @@ export default function ProjectPage() {
                   ) : null}
                 </div>
               </>
-            ) : null}
-
-            {performanceSubTab === "overview" && analytics && analytics.top_pages.length > 0 ? (
-              <div className={`${styles.card} ${styles.cardWide}`}>
-                <h3 style={{ marginTop: 0 }} className={styles.sectionSecondaryTitle}>Top pages by clicks</h3>
-                <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>
-                  Up to {analytics.top_pages.length} URLs from the linked property, sorted by clicks within the active window.
-                </div>
-                <div style={{ overflowX: "auto", border: "1px solid var(--aa-hairline)", borderRadius: 12 }}>
-                  <table className={`${styles.table} ${styles.tableZebra} ${styles.analyticsTopPagesTable}`} style={{ border: 0 }}>
-                    <thead>
-                      <tr>
-                        <th className={styles.th} style={{ width: "60%" }}>URL</th>
-                        <th className={`${styles.th} ${styles.thNum}`}>Clicks</th>
-                        <th className={`${styles.th} ${styles.thNum}`}>Impressions</th>
-                        <th className={`${styles.th} ${styles.thNum}`}>CTR</th>
-                        <th className={`${styles.th} ${styles.thNum}`}>Position</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {analytics.top_pages.map((row) => (
-                        <tr key={row.url}>
-                          <td
-                            className={styles.td}
-                            style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                          >
-                            <a
-                              href={row.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className={styles.tableLink}
-                              title={row.url}
-                            >
-                              {row.url}
-                            </a>
-                          </td>
-                          <td className={`${styles.td} ${styles.tdNum}`}>{row.clicks.toLocaleString()}</td>
-                          <td className={`${styles.td} ${styles.tdNum}`}>{row.impressions.toLocaleString()}</td>
-                          <td className={`${styles.td} ${styles.tdNum}`}>{(row.ctr * 100).toFixed(2)}%</td>
-                          <td className={`${styles.td} ${styles.tdNum}`}>{row.position.toFixed(1)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
             ) : null}
           </div>
         ) : null}
