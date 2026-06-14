@@ -2783,7 +2783,7 @@
 
   .articleEditorCard {
     height: auto;
-    min-height: 260px;
+    min-height: 320px;
   }
 
   /* Single column + content column first on small screens */
@@ -2807,8 +2807,8 @@
 }
 
 .articleEditorCard {
-  height: calc(100vh - 260px);
-  min-height: 520px;
+  height: calc(100svh - 175px);
+  min-height: 560px;
   display: flex;
   flex-direction: column;
 }
@@ -2841,7 +2841,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 8px;
+  padding: 10px 10px;
   border-bottom: 1px solid var(--aa-hairline-soft);
   background: color-mix(in oklab, var(--aa-surface-card), transparent 45%);
 }
@@ -2874,11 +2874,13 @@
   background: color-mix(in oklab, var(--aa-surface-card), transparent 25%);
   color: var(--aa-ink);
   border-radius: 8px;
-  padding: 6px 10px;
+  padding: 7px 11px;
   font-size: 12px;
   font-weight: 800;
   cursor: pointer;
   line-height: 1.2;
+  min-height: 34px;
+  min-width: 34px;
 }
 
 .articleRichToolBtn:hover {
@@ -2909,17 +2911,36 @@
 }
 
 .articleProseMirror {
-  min-height: 220px;
-  max-height: min(62vh, 760px);
+  min-height: 300px;
+  max-height: calc(100svh - 340px);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px 14px;
+  padding: 14px 18px 130px;
   outline: none;
   font-family: var(--font-ui-sans), var(--font-geist-sans), system-ui, sans-serif;
-  font-size: 15px;
-  line-height: 1.68;
+  font-size: 16px;
+  line-height: 1.8;
   color: var(--aa-body);
   word-break: break-word;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.10) transparent;
+}
+
+.articleProseMirror::-webkit-scrollbar {
+  width: 4px;
+}
+
+.articleProseMirror::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.articleProseMirror::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+}
+
+.articleProseMirror::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
 }
 
 .articleProseMirror:focus {
@@ -3037,7 +3058,8 @@
 @media (max-width: 980px) {
   .articleProseMirror {
     max-height: none;
-    min-height: 280px;
+    min-height: 320px;
+    padding-bottom: 80px;
   }
 }
 
@@ -3211,17 +3233,19 @@
 /* Read-only HTML from markdown (no TipTap) — match .articleProseMirror typography */
 .articleReadonlyArticleHtml {
   flex: 1;
-  min-height: 220px;
+  min-height: 300px;
   min-width: 0;
-  max-height: min(62vh, 760px);
+  max-height: calc(100svh - 340px);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 12px 14px;
+  padding: 14px 18px 130px;
   font-family: var(--font-ui-sans), var(--font-geist-sans), system-ui, sans-serif;
-  font-size: 15px;
-  line-height: 1.68;
+  font-size: 16px;
+  line-height: 1.8;
   color: var(--aa-body);
   word-break: break-word;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.10) transparent;
 }
 
 .articleReadonlyArticleHtml > div > *:first-child {
