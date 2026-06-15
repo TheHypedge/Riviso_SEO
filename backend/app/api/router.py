@@ -15,6 +15,7 @@ from app.api.routes import context_links
 from app.api.routes import health
 from app.api.routes import image_prompts
 from app.api.routes import profile
+from app.api.routes import content_briefs
 from app.api.routes import prompts
 from app.api.routes import projects
 from app.api.routes import wordpress
@@ -38,6 +39,7 @@ api_router.include_router(profile.router)
 api_router.include_router(projects.router)
 api_router.include_router(articles.router)
 api_router.include_router(prompts.router)
+api_router.include_router(content_briefs.router)
 api_router.include_router(image_prompts.router)
 api_router.include_router(context_links.router)
 api_router.include_router(admin.router)

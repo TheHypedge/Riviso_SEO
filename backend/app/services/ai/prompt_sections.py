@@ -2,65 +2,111 @@
 One compiler per layer of the V2 prompt hierarchy.
 
 ``PromptBuilderService.compile()`` (prompt_builder.py) concatenates these in a
-fixed order — SYSTEM RULES → SEO RULES → INDUSTRY RULES → USER CONFIGURATION →
-WEBSITE DATA → ADDITIONAL INSTRUCTIONS → OUTPUT FORMAT — and that order *is*
-the authority hierarchy described in CONTENT_ENGINE_V2_PLAN.md: every layer
-before ADDITIONAL INSTRUCTIONS is written as short, factual, non-competing
-statements (context, configuration, parameterized requirements, falsifiable
-checklist lines, hard boundaries), so the user's own free text — the one
-imperative, prose-register block, placed last — has nothing of comparable
-weight left to out-argue. "User wins" becomes a property of the shape of the
-prompt, not a sentence asking the model to retroactively believe it.
+fixed order:
 
-Each ``compile_*`` returns "" when its layer has nothing to contribute (e.g.
-no restrictions checked, no industry block, website data toggled off,
-empty additional instructions) — ``PromptBuilderService`` filters empties
-before joining, so an unused layer simply doesn't appear rather than appearing
-as an empty heading.
+  SYSTEM RULES → OPTIMIZATION RULES → USER CONFIGURATION → WEBSITE DATA
+  → CUSTOM INSTRUCTIONS → OUTPUT FORMAT
+
+That order *is* the authority hierarchy: every layer before CUSTOM INSTRUCTIONS
+is written as short, factual, non-competing statements (parameterized
+requirements, falsifiable checklist lines, context facts) — leaving the user's
+own free text the only imperative, prose-register block in the prompt.  "User
+wins" is a property of the prompt's shape, not a sentence asking the model to
+believe it retroactively.
+
+Each ``compile_*`` returns "" when its layer has nothing to contribute — the
+PromptBuilderService filters empties before joining, so an unused layer simply
+doesn't appear rather than appearing as an empty heading.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from app.schemas.content_brief import ArticleLength, ContentBrief, ContentDepth, ContentRestriction
-from app.services.ai.industry_rules import build_industry_context_block
-from app.services.ai.seo_rules import build_eeat_lines, build_seo_lines
+from app.schemas.content_brief import (
+    BriefBrandPersonality,
+    BriefContentDepth,
+    BriefTargetAudience,
+    BriefToneOfVoice,
+    ConversationStyle,
+    ContentBrief,
+    ContentOptimizationOption,
+    ContentStructureOption,
+    DataResearchOption,
+    ReadabilityLevel,
+)
+from app.services.ai.optimization_rules import (
+    build_content_optimization_lines,
+    build_data_research_lines,
+)
 
 # ---------------------------------------------------------------------------
-# SYSTEM RULES — structural requirements (parameterized by Article Length,
-# replacing the legacy fixed "1,500 words minimum") plus §17 Content
-# Restrictions, rendered as hard negative boundaries. Same category as the
-# legacy "non-negotiable" structure block — but the *length* requirement now
-# reflects what the user actually asked for instead of overriding it.
+# SYSTEM RULES — structural requirements parameterized by §7 Content Depth,
+# §8 Content Length, and §10 FAQ Generation.  These were previously fixed
+# strings; they now reflect what the user actually configured.
 # ---------------------------------------------------------------------------
 
-_LENGTH_TARGETS: dict[ArticleLength, str] = {
-    "Short (600-900 words)": "Write approximately 600-900 words.",
-    "Medium (1,000-1,800 words)": "Write approximately 1,000-1,800 words.",
-    "Long (1,800-3,000 words)": "Write approximately 1,800-3,000 words.",
-    "Comprehensive (3,000+ words)": (
-        "Write at least 3,000 words — go deep enough to cover the topic fully "
-        "rather than padding to reach a count."
+_DEPTH_GUIDANCE: dict[BriefContentDepth, str] = {
+    "Basic": (
+        "Write an accessible overview — define key terms, avoid assumed knowledge, "
+        "and favour clarity over comprehensiveness."
+    ),
+    "Standard": (
+        "Provide balanced coverage — enough depth to be genuinely useful without "
+        "overwhelming a reader who knows the basics."
+    ),
+    "In-Depth": (
+        "Cover the topic thoroughly — include nuance, edge cases, and the kind of "
+        "detail that rewards a reader who wants to go beyond the surface."
+    ),
+    "Comprehensive": (
+        "Produce an exhaustive resource — leave no significant sub-topic unaddressed; "
+        "a reader should come away with everything they need to act or decide."
+    ),
+    "Ultimate Guide": (
+        "Create the definitive reference on this topic — cover every relevant angle, "
+        "include practical takeaways and structured navigation, and write to the "
+        "standard that other content on this topic would cite."
     ),
 }
 
-_RESTRICTION_LINES: dict[str, str] = {
-    "No competitor mentions": "Do not name or reference competitors.",
-    "No pricing or cost claims": "Do not state or imply specific prices or costs.",
-    "No medical, legal, or financial advice claims": (
-        "Do not present the content as medical, legal, or financial advice."
+_READABILITY_GUIDANCE: dict[ReadabilityLevel, str] = {
+    "General Public (8th Grade)": (
+        "Readability: write at an 8th-grade level — short sentences, common vocabulary, "
+        "concrete examples, no unexplained jargon."
     ),
-    "No first-person voice ('I', 'we')": "Do not write in first-person voice ('I', 'we').",
-    "No emojis": "Do not use emojis.",
-    "No exclamation points": "Do not use exclamation points.",
-    "Avoid superlatives ('best', '#1', 'guaranteed')": (
-        "Do not use unsupported superlatives such as 'best', '#1', or 'guaranteed'."
+    "Casual Reader": (
+        "Readability: write in a relaxed, readable style — avoid dense blocks, use "
+        "plain language, and keep paragraphs short."
     ),
-    "No fabricated statistics, names, or citations": (
-        "Do not invent statistics, studies, names, or citations — state only what "
-        "can be reasonably asserted as general knowledge."
+    "Informed Reader": (
+        "Readability: assume the reader is familiar with the topic's basics — you can "
+        "use standard terminology without defining every term."
     ),
+    "Professional Audience": (
+        "Readability: write for a professional audience — precise vocabulary, "
+        "industry-standard terminology used correctly, no over-explanation."
+    ),
+    "Technical Expert": (
+        "Readability: assume expert-level domain knowledge — use technical terminology "
+        "without hand-holding; precision matters more than accessibility."
+    ),
+    "Academic": (
+        "Readability: write to an academic standard — rigorous argumentation, "
+        "evidence-based claims, formal register, structured reasoning."
+    ),
+}
+
+_STRUCTURE_LABELS: dict[ContentStructureOption, str] = {
+    "Introduction": "Introduction",
+    "Quick Answer / TL;DR": "Quick Answer / TL;DR (a 50–100 word direct answer to the primary query, near the top)",
+    "Table of Contents": "Table of Contents",
+    "Key Takeaways": "Key Takeaways (8–10 bullet summary of the most important insights)",
+    "Pros and Cons": "Pros and Cons section",
+    "Step-by-Step Breakdown": "Step-by-Step Breakdown section",
+    "FAQs": "FAQs section (5–10 Q&A pairs optimised for AI extraction)",
+    "CTA (Call to Action)": "Call to Action",
+    "Summary / Conclusion": "Summary / Conclusion",
 }
 
 
@@ -68,85 +114,137 @@ def compile_system_rules(brief: ContentBrief) -> str:
     lines = [
         "Write in clear prose, organized with descriptive H2/H3 headings and "
         "well-formed paragraphs and lists where they aid readability.",
-        _LENGTH_TARGETS[brief.article_length],
+        f"Write approximately {brief.content_length:,} words (±10%).",
+        _DEPTH_GUIDANCE[brief.content_depth],
     ]
-    restriction_lines = [
-        _RESTRICTION_LINES[option]
-        for option in ContentRestriction.__args__
-        if option in brief.content_restrictions
+
+    if brief.readability_level:
+        lines.append(_READABILITY_GUIDANCE[brief.readability_level])
+
+    if brief.faq_generation:
+        lines.append(
+            "Include a '## Frequently Asked Questions' section with 5–10 Q&A pairs "
+            "based on real search queries, each answer 50–120 words and optimised for "
+            "AI extraction and featured snippets."
+        )
+
+    structure_items = [
+        _STRUCTURE_LABELS[opt]
+        for opt in ContentStructureOption.__args__
+        if opt in brief.content_structure
     ]
-    if restriction_lines:
-        lines.append("Boundaries — do not violate any of the following:")
-        lines.extend(f"- {line}" for line in restriction_lines)
+    if structure_items:
+        lines.append("Include the following named sections:")
+        lines.extend(f"- {label}" for label in structure_items)
+
     return "SYSTEM RULES\n" + "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# SEO RULES — one falsifiable line per checked EEAT/SEO box (seo_rules.py).
-# The structural replacement for content_optimization.py's "MODE" blocks —
-# see that module's docstring contrast in seo_rules.py.
+# OPTIMIZATION RULES — §11 Content Optimization + §12 Data & Research.
+# One falsifiable line per checked box — never a "mode" block.  See
+# optimization_rules.py and CONTENT_CONFIGURATION_PANEL_PLAN.md §0.3 + §4.3.
 # ---------------------------------------------------------------------------
 
 
-def compile_seo_rules(brief: ContentBrief) -> str:
-    lines = build_eeat_lines(brief.eeat_settings) + build_seo_lines(brief.seo_settings)
+def compile_optimization_rules(brief: ContentBrief) -> str:
+    lines = (
+        build_content_optimization_lines(brief.content_optimization)
+        + build_data_research_lines(brief.data_research)
+    )
     if not lines:
         return ""
-    return "SEO RULES\n" + "\n".join(f"- {line}" for line in lines)
+    return "OPTIMIZATION RULES\n" + "\n".join(f"- {line}" for line in lines)
 
 
 # ---------------------------------------------------------------------------
-# INDUSTRY RULES — short factual context for the chosen industry
-# (industry_rules.py). "" for "Other / general" — a generic industry adds no
-# useful grounding, so the layer simply doesn't appear.
+# USER CONFIGURATION — §1–6, §14 rendered as a flat list of declarative facts.
+# Deliberately not imperative — these are the user's own decisions, restated
+# as grounding context.  A fact cannot outrank an instruction and isn't trying
+# to; that's what keeps §19 uncontested.
 # ---------------------------------------------------------------------------
 
+_DEPTH_DESCRIPTIONS: dict[BriefContentDepth, str] = {
+    "Basic": "accessible overview for readers with no prior knowledge",
+    "Standard": "balanced coverage for a reader with basic familiarity",
+    "In-Depth": "thorough coverage for a reader who wants more than the basics",
+    "Comprehensive": "exhaustive resource covering all significant sub-topics",
+    "Ultimate Guide": "definitive reference that other content would cite",
+}
 
-def compile_industry_rules(brief: ContentBrief) -> str:
-    block = build_industry_context_block(brief.industry)
-    if not block:
-        return ""
-    return f"INDUSTRY RULES\n{block}"
+_AUDIENCE_DESCRIPTIONS: dict[BriefTargetAudience, str] = {
+    "General Public": "a general, non-specialist audience",
+    "Business Owners": "business owners making decisions about their operations",
+    "Marketing Professionals": "marketing practitioners evaluating strategies and tools",
+    "Developers / Technical Audience": "developers and technical practitioners",
+    "Healthcare Professionals": "healthcare professionals (clinical or administrative)",
+    "Finance / Legal Professionals": "finance or legal professionals",
+    "Students / Beginners": "students or beginners new to the topic",
+    "Young Adults (Gen Z / Millennials)": "young adult readers (Gen Z / Millennials)",
+    "Small Business Owners": "small business owners managing their own operations",
+    "Enterprise / B2B Buyers": "enterprise or B2B decision-makers evaluating solutions",
+}
 
+_TONE_DESCRIPTIONS: dict[BriefToneOfVoice, str] = {
+    "Professional": "precise, credible, and business-appropriate",
+    "Conversational": "warm and direct — as if speaking to the reader",
+    "Friendly": "approachable and encouraging",
+    "Authoritative": "confident and expert — the definitive word on the topic",
+    "Witty / Humorous": "light and entertaining — wit used to make a point",
+    "Empathetic": "understanding and supportive of the reader's situation",
+    "Formal": "structured, measured, and formally written",
+    "Inspirational": "motivating and forward-looking",
+    "Technical": "precise and terminology-rich, prioritizing accuracy over accessibility",
+    "Bold / Confident": "direct and assertive — no hedging, clear positions",
+    "Neutral / Balanced": "objective and even-handed, presenting all sides fairly",
+}
 
-# ---------------------------------------------------------------------------
-# USER CONFIGURATION — sections 1-12, rendered as a flat list of facts about
-# what the user chose ("the user has configured this article as follows").
-# Deliberately declarative, not imperative — these are the user's own
-# decisions, restated so the model has them as grounding context. They can
-# only ever conflict with §19 if the user contradicts themselves between the
-# structured form and their own free text — in which case ADDITIONAL
-# INSTRUCTIONS (more specific, more recent) is told it wins that internal tie.
-# ---------------------------------------------------------------------------
-
-_DEPTH_DESCRIPTIONS: dict[ContentDepth, str] = {
-    "Beginner-friendly overview": "written so a newcomer with no prior background can follow it",
-    "Standard / balanced": "written at a level that balances accessibility with useful detail",
-    "In-depth / comprehensive": "written with thorough, comprehensive coverage of the topic",
-    "Expert-level / technical": (
-        "written for an audience that already has strong domain knowledge, "
-        "using precise technical language"
-    ),
+_CONVERSATION_STYLE_DESCRIPTIONS: dict[ConversationStyle, str] = {
+    "Thought Leadership": "establishing a point of view and positioning the author as an expert",
+    "Storytelling / Narrative": "using narrative arcs and real scenarios to engage the reader",
+    "Educational / Tutorial": "teaching step-by-step, building understanding progressively",
+    "Persuasive / Sales": "building a case and moving the reader toward a decision",
+    "Investigative / Journalistic": "researching and presenting findings like a journalist would",
+    "Interview / Q&A": "structured as questions and answers",
+    "Opinionated / Editorial": "taking clear positions and defending them",
+    "Step-by-Step Guide": "numbered or ordered instructions with clear progression",
+    "Analytical / Data-Driven": "evidence-based reasoning with concrete data",
+    "Casual / Blog": "informal, first-person-friendly, personal in register",
+    "Expert Commentary": "providing professional analysis and interpretation",
 }
 
 
 def compile_user_configuration(brief: ContentBrief) -> str:
-    facts = [
+    facts: list[str] = [
         f"Content type: {brief.content_type}",
-        f"Content goal: {brief.content_goal}",
-        f"Target audience: {brief.target_audience}",
-        f"Industry: {brief.industry}",
         f"Primary keyword: {brief.primary_keyword}",
     ]
     if brief.secondary_keywords:
         facts.append(f"Secondary keywords: {', '.join(brief.secondary_keywords)}")
-    facts.append(f"Search intent: {brief.search_intent}")
-    facts.append(f"Tone of voice: {brief.tone_of_voice}")
-    facts.append(f"Writing style: {brief.writing_style}")
+    if brief.search_intent:
+        facts.append(f"Search intent: {brief.search_intent}")
+    if brief.target_audience:
+        desc = _AUDIENCE_DESCRIPTIONS.get(brief.target_audience, brief.target_audience)
+        facts.append(f"Target audience: {brief.target_audience} — {desc}.")
+    if brief.tone_of_voice:
+        desc = _TONE_DESCRIPTIONS.get(brief.tone_of_voice, "")
+        facts.append(
+            f"Tone of voice: {brief.tone_of_voice}"
+            + (f" — {desc}" if desc else "")
+            + "."
+        )
+    if brief.conversation_style:
+        desc = _CONVERSATION_STYLE_DESCRIPTIONS.get(brief.conversation_style, "")
+        facts.append(
+            f"Conversation style: {brief.conversation_style}"
+            + (f" — {desc}" if desc else "")
+            + "."
+        )
     if brief.brand_personality:
-        facts.append(f"Brand personality: {', '.join(brief.brand_personality)}")
-    facts.append(f"Content depth: {brief.content_depth} — {_DEPTH_DESCRIPTIONS[brief.content_depth]}.")
-    facts.append(f"Target length category: {brief.article_length}.")
+        facts.append(f"Brand personality: {', '.join(brief.brand_personality)}.")
+    depth_desc = _DEPTH_DESCRIPTIONS[brief.content_depth]
+    facts.append(f"Content depth: {brief.content_depth} — {depth_desc}.")
+
     return (
         "USER CONFIGURATION\n"
         "The user has configured this article as follows:\n"
@@ -155,23 +253,18 @@ def compile_user_configuration(brief: ContentBrief) -> str:
 
 
 # ---------------------------------------------------------------------------
-# WEBSITE DATA — gated entirely by the §18 toggle. A pure data-inclusion
-# switch supplying *context* (brand identity, site description, mapped
-# product/page context) — exactly like today's brand_identity/product_context
-# — never an instruction about how to write. "" when toggled off or when the
-# caller has nothing to supply, so the layer simply doesn't appear.
+# WEBSITE DATA — gated entirely by §18 Use Website Data toggle.  Pure data
+# supply — brand/site/product context — never an instruction about how to write.
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class PromptBuilderContext:
-    """Project/article-level facts the builder may fold into WEBSITE DATA.
+    """Project/article-level context the builder may fold into WEBSITE DATA.
 
     Mirrors the shape of data ``resolve_platform_generation_extras()`` and the
-    project record already supply to the legacy assembly — see
-    CONTENT_GENERATION_ARCHITECTURE.md "platform integration". Every field is
-    optional and defaults to "": the caller supplies what it has, and an
-    absent fact simply doesn't render a line.
+    project record already supply to the legacy assembly.  Every field defaults
+    to "": the caller supplies what it has; absent facts don't render.
     """
 
     brand_identity: str = ""
@@ -195,23 +288,19 @@ def compile_website_data(brief: ContentBrief, context: PromptBuilderContext) -> 
 
 
 # ---------------------------------------------------------------------------
-# ADDITIONAL INSTRUCTIONS — §19, the ONLY free-prose, imperative-register
-# layer in the entire compiled prompt, placed last on purpose. Carries the
-# same "USER PROMPT AUTHORITY" framing the legacy prompt uses today — but
-# here it is genuinely uncontested, because every layer above it has been
-# deliberately written in a register (facts, parameters, checklist lines,
-# boundaries) that does not compete with prose instructions for priority.
-# "" when empty: an empty value is meaningful (nothing to add beyond the
-# structured choices above) and must not be padded with filler text.
+# CUSTOM INSTRUCTIONS — §19, the ONLY free-prose, imperative-register layer.
+# Placed last, given USER PROMPT AUTHORITY framing, genuinely uncontested
+# because every layer above it is declarative facts, parameterized rules, or
+# falsifiable checklist lines — nothing in the same register to compete with.
 # ---------------------------------------------------------------------------
 
 
-def compile_additional_instructions(brief: ContentBrief) -> str:
-    text = brief.additional_instructions.strip()
+def compile_custom_instructions(brief: ContentBrief) -> str:
+    text = brief.custom_instructions.strip()
     if not text:
         return ""
     return (
-        "ADDITIONAL INSTRUCTIONS — USER PROMPT AUTHORITY\n"
+        "CUSTOM INSTRUCTIONS — USER PROMPT AUTHORITY\n"
         "The following are the user's own instructions. They are the most specific "
         "and most recent statement of intent in this prompt. Where they add detail "
         "to anything above, apply that detail; where they differ from anything "
@@ -222,11 +311,8 @@ def compile_additional_instructions(brief: ContentBrief) -> str:
 
 
 # ---------------------------------------------------------------------------
-# OUTPUT FORMAT — the JSON-shape instruction. Kept byte-for-byte aligned with
-# the legacy schema (title / body / meta_title / meta_description — see
-# CONTENT_GENERATION_ARCHITECTURE.md "chat_json ... article body, meta title,
-# meta description") so a brief-driven generation and a legacy generation
-# produce mongo documents the rest of the pipeline treats identically.
+# OUTPUT FORMAT — unchanged JSON shape; aligned with the legacy assembly so
+# brief-driven and legacy-driven generations produce identical mongo documents.
 # ---------------------------------------------------------------------------
 
 
@@ -241,10 +327,9 @@ def compile_output_format() -> str:
 __all__ = [
     "PromptBuilderContext",
     "compile_system_rules",
-    "compile_seo_rules",
-    "compile_industry_rules",
+    "compile_optimization_rules",
     "compile_user_configuration",
     "compile_website_data",
-    "compile_additional_instructions",
+    "compile_custom_instructions",
     "compile_output_format",
 ]
