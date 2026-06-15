@@ -21,12 +21,50 @@ from __future__ import annotations
 
 from app.schemas.content_brief import ContentRestriction, PromptTemplateOptions
 from app.services.ai.industry_rules import build_industry_context_block
-from app.services.ai.prompt_sections import (
-    _DEPTH_DESCRIPTIONS,
-    _LENGTH_TARGETS,
-    _RESTRICTION_LINES,
-)
 from app.services.ai.seo_rules import build_eeat_lines, build_seo_lines
+
+# Word-count instructions per ArticleLength — private to the template builder.
+# (These lived in prompt_sections.py but moved here since they belong to the
+# legacy PromptTemplateOptions flow, not the new ContentBrief compiler.)
+_LENGTH_TARGETS: dict[str, str] = {
+    "Short (600-900 words)": "Write approximately 600-900 words.",
+    "Medium (1,000-1,800 words)": "Write approximately 1,000-1,800 words.",
+    "Long (1,800-3,000 words)": "Write approximately 1,800-3,000 words.",
+    "Comprehensive (3,000+ words)": (
+        "Write at least 3,000 words — go deep enough to cover the topic fully "
+        "rather than padding to reach a count."
+    ),
+}
+
+# Short descriptions per ContentDepth — used as a fallback in _compile_configuration.
+_DEPTH_DESCRIPTIONS: dict[str, str] = {
+    "Beginner-friendly overview": "written so a newcomer with no prior background can follow it",
+    "Standard / balanced": "written at a level that balances accessibility with useful detail",
+    "In-depth / comprehensive": "written with thorough, comprehensive coverage of the topic",
+    "Expert-level / technical": (
+        "written for an audience that already has strong domain knowledge, "
+        "using precise technical language"
+    ),
+}
+
+# Instruction lines per ContentRestriction.
+_RESTRICTION_LINES: dict[str, str] = {
+    "No competitor mentions": "Do not name or reference competitors.",
+    "No pricing or cost claims": "Do not state or imply specific prices or costs.",
+    "No medical, legal, or financial advice claims": (
+        "Do not present the content as medical, legal, or financial advice."
+    ),
+    "No first-person voice ('I', 'we')": "Do not write in first-person voice ('I', 'we').",
+    "No emojis": "Do not use emojis.",
+    "No exclamation points": "Do not use exclamation points.",
+    "Avoid superlatives ('best', '#1', 'guaranteed')": (
+        "Do not use unsupported superlatives such as 'best', '#1', or 'guaranteed'."
+    ),
+    "No fabricated statistics, names, or citations": (
+        "Do not invent statistics, studies, names, or citations — state only what "
+        "can be reasonably asserted as general knowledge."
+    ),
+}
 
 __all__ = ["compile_prompt_template"]
 
