@@ -311,6 +311,9 @@ def _compile_writing_guidelines(options: PromptTemplateOptions) -> str:
     lines = [
         "Write in clear prose, organised with descriptive H2/H3 headings and "
         "well-formed paragraphs and lists where they aid readability.",
+        "Never use em dashes (—) — use a comma, plain hyphen, or rewrite the sentence.",
+        "Never use semicolons as sentence connectors; use a full stop or comma instead.",
+        "Never use a colon as a dramatic mid-sentence pause; rephrase as a complete sentence.",
         _LENGTH_TARGETS[options.article_length],
         _LENGTH_SECTION_GUIDANCE[options.article_length],
     ]

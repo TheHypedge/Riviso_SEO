@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from fastapi import HTTPException
@@ -256,6 +257,11 @@ async def execute_article_generation(
         and (x.get("url") or "").strip()
     ]
     _article_md = apply_context_links_markdown(gen["article"], _ctx_items)
+
+    # Strip em dashes and en dashes that the LLM slips through despite prompt directives.
+    # Replace with a plain hyphen surrounded by spaces, then collapse any double spaces.
+    _article_md = re.sub(r"\s*[—–]\s*", " - ", _article_md)
+    _article_md = re.sub(r" {2,}", " ", _article_md)
 
     updates = {
         "article": _article_md,

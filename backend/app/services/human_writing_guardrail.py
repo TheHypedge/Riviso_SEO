@@ -115,6 +115,9 @@ Also avoid:
 - Empty praise ("wonderful", "fantastic", "game-changer", "personality and flair").
 - Fake authority ("experts agree", "studies show") without a named source.
 - Meta talk ("this article will", "we will explore", "read on to discover").
+- Em dashes (—): never use them anywhere. Rewrite using a comma, period, or plain hyphen (-) instead.
+- Semicolons as sentence connectors: never write "X; however, Y" or "the result; it works" — use a full stop or comma instead.
+- Colons as dramatic mid-sentence pauses: never write "The truth: it's complicated" — rephrase as a complete sentence.
 
 ### Rhythm check (apply before output)
 - At least 30% of sentences under 12 words.

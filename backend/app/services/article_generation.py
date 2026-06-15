@@ -239,6 +239,9 @@ def build_generation_messages(
         "- Use numbered lists (1. step) for sequential processes or step-by-step instructions.\n"
         "- Use **bold** for 2–4 key terms, statistics, or critical phrases per article.\n"
         "- Keep paragraphs to 2–4 sentences. Long text must be broken into bullets or sub-sections.\n"
+        "- Never use em dashes (—) anywhere in the article. Use a comma, plain hyphen (-), or rewrite the sentence.\n"
+        "- Never use semicolons as sentence connectors (e.g. 'X; however, Y'). Use a full stop or comma instead.\n"
+        "- Never use a colon as a dramatic mid-sentence pause (e.g. 'The answer: it works'). Write a complete sentence.\n"
         + depth_and_faq_blocks
         + "\nUSER PROMPT AUTHORITY: The writing instructions in the user message are the HIGHEST PRIORITY "
         "directive for this article. Follow them precisely and completely — they define the article's "
