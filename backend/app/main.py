@@ -156,6 +156,20 @@ async def lifespan(app: FastAPI):
 
         asyncio.create_task(_run_listing_backfill())
 
+    # Migrate legacy default writing prompt ("Default writing prompt") to the
+    # new SEO/AEO/GEO version across all projects. Idempotent — only updates
+    # prompts whose name still matches the legacy sentinel.
+    async def _run_default_prompt_migration() -> None:
+        try:
+            from app.api.routes.prompts import migrate_all_default_prompts
+            n = await asyncio.to_thread(migrate_all_default_prompts, st)
+            if n:
+                _log.info("Default prompt migration updated %d project(s)", n)
+        except Exception as e:
+            _log.warning("Default prompt migration skipped: %s", e)
+
+    asyncio.create_task(_run_default_prompt_migration())
+
     scheduler_task: asyncio.Task | None = None
     generation_worker_task: asyncio.Task | None = None
     subscription_reset_task: asyncio.Task | None = None

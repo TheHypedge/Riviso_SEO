@@ -62,36 +62,130 @@ def _enforce_writing_prompt_limits(*, st, user: dict, plan: dict, plan_key: str,
                     ),
                 )
 
-_DEFAULT_WRITING_PROMPT_NAME = "Default writing prompt"
+# Legacy name used to detect and migrate old default prompts.
+_LEGACY_WRITING_PROMPT_NAME = "Default writing prompt"
+
+_DEFAULT_WRITING_PROMPT_NAME = "SEO & AI Optimized — Default"
 _DEFAULT_WRITING_PROMPT_TEXT = (
-    "Write a comprehensive, in-depth article for the given title and keywords.\n\n"
-    "REQUIRED STRUCTURE:\n"
-    "- Start with a compelling 2–3 sentence introduction that names the problem or situation directly\n"
-    "- Divide the body into 5 main sections using ## H2 headings\n"
-    "- Each H2 section must contain at least 3 full paragraphs (or 2 paragraphs + 1 structured list) — no thin sections\n"
-    "- Use ### H3 sub-headings inside any section with multiple sub-topics\n"
-    "- Use bullet points (- item) for any list of 3 or more tips, features, steps, or options\n"
-    "- Use numbered lists (1. 2. 3.) for any sequential process or step-by-step instructions\n"
-    "- Use **bold** for key terms, statistics, or critical phrases (2–4 per article)\n"
-    "- Keep paragraphs short: 2–4 sentences maximum\n\n"
-    "DEPTH:\n"
-    "- Cover: what it is, why it matters, how it works, common mistakes, and best practices — each as its own section\n"
-    "- Include concrete details: named processes, comparisons, specific examples, or real data points — no vague generalities\n"
-    "- Every paragraph must add new information — no repetition or padding\n\n"
-    "FAQ SECTION (REQUIRED — optimized for AEO + GEO):\n"
-    "Add a ## Frequently Asked Questions section before the conclusion with 4–6 Q&A pairs:\n"
-    "- Questions must reflect real user search queries (how to, what is, why, best, vs)\n"
-    "- Each answer: 2–4 direct sentences, written to appear in Google AI Overview, Perplexity, or featured snippets\n"
-    "- At least one answer must include a numbered or bulleted breakdown\n\n"
-    "CONCLUSION:\n"
-    "End with a short 2–3 sentence conclusion — no salesy CTA, no 'In conclusion' opener\n\n"
-    "TONE: Expert, authoritative, and specific. Name real details. No vague generalizations or filler.\n"
+    "You are a senior SEO strategist, content researcher, topical authority expert, "
+    "E-E-A-T evaluator, Answer Engine Optimization specialist, and Generative Engine "
+    "Optimization expert.\n\n"
+    "Your objective is to create a comprehensive, authoritative, search-intent-driven "
+    "article capable of ranking in Google Search, appearing in Google AI Overviews, and "
+    "being cited by AI systems such as ChatGPT, Gemini, Perplexity, and Copilot.\n\n"
+    "PRE-WRITING ANALYSIS (INTERNAL — reason through this silently, do not output this section)\n"
+    "Before writing, identify: primary search intent (Informational / Commercial / Transactional / "
+    "Navigational), target audience, core problem, desired outcome, common misconceptions, "
+    "related entities and concepts, and frequently asked questions. Build the article around "
+    "complete topic coverage rather than keyword repetition.\n\n"
+    "ARTICLE CONTEXT\n"
+    "- Article title: {article_title}\n"
+    "- Focus keyphrase: {focus_keyphrase}\n"
+    "- Target keywords: {targeting_keywords}\n\n"
+    "CONTENT GOAL\n"
+    "Create a genuinely useful resource that completely satisfies user intent and demonstrates "
+    "expertise. Prioritise: search intent satisfaction, E-E-A-T, topical authority, semantic SEO, "
+    "entity SEO, AEO, GEO, readability, and information gain.\n\n"
+    "WORD COUNT\n"
+    "Minimum 2,800 words. Target range:\n"
+    "- Standard topics: 2,800–3,500 words\n"
+    "- Competitive topics: 3,500–4,500 words\n"
+    "- Pillar topics: 4,500–6,000 words\n"
+    "Do not add filler — every section must contribute unique value.\n\n"
+    "ARTICLE STRUCTURE\n\n"
+    "Write in the following order:\n\n"
+    "INTRODUCTION (3–4 paragraphs)\n"
+    "- Immediately identify the user's problem or the situation the reader is in.\n"
+    "- Explain why the topic matters.\n"
+    "- Establish relevance and credibility.\n"
+    "- Naturally include the focus keyphrase within the first 100 words.\n\n"
+    "QUICK ANSWER (50–100 words)\n"
+    "Provide a concise, direct answer to the primary search query immediately after the introduction. "
+    "Optimised for featured snippets, Google AI Overviews, Perplexity summaries, and voice search. "
+    "Use a clear callout or bold label.\n\n"
+    "MAIN CONTENT (5–8 H2 sections)\n"
+    "Each H2 must:\n"
+    "- Cover a distinct aspect of the topic.\n"
+    "- Begin with a direct answer paragraph of 40–80 words (required for AEO and AI Overview eligibility).\n"
+    "- Contain at least 400–600 words.\n"
+    "- Include original insights, examples, and practical applications.\n"
+    "- Include specific details: named processes, comparisons, real data points — not vague generalities.\n"
+    "- Use H3 sub-headings whenever multiple sub-topics exist within the section.\n\n"
+    "Where relevant, include dedicated sections covering:\n"
+    "- What It Is: definition, explanation, and context.\n"
+    "- Why It Matters: benefits, impact, and significance.\n"
+    "- How It Works: process, methodology, or framework.\n"
+    "- Examples: practical scenarios and use cases.\n"
+    "- Common Mistakes: frequent errors and misconceptions.\n"
+    "- Best Practices: expert recommendations and proven approaches.\n"
+    "- Trends and Future Outlook: recent developments and emerging considerations.\n\n"
+    "ENTITY SEO\n"
+    "Identify and naturally incorporate related entities, industry terminology, concepts, tools, "
+    "frameworks, and standards. Use semantic relevance — not keyword stuffing.\n\n"
+    "INFORMATION GAIN\n"
+    "Every major section must contain specific examples, real-world scenarios, comparisons, "
+    "practical recommendations, and industry insights. Avoid generic statements.\n\n"
+    "GEO OPTIMIZATION\n"
+    "Use definitions, lists, tables, step-by-step explanations, summary boxes, and comparison "
+    "sections. Write clear, citation-friendly statements so AI systems can easily extract and "
+    "cite information.\n\n"
+    "E-E-A-T REQUIREMENTS\n"
+    "Demonstrate:\n"
+    "- Experience: practical examples, real-world applications, common implementation challenges.\n"
+    "- Expertise: accurate explanations, industry-specific knowledge, advanced insights.\n"
+    "- Authoritativeness: reference established standards, accepted frameworks, recognised methodologies.\n"
+    "- Trustworthiness: balanced viewpoints, limitations, risks, and honest considerations.\n\n"
+    "FORMATTING\n"
+    "- Use H2 and H3 headings throughout.\n"
+    "- Use bullet lists and numbered lists.\n"
+    "- Use comparison tables where relevant.\n"
+    "- Use callout summaries and step-by-step explanations.\n"
+    "- Never create large blocks of unbroken text.\n"
+    "- Paragraphs: maximum 3–4 sentences.\n"
+    "- Active voice preferred.\n"
+    "- Explain technical terms on first use.\n"
+    "- Use **bold** for 2–4 key terms, statistics, or critical phrases per article.\n\n"
+    "SEO REQUIREMENTS\n"
+    "- Focus keyphrase in the introduction within the first 100 words.\n"
+    "- Focus keyphrase in at least one H2 heading.\n"
+    "- Focus keyphrase in the conclusion.\n"
+    "- Natural keyword placement only — no stuffing.\n"
+    "- Use semantic keyword variations throughout.\n"
+    "- Cover related entities comprehensively.\n\n"
+    "FAQ SECTION (10–15 questions, MANDATORY)\n"
+    "Based on real search intent. Include:\n"
+    "- Informational questions (what is, how does, why)\n"
+    "- Comparison questions (X vs Y, which is better)\n"
+    "- Implementation questions (how to, step-by-step)\n"
+    "- Beginner questions (common starting points and misconceptions)\n"
+    "- Cost or pricing questions where relevant\n"
+    "Each answer: 50–120 words, direct, specific, and optimised for AI extraction and featured snippets.\n\n"
+    "KEY TAKEAWAYS\n"
+    "8–10 bullet points summarising the most important insights from the article.\n\n"
+    "CONCLUSION (2–3 paragraphs)\n"
+    "Summarise the key insights and reinforce the main takeaway. No promotional language. "
+    "No aggressive calls-to-action."
 )
 
 
 def _ensure_default_prompt(*, st, project_id: str, proj: dict) -> dict:
     prompts = [p for p in (proj.get("prompts") or []) if isinstance(p, dict)]
     default_id = (proj.get("default_prompt_id") or "").strip()
+
+    # Migrate any prompt still using the legacy default name to the new version.
+    migrated = False
+    for p in prompts:
+        if isinstance(p, dict) and (p.get("name") or "").strip() == _LEGACY_WRITING_PROMPT_NAME:
+            p["name"] = _DEFAULT_WRITING_PROMPT_NAME
+            p["text"] = _DEFAULT_WRITING_PROMPT_TEXT
+            migrated = True
+    if migrated:
+        try:
+            st.update_project_fields(project_id, {"prompts": prompts})
+        except Exception:
+            pass
+        proj["prompts"] = prompts
+
     if prompts and default_id:
         return proj
     if prompts and not default_id:
@@ -105,6 +199,35 @@ def _ensure_default_prompt(*, st, project_id: str, proj: dict) -> dict:
     proj["prompts"] = [row]
     proj["default_prompt_id"] = pid
     return proj
+
+
+def migrate_all_default_prompts(st) -> int:
+    """Replace legacy default prompt text across all projects. Returns count of projects updated."""
+    try:
+        projects = st.load_projects() or []
+    except Exception:
+        return 0
+    count = 0
+    for proj in projects:
+        if not isinstance(proj, dict):
+            continue
+        project_id = (proj.get("id") or "").strip()
+        if not project_id:
+            continue
+        prompts = [p for p in (proj.get("prompts") or []) if isinstance(p, dict)]
+        updated = False
+        for p in prompts:
+            if isinstance(p, dict) and (p.get("name") or "").strip() == _LEGACY_WRITING_PROMPT_NAME:
+                p["name"] = _DEFAULT_WRITING_PROMPT_NAME
+                p["text"] = _DEFAULT_WRITING_PROMPT_TEXT
+                updated = True
+        if updated:
+            try:
+                st.update_project_fields(project_id, {"prompts": prompts})
+                count += 1
+            except Exception:
+                pass
+    return count
 
 
 def _require_project_access(*, st, user: dict, project_id: str) -> dict:
