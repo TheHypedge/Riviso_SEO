@@ -2380,32 +2380,6 @@ export const api = {
     );
   },
 
-  async humanizeArticleIntegrity(
-    projectId: string,
-    articleId: string,
-    markdown?: string,
-    opts?: ApiFetchOptions,
-  ) {
-    const result = await apiFetch<{
-      ok: true;
-      original_markdown: string;
-      humanized_markdown: string;
-      rewritten: { index: number; before: string; after: string }[];
-      before: { ai_percentage: number; flagged_paragraphs: { index: number; text: string; reason: string }[] };
-      after: { ai_percentage: number; flagged_paragraphs: { index: number; text: string; reason: string }[] };
-    }>(
-      `/api/projects/${projectId}/articles/${articleId}/integrity/humanize`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(markdown != null ? { markdown } : {}),
-      },
-      opts,
-    );
-    invalidateArticleDetailCache(projectId, articleId);
-    return result;
-  },
-
   async listWritingPrompts(projectId: string, opts?: ApiFetchOptions) {
     const key = projectId;
     const cached = cacheGet(_cacheWritingPrompts, key, 30_000);

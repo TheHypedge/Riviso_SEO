@@ -74,21 +74,15 @@ from app.services.async_operation_dispatch import (
     should_use_async_queue,
 )
 from app.services.pipeline_streamer import (
-    MSG_HUMANIZE,
     MSG_PUBLISH_COMPLETE,
     MSG_PUBLISH_DISPATCH,
     STAGE_COMPLETE,
-    STAGE_HUMANIZATION,
     STAGE_PUBLISH_DISPATCH,
     pipeline_event_stream,
     publish_pipeline_status,
 )
 from app.services.plan_gatekeeper import PlanAction, require_plan_action
-from app.services.integrity_engine import (
-    AIDetectionAuditor,
-    execute_structural_humanization,
-    protected_terms_from_article,
-)
+from app.services.integrity_engine import AIDetectionAuditor
 from app.core.article_duplicates import normalize_article_title_key as _normalize_article_title_key
 from app.core.article_duplicates import sync_project_title_index as _sync_project_title_index
 from app.schemas.articles import (
@@ -1954,47 +1948,6 @@ async def audit_article_integrity(
     return payload
 
 
-@router.post("/{article_id}/integrity/humanize", status_code=200)
-async def humanize_article_integrity(
-    project_id: str,
-    article_id: str,
-    payload: IntegrityMarkdownBody | None = None,
-    user: dict = Depends(require_plan_action(PlanAction.HUMANIZE)),
-) -> dict:
-    """
-    Full-document structural humanization (industry-neutral). Does not persist until the user saves/applies in the editor.
-    Returns original + humanized + before/after audit for UI.
-    """
-    st = get_legacy_storage_module()
-    proj = await _require_project_access(st=st, user=user, project_id=project_id)
-    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
-    md_body = ((payload.markdown if payload and payload.markdown else None) or a.get("article") or "").strip()
-    await publish_pipeline_status(article_id, MSG_HUMANIZE, STAGE_HUMANIZATION)
-    auditor = AIDetectionAuditor()
-    audit_before = auditor.audit_markdown(md_body)
-    res = await execute_structural_humanization(
-        md=md_body,
-        protected_terms=protected_terms_from_article(a),
-        full_document=True,
-        max_passes=5,
-        target_ai_pct=6.0,
-        initial_strength=0.78,
-    )
-    human_md = (res.get("humanized_markdown") or "").strip()
-    audit_after = auditor.audit_markdown(human_md or md_body)
-    await publish_pipeline_status(
-        article_id,
-        "✨ Structural humanization pass complete.",
-        STAGE_COMPLETE,
-    )
-    return {
-        "ok": True,
-        "original_markdown": md_body,
-        "humanized_markdown": human_md or md_body,
-        "rewritten": res.get("rewritten") or [],
-        "before": audit_before,
-        "after": audit_after,
-    }
 
 
 def _validate_bulk_schedule_cadence(*, cadence: str | None, parsed: list[tuple[str, str, datetime]]) -> None:

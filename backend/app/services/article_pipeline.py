@@ -22,11 +22,7 @@ from app.services.article_generation import (
     generate_featured_image_only,
 )
 from app.services.prompt_validation import assert_image_prompt_allowed, assert_writing_prompt_allowed
-from app.services.integrity_engine import (
-    AIDetectionAuditor,
-    execute_structural_humanization,
-    protected_terms_from_article,
-)
+from app.services.integrity_engine import AIDetectionAuditor
 from app.services.platform_generation import resolve_platform_generation_extras
 from app.services.shopify_product_pipeline import is_shopify_project
 from app.services.wordpress_content_pipeline import is_wordpress_project
@@ -35,13 +31,11 @@ from app.services.context_links import apply_context_links_markdown
 from app.services.pipeline_streamer import (
     MSG_FEATURED_IMAGE,
     MSG_GENERATION_COMPLETE,
-    MSG_HUMANIZE,
     MSG_INTEGRITY,
     MSG_INTERNAL_LINKS,
     MSG_OPENAI,
     STAGE_COMPLETE,
     STAGE_FEATURED_IMAGE,
-    STAGE_HUMANIZATION,
     STAGE_INTEGRITY_VERIFY,
     STAGE_INTERNAL_LINKS,
     STAGE_OPENAI_DISPATCH,
