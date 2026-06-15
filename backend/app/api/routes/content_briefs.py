@@ -24,6 +24,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import ValidationError
 
 from app.core.deps import get_current_user
@@ -154,13 +155,13 @@ async def autosave_draft(
     return {"saved_at": draft_data["saved_at"]}
 
 
-@router.delete("/articles/{article_id}/content-brief", status_code=204)
+@router.delete("/articles/{article_id}/content-brief", status_code=204, response_class=Response)
 async def delete_content_brief(
     project_id: str,
     article_id: str,
     user: dict = Depends(get_current_user),
     st=Depends(get_legacy_storage_module),
-) -> None:
+) -> Response:
     """Clear the committed brief and any in-progress draft."""
     _require_project_access(st=st, user=user, project_id=project_id)
     _require_article(st=st, project_id=project_id, article_id=article_id)
@@ -169,6 +170,7 @@ async def delete_content_brief(
         article_id,
         {"content_brief": None, "content_brief_draft": None},
     )
+    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------
@@ -238,13 +240,13 @@ async def update_brief_template(
     return updated
 
 
-@router.delete("/brief-templates/{template_id}", status_code=204)
+@router.delete("/brief-templates/{template_id}", status_code=204, response_class=Response)
 async def delete_brief_template(
     project_id: str,
     template_id: str,
     user: dict = Depends(get_current_user),
     st=Depends(get_legacy_storage_module),
-) -> None:
+) -> Response:
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     templates = [t for t in (proj.get("content_brief_templates") or []) if isinstance(t, dict)]
 
@@ -253,10 +255,10 @@ async def delete_brief_template(
         raise HTTPException(status_code=404, detail="Template not found.")
 
     updates: dict = {"content_brief_templates": filtered}
-    # If the deleted template was the default, clear the default pointer
     if (proj.get("default_content_brief_template_id") or "") == template_id:
         updates["default_content_brief_template_id"] = ""
     st.update_project_fields(project_id, updates)
+    return Response(status_code=204)
 
 
 @router.post("/brief-templates/set-default")
