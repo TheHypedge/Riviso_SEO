@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
+import { CategorySelect } from "@/components/CategorySelect";
 import { ArticlesOverview } from "@/components/ArticlesOverview";
 import { AnalyticsPanelSkeleton, ArticlesTableSkeleton, FormFieldsSkeleton, InlineListSkeleton, TextLinesSkeleton } from "@/components/skeleton";
 import { BulkScheduleForm, type BulkScheduleFormValues } from "@/components/bulkSchedule/BulkScheduleForm";
@@ -1237,6 +1238,9 @@ export default function ProjectPage() {
   const [categorySaveBusy, setCategorySaveBusy] = useState(false);
   const [categorySaveError, setCategorySaveError] = useState<string | null>(null);
   const [wpCatsSyncDone, setWpCatsSyncDone] = useState(false);
+  // true from mount until the first WP categories fetch resolves — prevents the "—" flash
+  // while articles are already rendered but categories are still in-flight.
+  const [wpCatsLoading, setWpCatsLoading] = useState(true);
   const [scheduleWritingPrompts, setScheduleWritingPrompts] = useState<PromptListResponse | null>(null);
   const [scheduleImagePrompts, setScheduleImagePrompts] = useState<PromptListResponse | null>(null);
   const [scheduleWritingPromptId, setScheduleWritingPromptId] = useState<string>("");
@@ -1472,10 +1476,16 @@ export default function ProjectPage() {
   }, [projectId, router, token, tab, page, pageSize, debouncedQ, status, dateFrom, dateTo, dateOrder]);
 
   useEffect(() => {
-    if (tab !== "articles" || isShopifyProject || wpCatsForSchedule.length > 0 || !projectId) return;
+    if (tab !== "articles" || isShopifyProject || wpCatsForSchedule.length > 0 || !projectId) {
+      // Shopify projects never fetch WP categories — clear loading immediately.
+      if (isShopifyProject) setWpCatsLoading(false);
+      return;
+    }
+    setWpCatsLoading(true);
     api.wordpressCategories(projectId, { timeoutMs: 8000 })
       .then((cats) => {
         setWpCatsForSchedule(cats);
+        setWpCatsLoading(false);
         // After categories load, sync wp_category_ids from live WP for articles that are missing it.
         if (!wpCatsSyncDone && cats.length > 0) {
           setWpCatsSyncDone(true);
@@ -1484,7 +1494,7 @@ export default function ProjectPage() {
             .catch(() => {});
         }
       })
-      .catch(() => {});
+      .catch(() => { setWpCatsLoading(false); });
   }, [tab, projectId, isShopifyProject, wpCatsForSchedule.length, wpCatsSyncDone]);
 
   useEffect(() => {
@@ -6441,11 +6451,10 @@ export default function ProjectPage() {
                                   const currentVal = articleCategoryEdits[a.id] !== undefined ? articleCategoryEdits[a.id] : savedCatId;
                                   const isDirty = articleCategoryEdits[a.id] !== undefined;
                                   return (
-                                    <select
-                                      className={`${styles.articlesTableCategorySelect}${isDirty ? ` ${styles.articlesTableCategoryDirty}` : ""}`}
+                                    <CategorySelect
                                       value={currentVal}
-                                      onChange={(e) => {
-                                        const newVal = e.target.value;
+                                      options={wpCatsForSchedule.map((c) => ({ value: String(c.id), label: c.name }))}
+                                      onChange={(newVal) => {
                                         setArticleCategoryEdits((prev) => {
                                           if (newVal === savedCatId) {
                                             const { [a.id]: _removed, ...rest } = prev;
@@ -6454,15 +6463,13 @@ export default function ProjectPage() {
                                           return { ...prev, [a.id]: newVal };
                                         });
                                       }}
-                                      aria-label={`Category for ${title}`}
-                                    >
-                                      <option value="">Uncategorized</option>
-                                      {wpCatsForSchedule.map((c) => (
-                                        <option key={c.id} value={String(c.id)}>{c.name}</option>
-                                      ))}
-                                    </select>
+                                      isDirty={isDirty}
+                                      ariaLabel={`Category for ${title}`}
+                                    />
                                   );
-                                })() : (
+                                })() : wpCatsLoading ? (
+                                  <span className={styles.articlesTableCellLoading}>Loading</span>
+                                ) : (
                                   <span className={styles.articlesTableCellEmpty}>—</span>
                                 )}
                               </div>
@@ -6550,11 +6557,10 @@ export default function ProjectPage() {
                                   <div className={styles.articlesMobileMetaRow}>
                                     <dt>Category</dt>
                                     <dd>
-                                      <select
-                                        className={`${styles.articlesTableCategorySelect}${isDirty ? ` ${styles.articlesTableCategoryDirty}` : ""}`}
+                                      <CategorySelect
                                         value={currentVal}
-                                        onChange={(e) => {
-                                          const newVal = e.target.value;
+                                        options={wpCatsForSchedule.map((c) => ({ value: String(c.id), label: c.name }))}
+                                        onChange={(newVal) => {
                                           setArticleCategoryEdits((prev) => {
                                             if (newVal === savedCatId) {
                                               const { [a.id]: _removed, ...rest } = prev;
@@ -6563,17 +6569,18 @@ export default function ProjectPage() {
                                             return { ...prev, [a.id]: newVal };
                                           });
                                         }}
-                                        aria-label={`Category for ${title}`}
-                                      >
-                                        <option value="">Uncategorized</option>
-                                        {wpCatsForSchedule.map((c) => (
-                                          <option key={c.id} value={String(c.id)}>{c.name}</option>
-                                        ))}
-                                      </select>
+                                        isDirty={isDirty}
+                                        ariaLabel={`Category for ${title}`}
+                                      />
                                     </dd>
                                   </div>
                                 );
-                              })() : null}
+                              })() : wpCatsLoading ? (
+                                <div className={styles.articlesMobileMetaRow}>
+                                  <dt>Category</dt>
+                                  <dd className={styles.articlesTableCellLoading}>Loading</dd>
+                                </div>
+                              ) : null}
                             </dl>
                             <div className={styles.articlesMobileActions}>
                               {renderArticleActions(a, title, styles.articlesMobileIconBtn)}

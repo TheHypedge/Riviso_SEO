@@ -2237,6 +2237,22 @@
   font-weight: 600;
 }
 
+.articlesTableCellLoading {
+  color: color-mix(in oklab, var(--aa-muted), transparent 40%);
+  font-size: 11px;
+  font-style: italic;
+  animation: articlesLoadingPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes articlesLoadingPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .articlesTableCellLoading { animation: none; }
+}
+
 .articlesTableStatusCol {
   display: flex;
   align-items: center;
