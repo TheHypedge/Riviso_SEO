@@ -1233,14 +1233,38 @@ export default function ProjectPage() {
   const [schedulePostType, setSchedulePostType] = useState("posts");
   const [wpDefaults, setWpDefaults] = useState<{ post_type: string; wp_status: "draft" | "publish" } | null>(null);
   const [wpTypesForSchedule, setWpTypesForSchedule] = useState<import("@/lib/api").WordpressPostType[]>([]);
-  const [wpCatsForSchedule, setWpCatsForSchedule] = useState<import("@/lib/api").WordpressCategory[]>([]);
+  // sessionStorage key for this project's WP categories (5-min client-side TTL).
+  // Using a module-level constant avoids recreating the string on every render.
+  const _wpCatsCacheKey = `rvs_cats_${projectId}`;
+
+  const [wpCatsForSchedule, setWpCatsForSchedule] = useState<import("@/lib/api").WordpressCategory[]>(() => {
+    // Read synchronously from sessionStorage so the dropdown is available on the
+    // very first render — avoids waiting for the external WP API round-trip.
+    try {
+      const raw = sessionStorage.getItem(_wpCatsCacheKey);
+      if (raw) {
+        const { ts, data } = JSON.parse(raw) as { ts: number; data: import("@/lib/api").WordpressCategory[] };
+        if (Date.now() - ts < 5 * 60 * 1000) return data;
+        sessionStorage.removeItem(_wpCatsCacheKey);
+      }
+    } catch { /* ignore parse or storage errors */ }
+    return [];
+  });
   const [articleCategoryEdits, setArticleCategoryEdits] = useState<Record<string, string>>({});
   const [categorySaveBusy, setCategorySaveBusy] = useState(false);
   const [categorySaveError, setCategorySaveError] = useState<string | null>(null);
   const [wpCatsSyncDone, setWpCatsSyncDone] = useState(false);
-  // true from mount until the first WP categories fetch resolves — prevents the "—" flash
-  // while articles are already rendered but categories are still in-flight.
-  const [wpCatsLoading, setWpCatsLoading] = useState(true);
+  // false when sessionStorage pre-populated; true otherwise (shows "Loading" instead of "—").
+  const [wpCatsLoading, setWpCatsLoading] = useState<boolean>(() => {
+    try {
+      const raw = sessionStorage.getItem(_wpCatsCacheKey);
+      if (raw) {
+        const { ts } = JSON.parse(raw) as { ts: number };
+        if (Date.now() - ts < 5 * 60 * 1000) return false;
+      }
+    } catch { /* ignore */ }
+    return true;
+  });
   const [scheduleWritingPrompts, setScheduleWritingPrompts] = useState<PromptListResponse | null>(null);
   const [scheduleImagePrompts, setScheduleImagePrompts] = useState<PromptListResponse | null>(null);
   const [scheduleWritingPromptId, setScheduleWritingPromptId] = useState<string>("");
@@ -1486,6 +1510,8 @@ export default function ProjectPage() {
       .then((cats) => {
         setWpCatsForSchedule(cats);
         setWpCatsLoading(false);
+        // Persist to sessionStorage so the next page load shows the dropdown instantly.
+        try { sessionStorage.setItem(_wpCatsCacheKey, JSON.stringify({ ts: Date.now(), data: cats })); } catch { /* ignore */ }
         // After categories load, sync wp_category_ids from live WP for articles that are missing it.
         if (!wpCatsSyncDone && cats.length > 0) {
           setWpCatsSyncDone(true);

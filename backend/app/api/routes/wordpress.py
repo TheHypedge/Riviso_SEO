@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import time
 from datetime import datetime
 from typing import Any
 
@@ -25,6 +26,11 @@ from app.services import gsc
 router = APIRouter(tags=["wordpress"])
 
 _WP_REST_TIMEOUT_S = 45.0
+
+# In-process cache for WP categories — avoids a live WordPress round-trip on
+# every page open.  Key: project_id.  Value: (expires_at, parsed list).
+_CAT_CACHE: dict[str, tuple[float, list[WordpressCategory]]] = {}
+_CAT_CACHE_TTL_S: float = 300.0  # 5 minutes
 
 
 def _wp_upstream_error_detail(exc: httpx.HTTPStatusError) -> str:
@@ -911,6 +917,15 @@ async def wordpress_categories(project_id: str, user: dict = Depends(get_current
     proj = _require_project_access(st=st, user=user, project_id=project_id)
     if _is_shopify_project(proj):
         return []
+
+    # Serve from cache when fresh — skips the external WordPress round-trip.
+    cached = _CAT_CACHE.get(project_id)
+    if cached:
+        expires_at, cats = cached
+        if expires_at > time.time():
+            return cats
+        _CAT_CACHE.pop(project_id, None)
+
     wp = _get_wp_client_for_project(proj)
     data = await _wp_try_get_json(
         wp,
@@ -920,7 +935,9 @@ async def wordpress_categories(project_id: str, user: dict = Depends(get_current
             "/wp-json/wp/v2/categories?per_page=100",
         ),
     )
-    return _parse_wp_categories(data)
+    result = _parse_wp_categories(data)
+    _CAT_CACHE[project_id] = (time.time() + _CAT_CACHE_TTL_S, result)
+    return result
 
 
 @router.post("/projects/{project_id}/wordpress/sync-linked-articles", status_code=200)
