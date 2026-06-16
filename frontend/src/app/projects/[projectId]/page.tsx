@@ -1505,22 +1505,39 @@ export default function ProjectPage() {
       if (isShopifyProject) setWpCatsLoading(false);
       return;
     }
-    setWpCatsLoading(true);
-    api.wordpressCategories(projectId, { timeoutMs: 8000 })
-      .then((cats) => {
-        setWpCatsForSchedule(cats);
-        setWpCatsLoading(false);
-        // Persist to sessionStorage so the next page load shows the dropdown instantly.
-        try { sessionStorage.setItem(_wpCatsCacheKey, JSON.stringify({ ts: Date.now(), data: cats })); } catch { /* ignore */ }
-        // After categories load, sync wp_category_ids from live WP for articles that are missing it.
-        if (!wpCatsSyncDone && cats.length > 0) {
-          setWpCatsSyncDone(true);
-          api.syncWpCategories(projectId)
-            .then((res) => { if (res.synced > 0) refreshArticlesList(); })
-            .catch(() => {});
-        }
-      })
-      .catch(() => { setWpCatsLoading(false); });
+    let cancelled = false;
+    const doFetch = (isRetry: boolean) => {
+      if (cancelled) return;
+      setWpCatsLoading(true);
+      // No opts — uses default 15 s timeout and benefits from in-memory dedup cache.
+      api.wordpressCategories(projectId)
+        .then((cats) => {
+          if (cancelled) return;
+          setWpCatsForSchedule(cats);
+          setWpCatsLoading(false);
+          // Persist to sessionStorage so the next page load shows the dropdown instantly.
+          try { sessionStorage.setItem(_wpCatsCacheKey, JSON.stringify({ ts: Date.now(), data: cats })); } catch { /* ignore */ }
+          // After categories load, sync wp_category_ids from live WP for articles that are missing it.
+          if (!wpCatsSyncDone && cats.length > 0) {
+            setWpCatsSyncDone(true);
+            api.syncWpCategories(projectId)
+              .then((res) => { if (res.synced > 0) refreshArticlesList(); })
+              .catch(() => {});
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (!isRetry) {
+            // First attempt failed (e.g. backend cold-fetching WP on deploy).
+            // Retry once after 5 s — by then the backend has warmed its cache.
+            setTimeout(() => doFetch(true), 5000);
+          } else {
+            setWpCatsLoading(false);
+          }
+        });
+    };
+    doFetch(false);
+    return () => { cancelled = true; };
   }, [tab, projectId, isShopifyProject, wpCatsForSchedule.length, wpCatsSyncDone]);
 
   useEffect(() => {
