@@ -2863,10 +2863,10 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--button-secondary-border);
-  border-radius: 12px;
+  border: none;
+  border-radius: 0;
   overflow: hidden;
-  background: color-mix(in oklab, var(--aa-surface-dark-soft), transparent 55%);
+  background: transparent;
 }
 
 .articleRichEditorReadonly {
@@ -2877,10 +2877,10 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 10px 10px;
-  border-bottom: 1px solid var(--aa-hairline-soft);
-  background: color-mix(in oklab, var(--aa-surface-card), transparent 45%);
+  gap: 4px;
+  padding: 8px 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
 }
 
 .articleRichFormatLabel {
@@ -2889,14 +2889,14 @@
 }
 
 .articleRichFormatSelect {
-  min-width: 132px;
-  border: 1px solid var(--aa-hairline);
-  background: color-mix(in oklab, var(--aa-surface-card), transparent 18%);
+  min-width: 120px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
   color: var(--aa-ink);
-  border-radius: 8px;
-  padding: 6px 30px 6px 10px;
+  border-radius: 6px;
+  padding: 5px 28px 5px 8px;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   line-height: 1.2;
   cursor: pointer;
 }
@@ -2907,26 +2907,28 @@
 }
 
 .articleRichToolBtn {
-  border: 1px solid var(--aa-hairline);
-  background: color-mix(in oklab, var(--aa-surface-card), transparent 25%);
-  color: var(--aa-ink);
-  border-radius: 8px;
-  padding: 7px 11px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--aa-muted);
+  border-radius: 6px;
+  padding: 6px 9px;
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
   cursor: pointer;
   line-height: 1.2;
-  min-height: 34px;
-  min-width: 34px;
+  min-height: 30px;
+  min-width: 30px;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
 .articleRichToolBtn:hover {
-  border-color: color-mix(in oklab, var(--aa-primary), var(--aa-hairline) 40%);
+  color: var(--aa-ink);
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .articleRichToolBtn[aria-pressed="true"] {
-  border-color: color-mix(in oklab, var(--aa-primary), transparent 25%);
-  background: color-mix(in oklab, var(--aa-primary), transparent 80%);
+  color: var(--aa-ink);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .srOnly {
@@ -2949,18 +2951,20 @@
 
 .articleProseMirror {
   min-height: 300px;
-  max-height: calc(100svh - 340px);
+  max-height: calc(100svh - 280px);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 14px 18px 130px;
+  padding: 24px 8px 140px;
   outline: none;
   font-family: var(--font-ui-sans), var(--font-geist-sans), system-ui, sans-serif;
   font-size: 16px;
-  line-height: 1.8;
-  color: var(--aa-body);
+  line-height: 1.85;
+  color: rgba(250, 249, 245, 0.88);
   word-break: break-word;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.10) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+  max-width: 720px;
+  margin: 0 auto;
 }
 
 .articleProseMirror::-webkit-scrollbar {
@@ -2981,7 +2985,7 @@
 }
 
 .articleProseMirror:focus {
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--aa-primary), transparent 70%);
+  box-shadow: none;
 }
 
 .articleProseMirror p {

@@ -81,13 +81,50 @@ function statusDotClass(status: string): string {
 }
 
 type ContextTab = "seo" | "media" | "publish" | "ai" | "settings";
-const CONTEXT_TABS: { key: ContextTab; label: string }[] = [
-  { key: "seo", label: "SEO" },
-  { key: "media", label: "Media" },
-  { key: "publish", label: "Publish" },
-  { key: "ai", label: "AI Tools" },
-  { key: "settings", label: "Settings" },
+const CONTEXT_TABS: { key: ContextTab; label: string; icon: string }[] = [
+  { key: "seo", label: "SEO", icon: "⬡" },
+  { key: "media", label: "Media", icon: "▣" },
+  { key: "publish", label: "Publish", icon: "⬆" },
+  { key: "ai", label: "AI", icon: "✦" },
+  { key: "settings", label: "Settings", icon: "⚙" },
 ];
+
+function computeSeoScore(metrics: {
+  metaTitleLen: number; metaTitleMax: number;
+  metaDescLen: number; metaDescMax: number;
+  headingCount: number; wordCount: number;
+  focusKeyphrase: string; body: string;
+}): { total: number; readability: number; structure: number; keywords: number; meta: number } {
+  const metaTitleScore = metrics.metaTitleLen >= metrics.metaTitleMax * 0.5 && metrics.metaTitleLen <= metrics.metaTitleMax ? 100 : metrics.metaTitleLen > 0 ? 50 : 0;
+  const metaDescScore = metrics.metaDescLen >= metrics.metaDescMax * 0.4 && metrics.metaDescLen <= metrics.metaDescMax ? 100 : metrics.metaDescLen > 0 ? 50 : 0;
+  const meta = Math.round((metaTitleScore + metaDescScore) / 2);
+  const structure = Math.min(100, metrics.headingCount >= 4 ? 100 : metrics.headingCount >= 2 ? 75 : metrics.headingCount >= 1 ? 40 : 0);
+  const readability = Math.min(100, metrics.wordCount >= 300 ? 85 + Math.min(15, Math.floor(metrics.wordCount / 200)) : metrics.wordCount >= 100 ? 60 : metrics.wordCount > 0 ? 30 : 0);
+  const kw = metrics.focusKeyphrase.trim();
+  const bodyLower = metrics.body.toLowerCase();
+  const kwCount = kw ? bodyLower.split(kw.toLowerCase()).length - 1 : 0;
+  const keywords = !kw ? 0 : kwCount >= 3 ? 100 : kwCount >= 1 ? 60 : 20;
+  const total = Math.round(meta * 0.25 + structure * 0.25 + readability * 0.25 + keywords * 0.25);
+  return { total, readability, structure, keywords, meta };
+}
+
+function slugFromTitle(t: string): string {
+  return t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "untitled";
+}
+
+function timeAgo(dateStr: string | undefined | null): string {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "";
+  const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 function noticeWithoutUrl(notice: string): string {
   return notice.replace(/\s*https?:\/\/\S+/g, "").trim();
@@ -279,6 +316,9 @@ export default function ArticleEditPage() {
 
   const [editorRevision, setEditorRevision] = useState(0);
   const [contextTab, setContextTab] = useState<ContextTab>("seo");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [commandBarVisible, setCommandBarVisible] = useState(false);
+  const titleHeroRef = useRef<HTMLDivElement>(null);
 
   const isPublishedArticle = articleStatus === "published";
 
@@ -294,12 +334,33 @@ export default function ArticleEditPage() {
 
   const editorMetrics = useMemo(() => {
     const text = (body || "").trim();
-    if (!text) return { words: 0, readingTime: "0 min", headings: 0 };
+    if (!text) return { words: 0, chars: 0, readingTime: "0 min", headings: 0 };
     const words = text.split(/\s+/).filter(Boolean).length;
+    const chars = text.length;
     const minutes = Math.max(1, Math.ceil(words / 238));
     const headings = (text.match(/^#{1,6}\s/gm) || []).length;
-    return { words, readingTime: `${minutes} min`, headings };
+    return { words, chars, readingTime: `${minutes} min`, headings };
   }, [body]);
+
+  const seoScore = useMemo(() => computeSeoScore({
+    metaTitleLen: metaTitle.length, metaTitleMax: META_TITLE_MAX,
+    metaDescLen: metaDesc.length, metaDescMax: META_DESC_MAX,
+    headingCount: editorMetrics.headings, wordCount: editorMetrics.words,
+    focusKeyphrase: focus, body,
+  }), [metaTitle.length, metaDesc.length, editorMetrics.headings, editorMetrics.words, focus, body]);
+
+  const lastSavedLabel = useMemo(() => timeAgo(article?.updated_at), [article?.updated_at]);
+
+  useEffect(() => {
+    const hero = titleHeroRef.current;
+    if (!hero) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setCommandBarVisible(!entry.isIntersecting),
+      { threshold: 0 },
+    );
+    observer.observe(hero);
+    return () => observer.disconnect();
+  }, []);
 
   const isDirty = useMemo(() => {
     if (!editorBaseline) return false;
@@ -1537,32 +1598,27 @@ export default function ArticleEditPage() {
     );
   }
 
-  const seoStatusLabel =
-    seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" &&
-    seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent"
-      ? "Good"
-      : "Needs work";
-  const seoStatusOk = seoStatusLabel === "Good";
+  const seoScoreColor = seoScore.total >= 70 ? "var(--aa-success)" : seoScore.total >= 40 ? "var(--aa-warning)" : "var(--aa-error)";
+  const seoArcLength = (seoScore.total / 100) * 188.5;
+
+  const articleSlug = useMemo(() => slugFromTitle(title || article?.title || ""), [title, article?.title]);
+  const canonicalUrl = wpLink || (projectSettings?.website_url ? `${projectSettings.website_url.replace(/\/$/, "")}/${articleSlug}/` : "");
 
   return (
     <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
       <main className={`${styles.main} ${styles.mainWide}`} style={{ padding: 0 }}>
 
-        {/* ── Sticky header ── */}
-        <header className={editorStyles.stickyHeader}>
-          <div className={editorStyles.headerLeft}>
-            <button
-              type="button"
-              className={editorStyles.backLink}
-              onClick={() => requestNavigation(`/projects/${params.projectId}`)}
-            >
-              ← Project
-            </button>
-            <span className={editorStyles.headerSep}>/</span>
-            <span className={editorStyles.headerTitle}>{displayTitle}</span>
-          </div>
-
-          <div className={editorStyles.headerStatusDots}>
+        {/* ── Title hero ── */}
+        <div className={editorStyles.titleHero} ref={titleHeroRef}>
+          <button
+            type="button"
+            className={editorStyles.titleBackLink}
+            onClick={() => requestNavigation(`/projects/${params.projectId}?tab=articles`)}
+          >
+            ← Back to Articles
+          </button>
+          <h1 className={editorStyles.titleHeading}>{displayTitle}</h1>
+          <div className={editorStyles.titleMeta}>
             <span className={editorStyles.statusDot}>
               <span className={`${editorStyles.statusDotIndicator} ${statusDotClass(article?.status || "")}`} />
               {article?.status ? article.status.charAt(0).toUpperCase() + article.status.slice(1) : "..."}
@@ -1579,52 +1635,57 @@ export default function ArticleEditPage() {
                 Unsynced
               </span>
             ) : null}
-            {article?.posted_at ? (
+            {seoScore.total > 0 ? (
+              <span className={editorStyles.statusDot}>
+                <span className={editorStyles.statusDotIndicator} style={{ background: seoScoreColor }} />
+                SEO {seoScore.total}
+              </span>
+            ) : null}
+            {lastSavedLabel ? (
               <span className={editorStyles.statusDot}>
                 <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotNeutral}`} />
-                {article.posted_at}
+                {lastSavedLabel}
               </span>
             ) : null}
           </div>
+        </div>
 
-          <div className={editorStyles.headerActions}>
+        {/* ── Sticky command bar (appears on scroll) ── */}
+        <div className={`${editorStyles.commandBar} ${commandBarVisible ? editorStyles.commandBarVisible : ""}`}>
+          <span className={editorStyles.commandBarTitle}>{displayTitle}</span>
+          <div className={editorStyles.commandBarCenter}>
+            <span className={editorStyles.statusDot}>
+              <span className={`${editorStyles.statusDotIndicator} ${statusDotClass(article?.status || "")}`} />
+              {article?.status ? article.status.charAt(0).toUpperCase() + article.status.slice(1) : "..."}
+            </span>
+            {isLiveOnWordPress ? (
+              <span className={editorStyles.statusDot}>
+                <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotSynced}`} />
+                Synced
+              </span>
+            ) : null}
+          </div>
+          <div className={editorStyles.commandBarActions}>
             {isDirty ? (
               <button type="button" className={styles.btnSecondary} onClick={save} disabled={editorLocked}>
-                Save
+                Save draft
               </button>
             ) : null}
             {isShopifyProject ? (
-              <button
-                type="button"
-                className={styles.button}
-                onClick={() => void publishToShopify()}
-                disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}
-              >
-                {shopifyPublishBusy
-                  ? article?.shopify_article_id ? "Updating…" : "Publishing…"
-                  : article?.shopify_article_id ? "Update Shopify" : "Publish to Shopify"}
+              <button type="button" className={styles.button} onClick={() => void publishToShopify()} disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}>
+                {shopifyPublishBusy ? "Posting…" : article?.shopify_article_id ? "Update Shopify" : "Publish to Shopify"}
               </button>
             ) : showUpdateWordPress && hasPendingWpChanges ? (
-              <button
-                type="button"
-                className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`}
-                onClick={() => void updateWordPressPost()}
-                disabled={!canUpdateWordPress}
-              >
+              <button type="button" className={styles.button} onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}>
                 {wpUpdateBusy ? "Updating…" : "Update article"}
               </button>
             ) : showPublishWordPress ? (
-              <button
-                type="button"
-                className={styles.button}
-                onClick={publishToLiveSite}
-                disabled={!canPublish || wpPushBusy}
-              >
+              <button type="button" className={styles.button} onClick={publishToLiveSite} disabled={!canPublish || wpPushBusy}>
                 {wpPublishBusy ? "Publishing…" : "Publish"}
               </button>
             ) : null}
           </div>
-        </header>
+        </div>
 
         {error ? (
           <div className={`${editorStyles.banner} ${editorStyles.bannerError}`} role="alert">
@@ -1842,13 +1903,13 @@ export default function ArticleEditPage() {
         ) : null}
 
         {/* ── Two-column workspace ── */}
-        <div className={editorStyles.editorLayout}>
+        <div className={`${editorStyles.editorLayout} ${sidebarCollapsed ? editorStyles.editorLayoutCollapsed : ""}`}>
 
-          {/* Editor column (72%) */}
+          {/* Editor column */}
           <div className={editorStyles.editorCol}>
             <div className={editorStyles.editorColInner}>
-              <div className={`${editorStyles.contentCard} ${styles.articleEditorCard}`}>
-                <div className={editorStyles.contentCardBody}>
+              <div className={editorStyles.editorSurface}>
+                <div className={editorStyles.editorBody}>
                   {bodyLoading ? (
                     <ArticleEditorSkeleton bodyOnly />
                   ) : editorLocked ? (
@@ -1858,16 +1919,21 @@ export default function ArticleEditPage() {
                   )}
                 </div>
                 {showUpdateWordPress && hasPendingWpChanges ? (
-                  <p className={editorStyles.contentHint}>
-                    {isDirty ? "You have unsaved text changes. Update article saves locally and pushes everything live." : "Featured image changed. Use Update article to push the new image to your site."}
-                  </p>
+                  <div className={editorStyles.contentHint}>
+                    <span className={editorStyles.contentHintDot} />
+                    {isDirty ? "Unsaved text changes. Update pushes everything live." : "Featured image changed. Update to push."}
+                  </div>
                 ) : null}
               </div>
 
-              {/* Metrics footer bar */}
+              {/* Metrics footer */}
               <div className={editorStyles.metricsBar}>
                 <span className={editorStyles.metricsItem}>
                   <span className={editorStyles.metricsValue}>{editorMetrics.words.toLocaleString()}</span> words
+                </span>
+                <span className={editorStyles.metricsSep} />
+                <span className={editorStyles.metricsItem}>
+                  <span className={editorStyles.metricsValue}>{editorMetrics.chars.toLocaleString()}</span> chars
                 </span>
                 <span className={editorStyles.metricsSep} />
                 <span className={editorStyles.metricsItem}>
@@ -1887,14 +1953,26 @@ export default function ArticleEditPage() {
                 ) : null}
                 <span className={editorStyles.metricsSep} />
                 <span className={editorStyles.metricsItem}>
-                  SEO: <span className={seoStatusOk ? editorStyles.metricsValueGood : editorStyles.metricsValueWarn}>{seoStatusLabel}</span>
+                  SEO <span style={{ color: seoScoreColor, fontWeight: 700 }}>{seoScore.total}</span>
                 </span>
+                {lastSavedLabel ? (
+                  <span className={editorStyles.metricsSaved}>Saved {lastSavedLabel}</span>
+                ) : null}
               </div>
             </div>
           </div>
 
-          {/* Context panel (28%) */}
+          {/* Context panel */}
           <div className={editorStyles.contextPanel}>
+            <button
+              type="button"
+              className={editorStyles.panelCollapseBtn}
+              onClick={() => setSidebarCollapsed((v) => !v)}
+              aria-label={sidebarCollapsed ? "Expand panel" : "Collapse panel"}
+            >
+              {sidebarCollapsed ? "◀" : "▶"}
+            </button>
+
             <div className={editorStyles.contextTabBar} role="tablist" aria-label="Context panel">
               {CONTEXT_TABS.map((t) => (
                 <button
@@ -1905,8 +1983,9 @@ export default function ArticleEditPage() {
                   aria-controls={`panel-${t.key}`}
                   id={`tab-${t.key}`}
                   className={`${editorStyles.contextTabBtn} ${contextTab === t.key ? editorStyles.contextTabBtnActive : ""}`}
-                  onClick={() => setContextTab(t.key)}
+                  onClick={() => { setContextTab(t.key); if (sidebarCollapsed) setSidebarCollapsed(false); }}
                 >
+                  <span className={editorStyles.contextTabIcon}>{t.icon}</span>
                   {t.label}
                 </button>
               ))}
@@ -1918,15 +1997,42 @@ export default function ArticleEditPage() {
               {contextTab === "seo" ? (
                 contentLoading ? <ArticleEditorSkeleton /> : (
                   <>
+                    {/* SEO Score ring */}
+                    <div className={editorStyles.seoScoreCard}>
+                      <div className={editorStyles.seoScoreRing}>
+                        <svg viewBox="0 0 68 68">
+                          <circle cx="34" cy="34" r="30" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="4" />
+                          <circle cx="34" cy="34" r="30" fill="none" stroke={seoScoreColor} strokeWidth="4" strokeDasharray="188.5" strokeDashoffset={188.5 - seoArcLength} strokeLinecap="round" />
+                        </svg>
+                        <span className={editorStyles.seoScoreNumber}>{seoScore.total}</span>
+                      </div>
+                      <div className={editorStyles.seoScoreBreakdown}>
+                        {([
+                          { label: "Readability", value: seoScore.readability },
+                          { label: "Structure", value: seoScore.structure },
+                          { label: "Keywords", value: seoScore.keywords },
+                          { label: "Meta", value: seoScore.meta },
+                        ] as const).map((row) => (
+                          <div key={row.label} className={editorStyles.seoScoreRow}>
+                            <span className={editorStyles.seoScoreRowLabel}>{row.label}</span>
+                            <div className={editorStyles.seoScoreRowTrack}>
+                              <div className={editorStyles.seoScoreRowFill} style={{ width: `${row.value}%`, background: row.value >= 70 ? "var(--aa-success)" : row.value >= 40 ? "var(--aa-warning)" : "var(--aa-error)" }} />
+                            </div>
+                            <span className={editorStyles.seoScoreRowValue}>{row.value}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
                     <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>Title</h3>
+                      <h3 className={editorStyles.panelSectionTitle}>Title and focus</h3>
                       <label className={styles.label}>
                         Article title
                         <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
                       </label>
                       <label className={styles.label} style={{ marginTop: 10 }}>
                         Focus keyphrase
-                        <input className={styles.input} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Optional" disabled={editorLocked} />
+                        <input className={styles.input} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. FM contract handover" disabled={editorLocked} />
                       </label>
                     </div>
                     <div className={editorStyles.panelSection}>
@@ -1958,7 +2064,7 @@ export default function ArticleEditPage() {
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Targeting keywords</h3>
                       <input className={styles.input} value={keywords} onChange={(e) => setKeywords(e.target.value)} disabled={editorLocked} placeholder="keyword one, keyword two…" />
-                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>Comma-separated, 5-10 keywords max.</div>
+                      <div className={styles.muted} style={{ fontSize: 11, marginTop: 4 }}>Comma-separated. 5-10 recommended.</div>
                     </div>
                   </>
                 )
@@ -1976,34 +2082,18 @@ export default function ArticleEditPage() {
                           <div className={editorStyles.imageSkeletonPulse} aria-hidden="true" />
                           <div className={editorStyles.imageSkeletonBars} aria-hidden="true"><span /><span /><span /></div>
                           <div className={editorStyles.imageSkeletonContent}>
-                            {imageRegenBusy ? (
-                              <>
-                                <div className={editorStyles.imageSpinner} aria-hidden="true" />
-                                <div className={editorStyles.imageGeneratingTitle}>{imageGenPhase === "saving" ? "Saving featured image…" : "Generating featured image…"}</div>
-                                <div className={editorStyles.imageGeneratingHint}>{imageGenPhase === "saving" ? "Writing to storage." : "OpenAI is creating your image (30–90s)."}</div>
-                              </>
-                            ) : (
-                              <>
-                                <div className={editorStyles.imageSpinner} aria-hidden="true" />
-                                <div className={editorStyles.imageGeneratingTitle}>Loading featured image…</div>
-                                <div className={editorStyles.imageGeneratingHint}>Retrieving your saved image from storage.</div>
-                              </>
-                            )}
+                            <div className={editorStyles.imageSpinner} aria-hidden="true" />
+                            <div className={editorStyles.imageGeneratingTitle}>{imageRegenBusy ? (imageGenPhase === "saving" ? "Saving…" : "Generating…") : "Loading…"}</div>
+                            <div className={editorStyles.imageGeneratingHint}>{imageRegenBusy ? (imageGenPhase === "saving" ? "Writing to storage." : "30-90 seconds.") : "Retrieving from storage."}</div>
                           </div>
                         </div>
                       ) : generateImage ? (
                         generatedImageUrl ? (
                           <LazyArticleImage src={generatedImageUrl} alt="Generated preview" className={styles.articleImage} />
                         ) : featuredImageLoadFailed ? (
-                          <div className={editorStyles.imagePlaceholder}>
-                            Saved featured image could not be loaded.
-                            <div style={{ marginTop: 6 }}>Use &ldquo;Regenerate featured image&rdquo; to create a new one.</div>
-                          </div>
+                          <div className={editorStyles.imagePlaceholder}>Could not load saved image. Regenerate to create a new one.</div>
                         ) : (
-                          <div className={editorStyles.imagePlaceholder}>
-                            Image will be generated using the selected image prompt.
-                            <div style={{ marginTop: 6 }}>Once ready, it will appear here.</div>
-                          </div>
+                          <div className={editorStyles.imagePlaceholder}>Image will be generated with your selected prompt.</div>
                         )
                       ) : uploadedImagePreview ? (
                         <LazyArticleImage src={uploadedImagePreview} alt="Uploaded preview" className={styles.articleImage} />
@@ -2022,23 +2112,18 @@ export default function ArticleEditPage() {
                       </select>
                     </label>
                     {!generateImage ? (
-                      <label className={styles.label} style={{ marginTop: 10 }}>
+                      <label className={styles.label} style={{ marginTop: 8 }}>
                         Upload image
                         <input className={styles.input} type="file" accept="image/*" disabled={editorLocked} onChange={(e) => setUploadedImageFile(e.target.files?.[0] || null)} />
                       </label>
                     ) : null}
                     {generateImage ? (
-                      <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-                        <div className={editorStyles.imageMeta}>
-                          Regenerations: {imageRegenUsed}{imageRegenUnlimited ? " / unlimited" : ` / ${imageRegenLimit}`}
-                          {!imageRegenUnlimited ? ` (${Math.max(0, imageRegenRemaining ?? 0)} remaining)` : ""}
-                        </div>
-                        <button className={styles.btnSecondary} type="button" onClick={handleFeaturedImageButtonClick} disabled={imageRegenBusy || !canFeaturedImageAction}
-                          title={!canFeaturedImageAction ? (imageRegenExhausted && hasFeaturedImage ? "Regeneration limit exhausted." : !hasGeneratedContent ? "Generate article content first." : "Enable Generate image.") : (hasFeaturedImage ? "Regenerate the featured image." : "Generate the featured image.")}
-                        >
-                          {imageRegenBusy ? (hasFeaturedImage ? "Regenerating image…" : "Generating image…") : (hasFeaturedImage ? "Regenerate featured image" : "Generate featured image")}
+                      <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
+                        <div className={editorStyles.imageMeta}>Regenerations: {imageRegenUsed}{imageRegenUnlimited ? " / unlimited" : ` / ${imageRegenLimit}`}</div>
+                        <button className={styles.btnSecondary} type="button" onClick={handleFeaturedImageButtonClick} disabled={imageRegenBusy || !canFeaturedImageAction}>
+                          {imageRegenBusy ? (hasFeaturedImage ? "Regenerating…" : "Generating…") : (hasFeaturedImage ? "Regenerate image" : "Generate image")}
                         </button>
-                        {imageRegenExhausted ? <div className={styles.error} style={{ fontSize: 12 }}>Regeneration limit exhausted for this article.</div> : null}
+                        {imageRegenExhausted ? <div className={styles.error} style={{ fontSize: 11 }}>Regeneration limit reached.</div> : null}
                       </div>
                     ) : null}
                   </div>
@@ -2056,7 +2141,7 @@ export default function ArticleEditPage() {
                         <div className={editorStyles.liveUrlBarActions}>
                           <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void copyLiveUrl()}>{liveUrlCopied ? "Copied" : "Copy"}</button>
                           <a href={wpLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlBarBtn}>Open ↗</a>
-                          <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void syncFromWordPress()} disabled={wpSyncBusy || !websiteConnected} title="Pull the latest from WordPress">
+                          <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void syncFromWordPress()} disabled={wpSyncBusy || !websiteConnected}>
                             {wpSyncBusy ? "Syncing…" : "Sync"}
                           </button>
                         </div>
@@ -2069,33 +2154,25 @@ export default function ArticleEditPage() {
                     <p className={editorStyles.wpCardDesc}>
                       {isShopifyProject
                         ? shopifyLink ? "This article is on Shopify." : "Post directly to your Shopify blog."
-                        : isScheduledArticle ? "Scheduled. Update is available after publish."
-                        : showUpdateWordPress ? "Push edits to your live WordPress post."
-                        : showPublishWordPress ? "Publish when the article is ready."
-                        : "WordPress actions depend on article status."}
+                        : isScheduledArticle ? "Scheduled. Update available after publish."
+                        : showUpdateWordPress ? "Push edits to your live post."
+                        : showPublishWordPress ? "Publish when ready."
+                        : "Connect WordPress to publish."}
                     </p>
-                    <div className={editorStyles.wpActions} style={{ marginTop: 10 }}>
+                    <div className={editorStyles.wpActions}>
                       {isShopifyProject ? (
                         <>
-                          <button className={styles.button} type="button" onClick={() => void publishToShopify()} disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}
-                            title={!shopifyBlogsAvailable ? "Sync catalog to load blogs first" : !shopifyCanPublish ? "Connect Shopify and grant write_content scope" : shopifyPublishNow ? "Publish live on Shopify" : "Save as draft on Shopify"}>
+                          <button className={styles.button} type="button" onClick={() => void publishToShopify()} disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}>
                             {shopifyPublishBusy ? "Posting…" : shopifyPublishNow ? "Publish to Shopify" : "Save Shopify draft"}
                           </button>
                           <button className={styles.btnSecondary} type="button" onClick={copyArticleMarkdown} disabled={!body.trim()}>Copy markdown</button>
-                          <button className={styles.btnSecondary} type="button" onClick={copyArticleTitleAndMarkdown} disabled={!body.trim() && !(title || article?.title || "").trim()}>Copy title + markdown</button>
                         </>
                       ) : (
                         <>
                           {showUpdateWordPress ? (
-                            <button className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`} type="button" onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}
-                              title={!websiteConnected ? "Connect WordPress in project settings" : "Push the current article to WordPress"}>
-                              {wpUpdateBusy ? "Updating…" : "Update"}
-                            </button>
+                            <button className={styles.button} type="button" onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}>{wpUpdateBusy ? "Updating…" : "Update article"}</button>
                           ) : showPublishWordPress ? (
-                            <button className={styles.button} type="button" onClick={publishToLiveSite} disabled={!canPublish || wpPushBusy}
-                              title={!websiteConnected ? "Connect WordPress in project settings" : "Publish this article to WordPress"}>
-                              {wpPublishBusy ? "Publishing…" : "Publish"}
-                            </button>
+                            <button className={styles.button} type="button" onClick={publishToLiveSite} disabled={!canPublish || wpPushBusy}>{wpPublishBusy ? "Publishing…" : "Publish article"}</button>
                           ) : null}
                         </>
                       )}
@@ -2105,70 +2182,44 @@ export default function ArticleEditPage() {
                   {isShopifyProject ? (
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Shopify settings</h3>
-                      {shopifyLink ? (
-                        <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 8 }}>
-                          Live: <a href={shopifyLink} target="_blank" rel="noreferrer" style={{ color: "rgba(217,119,87,0.95)" }}>{shopifyLink}</a>
-                        </div>
-                      ) : null}
-                      <div className={styles.muted} style={{ fontSize: 12 }}>
-                        Store: <strong>{(projectSettings?.shopify_shop || shopifyStatus?.shop || "Not set").toString()}</strong>
-                        {" · "}<strong>{websiteConnected ? "Connected" : "Not connected"}</strong>
+                      <div className={styles.muted} style={{ fontSize: 11, marginBottom: 8 }}>
+                        Store: <strong>{(projectSettings?.shopify_shop || shopifyStatus?.shop || "Not set").toString()}</strong> · <strong>{websiteConnected ? "Connected" : "Not connected"}</strong>
                       </div>
-                      {shopifyStatus?.setup_hint ? (
-                        <div style={{ fontSize: 12, lineHeight: 1.5, padding: "10px 12px", borderRadius: 8, border: "1px solid color-mix(in oklab, #e6b422, transparent 45%)", background: "color-mix(in oklab, #e6b422 8%, transparent)", marginTop: 8 }}>
-                          {shopifyStatus.setup_hint}
-                          {shopifyStatus.needs_reauthorize ? (<>{" "}<Link href={`/projects/${params.projectId}?tab=project_settings`}>Project settings → Shopify</Link></>) : null}
-                        </div>
-                      ) : null}
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                         <label className={styles.label}>
-                          Target blog
+                          Blog
                           <select className={styles.input} value={shopifyBlogId == null ? "" : String(shopifyBlogId)} onChange={(e) => setShopifyBlogId(e.target.value ? Number(e.target.value) : null)} disabled={!shopifyBlogsAvailable}>
-                            <option value="">Select blog…</option>
+                            <option value="">Select…</option>
                             {(shopifyCatalog?.blogs || []).map((b) => (<option key={String(b?.id)} value={String(b?.id || "")}>{formatShopifyBlogOptionLabel(b)}</option>))}
                           </select>
-                          <span className={styles.muted} style={{ fontSize: 11, display: "block", marginTop: 6, lineHeight: 1.45 }}>{SHOPIFY_BLOG_CHANNEL_HELP}</span>
                         </label>
                         <label className={styles.label}>
-                          Post status
+                          Status
                           <select className={styles.input} value={shopifyPublishNow ? "publish" : "draft"} onChange={(e) => setShopifyPublishNow(e.target.value === "publish")}>
-                            <option value="draft">Draft on Shopify</option>
-                            <option value="publish">Published (live)</option>
+                            <option value="draft">Draft</option>
+                            <option value="publish">Published</option>
                           </select>
                         </label>
                       </div>
                       {!shopifyBlogsAvailable ? (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 10 }}>
-                          <button type="button" className={styles.btnSecondary} onClick={() => void syncShopifyCatalogFromEditor()} disabled={shopifyCatalogSyncing || !websiteConnected}>
-                            {shopifyCatalogSyncing ? "Syncing…" : "Sync blogs from Shopify"}
-                          </button>
-                        </div>
+                        <button type="button" className={styles.btnSecondary} style={{ marginTop: 8 }} onClick={() => void syncShopifyCatalogFromEditor()} disabled={shopifyCatalogSyncing || !websiteConnected}>
+                          {shopifyCatalogSyncing ? "Syncing…" : "Sync blogs"}
+                        </button>
                       ) : null}
                     </div>
                   ) : (
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>WordPress settings</h3>
-                      {showUpdateWordPress && hasPendingWpChanges ? (
-                        <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>You have unsaved edits. Update will push the latest content to WordPress.</div>
-                      ) : null}
                       {wpMetaLoading && !wpPostTypes.length && !wpCategories.length ? (
-                        <div className={editorStyles.wpMetaLoading}>
-                          <div className={editorStyles.imageSpinner} aria-hidden="true" />
-                          <span>Loading WordPress settings…</span>
-                        </div>
-                      ) : null}
-                      {wpMetaError && !wpPostTypes.length && !wpCategories.length ? (
-                        <div style={{ display: "grid", gap: 8 }}>
-                          <div className={styles.error} style={{ fontSize: 12 }}>{wpMetaError}</div>
+                        <div className={editorStyles.wpMetaLoading}><div className={editorStyles.imageSpinner} aria-hidden="true" /><span>Loading…</span></div>
+                      ) : wpMetaError && !wpPostTypes.length && !wpCategories.length ? (
+                        <div style={{ display: "grid", gap: 6 }}>
+                          <div className={styles.error} style={{ fontSize: 11 }}>{wpMetaError}</div>
                           <button className={styles.btnSecondary} type="button" onClick={() => void ensureWpMetaLoaded({ force: true })} disabled={wpMetaLoading}>Retry</button>
                         </div>
-                      ) : null}
-                      {!wpMetaLoading && !wpMetaError && !wpPostTypes.length && !wpCategories.length && websiteConnected ? (
-                        <div className={styles.muted} style={{ fontSize: 12 }}>Using project defaults until settings load.</div>
-                      ) : null}
-                      {wpPostTypes.length || wpCategories.length ? (
+                      ) : wpPostTypes.length || wpCategories.length ? (
                         <>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                             <label className={styles.label}>
                               Post type
                               <select className={styles.input} value={wpPostType} onChange={(e) => setWpPostType(e.target.value)} disabled={editorLocked}>
@@ -2184,35 +2235,49 @@ export default function ArticleEditPage() {
                               </select>
                             </label>
                           </div>
-                          <label className={styles.label} style={{ marginTop: 10 }}>
+                          <label className={styles.label} style={{ marginTop: 8 }}>
                             Categories
-                            <select className={styles.input} multiple value={wpCategoryIds.map(String)} onChange={(e) => { const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n)); setWpCategoryIds(ids); }} style={{ minHeight: 80 }} disabled={editorLocked}>
+                            <select className={styles.input} multiple value={wpCategoryIds.map(String)} onChange={(e) => { const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n)); setWpCategoryIds(ids); }} style={{ minHeight: 72 }} disabled={editorLocked}>
                               {wpCategories.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
                             </select>
-                            <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>Hold Cmd/Ctrl to select multiple.</div>
                           </label>
                         </>
                       ) : (
-                        <div className={styles.muted} style={{ fontSize: 12 }}>Publishing will use defaults unless you load WordPress settings.</div>
+                        <div className={styles.muted} style={{ fontSize: 11 }}>Using project defaults.</div>
                       )}
                     </div>
                   )}
                 </>
               ) : null}
 
-              {/* ── AI Tools tab ── */}
+              {/* ── AI tab ── */}
               {contextTab === "ai" ? (
                 contentLoading ? <ArticleEditorSkeleton /> : (
                   <>
                     <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>Prompts</h3>
-                      {!editorLocked && !writingPrompts && !imagePrompts ? (
-                        <div style={{ display: "grid", gap: 8 }}>
-                          <button className={styles.btnSecondary} type="button" onClick={ensurePromptsLoaded} disabled={promptsLoading}>
-                            {promptsLoading ? "Loading prompts…" : "Load prompts"}
+                      <h3 className={editorStyles.panelSectionTitle}>AI copilot</h3>
+                      <div className={editorStyles.aiActionGrid}>
+                        {([
+                          { icon: "✦", label: "Generate article", action: () => void generate(), disabled: editorLocked },
+                          { icon: "↻", label: hasGeneratedContent ? "Regenerate" : "Generate", action: () => void generate(), disabled: editorLocked },
+                          { icon: "⊕", label: "Expand topic", action: () => void generate(), disabled: editorLocked || !hasGeneratedContent },
+                          { icon: "✎", label: "Rewrite heading", action: () => void generate(), disabled: editorLocked || !hasGeneratedContent },
+                          { icon: "☰", label: "Generate FAQ", action: () => void generate(), disabled: editorLocked || !hasGeneratedContent },
+                          { icon: "⟡", label: "Add examples", action: () => void generate(), disabled: editorLocked || !hasGeneratedContent },
+                        ]).map((cmd) => (
+                          <button key={cmd.label} type="button" className={editorStyles.aiActionBtn} onClick={cmd.action} disabled={cmd.disabled}>
+                            <span className={editorStyles.aiActionIcon}>{cmd.icon}</span>
+                            {cmd.label}
                           </button>
-                          <div className={styles.muted} style={{ fontSize: 12 }}>Loaded on demand to keep this page fast.</div>
-                        </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Prompt configuration</h3>
+                      {!editorLocked && !writingPrompts && !imagePrompts ? (
+                        <button className={styles.btnSecondary} type="button" onClick={ensurePromptsLoaded} disabled={promptsLoading} style={{ width: "100%" }}>
+                          {promptsLoading ? "Loading…" : "Load prompts"}
+                        </button>
                       ) : (
                         <>
                           <label className={styles.label}>
@@ -2233,30 +2298,11 @@ export default function ArticleEditPage() {
                       )}
                     </div>
                     <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>Generate</h3>
-                      {isShopifyProject ? (
-                        <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "0 0 10px" }}>
-                          {hasGeneratedContent
-                            ? <>Use <strong>Regenerate</strong> to apply the latest guardrails and optionally remap active products.</>
-                            : <>Click <strong>Generate</strong> to choose active products to weave into content.</>}
-                        </p>
-                      ) : isWordPressProject ? (
-                        <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "0 0 10px" }}>
-                          {hasGeneratedContent
-                            ? <>Use <strong>Regenerate</strong> to apply the latest guardrails and optionally remap synced pages.</>
-                            : <>Click <strong>Generate</strong> to map posts from your site map for internal links.</>}
-                        </p>
-                      ) : hasGeneratedContent ? (
-                        <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "0 0 10px" }}>
-                          <strong>Regenerate</strong> replaces this draft with new content using the latest human-writing guardrails.
-                        </p>
-                      ) : null}
-                      <div className={editorStyles.fieldActions} style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
-                        <button className={styles.button} type="button" onClick={() => void generate()} disabled={editorLocked}
-                          title={hasGeneratedContent ? "Replace article with a new draft" : "Generate article content"}>
-                          {hasGeneratedContent ? "Regenerate" : "Generate"}
+                      <div className={editorStyles.fieldActions} style={{ borderTop: "none", paddingTop: 0, marginTop: 0 }}>
+                        <button className={styles.button} type="button" onClick={() => void generate()} disabled={editorLocked}>
+                          {hasGeneratedContent ? "Regenerate article" : "Generate article"}
                         </button>
-                        <button className={styles.button} type="button" onClick={save} disabled={editorLocked}>Save</button>
+                        <button className={styles.btnSecondary} type="button" onClick={save} disabled={editorLocked}>Save</button>
                       </div>
                     </div>
                   </>
@@ -2265,12 +2311,49 @@ export default function ArticleEditPage() {
 
               {/* ── Settings tab ── */}
               {contextTab === "settings" ? (
-                <div className={editorStyles.panelSection}>
-                  <h3 className={editorStyles.panelSectionTitle}>Article settings</h3>
-                  <div className={styles.muted} style={{ fontSize: 13, lineHeight: 1.55 }}>
-                    Slug, canonical URL, schema markup, and advanced metadata settings will appear here in a future update.
+                <>
+                  <div className={editorStyles.panelSection}>
+                    <h3 className={editorStyles.panelSectionTitle}>URL and identity</h3>
+                    <div className={editorStyles.settingsField}>
+                      <span className={editorStyles.settingsFieldLabel}>Slug</span>
+                      <input className={editorStyles.settingsInput} value={articleSlug} disabled readOnly />
+                    </div>
+                    <div className={editorStyles.settingsField}>
+                      <span className={editorStyles.settingsFieldLabel}>Canonical URL</span>
+                      <input className={editorStyles.settingsInput} value={canonicalUrl} disabled readOnly />
+                    </div>
                   </div>
-                </div>
+                  <div className={editorStyles.panelSection}>
+                    <h3 className={editorStyles.panelSectionTitle}>Schema and indexing</h3>
+                    <div className={editorStyles.settingsField}>
+                      <span className={editorStyles.settingsFieldLabel}>Schema type</span>
+                      <select className={editorStyles.settingsInput} disabled defaultValue="Article">
+                        <option>Article</option>
+                        <option>BlogPosting</option>
+                        <option>HowTo</option>
+                        <option>FAQPage</option>
+                      </select>
+                    </div>
+                    <div className={editorStyles.settingsToggle}>
+                      <span className={editorStyles.settingsFieldLabel}>Open Graph tags</span>
+                      <div className={`${editorStyles.settingsToggleTrack} ${editorStyles.settingsToggleTrackOn}`}>
+                        <div className={editorStyles.settingsToggleThumb} />
+                      </div>
+                    </div>
+                    <div className={editorStyles.settingsToggle}>
+                      <span className={editorStyles.settingsFieldLabel}>Index / Follow</span>
+                      <div className={`${editorStyles.settingsToggleTrack} ${editorStyles.settingsToggleTrackOn}`}>
+                        <div className={editorStyles.settingsToggleThumb} />
+                      </div>
+                    </div>
+                    <div className={editorStyles.settingsToggle}>
+                      <span className={editorStyles.settingsFieldLabel}>Twitter card</span>
+                      <div className={`${editorStyles.settingsToggleTrack} ${editorStyles.settingsToggleTrackOn}`}>
+                        <div className={editorStyles.settingsToggleThumb} />
+                      </div>
+                    </div>
+                  </div>
+                </>
               ) : null}
 
             </div>
