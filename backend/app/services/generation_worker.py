@@ -177,6 +177,13 @@ async def _handle_article_generate(payload: dict) -> None:
 
     try:
         async with generation_slot():
+            # Transition to "generating" once a worker slot is acquired.
+            try:
+                if hasattr(st, "patch_article_fields"):
+                    await run_sync(st.patch_article_fields, aid, {"status": "generating"})
+            except Exception:
+                pass
+
             mapped_products = payload.get("mapped_products")
             mapped_products_list = mapped_products if isinstance(mapped_products, list) else None
             mapped_pages = payload.get("mapped_pages")
@@ -204,6 +211,12 @@ async def _handle_article_generate(payload: dict) -> None:
         else:
             err_msg = str(exc) or "Generation failed — check server logs."
         await _persist_article_generation_error(st, aid, err_msg)
+        # Return to pending so the article is actionable again (user can retry from editor).
+        try:
+            if hasattr(st, "patch_article_fields"):
+                await run_sync(st.patch_article_fields, aid, {"status": "pending"})
+        except Exception:
+            pass
         raise
     finally:
         await clear_dedup(dedup)

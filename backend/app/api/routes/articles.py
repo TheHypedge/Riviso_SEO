@@ -1777,6 +1777,10 @@ async def generate_article_and_image(
             user_id=(user.get("id") or "").strip(),
             payload=gen_payload,
         )
+        try:
+            await run_sync(st.patch_article_fields, aid, {"status": "queued"})
+        except Exception:
+            pass
         await publish_pipeline_status(
             aid,
             "📋 Generation job queued — waiting for background worker...",

@@ -2262,7 +2262,7 @@ export default function ProjectPage() {
   useEffect(() => {
     if (!toast) return;
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2400);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 4000);
     return () => {
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
       toastTimerRef.current = null;
@@ -3268,10 +3268,69 @@ export default function ProjectPage() {
   const totalPages = Math.max(1, Math.ceil(listTotal / pageSize));
   const pageClamped = Math.min(Math.max(1, page), totalPages);
   const pageItems = listItems;
+  const hasGeneratingArticles = useMemo(
+    () => pageItems.some((a) => { const s = (a.status || "").toLowerCase(); return s === "queued" || s === "generating"; }),
+    [pageItems],
+  );
 
   useEffect(() => {
     if (page > totalPages) setPage(totalPages);
   }, [page, totalPages]);
+
+  // Poll articles list while any visible article is "queued" or "generating"
+  // so status badges update automatically and action buttons restore on completion.
+  // Backoff: 6s → 9s → 13s → … → 20s cap. Pauses when tab is hidden or offline.
+  useEffect(() => {
+    if (tab !== "articles" || !hasGeneratingArticles) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    let delay = 6000;
+    const MAX_DELAY = 20000;
+
+    const tick = async () => {
+      if (cancelled) return;
+      if (typeof document !== "undefined" && document.hidden) {
+        delay = MAX_DELAY;
+      } else if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        delay = MAX_DELAY;
+      } else {
+        try {
+          const res = await api.listArticlesPage(projectId, {
+            page,
+            per_page: pageSize,
+            q: debouncedQ.trim() || undefined,
+            status: status || undefined,
+            date_from: dateFrom || undefined,
+            date_to: dateTo || undefined,
+            sort: dateOrder,
+          });
+          if (!cancelled) {
+            setListItems(res.items || []);
+            setListTotal(res.total || 0);
+          }
+        } catch {
+          // Non-fatal — next tick will retry.
+        }
+        delay = Math.min(MAX_DELAY, Math.floor(delay * 1.5));
+      }
+      if (!cancelled) timer = window.setTimeout(tick, delay);
+    };
+
+    timer = window.setTimeout(tick, delay);
+    const onVisible = () => {
+      if (typeof document !== "undefined" && !document.hidden && !cancelled) {
+        delay = 6000;
+        if (timer) window.clearTimeout(timer);
+        timer = window.setTimeout(tick, 0);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [tab, hasGeneratingArticles, projectId, page, pageSize, debouncedQ, status, dateFrom, dateTo, dateOrder]);
 
   function articleTitleFor(id: string) {
     return selectedMeta[id]?.title || articleTitlesById[id] || "(Untitled)";
@@ -4135,6 +4194,8 @@ export default function ProjectPage() {
     if (s === "pending") return `${styles.statusPill} ${styles.statusPending}`;
     if (s === "draft") return `${styles.statusPill} ${styles.statusDraft}`;
     if (s === "published") return `${styles.statusPill} ${styles.statusPublished}`;
+    if (s === "queued") return `${styles.statusPill} ${styles.statusQueued}`;
+    if (s === "generating") return `${styles.statusPill} ${styles.statusGenerating}`;
     return `${styles.statusPill} ${styles.statusNeutral}`;
   }
 
@@ -4144,6 +4205,21 @@ export default function ProjectPage() {
   }
 
   function renderArticleActions(a: ArticleListItem, title: string, iconBtnClass: string) {
+    const inProgressStatus = (a.status || "").toLowerCase();
+    if (inProgressStatus === "queued") {
+      return (
+        <span className={`${styles.articleInProgressBadge} ${styles.statusQueued}`} aria-label="Article is waiting in the generation queue">
+          In Queue
+        </span>
+      );
+    }
+    if (inProgressStatus === "generating") {
+      return (
+        <span className={`${styles.articleInProgressBadge} ${styles.statusGenerating}`} aria-label="Article is currently being generated">
+          Generating...
+        </span>
+      );
+    }
     return (
       <>
         <Link
@@ -5152,6 +5228,10 @@ export default function ProjectPage() {
       setResearchImportMsg(
         `${count} article${count === 1 ? "" : "s"} queued for generation. Check the Articles tab for progress.`,
       );
+      setToast({
+        message: `${count} article${count === 1 ? "" : "s"} queued for generation`,
+        tone: "success",
+      });
       void refreshArticleQuota();
       await reloadArticleTitles();
       void refreshArticlesList();
@@ -6444,7 +6524,11 @@ export default function ProjectPage() {
                         const focus = (a.focus_keyphrase || "").trim() || "—";
                         const keywordsText = formatSupportingKeywords(a.keywords);
                         const gscRequested = (a.gsc_status || "").toLowerCase() === "inspected";
-                        const statusLabel = (a.status || "pending").toUpperCase();
+                        const _rawStatus = (a.status || "pending").toLowerCase();
+                        const statusLabel =
+                          _rawStatus === "queued" ? "In Queue" :
+                          _rawStatus === "generating" ? "Generating..." :
+                          _rawStatus.toUpperCase();
                         const statusTitle = `${statusLabel} · ${gscRequested ? "Indexing requested" : "Indexing not requested"}`;
                         return (
                           <article key={a.id} className={styles.articleRow}>
@@ -6558,7 +6642,11 @@ export default function ProjectPage() {
                         const focus = (a.focus_keyphrase || "").trim() || "—";
                         const keywordsText = formatSupportingKeywords(a.keywords);
                         const gscRequested = (a.gsc_status || "").toLowerCase() === "inspected";
-                        const statusLabel = (a.status || "pending").toUpperCase();
+                        const _rawStatus = (a.status || "pending").toLowerCase();
+                        const statusLabel =
+                          _rawStatus === "queued" ? "In Queue" :
+                          _rawStatus === "generating" ? "Generating..." :
+                          _rawStatus.toUpperCase();
                         const statusTitle = `${statusLabel} · ${gscRequested ? "Indexing requested" : "Indexing not requested"}`;
                         return (
                           <article key={`mobile-${a.id}`} className={styles.articlesMobileCard}>

@@ -2282,6 +2282,15 @@
   overflow: visible;
 }
 
+.articleInProgressBadge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  padding: 5px 10px;
+  border-radius: 999px;
+}
+
 .articlesTableCategoryCol {
   min-width: 0;
   display: flex;
@@ -2764,6 +2773,18 @@
   background: rgba(0, 0, 0, 0.06);
   border: 1px solid rgba(0, 0, 0, 0.16);
   color: var(--text-secondary);
+}
+
+.statusQueued {
+  background: rgba(112, 144, 200, 0.14);
+  border: 1px solid rgba(112, 144, 200, 0.42);
+  color: #7090c8;
+}
+
+.statusGenerating {
+  background: rgba(217, 119, 87, 0.14);
+  border: 1px solid rgba(217, 119, 87, 0.42);
+  color: #d97757;
 }
 
 @media (max-width: 720px) {
