@@ -72,13 +72,22 @@ function clampChars(s: string, max: number) {
   return t.length <= max ? t : t.slice(0, max).trim();
 }
 
-function statusPillClass(status: string): string {
+function statusDotClass(status: string): string {
   const s = (status || "").trim().toLowerCase();
-  if (s === "published") return editorStyles.statusPublished;
-  if (s === "draft") return editorStyles.statusDraft;
-  if (s === "pending" || s === "scheduled") return editorStyles.statusPending;
-  return editorStyles.statusNeutral;
+  if (s === "published") return editorStyles.statusDotPublished;
+  if (s === "draft") return editorStyles.statusDotDraft;
+  if (s === "pending" || s === "scheduled") return editorStyles.statusDotPending;
+  return editorStyles.statusDotNeutral;
 }
+
+type ContextTab = "seo" | "media" | "publish" | "ai" | "settings";
+const CONTEXT_TABS: { key: ContextTab; label: string }[] = [
+  { key: "seo", label: "SEO" },
+  { key: "media", label: "Media" },
+  { key: "publish", label: "Publish" },
+  { key: "ai", label: "AI Tools" },
+  { key: "settings", label: "Settings" },
+];
 
 function noticeWithoutUrl(notice: string): string {
   return notice.replace(/\s*https?:\/\/\S+/g, "").trim();
@@ -269,6 +278,7 @@ export default function ArticleEditPage() {
     : (projectSettings?.wp_verified_status || "").trim().toLowerCase() === "connected";
 
   const [editorRevision, setEditorRevision] = useState(0);
+  const [contextTab, setContextTab] = useState<ContextTab>("seo");
 
   const isPublishedArticle = articleStatus === "published";
 
@@ -281,6 +291,15 @@ export default function ArticleEditPage() {
       !!(article?.generated_at || "").trim(),
     [article?.generated_at, body, generatedImageUrl, metaDesc, metaTitle],
   );
+
+  const editorMetrics = useMemo(() => {
+    const text = (body || "").trim();
+    if (!text) return { words: 0, readingTime: "0 min", headings: 0 };
+    const words = text.split(/\s+/).filter(Boolean).length;
+    const minutes = Math.max(1, Math.ceil(words / 238));
+    const headings = (text.match(/^#{1,6}\s/gm) || []).length;
+    return { words, readingTime: `${minutes} min`, headings };
+  }, [body]);
 
   const isDirty = useMemo(() => {
     if (!editorBaseline) return false;
@@ -680,13 +699,14 @@ export default function ArticleEditPage() {
   // not from the article's stale wp_rest_base. This ensures that changing Post Type in Project
   // Settings takes effect immediately for all new publications.
 
-  // Auto-load WordPress post types + categories in the background (no manual click required).
+  // Load WordPress post types + categories when Publish tab opens (lazy).
   useEffect(() => {
+    if (contextTab !== "publish") return;
     if (!token || !needsWpMeta || !article?.id) return;
     if (wpPostTypes.length || wpCategories.length) return;
     void ensureWpMetaLoaded();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, needsWpMeta, article?.id, params.projectId, wpPostTypes.length, wpCategories.length]);
+  }, [contextTab, token, needsWpMeta, article?.id, params.projectId, wpPostTypes.length, wpCategories.length]);
 
   // Reset featured-image fetch state when navigating to a different article (not on first mount).
   useEffect(() => {
@@ -1058,7 +1078,7 @@ export default function ArticleEditPage() {
   function openImageRegenModal() {
     setError(null);
     if (!generateImage) {
-      setError("Enable “Generate image” (Yes) to create a featured image.");
+      setError('Enable "Generate image" (Yes) to create a featured image.');
       return;
     }
     if (!body.trim()) {
@@ -1086,7 +1106,7 @@ export default function ArticleEditPage() {
     const regenRemaining = article?.featured_image_regeneration_remaining;
     const regenExhausted = !regenUnlimited && (regenRemaining ?? 0) <= 0;
     if (!generateImage) {
-      setError("Enable “Generate image” (Yes) to create a featured image.");
+      setError('Enable "Generate image" (Yes) to create a featured image.');
       return;
     }
     if (!body.trim()) {
@@ -1517,233 +1537,143 @@ export default function ArticleEditPage() {
     );
   }
 
+  const seoStatusLabel =
+    seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" &&
+    seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent"
+      ? "Good"
+      : "Needs work";
+  const seoStatusOk = seoStatusLabel === "Good";
+
   return (
     <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
-      <main className={`${styles.main} ${styles.mainWide}`}>
-        <section className={`${styles.contentCol} ${editorStyles.pageShell}`}>
-          <header className={editorStyles.pageHeader}>
-            <div className={editorStyles.pageHeaderTop}>
-              <div className={editorStyles.pageTitleBlock}>
-                <nav className={editorStyles.breadcrumb}>
-                  <button
-                    type="button"
-                    className={editorStyles.backLink}
-                    onClick={() => requestNavigation(`/projects/${params.projectId}`)}
-                  >
-                    ← Project
-                  </button>
-                  <span className={editorStyles.breadcrumbSep}>·</span>
-                  <span className={editorStyles.breadcrumbCurrent}>Article editor</span>
-                </nav>
-                <h1 className={editorStyles.pageTitle}>{displayTitle}</h1>
-              </div>
+      <main className={`${styles.main} ${styles.mainWide}`} style={{ padding: 0 }}>
 
-              <div className={editorStyles.headerActions}>
-                {isDirty ? (
-                  <button
-                    type="button"
-                    className={styles.btnSecondary}
-                    onClick={save}
-                    disabled={editorLocked}
-                  >
-                    Save
-                  </button>
-                ) : null}
-                {isShopifyProject ? (
-                  <button
-                    type="button"
-                    className={styles.button}
-                    onClick={() => void publishToShopify()}
-                    disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}
-                  >
-                    {shopifyPublishBusy
-                      ? article?.shopify_article_id
-                        ? "Updating…"
-                        : "Publishing…"
-                      : article?.shopify_article_id
-                        ? "Update Shopify"
-                        : "Publish to Shopify"}
-                  </button>
-                ) : showUpdateWordPress && hasPendingWpChanges ? (
-                  <button
-                    type="button"
-                    className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`}
-                    onClick={() => void updateWordPressPost()}
-                    disabled={!canUpdateWordPress}
-                  >
-                    {wpUpdateBusy ? "Updating…" : "Update article"}
-                  </button>
-                ) : showPublishWordPress ? (
-                  <button
-                    type="button"
-                    className={styles.button}
-                    onClick={publishToLiveSite}
-                    disabled={!canPublish || wpPushBusy}
-                  >
-                    {wpPublishBusy ? "Publishing…" : "Publish"}
-                  </button>
-                ) : null}
-              </div>
-            </div>
+        {/* ── Sticky header ── */}
+        <header className={editorStyles.stickyHeader}>
+          <div className={editorStyles.headerLeft}>
+            <button
+              type="button"
+              className={editorStyles.backLink}
+              onClick={() => requestNavigation(`/projects/${params.projectId}`)}
+            >
+              ← Project
+            </button>
+            <span className={editorStyles.headerSep}>/</span>
+            <span className={editorStyles.headerTitle}>{displayTitle}</span>
+          </div>
 
-            <div className={editorStyles.metaBar} aria-label="Article status">
-              <span className={`${editorStyles.statusPill} ${statusPillClass(article?.status || "")}`}>
-                {article?.status ? article.status.charAt(0).toUpperCase() + article.status.slice(1) : "…"}
+          <div className={editorStyles.headerStatusDots}>
+            <span className={editorStyles.statusDot}>
+              <span className={`${editorStyles.statusDotIndicator} ${statusDotClass(article?.status || "")}`} />
+              {article?.status ? article.status.charAt(0).toUpperCase() + article.status.slice(1) : "..."}
+            </span>
+            {isLiveOnWordPress ? (
+              <span className={editorStyles.statusDot}>
+                <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotSynced}`} />
+                {isWpTrashed ? "Trashed" : "Synced"}
               </span>
-              {article?.posted_at ? (
-                <span className={`${editorStyles.statusPill} ${editorStyles.statusNeutral}`}>
-                  Posted {article.posted_at}
-                </span>
-              ) : null}
-              {article?.wp_scheduled_at ? (
-                <span className={`${editorStyles.statusPill} ${editorStyles.statusPending}`}>
-                  Scheduled {article.wp_scheduled_at}
-                </span>
-              ) : null}
-              {isLiveOnWordPress ? (
-                <span className={`${editorStyles.statusPill} ${editorStyles.statusWp}`}>
-                  {wpPostId ? `WordPress #${wpPostId}` : "Live on WordPress"}
-                </span>
-              ) : null}
-              {isLiveOnWordPress && wpLastStatus && wpLastStatus !== "publish" ? (
-                <span
-                  className={`${editorStyles.statusPill} ${isWpTrashed ? editorStyles.statusTrash : editorStyles.statusNeutral}`}
-                >
-                  {formatWordPressRestStatus(article?.wp_last_wp_status)}
-                </span>
-              ) : null}
-              {showUpdateWordPress && hasPendingWpChanges ? (
-                <span className={`${editorStyles.statusPill} ${editorStyles.statusWarn}`}>Unsynced changes</span>
-              ) : null}
-              {isLiveOnWordPress && article?.wp_synced_at ? (
-                <span className={`${editorStyles.statusPill} ${editorStyles.statusNeutral}`}>
-                  Synced {article.wp_synced_at}
-                </span>
-              ) : null}
-            </div>
-
-            {isLiveOnWordPress && wpLink ? (
-              <div className={`${editorStyles.liveUrlBar} ${isWpTrashed ? editorStyles.liveUrlBarTrashed : ""}`}>
-                <span className={editorStyles.liveUrlBarLabel}>
-                  {isWpTrashed ? "Trashed" : "Live"}
-                </span>
-                <a
-                  href={wpLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className={editorStyles.liveUrlBarHref}
-                  title={wpLink}
-                >
-                  {wpLink}
-                </a>
-                <div className={editorStyles.liveUrlBarActions}>
-                  <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void copyLiveUrl()}>
-                    {liveUrlCopied ? "Copied" : "Copy"}
-                  </button>
-                  <a
-                    href={wpLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className={editorStyles.liveUrlBarBtn}
-                  >
-                    Open ↗
-                  </a>
-                  <button
-                    type="button"
-                    className={editorStyles.liveUrlBarBtn}
-                    onClick={() => void syncFromWordPress()}
-                    disabled={wpSyncBusy || !websiteConnected}
-                    title="Pull the latest title, body, SEO, and permalink from WordPress"
-                  >
-                    {wpSyncBusy ? "Syncing…" : "Sync"}
-                  </button>
-                </div>
-              </div>
             ) : null}
-          </header>
+            {showUpdateWordPress && hasPendingWpChanges ? (
+              <span className={editorStyles.statusDot}>
+                <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotDraft}`} />
+                Unsynced
+              </span>
+            ) : null}
+            {article?.posted_at ? (
+              <span className={editorStyles.statusDot}>
+                <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotNeutral}`} />
+                {article.posted_at}
+              </span>
+            ) : null}
+          </div>
 
-          {error ? (
-            <div className={`${editorStyles.banner} ${editorStyles.bannerError}`} role="alert">
-              <p className={styles.error} style={{ margin: 0 }}>
-                {error}
-              </p>
-              <div className={editorStyles.bannerActions}>
-                <button
-                  type="button"
-                  className={styles.button}
-                  onClick={() => requestNavigation(`/projects/${params.projectId}?tab=articles`)}
-                >
-                  Back to articles
+          <div className={editorStyles.headerActions}>
+            {isDirty ? (
+              <button type="button" className={styles.btnSecondary} onClick={save} disabled={editorLocked}>
+                Save
+              </button>
+            ) : null}
+            {isShopifyProject ? (
+              <button
+                type="button"
+                className={styles.button}
+                onClick={() => void publishToShopify()}
+                disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}
+              >
+                {shopifyPublishBusy
+                  ? article?.shopify_article_id ? "Updating…" : "Publishing…"
+                  : article?.shopify_article_id ? "Update Shopify" : "Publish to Shopify"}
+              </button>
+            ) : showUpdateWordPress && hasPendingWpChanges ? (
+              <button
+                type="button"
+                className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`}
+                onClick={() => void updateWordPressPost()}
+                disabled={!canUpdateWordPress}
+              >
+                {wpUpdateBusy ? "Updating…" : "Update article"}
+              </button>
+            ) : showPublishWordPress ? (
+              <button
+                type="button"
+                className={styles.button}
+                onClick={publishToLiveSite}
+                disabled={!canPublish || wpPushBusy}
+              >
+                {wpPublishBusy ? "Publishing…" : "Publish"}
+              </button>
+            ) : null}
+          </div>
+        </header>
+
+        {error ? (
+          <div className={`${editorStyles.banner} ${editorStyles.bannerError}`} role="alert">
+            <p className={styles.error} style={{ margin: 0 }}>{error}</p>
+            <div className={editorStyles.bannerActions}>
+              <button type="button" className={styles.button} onClick={() => requestNavigation(`/projects/${params.projectId}?tab=articles`)}>
+                Back to articles
+              </button>
+              {errorCanRetry ? (
+                <button type="button" className={styles.btnSecondary} onClick={() => setLoadAttempt((n) => n + 1)}>
+                  Retry
                 </button>
-                {errorCanRetry ? (
-                  <button
-                    type="button"
-                    className={styles.btnSecondary}
-                    onClick={() => setLoadAttempt((n) => n + 1)}
-                  >
-                    Retry
-                  </button>
-                ) : null}
-              </div>
+              ) : null}
             </div>
-          ) : null}
+          </div>
+        ) : null}
+
+        {/* ── Modals (unchanged, position: fixed) ── */}
 
         {productMapBeforeGenerateOpen ? (
-          <div
-            className={styles.modalBackdrop}
-            role="dialog"
-            aria-modal="true"
-            aria-label={isShopifyProject ? "Map products before generation" : "Map pages before generation"}
-          >
+          <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label={isShopifyProject ? "Map products before generation" : "Map pages before generation"}>
             <div className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>
                   {hasGeneratedContent
-                    ? isShopifyProject
-                      ? "Map products before regenerate"
-                      : "Map pages before regenerate"
-                    : isShopifyProject
-                      ? "Map products for this article"
-                      : "Map site pages for this article"}
+                    ? isShopifyProject ? "Map products before regenerate" : "Map pages before regenerate"
+                    : isShopifyProject ? "Map products for this article" : "Map site pages for this article"}
                 </h3>
-                <button
-                  type="button"
-                  className={styles.iconButton}
-                  aria-label="Close"
-                  onClick={() => setProductMapBeforeGenerateOpen(false)}
-                >
-                  ×
-                </button>
+                <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setProductMapBeforeGenerateOpen(false)}>×</button>
               </div>
               <div className={styles.modalBody}>
                 {isWordPressProject && isClusterArticle && clusterLinkContext ? (
                   <div className={editorStyles.clusterContextCard}>
-                    <div className={editorStyles.clusterContextTitle}>
-                      Topic cluster · {clusterRoleLabel} article
-                    </div>
+                    <div className={editorStyles.clusterContextTitle}>Topic cluster · {clusterRoleLabel} article</div>
                     {clusterLinkContext.auto_link_ready ? (
                       <p className={styles.muted} style={{ margin: 0 }}>
-                        {clusterLinkContext.live_sibling_count} related article
-                        {clusterLinkContext.live_sibling_count === 1 ? "" : "s"} already live on WordPress — Riviso
-                        will link them automatically when you generate.
+                        {clusterLinkContext.live_sibling_count} related article{clusterLinkContext.live_sibling_count === 1 ? "" : "s"} already live on WordPress — Riviso will link them automatically when you generate.
                       </p>
                     ) : (
                       <p className={styles.muted} style={{ margin: 0 }}>
-                        Related cluster articles are not live on WordPress yet. Map published pages below, or skip to
-                        generate without internal links until siblings are published.
+                        Related cluster articles are not live on WordPress yet. Map published pages below, or skip to generate without internal links until siblings are published.
                       </p>
                     )}
                     {clusterLinkContext.siblings.length ? (
                       <ul style={{ margin: "8px 0 0", paddingLeft: 18 }}>
                         {clusterLinkContext.siblings.map((s) => (
                           <li key={s.slot_id} style={{ marginBottom: 4 }}>
-                            <span style={{ fontWeight: 700 }}>{s.title || "Untitled"}</span>
-                            {" — "}
-                            {s.is_live ? (
-                              <span style={{ color: "rgba(120,200,140,0.95)" }}>Live</span>
-                            ) : (
-                              <span style={{ color: "rgba(255,180,120,0.95)" }}>Not live</span>
-                            )}
+                            <span style={{ fontWeight: 700 }}>{s.title || "Untitled"}</span>{" — "}
+                            {s.is_live ? <span style={{ color: "rgba(120,200,140,0.95)" }}>Live</span> : <span style={{ color: "rgba(255,180,120,0.95)" }}>Not live</span>}
                           </li>
                         ))}
                       </ul>
@@ -1751,63 +1681,21 @@ export default function ArticleEditPage() {
                   </div>
                 ) : null}
                 {isShopifyProject ? (
-                  <ShopifyProductMapPicker
-                    products={shopifyCatalog?.products || []}
-                    value={mappedProductsForGenerate}
-                    onChange={setMappedProductsForGenerate}
-                    loading={shopifyCatalogLoading}
-                    grantedScopes={shopifyCatalog?.granted_scopes || []}
-                  />
+                  <ShopifyProductMapPicker products={shopifyCatalog?.products || []} value={mappedProductsForGenerate} onChange={setMappedProductsForGenerate} loading={shopifyCatalogLoading} grantedScopes={shopifyCatalog?.granted_scopes || []} />
                 ) : (
-                  <WordPressPageMapPicker
-                    entries={siteMapEntries || []}
-                    value={mappedPagesForGenerate}
-                    onChange={setMappedPagesForGenerate}
-                    loading={siteMapLoading}
-                    internalLinkAwareEnabled={wpInternalLinkAware}
-                  />
+                  <WordPressPageMapPicker entries={siteMapEntries || []} value={mappedPagesForGenerate} onChange={setMappedPagesForGenerate} loading={siteMapLoading} internalLinkAwareEnabled={wpInternalLinkAware} />
                 )}
               </div>
               <div className={styles.modalFooter}>
-                <button
-                  type="button"
-                  className={styles.btnSecondary}
-                  onClick={() => setProductMapBeforeGenerateOpen(false)}
-                >
-                  Cancel
+                <button type="button" className={styles.btnSecondary} onClick={() => setProductMapBeforeGenerateOpen(false)}>Cancel</button>
+                <button type="button" className={styles.btnSecondary} onClick={() => { setProductMapBeforeGenerateOpen(false); void doGenerate(undefined, undefined, { regenerate: hasGeneratedContent, skipPlatformMapping: true }); }}>
+                  Skip — {hasGeneratedContent ? "regenerate" : "generate"} {isShopifyProject ? "without products" : "without mapped pages"}
                 </button>
-                <button
-                  type="button"
-                  className={styles.btnSecondary}
-                  onClick={() => {
-                    setProductMapBeforeGenerateOpen(false);
-                    void doGenerate(undefined, undefined, {
-                      regenerate: hasGeneratedContent,
-                      skipPlatformMapping: true,
-                    });
-                  }}
-                >
-                  Skip — {hasGeneratedContent ? "regenerate" : "generate"}{" "}
-                  {isShopifyProject ? "without products" : "without mapped pages"}
-                </button>
-                <button
-                  type="button"
-                  className={styles.button}
-                  disabled={isShopifyProject ? !mappedProductsForGenerate.length : !mappedPagesForGenerate.length}
-                  onClick={() => {
-                    if (isShopifyProject) {
-                      const picked = [...mappedProductsForGenerate];
-                      setProductMapBeforeGenerateOpen(false);
-                      void doGenerate(picked, undefined, { regenerate: hasGeneratedContent });
-                    } else {
-                      const picked = [...mappedPagesForGenerate];
-                      setProductMapBeforeGenerateOpen(false);
-                      void doGenerate(undefined, picked, { regenerate: hasGeneratedContent });
-                    }
-                  }}
-                >
-                  {hasGeneratedContent ? "Regenerate" : "Generate"} with mapped{" "}
-                  {isShopifyProject ? "products" : "pages"}
+                <button type="button" className={styles.button} disabled={isShopifyProject ? !mappedProductsForGenerate.length : !mappedPagesForGenerate.length} onClick={() => {
+                  if (isShopifyProject) { const picked = [...mappedProductsForGenerate]; setProductMapBeforeGenerateOpen(false); void doGenerate(picked, undefined, { regenerate: hasGeneratedContent }); }
+                  else { const picked = [...mappedPagesForGenerate]; setProductMapBeforeGenerateOpen(false); void doGenerate(undefined, picked, { regenerate: hasGeneratedContent }); }
+                }}>
+                  {hasGeneratedContent ? "Regenerate" : "Generate"} with mapped {isShopifyProject ? "products" : "pages"}
                 </button>
               </div>
             </div>
@@ -1817,89 +1705,42 @@ export default function ArticleEditPage() {
         {showRegenConfirm ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Regenerate article">
             <div className={styles.modalPanel}>
-              <div className={styles.modalHead}>
-                <h3 className={styles.modalTitle}>Regenerate article?</h3>
-              </div>
+              <div className={styles.modalHead}><h3 className={styles.modalTitle}>Regenerate article?</h3></div>
               <div className={styles.modalBody} style={{ display: "grid", gap: 16 }}>
                 <p style={{ margin: 0, lineHeight: 1.6, fontSize: 14, color: "var(--aa-ink)" }}>
-                  Generate a fresh version of this article using the selected prompts. This will replace the current
-                  article content and SEO metadata. Any unsaved edits will be lost. Save your work before continuing.
-                  {regenImageChoice && (
-                    <>{" "}<span style={{ opacity: 0.75 }}>A new featured image will also be generated and replace the current image.</span></>
-                  )}
+                  Generate a fresh version of this article using the selected prompts. This will replace the current article content and SEO metadata. Any unsaved edits will be lost. Save your work before continuing.
+                  {regenImageChoice && (<>{" "}<span style={{ opacity: 0.75 }}>A new featured image will also be generated and replace the current image.</span></>)}
                 </p>
-
                 <label className={styles.label}>
                   Writing prompt
-                  <select
-                    className={styles.input}
-                    value={writingPromptId}
-                    onChange={(e) => setWritingPromptId(e.target.value)}
-                  >
+                  <select className={styles.input} value={writingPromptId} onChange={(e) => setWritingPromptId(e.target.value)}>
                     <option value="">Project default</option>
-                    {(writingPrompts?.items || []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
+                    {(writingPrompts?.items || []).map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
                   </select>
                 </label>
-
-                {/* Featured image choice — radio buttons, isolated from global generateImage state */}
                 <div style={{ display: "grid", gap: 8 }}>
                   <span className={styles.label} style={{ marginBottom: 0 }}>Featured image</span>
                   <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 14, color: "var(--aa-ink)" }}>
-                    <input
-                      type="radio"
-                      name="regenImage"
-                      checked={regenImageChoice}
-                      onChange={() => setRegenImageChoice(true)}
-                    />
-                    Generate a new image
+                    <input type="radio" name="regenImage" checked={regenImageChoice} onChange={() => setRegenImageChoice(true)} /> Generate a new image
                   </label>
                   <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 14, color: "var(--aa-ink)" }}>
-                    <input
-                      type="radio"
-                      name="regenImage"
-                      checked={!regenImageChoice}
-                      onChange={() => setRegenImageChoice(false)}
-                    />
-                    Keep existing image
+                    <input type="radio" name="regenImage" checked={!regenImageChoice} onChange={() => setRegenImageChoice(false)} /> Keep existing image
                   </label>
                   <p className={styles.muted} style={{ fontSize: 12, margin: 0, lineHeight: 1.45 }}>
-                    {regenImageChoice
-                      ? "A new featured image will be generated after the article is written."
-                      : "Your current featured image will remain unchanged. Only the article content will be regenerated."}
+                    {regenImageChoice ? "A new featured image will be generated after the article is written." : "Your current featured image will remain unchanged. Only the article content will be regenerated."}
                   </p>
                 </div>
-
                 <label className={styles.label} style={{ opacity: regenImageChoice ? 1 : 0.45 }}>
                   Image prompt
-                  <select
-                    className={styles.input}
-                    value={imagePromptId}
-                    onChange={(e) => setImagePromptId(e.target.value)}
-                    disabled={!regenImageChoice}
-                  >
+                  <select className={styles.input} value={imagePromptId} onChange={(e) => setImagePromptId(e.target.value)} disabled={!regenImageChoice}>
                     <option value="">Project default</option>
-                    {(imagePrompts?.items || []).map((p) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
+                    {(imagePrompts?.items || []).map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
                   </select>
                 </label>
               </div>
               <div className={styles.modalFooter}>
-                <button className={styles.btnSecondary} type="button" onClick={() => setShowRegenConfirm(false)}>
-                  Cancel
-                </button>
-                <button
-                  className={styles.button}
-                  type="button"
-                  onClick={() => {
-                    setShowRegenConfirm(false);
-                    startGenerateFlow({ regenerate: true, generateImageOverride: regenImageChoice });
-                  }}
-                >
-                  Regenerate
-                </button>
+                <button className={styles.btnSecondary} type="button" onClick={() => setShowRegenConfirm(false)}>Cancel</button>
+                <button className={styles.button} type="button" onClick={() => { setShowRegenConfirm(false); startGenerateFlow({ regenerate: true, generateImageOverride: regenImageChoice }); }}>Regenerate</button>
               </div>
             </div>
           </div>
@@ -1908,29 +1749,13 @@ export default function ArticleEditPage() {
         {showWpSyncConfirm ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Sync from WordPress">
             <div className={styles.modalPanel}>
-              <div className={styles.modalHead}>
-                <div className={styles.modalTitle}>Sync from WordPress?</div>
-              </div>
+              <div className={styles.modalHead}><div className={styles.modalTitle}>Sync from WordPress?</div></div>
               <div className={styles.modalBody}>
-                <p style={{ margin: 0, lineHeight: 1.55 }}>
-                  You have unsaved edits in Riviso. Syncing will replace the title, body, SEO fields, and live URL with
-                  the current version on WordPress.
-                </p>
+                <p style={{ margin: 0, lineHeight: 1.55 }}>You have unsaved edits in Riviso. Syncing will replace the title, body, SEO fields, and live URL with the current version on WordPress.</p>
               </div>
               <div className={styles.modalFooter}>
-                <button className={styles.btnSecondary} type="button" onClick={() => setShowWpSyncConfirm(false)}>
-                  Cancel
-                </button>
-                <button
-                  className={styles.button}
-                  type="button"
-                  onClick={() => {
-                    setShowWpSyncConfirm(false);
-                    void syncFromWordPress({ force: true });
-                  }}
-                >
-                  Sync and overwrite
-                </button>
+                <button className={styles.btnSecondary} type="button" onClick={() => setShowWpSyncConfirm(false)}>Cancel</button>
+                <button className={styles.button} type="button" onClick={() => { setShowWpSyncConfirm(false); void syncFromWordPress({ force: true }); }}>Sync and overwrite</button>
               </div>
             </div>
           </div>
@@ -1940,109 +1765,44 @@ export default function ArticleEditPage() {
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Regenerate featured image">
             <div className={styles.modalPanel} style={{ maxWidth: 520 }}>
               <div className={styles.modalHead}>
-                <h3 className={styles.modalTitle}>
-                  {hasFeaturedImage ? "Regenerate featured image" : "Generate featured image"}
-                </h3>
-                <button
-                  type="button"
-                  className={styles.iconButton}
-                  aria-label="Close"
-                  disabled={imageRegenBusy}
-                  onClick={() => setShowImageRegenModal(false)}
-                >
-                  ×
-                </button>
+                <h3 className={styles.modalTitle}>{hasFeaturedImage ? "Regenerate featured image" : "Generate featured image"}</h3>
+                <button type="button" className={styles.iconButton} aria-label="Close" disabled={imageRegenBusy} onClick={() => setShowImageRegenModal(false)}>×</button>
               </div>
               <div className={styles.modalBody} style={{ display: "grid", gap: 14 }}>
                 {imageRegenBusy ? (
                   <div className={editorStyles.imageGenerating} style={{ minHeight: 120 }}>
                     <div className={editorStyles.imageSpinner} aria-hidden="true" />
-                    <div className={editorStyles.imageGeneratingTitle}>
-                      {imageGenPhase === "saving" ? "Saving featured image…" : "Generating with OpenAI…"}
-                    </div>
-                    <div className={editorStyles.imageGeneratingHint}>
-                      {imageGenPhase === "saving"
-                        ? "Writing to storage."
-                        : "This usually takes 30–90 seconds. Please keep this tab open."}
-                    </div>
+                    <div className={editorStyles.imageGeneratingTitle}>{imageGenPhase === "saving" ? "Saving featured image…" : "Generating with OpenAI…"}</div>
+                    <div className={editorStyles.imageGeneratingHint}>{imageGenPhase === "saving" ? "Writing to storage." : "This usually takes 30–90 seconds. Please keep this tab open."}</div>
                   </div>
                 ) : (
                   <>
-                <p className={styles.muted} style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>
-                  Choose a saved image prompt or enter a one-time custom prompt. If no saved prompt is selected, Riviso
-                  uses your brand/niche defaults. Custom prompts are not saved to your project prompt list.
-                </p>
-                <label className={styles.label} style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
-                  <input
-                    type="radio"
-                    name="regen-prompt-source"
-                    checked={regenPromptSource === "saved"}
-                    onChange={() => setRegenPromptSource("saved")}
-                  />
-                  Use saved image prompt
-                </label>
-                {regenPromptSource === "saved" ? (
-                  <select
-                    className={styles.input}
-                    value={regenPromptId}
-                    onChange={(e) => setRegenPromptId(e.target.value)}
-                  >
-                    <option value="">Default (brand + niche)</option>
-                    {(imagePrompts?.items || []).map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name || p.id}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-                <label className={styles.label} style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
-                  <input
-                    type="radio"
-                    name="regen-prompt-source"
-                    checked={regenPromptSource === "custom"}
-                    onChange={() => setRegenPromptSource("custom")}
-                  />
-                  Add custom prompt for regeneration
-                </label>
-                {regenPromptSource === "custom" ? (
-                  <textarea
-                    className={styles.input}
-                    rows={5}
-                    value={regenCustomPrompt}
-                    onChange={(e) => setRegenCustomPrompt(e.target.value)}
-                    placeholder="Describe the image you want for this article only…"
-                  />
-                ) : null}
+                    <p className={styles.muted} style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>Choose a saved image prompt or enter a one-time custom prompt. If no saved prompt is selected, Riviso uses your brand/niche defaults.</p>
+                    <label className={styles.label} style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
+                      <input type="radio" name="regen-prompt-source" checked={regenPromptSource === "saved"} onChange={() => setRegenPromptSource("saved")} /> Use saved image prompt
+                    </label>
+                    {regenPromptSource === "saved" ? (
+                      <select className={styles.input} value={regenPromptId} onChange={(e) => setRegenPromptId(e.target.value)}>
+                        <option value="">Default (brand + niche)</option>
+                        {(imagePrompts?.items || []).map((p) => (<option key={p.id} value={p.id}>{p.name || p.id}</option>))}
+                      </select>
+                    ) : null}
+                    <label className={styles.label} style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
+                      <input type="radio" name="regen-prompt-source" checked={regenPromptSource === "custom"} onChange={() => setRegenPromptSource("custom")} /> Add custom prompt for regeneration
+                    </label>
+                    {regenPromptSource === "custom" ? (
+                      <textarea className={styles.input} rows={5} value={regenCustomPrompt} onChange={(e) => setRegenCustomPrompt(e.target.value)} placeholder="Describe the image you want for this article only…" />
+                    ) : null}
                   </>
                 )}
               </div>
               <div className={styles.modalFooter}>
-                <button className={styles.btnSecondary} type="button" disabled={imageRegenBusy} onClick={() => setShowImageRegenModal(false)}>
-                  Cancel
-                </button>
-                <button
-                  className={styles.button}
-                  type="button"
-                  disabled={
-                    imageRegenBusy ||
-                    (regenPromptSource === "custom" && regenCustomPrompt.trim().length > 0 && regenCustomPrompt.trim().length < 10) ||
-                    (regenPromptSource === "custom" && !regenCustomPrompt.trim())
-                  }
-                  onClick={() =>
-                    void regenerateFeaturedImage(
-                      regenPromptSource === "custom"
-                        ? { custom_image_prompt: regenCustomPrompt.trim() }
-                        : { image_prompt_id: regenPromptId || null },
-                    )
-                  }
+                <button className={styles.btnSecondary} type="button" disabled={imageRegenBusy} onClick={() => setShowImageRegenModal(false)}>Cancel</button>
+                <button className={styles.button} type="button"
+                  disabled={imageRegenBusy || (regenPromptSource === "custom" && regenCustomPrompt.trim().length > 0 && regenCustomPrompt.trim().length < 10) || (regenPromptSource === "custom" && !regenCustomPrompt.trim())}
+                  onClick={() => void regenerateFeaturedImage(regenPromptSource === "custom" ? { custom_image_prompt: regenCustomPrompt.trim() } : { image_prompt_id: regenPromptId || null })}
                 >
-                  {imageRegenBusy
-                    ? hasFeaturedImage
-                      ? "Regenerating…"
-                      : "Generating…"
-                    : hasFeaturedImage
-                      ? "Regenerate image"
-                      : "Generate image"}
+                  {imageRegenBusy ? (hasFeaturedImage ? "Regenerating…" : "Generating…") : (hasFeaturedImage ? "Regenerate image" : "Generate image")}
                 </button>
               </div>
             </div>
@@ -2054,25 +1814,12 @@ export default function ArticleEditPage() {
             <div className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>Website not connected</h3>
-                <button
-                  type="button"
-                  className={styles.iconButton}
-                  aria-label="Close"
-                  onClick={() => setWebsiteConnectionModal(false)}
-                >
-                  ×
-                </button>
+                <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setWebsiteConnectionModal(false)}>×</button>
               </div>
-              <div className={styles.modalBody}>
-                Website is not connected for this project. Connect and verify WordPress in Project Settings to generate or publish articles.
-              </div>
+              <div className={styles.modalBody}>Website is not connected for this project. Connect and verify WordPress in Project Settings to generate or publish articles.</div>
               <div className={styles.modalFooter}>
-                <button className={styles.btnSecondary} type="button" onClick={() => router.push("/dashboard")}>
-                  Cancel
-                </button>
-                <button className={styles.button} type="button" onClick={() => router.push(`/projects/${params.projectId}?tab=project_settings`)}>
-                  Connect Website
-                </button>
+                <button className={styles.btnSecondary} type="button" onClick={() => router.push("/dashboard")}>Cancel</button>
+                <button className={styles.button} type="button" onClick={() => router.push(`/projects/${params.projectId}?tab=project_settings`)}>Connect Website</button>
               </div>
             </div>
           </div>
@@ -2081,678 +1828,460 @@ export default function ArticleEditPage() {
         {leaveConfirmOpen ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="leave-unsaved-title">
             <div className={styles.modalPanel} style={{ maxWidth: 480 }}>
-              <div className={styles.modalHead}>
-                <h3 id="leave-unsaved-title" className={styles.modalTitle}>
-                  Leave without saving?
-                </h3>
-              </div>
+              <div className={styles.modalHead}><h3 id="leave-unsaved-title" className={styles.modalTitle}>Leave without saving?</h3></div>
               <div className={styles.modalBody} style={{ display: "grid", gap: 10 }}>
-                <p style={{ margin: 0, lineHeight: 1.55, fontSize: 14, color: "var(--aa-ink)" }}>
-                  You have unsaved changes on this article. If you leave now, your edits will be lost and will not be
-                  pushed to WordPress.
-                </p>
-                <p className={styles.muted} style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>
-                  Cancel to keep editing. Confirm to leave this page.
-                </p>
+                <p style={{ margin: 0, lineHeight: 1.55, fontSize: 14, color: "var(--aa-ink)" }}>You have unsaved changes on this article. If you leave now, your edits will be lost and will not be pushed to WordPress.</p>
+                <p className={styles.muted} style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>Cancel to keep editing. Confirm to leave this page.</p>
               </div>
               <div className={styles.modalFooter}>
-                <button
-                  className={styles.btnSecondary}
-                  type="button"
-                  onClick={() => {
-                    setLeaveConfirmOpen(false);
-                    setPendingLeaveHref(null);
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  className={styles.button}
-                  type="button"
-                  onClick={() => {
-                    const href = pendingLeaveHref;
-                    setLeaveConfirmOpen(false);
-                    setPendingLeaveHref(null);
-                    if (href) router.push(href);
-                  }}
-                >
-                  Confirm
-                </button>
+                <button className={styles.btnSecondary} type="button" onClick={() => { setLeaveConfirmOpen(false); setPendingLeaveHref(null); }}>Cancel</button>
+                <button className={styles.button} type="button" onClick={() => { const href = pendingLeaveHref; setLeaveConfirmOpen(false); setPendingLeaveHref(null); if (href) router.push(href); }}>Confirm</button>
               </div>
             </div>
           </div>
         ) : null}
 
-          <div className={editorStyles.editorLayout}>
-          <div className={editorStyles.sidebarCol}>
-            <div className={editorStyles.sectionCard}>
-              <h2 className={editorStyles.sectionTitle}>Prompts</h2>
-              {contentLoading ? (
-                <ArticleEditorSkeleton />
-              ) : null}
-              {!contentLoading && !editorLocked && !writingPrompts && !imagePrompts ? (
-                <div className={styles.row}>
-                  <button className={styles.btnSecondary} type="button" onClick={ensurePromptsLoaded} disabled={promptsLoading}>
-                    {promptsLoading ? "Loading prompts…" : "Load prompts"}
-                  </button>
-                  <div className={styles.muted} style={{ fontSize: 12 }}>
-                    Loaded on demand to keep this page fast.
-                  </div>
-                </div>
-              ) : null}
+        {/* ── Two-column workspace ── */}
+        <div className={editorStyles.editorLayout}>
 
-              {!contentLoading ? (
-              <>
-              <label className={styles.label}>
-                Writing prompt
-                <select className={styles.input} value={writingPromptId} onChange={(e) => setWritingPromptId(e.target.value)} disabled={editorLocked}>
-                  <option value="">Project default</option>
-                  {(writingPrompts?.items || []).map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className={styles.label}>
-                Image prompt
-                <select className={styles.input} value={imagePromptId} onChange={(e) => setImagePromptId(e.target.value)} disabled={editorLocked}>
-                  <option value="">Project default</option>
-                  {(imagePrompts?.items || []).map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className={styles.label}>
-                Focus keyphrase (Yoast)
-                <input className={styles.input} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Optional" disabled={editorLocked} />
-              </label>
-
-              <label className={styles.label}>
-                Generate image
-                <select className={styles.input} value={generateImage ? "yes" : "no"} onChange={(e) => setGenerateImage(e.target.value === "yes")} disabled={editorLocked}>
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                </select>
-              </label>
-
-              {isShopifyProject ? (
-                <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "8px 0 0" }}>
-                  {hasGeneratedContent ? (
-                    <>
-                      Use <strong>Regenerate</strong> to apply the latest guardrails and optionally remap active products.
-                    </>
+          {/* Editor column (72%) */}
+          <div className={editorStyles.editorCol}>
+            <div className={editorStyles.editorColInner}>
+              <div className={`${editorStyles.contentCard} ${styles.articleEditorCard}`}>
+                <div className={editorStyles.contentCardBody}>
+                  {bodyLoading ? (
+                    <ArticleEditorSkeleton bodyOnly />
+                  ) : editorLocked ? (
+                    <ArticleReadonlyBody key={editorRevision} markdown={body} />
                   ) : (
-                    <>
-                      Click <strong>Generate</strong> to choose active products to weave into content and the featured image.
-                    </>
+                    <ArticleRichEditor key={editorRevision} contentRevision={editorRevision} value={body} onChange={setBody} />
                   )}
-                </p>
-              ) : isWordPressProject ? (
-                <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "8px 0 0" }}>
-                  {hasGeneratedContent ? (
-                    <>
-                      Use <strong>Regenerate</strong> to apply the latest guardrails and optionally remap synced site pages.
-                    </>
-                  ) : (
-                    <>
-                      Click <strong>Generate</strong> to map posts from your site map for internal links and optional hero-image
-                      reference.
-                    </>
-                  )}
-                </p>
-              ) : hasGeneratedContent ? (
-                <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "8px 0 0" }}>
-                  <strong>Regenerate</strong> replaces this draft with new content using the latest human-writing guardrails.
-                </p>
-              ) : null}
-
-              <div className={editorStyles.fieldActions}>
-                {!hasGeneratedContent ? (
-                  <button className={styles.button} type="button" onClick={() => void generate()} disabled={editorLocked}>
-                    Generate
-                  </button>
-                ) : (
-                  <button
-                    className={styles.button}
-                    type="button"
-                    onClick={() => void generate()}
-                    disabled={editorLocked}
-                    title="Replace article with a new draft using latest human-writing guardrails"
-                  >
-                    Regenerate
-                  </button>
-                )}
-                <button className={styles.button} type="button" onClick={save} disabled={editorLocked}>
-                  Save
-                </button>
-              </div>
-              </>
-              ) : null}
-            </div>
-
-            <div className={editorStyles.sectionCard}>
-              <h2 className={editorStyles.sectionTitle}>SEO</h2>
-              {contentLoading ? (
-                <ArticleEditorSkeleton />
-              ) : (
-              <>
-              <label className={styles.label}>
-                Title
-                <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
-              </label>
-              <label className={styles.label}>
-                Meta title
-                <input
-                  className={styles.input}
-                  value={metaTitle}
-                  onChange={(e) => setMetaTitle(clampChars(e.target.value, META_TITLE_MAX))}
-                  disabled={editorLocked}
-                />
-              </label>
-              <div className={styles.seoMeterRow} aria-label="Meta title character meter">
-                <div className={styles.seoMeterMeta}>
-                  <span className={styles.muted}>
-                    {metaTitle.length}/{META_TITLE_MAX}
-                  </span>
-                  <span className={seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? styles.seoOk : styles.seoWarn}>
-                    {seoMeter(metaTitle.length, META_TITLE_MAX).label}
-                  </span>
                 </div>
-                <div className={styles.seoMeterTrack}>
-                  <div
-                    className={seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? styles.seoMeterFillOk : styles.seoMeterFillWarn}
-                    style={{ width: `${seoMeter(metaTitle.length, META_TITLE_MAX).percent}%` }}
-                  />
-                </div>
-              </div>
-              <label className={styles.label}>
-                Meta description
-                <input
-                  className={styles.input}
-                  value={metaDesc}
-                  onChange={(e) => setMetaDesc(clampChars(e.target.value, META_DESC_MAX))}
-                  disabled={editorLocked}
-                />
-              </label>
-              <div className={styles.seoMeterRow} aria-label="Meta description character meter">
-                <div className={styles.seoMeterMeta}>
-                  <span className={styles.muted}>
-                    {metaDesc.length}/{META_DESC_MAX}
-                  </span>
-                  <span className={seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? styles.seoOk : styles.seoWarn}>
-                    {seoMeter(metaDesc.length, META_DESC_MAX).label}
-                  </span>
-                </div>
-                <div className={styles.seoMeterTrack}>
-                  <div
-                    className={seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? styles.seoMeterFillOk : styles.seoMeterFillWarn}
-                    style={{ width: `${seoMeter(metaDesc.length, META_DESC_MAX).percent}%` }}
-                  />
-                </div>
-              </div>
-              <label className={styles.label} style={{ marginTop: 10 }}>
-                Targeting keywords
-                <input
-                  className={styles.input}
-                  value={keywords}
-                  onChange={(e) => setKeywords(e.target.value)}
-                  disabled={editorLocked}
-                  placeholder="keyword one, keyword two…"
-                />
-              </label>
-              <div className={styles.muted} style={{ fontSize: 12 }}>
-                Comma-separated, 5–10 keywords max.
-              </div>
-              </>
-              )}
-            </div>
-
-          </div>
-
-          <div className={editorStyles.contentCol}>
-            <div className={`${editorStyles.contentCard} ${styles.articleEditorCard}`}>
-              <h2 className={editorStyles.sectionTitlePrimary}>
-                Article content
-                {bodyLoading ? (
-                  <span className={styles.muted} style={{ fontSize: 12, fontWeight: 500, marginLeft: 10 }}>
-                    Loading body…
-                  </span>
+                {showUpdateWordPress && hasPendingWpChanges ? (
+                  <p className={editorStyles.contentHint}>
+                    {isDirty ? "You have unsaved text changes. Update article saves locally and pushes everything live." : "Featured image changed. Use Update article to push the new image to your site."}
+                  </p>
                 ) : null}
-              </h2>
-              <div className={editorStyles.contentCardBody}>
-                {bodyLoading ? (
-                  <ArticleEditorSkeleton bodyOnly />
-                ) : editorLocked ? (
-                  <ArticleReadonlyBody key={editorRevision} markdown={body} />
-                ) : (
-                  <ArticleRichEditor
-                    key={editorRevision}
-                    contentRevision={editorRevision}
-                    value={body}
-                    onChange={setBody}
-                  />
-                )}
               </div>
-              {showUpdateWordPress && hasPendingWpChanges ? (
-                <p className={editorStyles.contentHint}>
-                  {isDirty
-                    ? "You have unsaved text changes. Update article saves locally and pushes everything live."
-                    : "Featured image changed. Use Update article to push the new image to your site."}
-                </p>
-              ) : null}
+
+              {/* Metrics footer bar */}
+              <div className={editorStyles.metricsBar}>
+                <span className={editorStyles.metricsItem}>
+                  <span className={editorStyles.metricsValue}>{editorMetrics.words.toLocaleString()}</span> words
+                </span>
+                <span className={editorStyles.metricsSep} />
+                <span className={editorStyles.metricsItem}>
+                  <span className={editorStyles.metricsValue}>{editorMetrics.readingTime}</span> read
+                </span>
+                <span className={editorStyles.metricsSep} />
+                <span className={editorStyles.metricsItem}>
+                  <span className={editorStyles.metricsValue}>{editorMetrics.headings}</span> headings
+                </span>
+                {focus ? (
+                  <>
+                    <span className={editorStyles.metricsSep} />
+                    <span className={editorStyles.metricsItem}>
+                      Focus: <span className={editorStyles.metricsValue}>{focus}</span>
+                    </span>
+                  </>
+                ) : null}
+                <span className={editorStyles.metricsSep} />
+                <span className={editorStyles.metricsItem}>
+                  SEO: <span className={seoStatusOk ? editorStyles.metricsValueGood : editorStyles.metricsValueWarn}>{seoStatusLabel}</span>
+                </span>
+              </div>
             </div>
           </div>
 
-          <div className={editorStyles.sidebarCol}>
-            <div className={editorStyles.sectionCard}>
-              <h2 className={editorStyles.sectionTitle}>Featured image</h2>
-              <div className={styles.articleImageFrame}>
-                {showFeaturedImageSkeleton ? (
-                  <div className={editorStyles.imageSkeleton} aria-live="polite" aria-busy="true">
-                    <div className={editorStyles.imageSkeletonShimmer} aria-hidden="true" />
-                    <div className={editorStyles.imageSkeletonPulse} aria-hidden="true" />
-                    <div className={editorStyles.imageSkeletonBars} aria-hidden="true">
-                      <span />
-                      <span />
-                      <span />
+          {/* Context panel (28%) */}
+          <div className={editorStyles.contextPanel}>
+            <div className={editorStyles.contextTabBar} role="tablist" aria-label="Context panel">
+              {CONTEXT_TABS.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={contextTab === t.key}
+                  aria-controls={`panel-${t.key}`}
+                  id={`tab-${t.key}`}
+                  className={`${editorStyles.contextTabBtn} ${contextTab === t.key ? editorStyles.contextTabBtnActive : ""}`}
+                  onClick={() => setContextTab(t.key)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <div className={editorStyles.contextTabContent} role="tabpanel" id={`panel-${contextTab}`} aria-labelledby={`tab-${contextTab}`}>
+
+              {/* ── SEO tab ── */}
+              {contextTab === "seo" ? (
+                contentLoading ? <ArticleEditorSkeleton /> : (
+                  <>
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Title</h3>
+                      <label className={styles.label}>
+                        Article title
+                        <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
+                      </label>
+                      <label className={styles.label} style={{ marginTop: 10 }}>
+                        Focus keyphrase
+                        <input className={styles.input} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Optional" disabled={editorLocked} />
+                      </label>
                     </div>
-                    <div className={editorStyles.imageSkeletonContent}>
-                      {imageRegenBusy ? (
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Meta title</h3>
+                      <input className={styles.input} value={metaTitle} onChange={(e) => setMetaTitle(clampChars(e.target.value, META_TITLE_MAX))} disabled={editorLocked} />
+                      <div className={styles.seoMeterRow} aria-label="Meta title character meter">
+                        <div className={styles.seoMeterMeta}>
+                          <span className={styles.muted}>{metaTitle.length}/{META_TITLE_MAX}</span>
+                          <span className={seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? styles.seoOk : styles.seoWarn}>{seoMeter(metaTitle.length, META_TITLE_MAX).label}</span>
+                        </div>
+                        <div className={styles.seoMeterTrack}>
+                          <div className={seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? styles.seoMeterFillOk : styles.seoMeterFillWarn} style={{ width: `${seoMeter(metaTitle.length, META_TITLE_MAX).percent}%` }} />
+                        </div>
+                      </div>
+                    </div>
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Meta description</h3>
+                      <input className={styles.input} value={metaDesc} onChange={(e) => setMetaDesc(clampChars(e.target.value, META_DESC_MAX))} disabled={editorLocked} />
+                      <div className={styles.seoMeterRow} aria-label="Meta description character meter">
+                        <div className={styles.seoMeterMeta}>
+                          <span className={styles.muted}>{metaDesc.length}/{META_DESC_MAX}</span>
+                          <span className={seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? styles.seoOk : styles.seoWarn}>{seoMeter(metaDesc.length, META_DESC_MAX).label}</span>
+                        </div>
+                        <div className={styles.seoMeterTrack}>
+                          <div className={seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? styles.seoMeterFillOk : styles.seoMeterFillWarn} style={{ width: `${seoMeter(metaDesc.length, META_DESC_MAX).percent}%` }} />
+                        </div>
+                      </div>
+                    </div>
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Targeting keywords</h3>
+                      <input className={styles.input} value={keywords} onChange={(e) => setKeywords(e.target.value)} disabled={editorLocked} placeholder="keyword one, keyword two…" />
+                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>Comma-separated, 5-10 keywords max.</div>
+                    </div>
+                  </>
+                )
+              ) : null}
+
+              {/* ── Media tab ── */}
+              {contextTab === "media" ? (
+                <>
+                  <div className={editorStyles.panelSection}>
+                    <h3 className={editorStyles.panelSectionTitle}>Featured image</h3>
+                    <div className={styles.articleImageFrame}>
+                      {showFeaturedImageSkeleton ? (
+                        <div className={editorStyles.imageSkeleton} aria-live="polite" aria-busy="true">
+                          <div className={editorStyles.imageSkeletonShimmer} aria-hidden="true" />
+                          <div className={editorStyles.imageSkeletonPulse} aria-hidden="true" />
+                          <div className={editorStyles.imageSkeletonBars} aria-hidden="true"><span /><span /><span /></div>
+                          <div className={editorStyles.imageSkeletonContent}>
+                            {imageRegenBusy ? (
+                              <>
+                                <div className={editorStyles.imageSpinner} aria-hidden="true" />
+                                <div className={editorStyles.imageGeneratingTitle}>{imageGenPhase === "saving" ? "Saving featured image…" : "Generating featured image…"}</div>
+                                <div className={editorStyles.imageGeneratingHint}>{imageGenPhase === "saving" ? "Writing to storage." : "OpenAI is creating your image (30–90s)."}</div>
+                              </>
+                            ) : (
+                              <>
+                                <div className={editorStyles.imageSpinner} aria-hidden="true" />
+                                <div className={editorStyles.imageGeneratingTitle}>Loading featured image…</div>
+                                <div className={editorStyles.imageGeneratingHint}>Retrieving your saved image from storage.</div>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      ) : generateImage ? (
+                        generatedImageUrl ? (
+                          <LazyArticleImage src={generatedImageUrl} alt="Generated preview" className={styles.articleImage} />
+                        ) : featuredImageLoadFailed ? (
+                          <div className={editorStyles.imagePlaceholder}>
+                            Saved featured image could not be loaded.
+                            <div style={{ marginTop: 6 }}>Use &ldquo;Regenerate featured image&rdquo; to create a new one.</div>
+                          </div>
+                        ) : (
+                          <div className={editorStyles.imagePlaceholder}>
+                            Image will be generated using the selected image prompt.
+                            <div style={{ marginTop: 6 }}>Once ready, it will appear here.</div>
+                          </div>
+                        )
+                      ) : uploadedImagePreview ? (
+                        <LazyArticleImage src={uploadedImagePreview} alt="Uploaded preview" className={styles.articleImage} />
+                      ) : (
+                        <div className={editorStyles.imagePlaceholder}>No image selected.</div>
+                      )}
+                    </div>
+                  </div>
+                  <div className={editorStyles.panelSection}>
+                    <h3 className={editorStyles.panelSectionTitle}>Image options</h3>
+                    <label className={styles.label}>
+                      Generate image
+                      <select className={styles.input} value={generateImage ? "yes" : "no"} onChange={(e) => setGenerateImage(e.target.value === "yes")} disabled={editorLocked}>
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                      </select>
+                    </label>
+                    {!generateImage ? (
+                      <label className={styles.label} style={{ marginTop: 10 }}>
+                        Upload image
+                        <input className={styles.input} type="file" accept="image/*" disabled={editorLocked} onChange={(e) => setUploadedImageFile(e.target.files?.[0] || null)} />
+                      </label>
+                    ) : null}
+                    {generateImage ? (
+                      <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+                        <div className={editorStyles.imageMeta}>
+                          Regenerations: {imageRegenUsed}{imageRegenUnlimited ? " / unlimited" : ` / ${imageRegenLimit}`}
+                          {!imageRegenUnlimited ? ` (${Math.max(0, imageRegenRemaining ?? 0)} remaining)` : ""}
+                        </div>
+                        <button className={styles.btnSecondary} type="button" onClick={handleFeaturedImageButtonClick} disabled={imageRegenBusy || !canFeaturedImageAction}
+                          title={!canFeaturedImageAction ? (imageRegenExhausted && hasFeaturedImage ? "Regeneration limit exhausted." : !hasGeneratedContent ? "Generate article content first." : "Enable Generate image.") : (hasFeaturedImage ? "Regenerate the featured image." : "Generate the featured image.")}
+                        >
+                          {imageRegenBusy ? (hasFeaturedImage ? "Regenerating image…" : "Generating image…") : (hasFeaturedImage ? "Regenerate featured image" : "Generate featured image")}
+                        </button>
+                        {imageRegenExhausted ? <div className={styles.error} style={{ fontSize: 12 }}>Regeneration limit exhausted for this article.</div> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
+
+              {/* ── Publish tab ── */}
+              {contextTab === "publish" ? (
+                <>
+                  {isLiveOnWordPress && wpLink ? (
+                    <div className={editorStyles.panelSection}>
+                      <div className={`${editorStyles.liveUrlBar} ${isWpTrashed ? editorStyles.liveUrlBarTrashed : ""}`}>
+                        <span className={editorStyles.liveUrlBarLabel}>{isWpTrashed ? "Trashed" : "Live"}</span>
+                        <a href={wpLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlBarHref} title={wpLink}>{wpLink}</a>
+                        <div className={editorStyles.liveUrlBarActions}>
+                          <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void copyLiveUrl()}>{liveUrlCopied ? "Copied" : "Copy"}</button>
+                          <a href={wpLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlBarBtn}>Open ↗</a>
+                          <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void syncFromWordPress()} disabled={wpSyncBusy || !websiteConnected} title="Pull the latest from WordPress">
+                            {wpSyncBusy ? "Syncing…" : "Sync"}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className={editorStyles.panelSection}>
+                    <h3 className={editorStyles.panelSectionTitle}>{isShopifyProject ? "Shopify" : "WordPress"}</h3>
+                    <p className={editorStyles.wpCardDesc}>
+                      {isShopifyProject
+                        ? shopifyLink ? "This article is on Shopify." : "Post directly to your Shopify blog."
+                        : isScheduledArticle ? "Scheduled. Update is available after publish."
+                        : showUpdateWordPress ? "Push edits to your live WordPress post."
+                        : showPublishWordPress ? "Publish when the article is ready."
+                        : "WordPress actions depend on article status."}
+                    </p>
+                    <div className={editorStyles.wpActions} style={{ marginTop: 10 }}>
+                      {isShopifyProject ? (
                         <>
-                          <div className={editorStyles.imageSpinner} aria-hidden="true" />
-                          <div className={editorStyles.imageGeneratingTitle}>
-                            {imageGenPhase === "saving" ? "Saving featured image…" : "Generating featured image…"}
-                          </div>
-                          <div className={editorStyles.imageGeneratingHint}>
-                            {imageGenPhase === "saving"
-                              ? "Writing to storage. You can keep editing the article."
-                              : "OpenAI is creating your image (30–90s). The rest of the editor stays available."}
-                          </div>
+                          <button className={styles.button} type="button" onClick={() => void publishToShopify()} disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}
+                            title={!shopifyBlogsAvailable ? "Sync catalog to load blogs first" : !shopifyCanPublish ? "Connect Shopify and grant write_content scope" : shopifyPublishNow ? "Publish live on Shopify" : "Save as draft on Shopify"}>
+                            {shopifyPublishBusy ? "Posting…" : shopifyPublishNow ? "Publish to Shopify" : "Save Shopify draft"}
+                          </button>
+                          <button className={styles.btnSecondary} type="button" onClick={copyArticleMarkdown} disabled={!body.trim()}>Copy markdown</button>
+                          <button className={styles.btnSecondary} type="button" onClick={copyArticleTitleAndMarkdown} disabled={!body.trim() && !(title || article?.title || "").trim()}>Copy title + markdown</button>
                         </>
                       ) : (
                         <>
-                          <div className={editorStyles.imageSpinner} aria-hidden="true" />
-                          <div className={editorStyles.imageGeneratingTitle}>Loading featured image…</div>
-                          <div className={editorStyles.imageGeneratingHint}>
-                            Retrieving your saved image from storage.
-                          </div>
+                          {showUpdateWordPress ? (
+                            <button className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`} type="button" onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}
+                              title={!websiteConnected ? "Connect WordPress in project settings" : "Push the current article to WordPress"}>
+                              {wpUpdateBusy ? "Updating…" : "Update"}
+                            </button>
+                          ) : showPublishWordPress ? (
+                            <button className={styles.button} type="button" onClick={publishToLiveSite} disabled={!canPublish || wpPushBusy}
+                              title={!websiteConnected ? "Connect WordPress in project settings" : "Publish this article to WordPress"}>
+                              {wpPublishBusy ? "Publishing…" : "Publish"}
+                            </button>
+                          ) : null}
                         </>
                       )}
                     </div>
                   </div>
-                ) : generateImage ? (
-                  generatedImageUrl ? (
-                    <LazyArticleImage src={generatedImageUrl} alt="Generated preview" className={styles.articleImage} />
-                  ) : featuredImageLoadFailed ? (
-                    <div className={editorStyles.imagePlaceholder}>
-                      Saved featured image could not be loaded.
-                      <div style={{ marginTop: 6 }}>Use &ldquo;Regenerate featured image&rdquo; to create a new one.</div>
-                    </div>
-                  ) : (
-                    <div className={editorStyles.imagePlaceholder}>
-                      Image will be generated using the selected (or default) image prompt.
-                      <div style={{ marginTop: 6 }}>Once ready, it will appear here.</div>
-                    </div>
-                  )
-                ) : uploadedImagePreview ? (
-                  <LazyArticleImage src={uploadedImagePreview} alt="Uploaded preview" className={styles.articleImage} />
-                ) : (
-                  <div className={editorStyles.imagePlaceholder}>No image selected.</div>
-                )}
-              </div>
 
-              {!generateImage ? (
-                <label className={styles.label} style={{ marginTop: 10 }}>
-                  Upload image (used on publish)
-                  <input className={styles.input} type="file" accept="image/*" disabled={editorLocked} onChange={(e) => setUploadedImageFile(e.target.files?.[0] || null)} />
-                </label>
-              ) : null}
-              {generateImage ? (
-                <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
-                  <div className={editorStyles.imageMeta}>
-                    Featured image regenerations: {imageRegenUsed}
-                    {imageRegenUnlimited ? " / unlimited" : ` / ${imageRegenLimit}`}
-                    {!imageRegenUnlimited ? ` (${Math.max(0, imageRegenRemaining ?? 0)} remaining)` : ""}
-                  </div>
-                  <button
-                    className={styles.btnSecondary}
-                    type="button"
-                    onClick={handleFeaturedImageButtonClick}
-                    disabled={imageRegenBusy || !canFeaturedImageAction}
-                    title={
-                      !canFeaturedImageAction
-                        ? imageRegenExhausted && hasFeaturedImage
-                          ? "The max featured image regeneration limit is exhausted for this article."
-                          : !hasGeneratedContent
-                            ? "Generate article content first."
-                            : "Enable “Generate image” (Yes) to create a featured image."
-                        : hasFeaturedImage
-                          ? "Regenerate only the featured image using a saved or one-time custom prompt."
-                          : "Generate the featured image using a saved or one-time custom prompt."
-                    }
-                  >
-                    {imageRegenBusy
-                      ? hasFeaturedImage
-                        ? "Regenerating image…"
-                        : "Generating image…"
-                      : hasFeaturedImage
-                        ? "Regenerate featured image"
-                        : "Generate featured image"}
-                  </button>
-                  {imageRegenExhausted ? (
-                    <div className={styles.error} style={{ fontSize: 12 }}>
-                      The max featured image regeneration limit is exhausted for this article.
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-
-            <div className={editorStyles.sectionCard}>
-              <div className={editorStyles.wpCardHead}>
-                <div>
-                  <h2 className={editorStyles.sectionTitlePrimary}>{isShopifyProject ? "Shopify" : "WordPress"}</h2>
-                  <p className={editorStyles.wpCardDesc}>
-                    {isShopifyProject
-                      ? shopifyLink
-                        ? "This article is on Shopify. Change content here and post again, or open the live link below."
-                        : "Post directly to your Shopify blog as a draft or published article."
-                      : isScheduledArticle
-                        ? "This article is scheduled. Update is available after it is published live on WordPress."
-                        : showUpdateWordPress
-                          ? "Push edits to your live WordPress post when you change text or the featured image."
-                          : showPublishWordPress
-                            ? "Publish when the article is ready (draft or pending — not yet live on WordPress)."
-                            : "WordPress actions depend on article status."}
-                  </p>
-                </div>
-                <div className={editorStyles.wpActions}>
                   {isShopifyProject ? (
-                    <>
-                      <button
-                        className={styles.button}
-                        type="button"
-                        onClick={() => void publishToShopify()}
-                        disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}
-                        title={
-                          !shopifyBlogsAvailable
-                            ? "Sync catalog to load blogs first"
-                            : !shopifyCanPublish
-                              ? "Connect Shopify and grant write_content scope"
-                              : shopifyPublishNow
-                                ? "Publish live on Shopify"
-                                : "Save as draft on Shopify"
-                        }
-                      >
-                        {shopifyPublishBusy
-                          ? "Posting…"
-                          : shopifyPublishNow
-                            ? "Publish to Shopify"
-                            : "Save Shopify draft"}
-                      </button>
-                      <button className={styles.btnSecondary} type="button" onClick={copyArticleMarkdown} disabled={!body.trim()}>
-                        Copy markdown
-                      </button>
-                      <button
-                        className={styles.btnSecondary}
-                        type="button"
-                        onClick={copyArticleTitleAndMarkdown}
-                        disabled={!body.trim() && !(title || article?.title || "").trim()}
-                      >
-                        Copy title + markdown
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      {showUpdateWordPress ? (
-                        <button
-                          className={`${styles.button} ${canUpdateWordPress ? styles.wpUpdateButtonActive : ""}`}
-                          type="button"
-                          onClick={() => void updateWordPressPost()}
-                          disabled={!canUpdateWordPress}
-                          title={
-                            !websiteConnected
-                              ? "Connect WordPress in project settings"
-                              : "Push the current article (title, body, SEO, image, categories) to WordPress"
-                          }
-                        >
-                          {wpUpdateBusy ? "Updating…" : "Update"}
-                        </button>
-                      ) : showPublishWordPress ? (
-                        <button
-                          className={styles.button}
-                          type="button"
-                          onClick={publishToLiveSite}
-                          disabled={!canPublish || wpPushBusy}
-                          title={
-                            !websiteConnected
-                              ? "Connect WordPress in project settings"
-                              : "Publish this article to WordPress"
-                          }
-                        >
-                          {wpPublishBusy ? "Publishing…" : "Publish"}
-                        </button>
-                      ) : null}
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {isShopifyProject ? (
-                <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-                  {shopifyLink ? (
-                    <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
-                      Live on Shopify:{" "}
-                      <a href={shopifyLink} target="_blank" rel="noreferrer" style={{ color: "rgba(217,119,87,0.95)" }}>
-                        {shopifyLink}
-                      </a>
-                    </div>
-                  ) : null}
-                  <div className={styles.muted} style={{ fontSize: 12 }}>
-                    Store: <strong>{(projectSettings?.shopify_shop || shopifyStatus?.shop || "Not set").toString()}</strong>
-                    {" · "}
-                    <strong>{websiteConnected ? "Connected" : "Not connected"}</strong>
-                  </div>
-                  {shopifyStatus?.setup_hint ? (
-                    <div
-                      style={{
-                        fontSize: 12,
-                        lineHeight: 1.5,
-                        padding: "10px 12px",
-                        borderRadius: 8,
-                        border: "1px solid color-mix(in oklab, #e6b422, transparent 45%)",
-                        background: "color-mix(in oklab, #e6b422 8%, transparent)",
-                      }}
-                    >
-                      {shopifyStatus.setup_hint}
-                      {shopifyStatus.needs_reauthorize ? (
-                        <>
-                          {" "}
-                          <Link href={`/projects/${params.projectId}?tab=project_settings`}>Project settings → Shopify</Link>
-                        </>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {(shopifyStatus?.granted_scopes || []).length > 0 ? (
-                    <div className={styles.muted} style={{ fontSize: 11 }}>
-                      Token: {(shopifyStatus?.granted_scopes || []).map((s) => (
-                        <code key={s} style={{ marginRight: 6 }}>
-                          {s}
-                          {s === "read_products" || s === "write_content" ? " ✓" : ""}
-                        </code>
-                      ))}
-                    </div>
-                  ) : null}
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label className={styles.label}>
-                      Target blog
-                      <select
-                        className={styles.input}
-                        value={shopifyBlogId == null ? "" : String(shopifyBlogId)}
-                        onChange={(e) => setShopifyBlogId(e.target.value ? Number(e.target.value) : null)}
-                        disabled={!shopifyBlogsAvailable}
-                      >
-                        <option value="">Select blog…</option>
-                        {(shopifyCatalog?.blogs || []).map((b) => (
-                          <option key={String(b?.id)} value={String(b?.id || "")}>
-                            {formatShopifyBlogOptionLabel(b)}
-                          </option>
-                        ))}
-                      </select>
-                      <span className={styles.muted} style={{ fontSize: 11, display: "block", marginTop: 6, lineHeight: 1.45 }}>
-                        {SHOPIFY_BLOG_CHANNEL_HELP}
-                      </span>
-                    </label>
-                    <label className={styles.label}>
-                      Post status
-                      <select
-                        className={styles.input}
-                        value={shopifyPublishNow ? "publish" : "draft"}
-                        onChange={(e) => setShopifyPublishNow(e.target.value === "publish")}
-                      >
-                        <option value="draft">Draft on Shopify</option>
-                        <option value="publish">Published (live)</option>
-                      </select>
-                    </label>
-                  </div>
-                  {!shopifyBlogsAvailable ? (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-                      <button
-                        type="button"
-                        className={styles.btnSecondary}
-                        onClick={() => void syncShopifyCatalogFromEditor()}
-                        disabled={shopifyCatalogSyncing || !websiteConnected}
-                      >
-                        {shopifyCatalogSyncing ? "Syncing…" : "Sync blogs from Shopify"}
-                      </button>
-                      <span className={styles.muted} style={{ fontSize: 12 }}>
-                        Requires <code>read_content</code>
-                        {shopifyMissingPublishScopes.includes("write_content") ? " and `write_content` to post" : ""}.
-                      </span>
-                    </div>
-                  ) : null}
-                  {shopifyProductAware ? (
-                    <div className={styles.muted} style={{ fontSize: 12 }}>
-                      Product-aware generation is on — map products when generating from Research or cluster modals.
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <>
-                  {showUpdateWordPress && hasPendingWpChanges ? (
-                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 10 }}>
-                      You have unsaved edits in the editor — Update will push the latest content to WordPress.
-                    </div>
-                  ) : null}
-
-                  {wpMetaLoading && !wpPostTypes.length && !wpCategories.length ? (
-                    <div className={editorStyles.wpMetaLoading} style={{ marginTop: 12 }}>
-                      <div className={editorStyles.imageSpinner} aria-hidden="true" />
-                      <span>Loading WordPress settings…</span>
-                    </div>
-                  ) : null}
-
-                  {wpMetaError && !wpPostTypes.length && !wpCategories.length ? (
-                    <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                      <div className={styles.error} style={{ fontSize: 12 }}>
-                        {wpMetaError}
-                      </div>
-                      <button
-                        className={styles.btnSecondary}
-                        type="button"
-                        onClick={() => void ensureWpMetaLoaded({ force: true })}
-                        disabled={wpMetaLoading}
-                      >
-                        Retry WordPress settings
-                      </button>
-                    </div>
-                  ) : null}
-
-                  {!wpMetaLoading && !wpMetaError && !wpPostTypes.length && !wpCategories.length && websiteConnected ? (
-                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 10 }}>
-                      Using project defaults for post type and categories until WordPress settings load.
-                    </div>
-                  ) : null}
-
-                  {wpPostTypes.length || wpCategories.length ? (
-                    <>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 12 }}>
-                        <label className={styles.label}>
-                          Post type
-                          <select className={styles.input} value={wpPostType} onChange={(e) => setWpPostType(e.target.value)} disabled={editorLocked}>
-                            <option value="posts">Posts</option>
-                            {wpPostTypes
-                              .filter((t) => t.rest_base && t.rest_base !== "posts")
-                              .map((t) => (
-                                <option key={t.rest_base} value={t.rest_base}>
-                                  {t.name || t.rest_base}
-                                </option>
-                              ))}
-                          </select>
-                        </label>
-
-                        <label className={styles.label}>
-                          Status
-                          <select className={styles.input} value={wpStatus} onChange={(e) => setWpStatus(e.target.value as "draft" | "publish")} disabled={editorLocked}>
-                            <option value="draft">Draft</option>
-                            <option value="publish">Publish</option>
-                          </select>
-                        </label>
-                      </div>
-
-                      <label className={styles.label} style={{ marginTop: 10 }}>
-                        Categories
-                        <select
-                          className={styles.input}
-                          multiple
-                          value={wpCategoryIds.map(String)}
-                          onChange={(e) => {
-                            const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
-                            setWpCategoryIds(ids);
-                          }}
-                          style={{ minHeight: 80 }}
-                          disabled={editorLocked}
-                        >
-                          {wpCategories.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name}
-                            </option>
-                          ))}
-                        </select>
-                        <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                          Hold Cmd/Ctrl to select multiple categories.
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Shopify settings</h3>
+                      {shopifyLink ? (
+                        <div className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 8 }}>
+                          Live: <a href={shopifyLink} target="_blank" rel="noreferrer" style={{ color: "rgba(217,119,87,0.95)" }}>{shopifyLink}</a>
                         </div>
-                      </label>
-                    </>
+                      ) : null}
+                      <div className={styles.muted} style={{ fontSize: 12 }}>
+                        Store: <strong>{(projectSettings?.shopify_shop || shopifyStatus?.shop || "Not set").toString()}</strong>
+                        {" · "}<strong>{websiteConnected ? "Connected" : "Not connected"}</strong>
+                      </div>
+                      {shopifyStatus?.setup_hint ? (
+                        <div style={{ fontSize: 12, lineHeight: 1.5, padding: "10px 12px", borderRadius: 8, border: "1px solid color-mix(in oklab, #e6b422, transparent 45%)", background: "color-mix(in oklab, #e6b422 8%, transparent)", marginTop: 8 }}>
+                          {shopifyStatus.setup_hint}
+                          {shopifyStatus.needs_reauthorize ? (<>{" "}<Link href={`/projects/${params.projectId}?tab=project_settings`}>Project settings → Shopify</Link></>) : null}
+                        </div>
+                      ) : null}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                        <label className={styles.label}>
+                          Target blog
+                          <select className={styles.input} value={shopifyBlogId == null ? "" : String(shopifyBlogId)} onChange={(e) => setShopifyBlogId(e.target.value ? Number(e.target.value) : null)} disabled={!shopifyBlogsAvailable}>
+                            <option value="">Select blog…</option>
+                            {(shopifyCatalog?.blogs || []).map((b) => (<option key={String(b?.id)} value={String(b?.id || "")}>{formatShopifyBlogOptionLabel(b)}</option>))}
+                          </select>
+                          <span className={styles.muted} style={{ fontSize: 11, display: "block", marginTop: 6, lineHeight: 1.45 }}>{SHOPIFY_BLOG_CHANNEL_HELP}</span>
+                        </label>
+                        <label className={styles.label}>
+                          Post status
+                          <select className={styles.input} value={shopifyPublishNow ? "publish" : "draft"} onChange={(e) => setShopifyPublishNow(e.target.value === "publish")}>
+                            <option value="draft">Draft on Shopify</option>
+                            <option value="publish">Published (live)</option>
+                          </select>
+                        </label>
+                      </div>
+                      {!shopifyBlogsAvailable ? (
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 10 }}>
+                          <button type="button" className={styles.btnSecondary} onClick={() => void syncShopifyCatalogFromEditor()} disabled={shopifyCatalogSyncing || !websiteConnected}>
+                            {shopifyCatalogSyncing ? "Syncing…" : "Sync blogs from Shopify"}
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
                   ) : (
-                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 12 }}>
-                      Publishing will use defaults unless you load WordPress settings.
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>WordPress settings</h3>
+                      {showUpdateWordPress && hasPendingWpChanges ? (
+                        <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10 }}>You have unsaved edits. Update will push the latest content to WordPress.</div>
+                      ) : null}
+                      {wpMetaLoading && !wpPostTypes.length && !wpCategories.length ? (
+                        <div className={editorStyles.wpMetaLoading}>
+                          <div className={editorStyles.imageSpinner} aria-hidden="true" />
+                          <span>Loading WordPress settings…</span>
+                        </div>
+                      ) : null}
+                      {wpMetaError && !wpPostTypes.length && !wpCategories.length ? (
+                        <div style={{ display: "grid", gap: 8 }}>
+                          <div className={styles.error} style={{ fontSize: 12 }}>{wpMetaError}</div>
+                          <button className={styles.btnSecondary} type="button" onClick={() => void ensureWpMetaLoaded({ force: true })} disabled={wpMetaLoading}>Retry</button>
+                        </div>
+                      ) : null}
+                      {!wpMetaLoading && !wpMetaError && !wpPostTypes.length && !wpCategories.length && websiteConnected ? (
+                        <div className={styles.muted} style={{ fontSize: 12 }}>Using project defaults until settings load.</div>
+                      ) : null}
+                      {wpPostTypes.length || wpCategories.length ? (
+                        <>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                            <label className={styles.label}>
+                              Post type
+                              <select className={styles.input} value={wpPostType} onChange={(e) => setWpPostType(e.target.value)} disabled={editorLocked}>
+                                <option value="posts">Posts</option>
+                                {wpPostTypes.filter((t) => t.rest_base && t.rest_base !== "posts").map((t) => (<option key={t.rest_base} value={t.rest_base}>{t.name || t.rest_base}</option>))}
+                              </select>
+                            </label>
+                            <label className={styles.label}>
+                              Status
+                              <select className={styles.input} value={wpStatus} onChange={(e) => setWpStatus(e.target.value as "draft" | "publish")} disabled={editorLocked}>
+                                <option value="draft">Draft</option>
+                                <option value="publish">Publish</option>
+                              </select>
+                            </label>
+                          </div>
+                          <label className={styles.label} style={{ marginTop: 10 }}>
+                            Categories
+                            <select className={styles.input} multiple value={wpCategoryIds.map(String)} onChange={(e) => { const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n)); setWpCategoryIds(ids); }} style={{ minHeight: 80 }} disabled={editorLocked}>
+                              {wpCategories.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
+                            </select>
+                            <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>Hold Cmd/Ctrl to select multiple.</div>
+                          </label>
+                        </>
+                      ) : (
+                        <div className={styles.muted} style={{ fontSize: 12 }}>Publishing will use defaults unless you load WordPress settings.</div>
+                      )}
                     </div>
                   )}
                 </>
-              )}
+              ) : null}
+
+              {/* ── AI Tools tab ── */}
+              {contextTab === "ai" ? (
+                contentLoading ? <ArticleEditorSkeleton /> : (
+                  <>
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Prompts</h3>
+                      {!editorLocked && !writingPrompts && !imagePrompts ? (
+                        <div style={{ display: "grid", gap: 8 }}>
+                          <button className={styles.btnSecondary} type="button" onClick={ensurePromptsLoaded} disabled={promptsLoading}>
+                            {promptsLoading ? "Loading prompts…" : "Load prompts"}
+                          </button>
+                          <div className={styles.muted} style={{ fontSize: 12 }}>Loaded on demand to keep this page fast.</div>
+                        </div>
+                      ) : (
+                        <>
+                          <label className={styles.label}>
+                            Writing prompt
+                            <select className={styles.input} value={writingPromptId} onChange={(e) => setWritingPromptId(e.target.value)} disabled={editorLocked}>
+                              <option value="">Project default</option>
+                              {(writingPrompts?.items || []).map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+                            </select>
+                          </label>
+                          <label className={styles.label}>
+                            Image prompt
+                            <select className={styles.input} value={imagePromptId} onChange={(e) => setImagePromptId(e.target.value)} disabled={editorLocked}>
+                              <option value="">Project default</option>
+                              {(imagePrompts?.items || []).map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+                            </select>
+                          </label>
+                        </>
+                      )}
+                    </div>
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Generate</h3>
+                      {isShopifyProject ? (
+                        <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "0 0 10px" }}>
+                          {hasGeneratedContent
+                            ? <>Use <strong>Regenerate</strong> to apply the latest guardrails and optionally remap active products.</>
+                            : <>Click <strong>Generate</strong> to choose active products to weave into content.</>}
+                        </p>
+                      ) : isWordPressProject ? (
+                        <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "0 0 10px" }}>
+                          {hasGeneratedContent
+                            ? <>Use <strong>Regenerate</strong> to apply the latest guardrails and optionally remap synced pages.</>
+                            : <>Click <strong>Generate</strong> to map posts from your site map for internal links.</>}
+                        </p>
+                      ) : hasGeneratedContent ? (
+                        <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.45, margin: "0 0 10px" }}>
+                          <strong>Regenerate</strong> replaces this draft with new content using the latest human-writing guardrails.
+                        </p>
+                      ) : null}
+                      <div className={editorStyles.fieldActions} style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+                        <button className={styles.button} type="button" onClick={() => void generate()} disabled={editorLocked}
+                          title={hasGeneratedContent ? "Replace article with a new draft" : "Generate article content"}>
+                          {hasGeneratedContent ? "Regenerate" : "Generate"}
+                        </button>
+                        <button className={styles.button} type="button" onClick={save} disabled={editorLocked}>Save</button>
+                      </div>
+                    </div>
+                  </>
+                )
+              ) : null}
+
+              {/* ── Settings tab ── */}
+              {contextTab === "settings" ? (
+                <div className={editorStyles.panelSection}>
+                  <h3 className={editorStyles.panelSectionTitle}>Article settings</h3>
+                  <div className={styles.muted} style={{ fontSize: 13, lineHeight: 1.55 }}>
+                    Slug, canonical URL, schema markup, and advanced metadata settings will appear here in a future update.
+                  </div>
+                </div>
+              ) : null}
+
             </div>
           </div>
-          </div>
-        </section>
+        </div>
 
         {notice ? (
           <div className={editorStyles.toast} role="status" aria-live="polite">
             <div className={editorStyles.toastInner}>
               <span className={editorStyles.toastText}>{noticeWithoutUrl(notice)}</span>
-              <button
-                type="button"
-                className={editorStyles.toastClose}
-                aria-label="Dismiss"
-                onClick={() => setNotice(null)}
-              >
-                ×
-              </button>
+              <button type="button" className={editorStyles.toastClose} aria-label="Dismiss" onClick={() => setNotice(null)}>×</button>
             </div>
           </div>
         ) : null}
