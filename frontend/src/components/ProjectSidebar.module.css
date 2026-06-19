@@ -1,0 +1,141 @@
+/* ProjectSidebar — self-contained sidebar layout (container only).
+   Internal elements (navItem, sidebarBrand, etc.) use page.module.css classes. */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  box-sizing: border-box;
+  border-right: 1px solid var(--aa-hairline);
+  background: #0a0a0e;
+  padding: 16px 14px;
+  width: 100%;
+  min-height: 0;
+  height: 100dvh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.06) transparent;
+  flex-shrink: 0;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+}
+
+.overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 10, 14, 0.45);
+  z-index: var(--z-modal-bg, 300);
+  border: 0;
+  cursor: default;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+/* ── Mobile hamburger button (shown by parent when sidebar is off-canvas) ── */
+
+.mobileToggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--aa-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.mobileToggle:hover {
+  color: var(--aa-ink);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.mobileToggleIcon {
+  width: 18px;
+  height: 18px;
+}
+
+.mobileClose {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aa-muted);
+  cursor: pointer;
+  margin-left: auto;
+  margin-bottom: 8px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.mobileClose:hover {
+  color: var(--aa-ink);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.mobileCloseIcon {
+  width: 18px;
+  height: 18px;
+}
+
+/* ── Responsive: off-canvas below 1024px ── */
+
+@media (max-width: 1024px) {
+  .overlay {
+    display: block;
+  }
+
+  .mobileToggle {
+    display: inline-flex;
+  }
+
+  .mobileClose {
+    display: inline-flex;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100dvh;
+    width: min(300px, 86vw);
+    z-index: var(--z-modal, 400);
+    transform: translateX(-105%);
+    transition: transform 200ms ease;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    box-shadow: 6px 0 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .sidebarOpen {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
+}

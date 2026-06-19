@@ -41,6 +41,8 @@ import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
 import type { MappedWordPressPage } from "@/lib/wordpressPageMapping";
 import { resolveFeaturedImageFileForWordPress } from "@/lib/featuredImageFile";
 import { formatShopifyBlogOptionLabel, SHOPIFY_BLOG_CHANNEL_HELP } from "@/lib/shopifyBlogLabel";
+import { ProjectSidebar, ProjectSidebarStyles } from "@/components/ProjectSidebar";
+import type { ProfilePublic, ProjectPublic } from "@/lib/api";
 
 
 const ArticleRichEditor = dynamic(
@@ -194,6 +196,11 @@ export default function ArticleEditPage() {
   const [errorCanRetry, setErrorCanRetry] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Sidebar state
+  const [sidebarProfile, setSidebarProfile] = useState<ProfilePublic | null>(null);
+  const [sidebarProjects, setSidebarProjects] = useState<Array<{ id: string; name: string }>>([]);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const [article, setArticle] = useState<ArticleDetail | null>(null);
   const [projectSettings, setProjectSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
@@ -361,6 +368,27 @@ export default function ArticleEditPage() {
     observer.observe(hero);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [prof, projs] = await Promise.all([
+          api.profileMe({ skipGlobalLoading: true }).catch(() => null),
+          api.listProjects({ skipGlobalLoading: true }).catch(() => [] as ProjectPublic[]),
+        ]);
+        if (cancelled) return;
+        if (prof) setSidebarProfile(prof);
+        setSidebarProjects(
+          (projs || []).map((p) => ({ id: p.id, name: (p.name || "").trim() })),
+        );
+      } catch {
+        // Non-fatal — sidebar works without this data.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
 
   const isDirty = useMemo(() => {
     if (!editorBaseline) return false;
@@ -1604,9 +1632,48 @@ export default function ArticleEditPage() {
   const articleSlug = useMemo(() => slugFromTitle(title || article?.title || ""), [title, article?.title]);
   const canonicalUrl = wpLink || (projectSettings?.website_url ? `${projectSettings.website_url.replace(/\/$/, "")}/${articleSlug}/` : "");
 
+  const sidebarEmail = (sidebarProfile?.email || "").trim();
+  const sidebarPlan = (sidebarProfile?.subscription_type || "beta").trim() || "beta";
+  const isShopifySidebar = resolveProjectPlatform({ settings: projectSettings, meta: null }) === "shopify";
+  const sidebarHideTabs = [
+    ...(isShopifySidebar ? [] : ["products" as const]),
+    "performance" as const,
+  ];
+
   return (
-    <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
-      <main className={`${styles.main} ${styles.mainWide}`} style={{ padding: 0 }}>
+    <div className={`${styles.page} ${projectsDark.projectsDark} ${editorStyles.editorPage}`}>
+      <div className={editorStyles.editorShell}>
+        <ProjectSidebar
+          projectId={params.projectId}
+          projects={sidebarProjects}
+          email={sidebarEmail}
+          plan={sidebarPlan}
+          activeTab="articles"
+          onTabClick={(tab) => requestNavigation(`/projects/${params.projectId}?tab=${tab}`)}
+          onProjectSwitch={(id) => router.push(`/projects/${id}?tab=articles`)}
+          hideTabs={sidebarHideTabs}
+          mobileOpen={mobileSidebarOpen}
+          onMobileClose={() => setMobileSidebarOpen(false)}
+        />
+        <main className={editorStyles.editorMain}>
+
+        {/* ── Mobile sidebar toggle ── */}
+        <div className={editorStyles.mobileNavRow}>
+          <button
+            type="button"
+            className={ProjectSidebarStyles.mobileToggle}
+            aria-label="Open navigation"
+            aria-haspopup="dialog"
+            onClick={() => setMobileSidebarOpen(true)}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" className={ProjectSidebarStyles.mobileToggleIcon}>
+              <path d="M4 6.5h16M4 12h16M4 17.5h16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+          <span className={editorStyles.mobileNavTitle}>
+            {projectSettings?.name || "Project"}
+          </span>
+        </div>
 
         {/* ── Title hero ── */}
         <div className={editorStyles.titleHero} ref={titleHeroRef}>
@@ -2368,7 +2435,8 @@ export default function ArticleEditPage() {
             </div>
           </div>
         ) : null}
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
