@@ -326,6 +326,7 @@ export default function ArticleEditPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [commandBarVisible, setCommandBarVisible] = useState(false);
   const titleHeroRef = useRef<HTMLDivElement>(null);
+  const editorColRef = useRef<HTMLDivElement>(null);
 
   const isPublishedArticle = articleStatus === "published";
 
@@ -360,10 +361,11 @@ export default function ArticleEditPage() {
 
   useEffect(() => {
     const hero = titleHeroRef.current;
-    if (!hero) return;
+    const root = editorColRef.current;
+    if (!hero || !root) return;
     const observer = new IntersectionObserver(
       ([entry]) => setCommandBarVisible(!entry.isIntersecting),
-      { threshold: 0 },
+      { threshold: 0, root },
     );
     observer.observe(hero);
     return () => observer.disconnect();
@@ -1675,102 +1677,7 @@ export default function ArticleEditPage() {
           </span>
         </div>
 
-        {/* ── Title hero ── */}
-        <div className={editorStyles.titleHero} ref={titleHeroRef}>
-          <button
-            type="button"
-            className={editorStyles.titleBackLink}
-            onClick={() => requestNavigation(`/projects/${params.projectId}?tab=articles`)}
-          >
-            ← Back to Articles
-          </button>
-          <h1 className={editorStyles.titleHeading}>{displayTitle}</h1>
-          <div className={editorStyles.titleMeta}>
-            <span className={editorStyles.statusDot}>
-              <span className={`${editorStyles.statusDotIndicator} ${statusDotClass(article?.status || "")}`} />
-              {article?.status ? article.status.charAt(0).toUpperCase() + article.status.slice(1) : "..."}
-            </span>
-            {isLiveOnWordPress ? (
-              <span className={editorStyles.statusDot}>
-                <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotSynced}`} />
-                {isWpTrashed ? "Trashed" : "Synced"}
-              </span>
-            ) : null}
-            {showUpdateWordPress && hasPendingWpChanges ? (
-              <span className={editorStyles.statusDot}>
-                <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotDraft}`} />
-                Unsynced
-              </span>
-            ) : null}
-            {seoScore.total > 0 ? (
-              <span className={editorStyles.statusDot}>
-                <span className={editorStyles.statusDotIndicator} style={{ background: seoScoreColor }} />
-                SEO {seoScore.total}
-              </span>
-            ) : null}
-            {lastSavedLabel ? (
-              <span className={editorStyles.statusDot}>
-                <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotNeutral}`} />
-                {lastSavedLabel}
-              </span>
-            ) : null}
-          </div>
-        </div>
-
-        {/* ── Sticky command bar (appears on scroll) ── */}
-        <div className={`${editorStyles.commandBar} ${commandBarVisible ? editorStyles.commandBarVisible : ""}`}>
-          <span className={editorStyles.commandBarTitle}>{displayTitle}</span>
-          <div className={editorStyles.commandBarCenter}>
-            <span className={editorStyles.statusDot}>
-              <span className={`${editorStyles.statusDotIndicator} ${statusDotClass(article?.status || "")}`} />
-              {article?.status ? article.status.charAt(0).toUpperCase() + article.status.slice(1) : "..."}
-            </span>
-            {isLiveOnWordPress ? (
-              <span className={editorStyles.statusDot}>
-                <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotSynced}`} />
-                Synced
-              </span>
-            ) : null}
-          </div>
-          <div className={editorStyles.commandBarActions}>
-            {isDirty ? (
-              <button type="button" className={styles.btnSecondary} onClick={save} disabled={editorLocked}>
-                Save draft
-              </button>
-            ) : null}
-            {isShopifyProject ? (
-              <button type="button" className={styles.button} onClick={() => void publishToShopify()} disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}>
-                {shopifyPublishBusy ? "Posting…" : article?.shopify_article_id ? "Update Shopify" : "Publish to Shopify"}
-              </button>
-            ) : showUpdateWordPress && hasPendingWpChanges ? (
-              <button type="button" className={styles.button} onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}>
-                {wpUpdateBusy ? "Updating…" : "Update article"}
-              </button>
-            ) : showPublishWordPress ? (
-              <button type="button" className={styles.button} onClick={publishToLiveSite} disabled={!canPublish || wpPushBusy}>
-                {wpPublishBusy ? "Publishing…" : "Publish"}
-              </button>
-            ) : null}
-          </div>
-        </div>
-
-        {error ? (
-          <div className={`${editorStyles.banner} ${editorStyles.bannerError}`} role="alert">
-            <p className={styles.error} style={{ margin: 0 }}>{error}</p>
-            <div className={editorStyles.bannerActions}>
-              <button type="button" className={styles.button} onClick={() => requestNavigation(`/projects/${params.projectId}?tab=articles`)}>
-                Back to articles
-              </button>
-              {errorCanRetry ? (
-                <button type="button" className={styles.btnSecondary} onClick={() => setLoadAttempt((n) => n + 1)}>
-                  Retry
-                </button>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
-        {/* ── Modals (unchanged, position: fixed) ── */}
+        {/* ── Modals (position: fixed — DOM location doesn't affect rendering) ── */}
 
         {productMapBeforeGenerateOpen ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label={isShopifyProject ? "Map products before generation" : "Map pages before generation"}>
@@ -1972,8 +1879,104 @@ export default function ArticleEditPage() {
         {/* ── Two-column workspace ── */}
         <div className={`${editorStyles.editorLayout} ${sidebarCollapsed ? editorStyles.editorLayoutCollapsed : ""}`}>
 
-          {/* Editor column */}
-          <div className={editorStyles.editorCol}>
+          {/* Editor column — primary scroll container on desktop */}
+          <div className={editorStyles.editorCol} ref={editorColRef}>
+
+            {/* Title hero (scrolls away inside editor column) */}
+            <div className={editorStyles.titleHero} ref={titleHeroRef}>
+              <button
+                type="button"
+                className={editorStyles.titleBackLink}
+                onClick={() => requestNavigation(`/projects/${params.projectId}?tab=articles`)}
+              >
+                ← Back to Articles
+              </button>
+              <h1 className={editorStyles.titleHeading}>{displayTitle}</h1>
+              <div className={editorStyles.titleMeta}>
+                <span className={editorStyles.statusDot}>
+                  <span className={`${editorStyles.statusDotIndicator} ${statusDotClass(article?.status || "")}`} />
+                  {article?.status ? article.status.charAt(0).toUpperCase() + article.status.slice(1) : "..."}
+                </span>
+                {isLiveOnWordPress ? (
+                  <span className={editorStyles.statusDot}>
+                    <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotSynced}`} />
+                    {isWpTrashed ? "Trashed" : "Synced"}
+                  </span>
+                ) : null}
+                {showUpdateWordPress && hasPendingWpChanges ? (
+                  <span className={editorStyles.statusDot}>
+                    <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotDraft}`} />
+                    Unsynced
+                  </span>
+                ) : null}
+                {seoScore.total > 0 ? (
+                  <span className={editorStyles.statusDot}>
+                    <span className={editorStyles.statusDotIndicator} style={{ background: seoScoreColor }} />
+                    SEO {seoScore.total}
+                  </span>
+                ) : null}
+                {lastSavedLabel ? (
+                  <span className={editorStyles.statusDot}>
+                    <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotNeutral}`} />
+                    {lastSavedLabel}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+
+            {/* Sticky command bar (appears when title hero scrolls out) */}
+            <div className={`${editorStyles.commandBar} ${commandBarVisible ? editorStyles.commandBarVisible : ""}`}>
+              <span className={editorStyles.commandBarTitle}>{displayTitle}</span>
+              <div className={editorStyles.commandBarCenter}>
+                <span className={editorStyles.statusDot}>
+                  <span className={`${editorStyles.statusDotIndicator} ${statusDotClass(article?.status || "")}`} />
+                  {article?.status ? article.status.charAt(0).toUpperCase() + article.status.slice(1) : "..."}
+                </span>
+                {isLiveOnWordPress ? (
+                  <span className={editorStyles.statusDot}>
+                    <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotSynced}`} />
+                    Synced
+                  </span>
+                ) : null}
+              </div>
+              <div className={editorStyles.commandBarActions}>
+                {isDirty ? (
+                  <button type="button" className={styles.btnSecondary} onClick={save} disabled={editorLocked}>
+                    Save draft
+                  </button>
+                ) : null}
+                {isShopifyProject ? (
+                  <button type="button" className={styles.button} onClick={() => void publishToShopify()} disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}>
+                    {shopifyPublishBusy ? "Posting…" : article?.shopify_article_id ? "Update Shopify" : "Publish to Shopify"}
+                  </button>
+                ) : showUpdateWordPress && hasPendingWpChanges ? (
+                  <button type="button" className={styles.button} onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}>
+                    {wpUpdateBusy ? "Updating…" : "Update article"}
+                  </button>
+                ) : showPublishWordPress ? (
+                  <button type="button" className={styles.button} onClick={publishToLiveSite} disabled={!canPublish || wpPushBusy}>
+                    {wpPublishBusy ? "Publishing…" : "Publish"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            {error ? (
+              <div className={`${editorStyles.banner} ${editorStyles.bannerError}`} role="alert">
+                <p className={styles.error} style={{ margin: 0 }}>{error}</p>
+                <div className={editorStyles.bannerActions}>
+                  <button type="button" className={styles.button} onClick={() => requestNavigation(`/projects/${params.projectId}?tab=articles`)}>
+                    Back to articles
+                  </button>
+                  {errorCanRetry ? (
+                    <button type="button" className={styles.btnSecondary} onClick={() => setLoadAttempt((n) => n + 1)}>
+                      Retry
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
             <div className={editorStyles.editorColInner}>
               <div className={editorStyles.editorSurface}>
                 <div className={editorStyles.editorBody}>
