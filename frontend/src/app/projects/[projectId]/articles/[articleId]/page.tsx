@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import styles from "../../../../page.module.css";
 import editorStyles from "./articleEditor.module.css";
@@ -18,6 +18,7 @@ import {
   invalidateArticleDetailCache,
   PromptListResponse,
 } from "@/lib/api";
+import { activeBlockFormat, BLOCK_FORMAT_OPTIONS } from "@/components/ArticleRichEditor";
 import { ArticleEditorSkeleton } from "@/components/ArticleEditorSkeleton";
 import { ArticleReadonlyBody } from "@/components/ArticleReadonlyBody";
 import { LazyArticleImage } from "@/components/LazyArticleImage";
@@ -53,6 +54,9 @@ const ArticleRichEditor = dynamic(
   },
 );
 
+type TipTapEditor = import("@tiptap/react").Editor;
+type BlockFormat = import("@/components/ArticleRichEditor").BlockFormat;
+
 function kwToString(keywords?: string[] | null) {
   return (keywords || []).filter(Boolean).join(", ");
 }
@@ -63,6 +67,17 @@ function kwFromString(raw: string) {
     .map((s) => s.trim())
     .filter(Boolean)
     .slice(0, 10);
+}
+
+function kwChipsFromString(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function kwChipsToString(chips: string[]): string {
+  return chips.join(", ");
 }
 
 const META_TITLE_MAX = 60;
@@ -327,6 +342,24 @@ export default function ArticleEditPage() {
   const [commandBarVisible, setCommandBarVisible] = useState(false);
   const titleHeroRef = useRef<HTMLDivElement>(null);
   const editorColRef = useRef<HTMLDivElement>(null);
+  const [tiptapEditor, setTiptapEditor] = useState<TipTapEditor | null>(null);
+  const [blockFormat, setBlockFormat] = useState<BlockFormat>("paragraph");
+  const [kwInput, setKwInput] = useState("");
+
+  const onEditorReady = useCallback((ed: TipTapEditor) => {
+    setTiptapEditor(ed);
+  }, []);
+
+  useEffect(() => {
+    if (!tiptapEditor) return;
+    const handler = () => setBlockFormat(activeBlockFormat(tiptapEditor));
+    tiptapEditor.on("selectionUpdate", handler);
+    tiptapEditor.on("update", handler);
+    return () => {
+      tiptapEditor.off("selectionUpdate", handler);
+      tiptapEditor.off("update", handler);
+    };
+  }, [tiptapEditor]);
 
   const isPublishedArticle = articleStatus === "published";
 
@@ -1922,6 +1955,30 @@ export default function ArticleEditPage() {
                   </span>
                 ) : null}
               </div>
+
+              {/* Metrics chips — directly below title */}
+              <div className={editorStyles.metricsChips}>
+                <span className={editorStyles.metricsChip}>
+                  {editorMetrics.words.toLocaleString()} Words
+                </span>
+                <span className={editorStyles.metricsChip}>
+                  {editorMetrics.chars.toLocaleString()} Characters
+                </span>
+                <span className={editorStyles.metricsChip}>
+                  {editorMetrics.readingTime} Read
+                </span>
+                <span className={editorStyles.metricsChip}>
+                  {editorMetrics.headings} Headings
+                </span>
+                {focus ? (
+                  <span className={editorStyles.metricsChip}>
+                    Focus: {focus}
+                  </span>
+                ) : null}
+                <span className={`${editorStyles.metricsChip} ${seoScore.total >= 70 ? editorStyles.metricsChipGood : seoScore.total >= 40 ? editorStyles.metricsChipWarn : editorStyles.metricsChipBad}`}>
+                  SEO Score: {seoScore.total}
+                </span>
+              </div>
             </div>
 
             {/* Sticky command bar (appears when title hero scrolls out) */}
@@ -1961,6 +2018,48 @@ export default function ArticleEditPage() {
               </div>
             </div>
 
+            {/* Sticky editor toolbar — always visible during editing */}
+            {!editorLocked && !bodyLoading && tiptapEditor ? (
+              <div className={`${editorStyles.stickyToolbar} ${commandBarVisible ? editorStyles.stickyToolbarShifted : ""}`} role="toolbar" aria-label="Formatting">
+                <label className={styles.articleRichFormatLabel}>
+                  <span className={styles.srOnly}>Text style</span>
+                  <select
+                    className={styles.articleRichFormatSelect}
+                    value={blockFormat}
+                    onChange={(e) => {
+                      const next = e.target.value as BlockFormat;
+                      setBlockFormat(next);
+                      const chain = tiptapEditor.chain().focus();
+                      if (next === "paragraph") { chain.setParagraph().run(); return; }
+                      const level = Number(next.replace("heading-", "")) as 1 | 2 | 3 | 4 | 5 | 6;
+                      chain.setHeading({ level }).run();
+                    }}
+                    title="Text style"
+                    aria-label="Text style"
+                  >
+                    {BLOCK_FORMAT_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().toggleBold().run()} aria-pressed={tiptapEditor.isActive("bold")} title="Bold"><strong>B</strong></button>
+                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().toggleItalic().run()} aria-pressed={tiptapEditor.isActive("italic")} title="Italic"><em>I</em></button>
+                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().toggleBulletList().run()} aria-pressed={tiptapEditor.isActive("bulletList")} title="Bullet list">• List</button>
+                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().toggleOrderedList().run()} aria-pressed={tiptapEditor.isActive("orderedList")} title="Numbered list">1. List</button>
+                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().toggleBlockquote().run()} aria-pressed={tiptapEditor.isActive("blockquote")} title="Quote">&ldquo;&rdquo;</button>
+                <button type="button" className={styles.articleRichToolBtn} onClick={() => {
+                  const prev = tiptapEditor.getAttributes("link").href as string | undefined;
+                  const url = window.prompt("Link URL", prev || "https://");
+                  if (url === null) return;
+                  const trimmed = url.trim();
+                  if (trimmed === "") { tiptapEditor.chain().focus().extendMarkRange("link").unsetLink().run(); return; }
+                  tiptapEditor.chain().focus().extendMarkRange("link").setLink({ href: trimmed }).run();
+                }} aria-pressed={tiptapEditor.isActive("link")} title="Link">Link</button>
+                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().undo().run()} title="Undo">Undo</button>
+                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().redo().run()} title="Redo">Redo</button>
+              </div>
+            ) : null}
+
             {error ? (
               <div className={`${editorStyles.banner} ${editorStyles.bannerError}`} role="alert">
                 <p className={styles.error} style={{ margin: 0 }}>{error}</p>
@@ -1985,7 +2084,7 @@ export default function ArticleEditPage() {
                   ) : editorLocked ? (
                     <ArticleReadonlyBody key={editorRevision} markdown={body} />
                   ) : (
-                    <ArticleRichEditor key={editorRevision} contentRevision={editorRevision} value={body} onChange={setBody} />
+                    <ArticleRichEditor key={editorRevision} contentRevision={editorRevision} value={body} onChange={setBody} onEditorReady={onEditorReady} />
                   )}
                 </div>
                 {showUpdateWordPress && hasPendingWpChanges ? (
@@ -1995,48 +2094,14 @@ export default function ArticleEditPage() {
                   </div>
                 ) : null}
               </div>
-
-              {/* Metrics footer */}
-              <div className={editorStyles.metricsBar}>
-                <span className={editorStyles.metricsItem}>
-                  <span className={editorStyles.metricsValue}>{editorMetrics.words.toLocaleString()}</span> words
-                </span>
-                <span className={editorStyles.metricsSep} />
-                <span className={editorStyles.metricsItem}>
-                  <span className={editorStyles.metricsValue}>{editorMetrics.chars.toLocaleString()}</span> chars
-                </span>
-                <span className={editorStyles.metricsSep} />
-                <span className={editorStyles.metricsItem}>
-                  <span className={editorStyles.metricsValue}>{editorMetrics.readingTime}</span> read
-                </span>
-                <span className={editorStyles.metricsSep} />
-                <span className={editorStyles.metricsItem}>
-                  <span className={editorStyles.metricsValue}>{editorMetrics.headings}</span> headings
-                </span>
-                {focus ? (
-                  <>
-                    <span className={editorStyles.metricsSep} />
-                    <span className={editorStyles.metricsItem}>
-                      Focus: <span className={editorStyles.metricsValue}>{focus}</span>
-                    </span>
-                  </>
-                ) : null}
-                <span className={editorStyles.metricsSep} />
-                <span className={editorStyles.metricsItem}>
-                  SEO <span style={{ color: seoScoreColor, fontWeight: 700 }}>{seoScore.total}</span>
-                </span>
-                {lastSavedLabel ? (
-                  <span className={editorStyles.metricsSaved}>Saved {lastSavedLabel}</span>
-                ) : null}
-              </div>
             </div>
           </div>
 
           {/* Context panel */}
-          <div className={editorStyles.contextPanel}>
+          <div className={`${editorStyles.contextPanel} ${sidebarCollapsed ? editorStyles.contextPanelCollapsed : ""}`}>
             <button
               type="button"
-              className={editorStyles.panelCollapseBtn}
+              className={`${editorStyles.panelCollapseBtn} ${sidebarCollapsed ? editorStyles.panelCollapseBtnVisible : ""}`}
               onClick={() => setSidebarCollapsed((v) => !v)}
               aria-label={sidebarCollapsed ? "Expand panel" : "Collapse panel"}
             >
@@ -2096,45 +2161,99 @@ export default function ArticleEditPage() {
 
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Title and focus</h3>
-                      <label className={styles.label}>
+                      <label className={editorStyles.seoFieldLabel}>
                         Article title
-                        <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
+                        <input className={editorStyles.seoInput} value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
                       </label>
-                      <label className={styles.label} style={{ marginTop: 10 }}>
+                      <label className={editorStyles.seoFieldLabel} style={{ marginTop: 10 }}>
                         Focus keyphrase
-                        <input className={styles.input} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. FM contract handover" disabled={editorLocked} />
+                        <input className={editorStyles.seoInput} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. FM contract handover" disabled={editorLocked} />
                       </label>
                     </div>
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Meta title</h3>
-                      <input className={styles.input} value={metaTitle} onChange={(e) => setMetaTitle(clampChars(e.target.value, META_TITLE_MAX))} disabled={editorLocked} />
-                      <div className={styles.seoMeterRow} aria-label="Meta title character meter">
-                        <div className={styles.seoMeterMeta}>
-                          <span className={styles.muted}>{metaTitle.length}/{META_TITLE_MAX}</span>
-                          <span className={seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? styles.seoOk : styles.seoWarn}>{seoMeter(metaTitle.length, META_TITLE_MAX).label}</span>
-                        </div>
-                        <div className={styles.seoMeterTrack}>
-                          <div className={seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? styles.seoMeterFillOk : styles.seoMeterFillWarn} style={{ width: `${seoMeter(metaTitle.length, META_TITLE_MAX).percent}%` }} />
-                        </div>
+                      <input className={editorStyles.seoInput} value={metaTitle} onChange={(e) => setMetaTitle(clampChars(e.target.value, META_TITLE_MAX))} disabled={editorLocked} />
+                      <div className={editorStyles.seoCharCounter}>
+                        <span>{metaTitle.length} / {META_TITLE_MAX}</span>
+                        <span className={seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? editorStyles.seoCharGood : editorStyles.seoCharWarn}>
+                          {seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? "✓" : "⚠"} {seoMeter(metaTitle.length, META_TITLE_MAX).label}
+                        </span>
                       </div>
                     </div>
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Meta description</h3>
-                      <input className={styles.input} value={metaDesc} onChange={(e) => setMetaDesc(clampChars(e.target.value, META_DESC_MAX))} disabled={editorLocked} />
-                      <div className={styles.seoMeterRow} aria-label="Meta description character meter">
-                        <div className={styles.seoMeterMeta}>
-                          <span className={styles.muted}>{metaDesc.length}/{META_DESC_MAX}</span>
-                          <span className={seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? styles.seoOk : styles.seoWarn}>{seoMeter(metaDesc.length, META_DESC_MAX).label}</span>
-                        </div>
-                        <div className={styles.seoMeterTrack}>
-                          <div className={seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? styles.seoMeterFillOk : styles.seoMeterFillWarn} style={{ width: `${seoMeter(metaDesc.length, META_DESC_MAX).percent}%` }} />
-                        </div>
+                      <textarea className={editorStyles.seoTextarea} value={metaDesc} onChange={(e) => setMetaDesc(clampChars(e.target.value, META_DESC_MAX))} disabled={editorLocked} rows={3} />
+                      <div className={editorStyles.seoCharCounter}>
+                        <span>{metaDesc.length} / {META_DESC_MAX}</span>
+                        <span className={seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? editorStyles.seoCharGood : editorStyles.seoCharWarn}>
+                          {seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? "✓" : "⚠"} {seoMeter(metaDesc.length, META_DESC_MAX).label}
+                        </span>
                       </div>
                     </div>
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Targeting keywords</h3>
-                      <input className={styles.input} value={keywords} onChange={(e) => setKeywords(e.target.value)} disabled={editorLocked} placeholder="keyword one, keyword two…" />
-                      <div className={styles.muted} style={{ fontSize: 11, marginTop: 4 }}>Comma-separated. 5-10 recommended.</div>
+                      <div className={editorStyles.kwChipWrap}>
+                        {kwChipsFromString(keywords).map((kw, i) => (
+                          <span key={`${kw}-${i}`} className={editorStyles.kwChip}>
+                            {kw}
+                            {!editorLocked ? (
+                              <button
+                                type="button"
+                                className={editorStyles.kwChipRemove}
+                                aria-label={`Remove ${kw}`}
+                                onClick={() => {
+                                  const chips = kwChipsFromString(keywords);
+                                  chips.splice(i, 1);
+                                  setKeywords(kwChipsToString(chips));
+                                }}
+                              >×</button>
+                            ) : null}
+                          </span>
+                        ))}
+                        {!editorLocked ? (
+                          <input
+                            className={editorStyles.kwChipInput}
+                            value={kwInput}
+                            onChange={(e) => setKwInput(e.target.value)}
+                            onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+                              if (e.key === "Enter" || e.key === ",") {
+                                e.preventDefault();
+                                const val = kwInput.trim().replace(/,$/,"");
+                                if (!val) return;
+                                const existing = kwChipsFromString(keywords);
+                                const newChips = val.split(",").map(s => s.trim()).filter(Boolean);
+                                setKeywords(kwChipsToString([...existing, ...newChips]));
+                                setKwInput("");
+                              }
+                              if (e.key === "Backspace" && !kwInput) {
+                                const chips = kwChipsFromString(keywords);
+                                if (chips.length) {
+                                  chips.pop();
+                                  setKeywords(kwChipsToString(chips));
+                                }
+                              }
+                            }}
+                            onPaste={(e) => {
+                              const paste = e.clipboardData.getData("text");
+                              if (paste.includes(",")) {
+                                e.preventDefault();
+                                const existing = kwChipsFromString(keywords);
+                                const newChips = paste.split(",").map(s => s.trim()).filter(Boolean);
+                                setKeywords(kwChipsToString([...existing, ...newChips]));
+                                setKwInput("");
+                              }
+                            }}
+                            placeholder={kwChipsFromString(keywords).length ? "+ Add" : "Add keyword…"}
+                            disabled={editorLocked}
+                          />
+                        ) : null}
+                      </div>
+                      <div className={editorStyles.seoCharCounter} style={{ marginTop: 4 }}>
+                        <span>{kwChipsFromString(keywords).length} keywords</span>
+                        <span className={kwChipsFromString(keywords).length >= 5 ? editorStyles.seoCharGood : editorStyles.seoCharWarn}>
+                          {kwChipsFromString(keywords).length >= 5 ? "✓ Good" : "5-10 recommended"}
+                        </span>
+                      </div>
                     </div>
                   </>
                 )
