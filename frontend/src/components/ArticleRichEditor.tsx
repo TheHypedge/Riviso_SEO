@@ -46,7 +46,7 @@ export type ArticleRichEditorProps = {
   onChange: (markdown: string) => void;
   placeholder?: string;
   contentRevision?: number;
-  onEditorReady?: (editor: Editor) => void;
+  onEditorReady?: (editor: Editor, normalizedBody: string) => void;
 };
 
 export function ArticleRichEditor({ value, onChange, placeholder, contentRevision = 0, onEditorReady }: ArticleRichEditorProps) {
@@ -108,7 +108,9 @@ export function ArticleRichEditor({ value, onChange, placeholder, contentRevisio
   useEffect(() => {
     if (editor && onEditorReady && !editorReadyFired.current) {
       editorReadyFired.current = true;
-      onEditorReady(editor);
+      const normalizedMd = htmlToMarkdown(editor.getHTML());
+      lastSentMd.current = normalizedMd;
+      onEditorReady(editor, normalizedMd);
     }
   }, [editor, onEditorReady]);
 

@@ -405,6 +405,7 @@ def _to_public(a: dict) -> ArticlePublic:
         shopify_blog_id=a.get("shopify_blog_id"),
         shopify_article_id=a.get("shopify_article_id"),
         shopify_link=(a.get("shopify_link") or "").strip() or None,
+        wp_category_ids=(a.get("wp_category_ids") or ""),
     )
 
 
@@ -2034,7 +2035,7 @@ async def _persist_schedule_row(
     # Use patch_article_fields ($set-only, no read) instead of update_article_fields
     # (find+replace) to avoid holding _db_write_lock across a round-trip and
     # colliding with the scheduler's background writes.
-    cat_raw = (proj.get("wp_category_ids") or "").strip()
+    cat_raw = (article.get("wp_category_ids") or "").strip() or (proj.get("wp_category_ids") or "").strip()
     _art_patch = getattr(st, "patch_article_fields", None) or st.update_article_fields
     if not skip_article_update:
         await run_sync(
@@ -2512,6 +2513,8 @@ async def publish_to_live_site(
     rest_base = (post_type or "").strip() or "posts"
 
     cat_ids = _parse_wp_category_ids(category_ids)
+    if not cat_ids:
+        cat_ids = _parse_wp_category_ids((a.get("wp_category_ids") or "").strip())
 
     title = (a.get("title") or "").strip()
     article_md = (a.get("article") or "").strip()
@@ -2989,6 +2992,8 @@ async def update_wordpress_post(
     # fresh publishes.
     rest_base = (a.get("wp_rest_base") or "posts").strip() or "posts"
     cat_ids = _parse_wp_category_ids(category_ids)
+    if not cat_ids:
+        cat_ids = _parse_wp_category_ids((a.get("wp_category_ids") or "").strip())
 
     title = (a.get("title") or "").strip()
     article_md = (a.get("article") or "").strip()

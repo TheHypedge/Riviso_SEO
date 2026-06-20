@@ -346,8 +346,10 @@ export default function ArticleEditPage() {
   const [blockFormat, setBlockFormat] = useState<BlockFormat>("paragraph");
   const [kwInput, setKwInput] = useState("");
 
-  const onEditorReady = useCallback((ed: TipTapEditor) => {
+  const onEditorReady = useCallback((ed: TipTapEditor, normalizedBody: string) => {
     setTiptapEditor(ed);
+    setBody(normalizedBody);
+    setEditorBaseline((prev) => prev ? { ...prev, body: normalizedBody } : prev);
   }, []);
 
   useEffect(() => {
@@ -938,7 +940,8 @@ export default function ArticleEditPage() {
         setWpPostType((ps.default_wp_rest_base || "posts") as string);
         if (!isLiveOnWordPress) {
           setWpStatus(((ps.default_wp_status || "draft") as "draft" | "publish"));
-          setWpCategoryIds((ps.default_wp_category_ids || []) as number[]);
+          const articleCats = (article?.wp_category_ids || "").split(",").map(Number).filter(n => Number.isFinite(n) && n > 0);
+          setWpCategoryIds(articleCats.length ? articleCats : (ps.default_wp_category_ids || []) as number[]);
         }
       }
       if (typesRes.status === "rejected" && catsRes.status === "rejected") {

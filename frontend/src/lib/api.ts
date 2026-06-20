@@ -748,6 +748,7 @@ export type ArticlePublic = {
   shopify_blog_id?: number | null;
   shopify_article_id?: number | null;
   shopify_link?: string | null;
+  wp_category_ids?: string | null;
 };
 
 export type ArticleListPage = {
