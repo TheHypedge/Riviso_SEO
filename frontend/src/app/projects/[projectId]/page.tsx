@@ -784,7 +784,7 @@ export default function ProjectPage() {
 
   async function refreshArticleQuota() {
     try {
-      const quota = await api.articleQuota(projectId);
+      const quota = await api.articleQuota(projectId, { fresh: true });
       setArticleQuota(quota);
       return quota;
     } catch {
@@ -2094,7 +2094,7 @@ export default function ProjectPage() {
       }
 
       const [sRes, gsRes, pmRes] = await Promise.allSettled([
-        api.getProjectSettings(projectId, { fresh: true, skipGlobalLoading: true }),
+        api.getProjectSettings(projectId, { skipGlobalLoading: true }),
         api.gscProjectStatus(projectId),
         api.getProject(projectId, { skipGlobalLoading: true }),
       ]);
@@ -2392,7 +2392,7 @@ export default function ProjectPage() {
     if (!projectId) return;
     if (opts.showLoading) setGscLoading(true);
     try {
-      const gs = await api.gscProjectStatus(projectId);
+      const gs = await api.gscProjectStatus(projectId, { fresh: true });
       setGscStatus(gs);
       setGscApiUnavailable(false);
       if ((gs?.property_url || "") !== undefined && gs?.property_url) {
@@ -4713,7 +4713,7 @@ export default function ProjectPage() {
       // Pre-flight: ask the backend how many credits are left before we kick
       // off a request that would otherwise 403 partway through.
       try {
-        const q = await api.articleQuota(projectId);
+        const q = await api.articleQuota(projectId, { fresh: true });
         if (!q.unlimited && (q.max_can_consume_now ?? 0) < pendingCount) {
           setClusterErrorModal({
             title: "Article generation limit reached",
@@ -5191,7 +5191,7 @@ export default function ProjectPage() {
     setCurationPromptModal({ ...m, busy: true });
     const selected = researchResults.filter((r) => m.ideaIds.includes(r.id) && !r.imported);
     try {
-      const q = await api.articleQuota(projectId).catch(() => null);
+      const q = await api.articleQuota(projectId, { fresh: true }).catch(() => null);
       if (q && !q.unlimited && (q.max_can_consume_now ?? 0) < selected.length) {
         setResearchImportMsg(
           `Article generation limit reached. Your plan allows ${q.max_can_consume_now ?? 0} more generation${(q.max_can_consume_now ?? 0) === 1 ? "" : "s"} right now, but ${selected.length} selected idea${selected.length === 1 ? "" : "s"} need generation.`,

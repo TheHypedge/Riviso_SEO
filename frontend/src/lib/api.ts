@@ -1287,6 +1287,12 @@ const _cacheArticleDetail = new Map<string, CacheEntry<ArticleDetail>>();
 const _cacheArticleShell = new Map<string, CacheEntry<ArticleDetail>>();
 const _cacheArticleBody = new Map<string, CacheEntry<{ article: string }>>();
 const _cacheFeaturedImage = new Map<string, CacheEntry<{ image_url: string }>>();
+const _cacheProfileMe = new Map<string, CacheEntry<ProfilePublic>>();
+const _cacheListProjects = new Map<string, CacheEntry<ProjectPublic[]>>();
+const _cacheGetProject = new Map<string, CacheEntry<ProjectPublic>>();
+const _cacheFeatureLimits = new Map<string, CacheEntry<ProjectFeatureLimits>>();
+const _cacheArticleQuota = new Map<string, CacheEntry<ArticleQuota>>();
+const _cacheGscProjectStatus = new Map<string, CacheEntry<ProjectGscStatus>>();
 
 function articleDetailCacheKey(projectId: string, articleId: string) {
   return `${projectId}:${articleId}`;
@@ -1628,7 +1634,21 @@ export const api = {
     return apiFetch<UserPublic>("/api/auth/me", undefined, opts);
   },
   async profileMe(opts?: ApiFetchOptions) {
-    return apiFetch<ProfilePublic>("/api/profile/me", undefined, opts);
+    const key = "_";
+    if (!opts?.fresh && !opts?.bypassClientCache) {
+      const cached = cacheGet(_cacheProfileMe, key, 60_000);
+      if (cached) return await cached;
+    }
+    const p = apiFetch<ProfilePublic>("/api/profile/me", undefined, opts);
+    cacheSetInflight(_cacheProfileMe, key, p);
+    try {
+      const v = await p;
+      cacheSetValue(_cacheProfileMe, key, v);
+      return v;
+    } catch (e) {
+      _cacheProfileMe.delete(key);
+      throw e;
+    }
   },
   async getSubscriptionStatus(opts?: ApiFetchOptions) {
     return apiFetch<SubscriptionStatusPublic>("/api/user/subscription-status", undefined, {
@@ -1638,7 +1658,9 @@ export const api = {
     });
   },
   async updateProfileMe(patch: Partial<{ full_name: string; phone: string; timezone: string }>) {
-    return apiFetch<ProfilePublic>("/api/profile/me", { method: "PATCH", body: JSON.stringify(patch) });
+    const result = await apiFetch<ProfilePublic>("/api/profile/me", { method: "PATCH", body: JSON.stringify(patch) });
+    _cacheProfileMe.delete("_");
+    return result;
   },
   async gscStatus() {
     return apiFetch<GscStatus>("/api/gsc/status");
@@ -1650,16 +1672,34 @@ export const api = {
     return apiFetch<GscSite[]>("/api/gsc/sites");
   },
   async listProjects(opts?: ApiFetchOptions) {
-    return apiFetch<ProjectPublic[]>("/api/projects", undefined, opts);
+    const key = "_";
+    if (!opts?.fresh && !opts?.bypassClientCache) {
+      const cached = cacheGet(_cacheListProjects, key, 60_000);
+      if (cached) return await cached;
+    } else if (opts?.fresh) {
+      _cacheListProjects.delete(key);
+    }
+    const p = apiFetch<ProjectPublic[]>("/api/projects", undefined, opts);
+    cacheSetInflight(_cacheListProjects, key, p);
+    try {
+      const v = await p;
+      cacheSetValue(_cacheListProjects, key, v);
+      return v;
+    } catch (e) {
+      _cacheListProjects.delete(key);
+      throw e;
+    }
   },
   async workspaceOverview(opts?: ApiFetchOptions) {
     return apiFetch<WorkspaceOverviewResponse>("/api/workspace/overview", undefined, opts);
   },
   async createProject(name: string, platform: ProjectPlatform, website_url?: string) {
-    return apiFetch<ProjectPublic>("/api/projects", {
+    const result = await apiFetch<ProjectPublic>("/api/projects", {
       method: "POST",
       body: JSON.stringify({ name, website_url: website_url || null, platform }),
     });
+    _cacheListProjects.delete("_");
+    return result;
   },
 
   async verifyShopifyConnection(
@@ -1851,11 +1891,26 @@ export const api = {
     return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/shopify/disconnect`, { method: "POST" });
   },
   async getProject(projectId: string, opts?: ApiFetchOptions) {
-    return apiFetch<ProjectPublic>(`/api/projects/${projectId}`, undefined, {
+    if (!opts?.fresh && !opts?.bypassClientCache) {
+      const cached = cacheGet(_cacheGetProject, projectId, 30_000);
+      if (cached) return await cached;
+    } else if (opts?.fresh) {
+      _cacheGetProject.delete(projectId);
+    }
+    const p = apiFetch<ProjectPublic>(`/api/projects/${projectId}`, undefined, {
       timeoutMs: META_API_TIMEOUT_MS,
       skipGlobalLoading: true,
       ...opts,
     });
+    cacheSetInflight(_cacheGetProject, projectId, p);
+    try {
+      const v = await p;
+      cacheSetValue(_cacheGetProject, projectId, v);
+      return v;
+    } catch (e) {
+      _cacheGetProject.delete(projectId);
+      throw e;
+    }
   },
   async updateProject(
     projectId: string,
@@ -1882,10 +1937,14 @@ export const api = {
       body: JSON.stringify(patch),
     }, { skipGlobalLoading: true, ...opts });
     invalidateProjectSettingsCache(projectId);
+    _cacheGetProject.delete(projectId);
+    _cacheListProjects.delete("_");
     return updated;
   },
   async deleteProject(projectId: string) {
     await apiFetch<unknown>(`/api/projects/${projectId}`, { method: "DELETE" });
+    _cacheListProjects.delete("_");
+    _cacheGetProject.delete(projectId);
     return { ok: true as const };
   },
   async getProjectSettings(projectId: string, opts?: { fresh?: boolean } & ApiFetchOptions) {
@@ -2919,8 +2978,23 @@ export const api = {
       `/api/projects/${projectId}/articles/${articleId}/gsc/indexing-status`,
     );
   },
-  async gscProjectStatus(projectId: string) {
-    return apiFetch<ProjectGscStatus>(`/api/projects/${projectId}/gsc/status`);
+  async gscProjectStatus(projectId: string, opts?: ApiFetchOptions) {
+    if (!opts?.fresh && !opts?.bypassClientCache) {
+      const cached = cacheGet(_cacheGscProjectStatus, projectId, 30_000);
+      if (cached) return await cached;
+    } else if (opts?.fresh) {
+      _cacheGscProjectStatus.delete(projectId);
+    }
+    const p = apiFetch<ProjectGscStatus>(`/api/projects/${projectId}/gsc/status`, undefined, opts);
+    cacheSetInflight(_cacheGscProjectStatus, projectId, p);
+    try {
+      const v = await p;
+      cacheSetValue(_cacheGscProjectStatus, projectId, v);
+      return v;
+    } catch (e) {
+      _cacheGscProjectStatus.delete(projectId);
+      throw e;
+    }
   },
   async gscProjectConnectUrl(projectId: string, opts?: { origin?: string }) {
     const origin = opts?.origin || (typeof window !== "undefined" ? window.location.origin : "");
@@ -2931,19 +3005,23 @@ export const api = {
     return apiFetch<GscSite[]>(`/api/projects/${projectId}/gsc/sites`);
   },
   async gscProjectDisconnect(projectId: string) {
-    return apiFetch<{ ok: boolean; disconnected_at?: string }>(
+    const result = await apiFetch<{ ok: boolean; disconnected_at?: string }>(
       `/api/projects/${projectId}/gsc/disconnect`,
       { method: "POST" },
     );
+    _cacheGscProjectStatus.delete(projectId);
+    return result;
   },
   async gscProjectSetProperty(
     projectId: string,
     payload: { property_url?: string | null; index_on_publish?: boolean },
   ) {
-    return apiFetch<{ ok: boolean; property_url?: string | null; index_on_publish: boolean }>(
+    const result = await apiFetch<{ ok: boolean; property_url?: string | null; index_on_publish: boolean }>(
       `/api/projects/${projectId}/gsc/property`,
       { method: "POST", body: JSON.stringify(payload) },
     );
+    _cacheGscProjectStatus.delete(projectId);
+    return result;
   },
 
   async gscProjectListSitemaps(projectId: string) {
@@ -3159,10 +3237,40 @@ export const api = {
   },
 
   async articleQuota(projectId: string, opts?: ApiFetchOptions) {
-    return apiFetch<ArticleQuota>(`/api/projects/${projectId}/article-quota`, undefined, opts);
+    if (!opts?.fresh && !opts?.bypassClientCache) {
+      const cached = cacheGet(_cacheArticleQuota, projectId, 30_000);
+      if (cached) return await cached;
+    } else if (opts?.fresh) {
+      _cacheArticleQuota.delete(projectId);
+    }
+    const p = apiFetch<ArticleQuota>(`/api/projects/${projectId}/article-quota`, undefined, opts);
+    cacheSetInflight(_cacheArticleQuota, projectId, p);
+    try {
+      const v = await p;
+      cacheSetValue(_cacheArticleQuota, projectId, v);
+      return v;
+    } catch (e) {
+      _cacheArticleQuota.delete(projectId);
+      throw e;
+    }
   },
   async projectFeatureLimits(projectId: string, opts?: ApiFetchOptions) {
-    return apiFetch<ProjectFeatureLimits>(`/api/projects/${projectId}/feature-limits`, undefined, opts);
+    if (!opts?.fresh && !opts?.bypassClientCache) {
+      const cached = cacheGet(_cacheFeatureLimits, projectId, 30_000);
+      if (cached) return await cached;
+    } else if (opts?.fresh) {
+      _cacheFeatureLimits.delete(projectId);
+    }
+    const p = apiFetch<ProjectFeatureLimits>(`/api/projects/${projectId}/feature-limits`, undefined, opts);
+    cacheSetInflight(_cacheFeatureLimits, projectId, p);
+    try {
+      const v = await p;
+      cacheSetValue(_cacheFeatureLimits, projectId, v);
+      return v;
+    } catch (e) {
+      _cacheFeatureLimits.delete(projectId);
+      throw e;
+    }
   },
 
   // Feature 4 — Smart Refresh (foundations)

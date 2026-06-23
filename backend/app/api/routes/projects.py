@@ -329,7 +329,7 @@ async def create_project(
             "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    proj = st.get_project_listing_by_id(pid) if hasattr(st, "get_project_listing_by_id") else None
     if not proj and hasattr(st, "get_project_access_row"):
         proj = st.get_project_access_row(pid)
     if not proj:
@@ -493,8 +493,8 @@ async def update_project(project_id: str, payload: ProjectUpdate, user: dict = D
     if updates:
         st.update_project_fields(pid, updates)
     proj2 = st.get_project_listing_by_id(pid) if hasattr(st, "get_project_listing_by_id") else None
-    if not proj2:
-        proj2 = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    if not proj2 and hasattr(st, "get_project_access_row"):
+        proj2 = st.get_project_access_row(pid)
     if not proj2:
         raise HTTPException(status_code=404, detail="Not found")
     return _to_public(proj2)
@@ -513,9 +513,7 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
     """
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
-    if not proj and hasattr(st, "get_project_access_row"):
-        proj = st.get_project_access_row(pid)
+    proj = st.get_project_access_row(pid) if hasattr(st, "get_project_access_row") else None
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
@@ -591,9 +589,7 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
     """
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
-    if not proj and hasattr(st, "get_project_access_row"):
-        proj = st.get_project_access_row(pid)
+    proj = st.get_project_access_row(pid) if hasattr(st, "get_project_access_row") else None
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
@@ -727,9 +723,7 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
 async def delete_project(project_id: str, user: dict = Depends(get_current_user)) -> Response:
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
-    if not proj and hasattr(st, "get_project_access_row"):
-        proj = st.get_project_access_row(pid)
+    proj = st.get_project_access_row(pid) if hasattr(st, "get_project_access_row") else None
     if not proj:
         return Response(status_code=204)
     uid = (user.get("id") or "").strip()
