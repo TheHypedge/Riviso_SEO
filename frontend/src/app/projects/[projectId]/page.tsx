@@ -8528,61 +8528,66 @@ export default function ProjectPage() {
                             {articleTitleFor(j.article_id)}
                           </Link>
                           <div className={styles.scheduledActions}>
-                            <button
-                              type="button"
-                              className={styles.miniBtn}
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                void openPostNowConfirm(j);
-                              }}
-                              disabled={
-                                postNowBusy ||
-                                ["posted", "cancelled"].includes(jobState) ||
-                                isOrphanScheduledJob(j)
-                              }
-                              title={
-                                postNowAllowed
-                                  ? "Publish to WordPress now"
-                                  : jobState === "posting"
-                                    ? "Publishing in progress — click for status"
-                                    : "Not available after posted/cancelled"
-                              }
-                            >
-                              Post Now
-                            </button>
-                            {isFailed ? (
-                              <button
-                                type="button"
-                                className={styles.miniBtn}
-                                onClick={() => void retryScheduledPreparation(j.id)}
-                                disabled={retryPrepBusyId === j.id || isOrphanScheduledJob(j)}
-                                title="Re-run article and image generation for this scheduled post"
-                              >
-                                {retryPrepBusyId === j.id ? "Retrying…" : "Retry preparation"}
-                              </button>
-                            ) : null}
-                            <button
-                              type="button"
-                              className={styles.miniBtn}
-                              onClick={() => void openEditScheduledJob(j)}
-                              disabled={["posted", "cancelled"].includes(jobState)}
-                            >
-                              Re-Schedule
-                            </button>
-                            <button
-                              type="button"
-                              className={`${styles.miniBtn} ${styles.miniDanger}`}
-                              onClick={() => setConfirmCancelJob(j)}
-                              disabled={["posted", "cancelled"].includes(jobState)}
-                            >
-                              Cancel
-                            </button>
-                            {j.wp_link ? (
-                              <a className={styles.miniBtn} href={j.wp_link} target="_blank" rel="noreferrer">
-                                View on WordPress
-                              </a>
-                            ) : null}
+                            {jobState === "posted" ? (
+                              j.wp_link ? (
+                                <a className={styles.miniBtn} href={j.wp_link} target="_blank" rel="noreferrer">
+                                  View on Live
+                                </a>
+                              ) : null
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className={styles.miniBtn}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    void openPostNowConfirm(j);
+                                  }}
+                                  disabled={
+                                    postNowBusy ||
+                                    jobState === "cancelled" ||
+                                    isOrphanScheduledJob(j)
+                                  }
+                                  title={
+                                    postNowAllowed
+                                      ? "Publish to WordPress now"
+                                      : jobState === "posting"
+                                        ? "Publishing in progress — click for status"
+                                        : "Not available after cancelled"
+                                  }
+                                >
+                                  Post Now
+                                </button>
+                                {isFailed ? (
+                                  <button
+                                    type="button"
+                                    className={styles.miniBtn}
+                                    onClick={() => void retryScheduledPreparation(j.id)}
+                                    disabled={retryPrepBusyId === j.id || isOrphanScheduledJob(j)}
+                                    title="Re-run article and image generation for this scheduled post"
+                                  >
+                                    {retryPrepBusyId === j.id ? "Retrying…" : "Retry preparation"}
+                                  </button>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  className={styles.miniBtn}
+                                  onClick={() => void openEditScheduledJob(j)}
+                                  disabled={jobState === "cancelled"}
+                                >
+                                  Re-Schedule
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`${styles.miniBtn} ${styles.miniDanger}`}
+                                  onClick={() => setConfirmCancelJob(j)}
+                                  disabled={jobState === "cancelled"}
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            )}
                           </div>
                           {j.last_error ? <div className={styles.scheduledError}>{j.last_error}</div> : null}
                         </div>
