@@ -1,24 +1,573 @@
-.banner {
+/* ── Banner wrapper ─────────────────────────────────────────────────────────── */
+.bannerWrap {
   position: sticky;
   top: 0;
-  z-index: 9000;
+  z-index: 210; /* above --z-sticky:200, below --z-modal-bg:300 */
+  width: 100%;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  transition: background 0.35s ease, border-color 0.35s ease;
+}
+
+/* ── Phase color themes ───────────────────────────────────────────────────── */
+.phaseNormal {
+  background: linear-gradient(90deg, #1e1a3d 0%, #151c35 100%);
+  border-bottom-color: rgba(110, 95, 230, 0.25);
+}
+.phaseWarn {
+  background: linear-gradient(90deg, #2a1c0e 0%, #1f180a 100%);
+  border-bottom-color: rgba(217, 119, 87, 0.35);
+}
+.phaseAmber {
+  background: linear-gradient(90deg, #2a1e00 0%, #1f1600 100%);
+  border-bottom-color: rgba(212, 160, 23, 0.35);
+}
+.phaseUrgent {
+  background: linear-gradient(90deg, #280c0c 0%, #1c0808 100%);
+  border-bottom-color: rgba(198, 69, 69, 0.4);
+}
+.phaseExpired {
+  background: linear-gradient(90deg, #1e0404 0%, #140202 100%);
+  border-bottom-color: rgba(198, 69, 69, 0.5);
+}
+
+/* ── Left accent stripe ───────────────────────────────────────────────────── */
+.bannerWrap::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  transition: background 0.35s ease;
+}
+.phaseNormal::before  { background: #6e5fe6; }
+.phaseWarn::before    { background: #d97757; }
+.phaseAmber::before   { background: #d4a017; }
+.phaseUrgent::before  { background: #c64545; }
+.phaseExpired::before { background: #8b0000; }
+
+/* ── Inner layout ─────────────────────────────────────────────────────────── */
+.bannerInner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 10px 24px 10px 28px;
+}
+
+/* ── Left section: icon + label ───────────────────────────────────────────── */
+.bannerLeft {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.bannerIcon { font-size: 16px; line-height: 1; }
+.bannerLabel {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #f0eeff;
+  white-space: nowrap;
+}
+.phaseWarn    .bannerLabel { color: #fde4c5; }
+.phaseAmber   .bannerLabel { color: #fef3c7; }
+.phaseUrgent  .bannerLabel { color: #ffd5d5; }
+.phaseExpired .bannerLabel { color: #ffc4c4; }
+
+/* ── Center section ───────────────────────────────────────────────────────── */
+.bannerCenter {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.bannerMsg {
+  font-size: 13px;
+  color: rgba(240, 238, 255, 0.72);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.phaseWarn    .bannerMsg { color: rgba(253, 228, 197, 0.72); }
+.phaseAmber   .bannerMsg { color: rgba(254, 243, 199, 0.72); }
+.phaseUrgent  .bannerMsg { color: rgba(255, 213, 213, 0.72); }
+.phaseExpired .bannerMsg { color: rgba(255, 196, 196, 0.72); }
+
+.countdown {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f0eeff;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.phaseWarn    .countdown { color: #fde4c5; }
+.phaseAmber   .countdown { color: #fef3c7; }
+.phaseUrgent  .countdown { color: #ffb3b3; }
+.phaseExpired .countdown { color: #ffa3a3; }
+
+/* ── Progress strip ───────────────────────────────────────────────────────── */
+.progressWrap {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 120px;
+}
+.progressTrack {
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.progressFill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 1s linear;
+}
+.phaseNormal  .progressFill { background: #6e5fe6; }
+.phaseWarn    .progressFill { background: #d97757; }
+.phaseAmber   .progressFill { background: #d4a017; }
+.phaseUrgent  .progressFill { background: #c64545; }
+.phaseExpired .progressFill { background: #8b0000; }
+
+.progressLabel {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.4);
+  text-align: right;
+  line-height: 1;
+}
+
+/* ── Right section: actions ───────────────────────────────────────────────── */
+.bannerRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.featureBtn {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: rgba(240, 238, 255, 0.8);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.featureBtn:hover {
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.upgradeBtn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: none;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.15s, transform 0.1s;
+  color: #fff;
+}
+.upgradeBtn:hover { opacity: 0.88; transform: translateY(-1px); }
+.phaseNormal  .upgradeBtn { background: #6e5fe6; }
+.phaseWarn    .upgradeBtn { background: #d97757; }
+.phaseAmber   .upgradeBtn { background: #d4a017; color: #1a1200; }
+.phaseUrgent  .upgradeBtn { background: #c64545; }
+.phaseExpired .upgradeBtn { background: #8b0000; }
+
+.dismissBtn {
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  min-height: 40px;
-  padding: 8px 16px;
-  background: linear-gradient(90deg, #2a2258 0%, #1d2744 100%);
-  color: #eef2ff;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
   font-size: 14px;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+.dismissBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.85);
 }
 
-.banner strong {
+/* ── Welcome modal ────────────────────────────────────────────────────────── */
+.welcomeOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 350; /* above modal-bg:300, below z-modal:400 */
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px 16px;
+  background: rgba(5, 5, 10, 0.6);
+  backdrop-filter: blur(6px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .welcomeOverlay { backdrop-filter: none; }
+}
+
+.welcomeCard {
+  width: min(560px, 100%);
+  border-radius: 16px;
+  padding: 32px;
+  background: linear-gradient(160deg, #1a1530 0%, #0f0d1c 100%);
+  border: 1px solid rgba(110, 95, 230, 0.3);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(110, 95, 230, 0.1);
+  position: relative;
+}
+
+.welcomeCloseBtn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.welcomeCloseBtn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+
+.welcomeEyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
   font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #a89cf0;
+  margin-bottom: 12px;
 }
 
-.banner span {
-  color: rgba(238, 242, 255, 0.82);
+.welcomeTitle {
+  margin: 0 0 12px;
+  font-size: 26px;
+  font-weight: 800;
+  color: #f0eeff;
+  line-height: 1.2;
+}
+
+.welcomeBody {
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: rgba(240, 238, 255, 0.72);
+  line-height: 1.6;
+}
+
+.welcomeCountdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(110, 95, 230, 0.15);
+  border: 1px solid rgba(110, 95, 230, 0.25);
+  font-size: 14px;
+  font-weight: 700;
+  color: #c4beff;
+  margin-bottom: 24px;
+}
+
+.welcomeProgressWrap {
+  margin-bottom: 24px;
+}
+.welcomeProgressTrack {
+  height: 6px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.welcomeProgressFill {
+  height: 100%;
+  border-radius: 9999px;
+  background: #6e5fe6;
+  transition: width 0.8s ease;
+}
+.welcomeProgressMeta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.38);
+}
+
+.welcomeActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.welcomeUpgradeBtn {
+  height: 40px;
+  padding: 0 20px;
+  border-radius: 8px;
+  background: #6e5fe6;
+  border: none;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.welcomeUpgradeBtn:hover { opacity: 0.88; transform: translateY(-1px); }
+.welcomeFeatureBtn {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(240, 238, 255, 0.8);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.welcomeFeatureBtn:hover { border-color: rgba(255, 255, 255, 0.3); color: #fff; }
+
+/* ── Feature list modal ───────────────────────────────────────────────────── */
+.featureOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 350;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(5, 5, 10, 0.65);
+  backdrop-filter: blur(6px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .featureOverlay { backdrop-filter: none; }
+}
+
+.featureCard {
+  width: min(480px, 100%);
+  border-radius: 16px;
+  padding: 28px;
+  background: linear-gradient(160deg, #1a1530 0%, #0f0d1c 100%);
+  border: 1px solid rgba(110, 95, 230, 0.25);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.5);
+  position: relative;
+}
+
+.featureCardTitle {
+  margin: 0 0 20px;
+  font-size: 18px;
+  font-weight: 800;
+  color: #f0eeff;
+}
+
+.featureList {
+  list-style: none;
+  margin: 0 0 24px;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.featureItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: rgba(240, 238, 255, 0.85);
+}
+.featureCheck {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(93, 184, 114, 0.15);
+  border: 1px solid rgba(93, 184, 114, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: #5db872;
+  flex-shrink: 0;
+}
+
+.featureCloseBtn {
+  width: 100%;
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: rgba(240, 238, 255, 0.7);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.featureCloseBtn:hover { border-color: rgba(255, 255, 255, 0.3); color: #fff; }
+
+/* ── Upgrade Required modal ───────────────────────────────────────────────── */
+.upgradeOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(5, 5, 10, 0.72);
+  backdrop-filter: blur(8px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .upgradeOverlay { backdrop-filter: none; }
+}
+
+.upgradeCard {
+  width: min(480px, 100%);
+  border-radius: 16px;
+  padding: 32px;
+  background: linear-gradient(160deg, #1c0a0a 0%, #110505 100%);
+  border: 1px solid rgba(198, 69, 69, 0.3);
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.55);
+  position: relative;
+}
+
+.upgradeCardEyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #ffb3b3;
+  margin: 0 0 10px;
+}
+
+.upgradeCardTitle {
+  margin: 0 0 10px;
+  font-size: 22px;
+  font-weight: 800;
+  color: #ffd5d5;
+}
+
+.upgradeCardBody {
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: rgba(255, 213, 213, 0.65);
+  line-height: 1.6;
+}
+
+.upgradeFeatureList {
+  list-style: none;
+  margin: 0 0 24px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.upgradeFeatureItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: rgba(255, 213, 213, 0.78);
+}
+.upgradeFeatureCheck {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(198, 69, 69, 0.2);
+  border: 1px solid rgba(198, 69, 69, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: #c64545;
+  flex-shrink: 0;
+}
+
+.upgradeCardActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.upgradeCardPrimaryBtn {
+  height: 42px;
+  padding: 0 20px;
+  border-radius: 8px;
+  background: #c64545;
+  border: none;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.upgradeCardPrimaryBtn:hover { opacity: 0.88; }
+.upgradeCardSecondaryBtn {
+  height: 42px;
+  padding: 0 16px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid rgba(198, 69, 69, 0.3);
+  color: rgba(255, 213, 213, 0.7);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.upgradeCardSecondaryBtn:hover { border-color: rgba(198, 69, 69, 0.5); color: #ffd5d5; }
+
+.upgradeCloseBtn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 213, 213, 0.4);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+.upgradeCloseBtn:hover { background: rgba(255, 255, 255, 0.1); color: #ffd5d5; }
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .bannerInner { padding: 10px 16px 10px 20px; gap: 10px; }
+  .progressWrap { display: none; }
+  .bannerMsg { display: none; }
+}
+@media (max-width: 640px) {
+  .bannerLabel { display: none; }
+  .featureBtn { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bannerWrap,
+  .upgradeBtn,
+  .welcomeUpgradeBtn,
+  .progressFill,
+  .welcomeProgressFill { transition: none; }
 }

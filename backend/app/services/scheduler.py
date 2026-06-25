@@ -1039,6 +1039,10 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
     Dev-friendly: polls scheduled_jobs and posts due items.
     For production: move to a dedicated worker.
     """
+    import time as _time
+    _TRIAL_REMINDER_INTERVAL = 3600.0  # check trial milestones once per hour
+    _last_trial_reminder_check = 0.0
+
     # When Mongo/storage is temporarily unavailable, avoid noisy tracebacks every poll.
     # Back off with a capped retry delay, and throttle logs.
     consecutive_storage_failures = 0
@@ -1514,5 +1518,16 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                         )
         except Exception:
             log.exception("Scheduler loop top-level error")
+
+        # Trial milestone notification check — once per hour
+        now_mono = _time.monotonic()
+        if now_mono - _last_trial_reminder_check >= _TRIAL_REMINDER_INTERVAL:
+            _last_trial_reminder_check = now_mono
+            try:
+                from app.services.trial_reminder_service import check_trial_milestones
+                _st = get_legacy_storage_module()
+                await check_trial_milestones(_st)
+            except Exception:
+                log.exception("trial_reminder: unhandled error")
 
         await asyncio.sleep(poll_seconds)

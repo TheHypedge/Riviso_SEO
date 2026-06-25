@@ -1465,6 +1465,7 @@ def _normalize_subscription(doc: dict[str, Any]) -> dict[str, Any]:
         },
         "created_at": (doc.get("created_at") or _now_iso_seconds())[:64],
         "updated_at": (doc.get("updated_at") or _now_iso_seconds())[:64],
+        "trial_notified_milestones": [m for m in (doc.get("trial_notified_milestones") or []) if isinstance(m, str)],
     }
 
 
@@ -1569,6 +1570,27 @@ def get_subscription_by_user_id(user_id: str) -> dict[str, Any] | None:
     if not isinstance(doc, dict):
         return None
     return _normalize_subscription(doc)
+
+
+def patch_subscription_fields(user_id: str, updates: dict[str, Any]) -> bool:
+    """Atomic $set update on a subscription document (does not pass through _normalize_subscription)."""
+    uid = (user_id or "").strip()
+    if not uid or not isinstance(updates, dict) or not updates:
+        return False
+    updates["updated_at"] = _now_iso_seconds()
+    if _storage_mode != "mongo":
+        rows = _load_json_list("subscriptions.json")
+        found = False
+        for r in rows:
+            if isinstance(r, dict) and (r.get("user_id") or "").strip() == uid:
+                r.update(updates)
+                found = True
+                break
+        if found:
+            _save_json_list("subscriptions.json", rows)
+        return found
+    result = get_db().subscriptions.update_one({"user_id": uid}, {"$set": updates})
+    return result.matched_count > 0
 
 
 def reset_daily_subscription_usage() -> int:

@@ -4,14 +4,14 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 import { api, getAccessToken, SubscriptionStatusPublic } from "@/lib/api";
 
-import { TrialUpgradeModal } from "./TrialUpgradeModal";
-import { TrialCountdownBanner } from "./TrialCountdownBanner";
+import { TrialCountdownBanner, UpgradeRequiredModal } from "./TrialCountdownBanner";
 
 type SubscriptionContextValue = {
   status: SubscriptionStatusPublic | null;
   loading: boolean;
   trialExpired: boolean;
   refresh: () => Promise<void>;
+  openUpgradeModal: () => void;
 };
 
 const SubscriptionContext = createContext<SubscriptionContextValue>({
@@ -19,9 +19,9 @@ const SubscriptionContext = createContext<SubscriptionContextValue>({
   loading: true,
   trialExpired: false,
   refresh: async () => {},
+  openUpgradeModal: () => {},
 });
 
-/** Refresh usage/trial state periodically — not every minute (too noisy on the API). */
 const SUBSCRIPTION_POLL_MS = 5 * 60_000;
 
 export function useSubscription() {
@@ -31,6 +31,7 @@ export function useSubscription() {
 export function SubscriptionProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<SubscriptionStatusPublic | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const inflightRef = useRef<Promise<void> | null>(null);
 
   const refresh = useCallback(async () => {
@@ -84,16 +85,20 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
 
   const trialExpired = status?.status === "trial_expired";
 
+  const openUpgradeModal = useCallback(() => setShowUpgradeModal(true), []);
+
   const value = useMemo(
-    () => ({ status, loading, trialExpired, refresh }),
-    [status, loading, trialExpired, refresh],
+    () => ({ status, loading, trialExpired, refresh, openUpgradeModal }),
+    [status, loading, trialExpired, refresh, openUpgradeModal],
   );
 
   return (
     <SubscriptionContext.Provider value={value}>
-      {status && !trialExpired ? <TrialCountdownBanner status={status} /> : null}
+      {/* Banner: handles active trial (dismissible) and expired (permanent) */}
+      {status ? <TrialCountdownBanner status={status} /> : null}
       {children}
-      {trialExpired ? <TrialUpgradeModal status={status} /> : null}
+      {/* Upgrade Required modal — triggered by locked feature clicks */}
+      {showUpgradeModal && <UpgradeRequiredModal onClose={() => setShowUpgradeModal(false)} />}
     </SubscriptionContext.Provider>
   );
 }
