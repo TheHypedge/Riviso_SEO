@@ -12,7 +12,7 @@ from app.core.project_lookup import async_require_project_access, require_projec
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.research import ResearchIdeasRequest, ResearchIdeasResponse
 from app.services.async_operation_dispatch import should_use_async_queue  # retained for job-status polling path
-from app.services.plan_gatekeeper import PlanAction, require_plan_action
+from app.services.plan_gatekeeper import PlanAction, require_plan_action, require_plan_action_for_project
 from app.services.research_job_runner import (
     build_research_cache_key,
     execute_research_ideas,
@@ -107,7 +107,7 @@ async def research_ideas(
     request: Request,
     project_id: str,
     payload: ResearchIdeasRequest,
-    user: dict = Depends(require_plan_action(PlanAction.CUSTOM_RESEARCH, consume=False)),
+    user: dict = Depends(require_plan_action_for_project(PlanAction.CUSTOM_RESEARCH, consume=False)),
 ) -> ResearchIdeasResponse | JSONResponse:
     st = get_legacy_storage_module()
     await async_require_project_access(user=user, project_id=project_id, full=False)

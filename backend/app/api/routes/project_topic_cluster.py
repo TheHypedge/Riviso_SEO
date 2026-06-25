@@ -26,7 +26,7 @@ from app.services.async_operation_dispatch import (
     new_cluster_plan_id,
     should_use_async_queue,
 )
-from app.services.plan_gatekeeper import PlanAction, require_plan_action
+from app.services.plan_gatekeeper import PlanAction, require_plan_action, require_plan_action_for_project
 from app.services.topic_cluster_service import TopicClusterService
 
 
@@ -93,7 +93,7 @@ class TopicClusterPlanPayload(BaseModel):
 async def plan_cluster(
     project_id: str,
     payload: TopicClusterPlanPayload,
-    user: dict = Depends(require_plan_action(PlanAction.CLUSTER_PLAN, consume=False)),
+    user: dict = Depends(require_plan_action_for_project(PlanAction.CLUSTER_PLAN, consume=False)),
 ) -> dict | JSONResponse:
     """SERP snapshot + LLM topical map → saved cluster (draft)."""
     if not (settings.openai_api_key or "").strip():

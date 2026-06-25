@@ -75,7 +75,13 @@ def is_trial_expired(*, user: dict, subscription: dict[str, Any] | None) -> bool
     return datetime.now(timezone.utc) > end
 
 
-def assert_trial_active(*, user: dict, subscription: dict[str, Any] | None) -> None:
+def assert_trial_active(*, user: dict, subscription: dict[str, Any] | None, st=None) -> None:
+    # Skip expiry check when user is not on the trial plan (e.g. upgraded to unlimited)
+    if st is not None:
+        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+        trial_plan_key = st.get_trial_plan_key() if hasattr(st, "get_trial_plan_key") else None
+        if trial_plan_key and plan_key != trial_plan_key:
+            return
     if is_trial_expired(user=user, subscription=subscription):
         raise HTTPException(
             status_code=403,
@@ -100,7 +106,7 @@ def check_plan_limits(*, st, user: dict, action: PlanAction, consume: bool = Tru
         if subscription is None and hasattr(st, "get_subscription_by_user_id"):
             subscription = st.get_subscription_by_user_id(uid)
 
-    assert_trial_active(user=user, subscription=subscription)
+    assert_trial_active(user=user, subscription=subscription, st=st)
 
     plan_key, plan = _plan_for_user(st, user)
 
@@ -183,6 +189,70 @@ def require_plan_action(action: PlanAction, *, consume: bool = True):
     return _dep
 
 
+def _get_effective_user_for_project(st, current_user: dict, project_id: str) -> dict:
+    """
+    For project-scoped actions, resolve plan limits to the project *owner*'s
+    subscription when the logged-in user is a collaborator.
+
+    Returns the owner's user dict if the current user is a collaborator,
+    otherwise returns current_user unchanged.  Never raises — falls back
+    to current_user on any storage error.
+    """
+    pid = (project_id or "").strip()
+    uid = (current_user.get("id") or "").strip()
+    if not pid or not uid:
+        return current_user
+
+    try:
+        ctx = st.get_project_member_context(pid, uid) if hasattr(st, "get_project_member_context") else None
+    except Exception:
+        return current_user
+
+    if not ctx or ctx.get("is_owner", True):
+        return current_user
+
+    owner_uid = (ctx.get("owner_user_id") or "").strip()
+    if not owner_uid:
+        return current_user
+
+    try:
+        owner_user = st.get_user_by_id(owner_uid) if hasattr(st, "get_user_by_id") else None
+    except Exception:
+        owner_user = None
+
+    return owner_user if isinstance(owner_user, dict) and owner_user else current_user
+
+
+def require_plan_action_for_project(
+    action: PlanAction,
+    *,
+    project_id_param: str = "project_id",
+    consume: bool = True,
+):
+    """
+    Like require_plan_action but resolves the plan against the project *owner*
+    when the current user is a collaborator.  This means collaborators inherit
+    the owner's plan limits (and trial status) for every project-scoped action.
+
+    Returns the logged-in user (not the owner) so route handlers can still
+    read the real caller's identity.
+    """
+    async def _dep(request: Request, user: dict = Depends(get_current_user)) -> dict:
+        st = get_legacy_storage_module()
+        project_id = request.path_params.get(project_id_param, "")
+        effective_user = _get_effective_user_for_project(st, user, project_id)
+        # Don't use the cached subscription when we've swapped to the owner's user dict
+        subscription = (
+            cached_subscription(request)
+            if (has_cached_subscription(request) and effective_user is user)
+            else _UNSET
+        )
+        check_plan_limits(st=st, user=effective_user, action=action, consume=consume, subscription=subscription)
+        return user
+
+    return _dep
+
+
 def build_subscription_status(*, st, user: dict) -> dict[str, Any]:
     uid = (user.get("id") or "").strip()
     plan_key, plan = _plan_for_user(st, user)
@@ -192,8 +262,12 @@ def build_subscription_status(*, st, user: dict) -> dict[str, Any]:
 
     trial_end_raw = (subscription or {}).get("trial_end_date") or ""
     trial_start_raw = (subscription or {}).get("trial_start_date") or ""
-    expired = is_trial_expired(user=user, subscription=subscription)
-    status = "trial_expired" if expired else ("active" if trial_end_raw else "no_trial")
+    trial_plan_key = st.get_trial_plan_key() if hasattr(st, "get_trial_plan_key") else None
+    is_trial = bool(trial_plan_key and plan_key == trial_plan_key)
+    # Only flag expired if the user is currently on the trial plan — upgraded users keep their
+    # old trial_end_date in the subscription doc but should not be treated as expired.
+    expired = is_trial and is_trial_expired(user=user, subscription=subscription)
+    status = "trial_expired" if expired else ("active" if (trial_end_raw and is_trial) else "no_trial")
 
     remaining_days = remaining_hours = remaining_minutes = 0
     end = _parse_iso_utc(trial_end_raw)
@@ -205,7 +279,6 @@ def build_subscription_status(*, st, user: dict) -> dict[str, Any]:
         remaining_minutes = total_minutes % 60
 
     usage_raw = (subscription or {}).get("usage") if isinstance((subscription or {}).get("usage"), dict) else {}
-    trial_plan_key = st.get_trial_plan_key() if hasattr(st, "get_trial_plan_key") else None
 
     return {
         "status": status,
@@ -216,7 +289,7 @@ def build_subscription_status(*, st, user: dict) -> dict[str, Any]:
         "remaining_days": remaining_days,
         "remaining_hours": remaining_hours,
         "remaining_minutes": remaining_minutes,
-        "is_trial_plan": bool(trial_plan_key and plan_key == trial_plan_key),
+        "is_trial_plan": is_trial,
         "usage": {
             "articlesGeneratedToday": int(usage_raw.get("articlesGeneratedToday") or user.get("usage_daily_articles_count") or 0),
             "articlesGeneratedThisMonth": int(usage_raw.get("articlesGeneratedThisMonth") or user.get("usage_monthly_articles_count") or 0),

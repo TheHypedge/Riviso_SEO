@@ -81,7 +81,7 @@ from app.services.pipeline_streamer import (
     pipeline_event_stream,
     publish_pipeline_status,
 )
-from app.services.plan_gatekeeper import PlanAction, require_plan_action
+from app.services.plan_gatekeeper import PlanAction, require_plan_action, require_plan_action_for_project
 from app.services.integrity_engine import AIDetectionAuditor
 from app.core.article_duplicates import normalize_article_title_key as _normalize_article_title_key
 from app.core.article_duplicates import sync_project_title_index as _sync_project_title_index
@@ -951,7 +951,7 @@ async def list_articles(
 @router.post("/export/consume", status_code=200)
 async def consume_export_quota(
     project_id: str,
-    user: dict = Depends(require_plan_action(PlanAction.BULK_EXPORT, consume=False)),
+    user: dict = Depends(require_plan_action_for_project(PlanAction.BULK_EXPORT, consume=False)),
 ) -> dict:
     """
     Consume an export allowance for the user's current plan.
@@ -1155,7 +1155,7 @@ async def bulk_upload_articles(
     request: Request,
     project_id: str,
     payload: BulkUploadRequest,
-    user: dict = Depends(require_plan_action(PlanAction.BULK_UPLOAD, consume=False)),
+    user: dict = Depends(require_plan_action_for_project(PlanAction.BULK_UPLOAD, consume=False)),
 ) -> BulkUploadResponse:
     """
     Import many articles from a parsed Excel flow. In-sheet dedupe first, then project index.
@@ -1725,7 +1725,7 @@ async def generate_article_and_image(
     project_id: str,
     article_id: str,
     payload: GenerateRequest,
-    user: dict = Depends(require_plan_action(PlanAction.GENERATE_CONTENT, consume=False)),
+    user: dict = Depends(require_plan_action_for_project(PlanAction.GENERATE_CONTENT, consume=False)),
 ) -> dict | JSONResponse:
     """
     Generate article HTML and optional featured image (OpenAI), then persist to storage.
@@ -1925,7 +1925,7 @@ async def audit_article_integrity(
     project_id: str,
     article_id: str,
     payload: IntegrityMarkdownBody | None = None,
-    user: dict = Depends(require_plan_action(PlanAction.HUMANIZE, consume=False)),
+    user: dict = Depends(require_plan_action_for_project(PlanAction.HUMANIZE, consume=False)),
 ) -> dict:
     """
     Integrity audit (fast heuristics): flags templated / overly-uniform paragraphs.
