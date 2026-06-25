@@ -122,6 +122,43 @@ def dispatch_plan_notification_email(*, to: str, plan_name: str) -> None:
     asyncio.create_task(_run_email("plan_notification", to, plan_name))
 
 
+def dispatch_invitation_email(
+    *,
+    to: str,
+    invited_by_name: str,
+    project_name: str,
+    project_website_url: str,
+    role: str,
+    accept_url: str,
+) -> None:
+    import json
+    asyncio.create_task(
+        _run_invitation_email(to, invited_by_name, project_name, project_website_url, role, accept_url)
+    )
+
+
+async def _run_invitation_email(
+    to: str,
+    invited_by: str,
+    project_name: str,
+    project_url: str,
+    role: str,
+    accept_url: str,
+) -> None:
+    to_clean = (to or "").strip()
+    if not to_clean:
+        return
+    if _smtp_configured():
+        from app.services.email_smtp import send_invitation_email
+        try:
+            await send_invitation_email(to_clean, invited_by, project_name, project_url, role, accept_url)
+            log.info("Invitation email sent to=%s project=%s", to_clean, project_name)
+        except Exception:
+            log.exception("Invitation email failed to=%s", to_clean)
+    else:
+        log.warning("SMTP not configured; invitation email not sent to=%s", to_clean)
+
+
 async def notify_plan_event(*, email: str, plan_name: str, event: str) -> None:
     """Wrapper for admin/subscription managers. ``event`` reserved for future variants."""
     _ = event

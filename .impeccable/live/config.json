@@ -1,0 +1,8 @@
+{
+  "files": ["frontend/src/app/**/*.tsx", "frontend/src/app/**/*.html"],
+  "framework": "nextjs",
+  "insertBefore": "</body>",
+  "commentSyntax": "//",
+  "devServerUrl": "http://localhost:3000",
+  "cspChecked": true
+}

@@ -98,6 +98,21 @@ def _password_reset_html(to: str, reset_token: str) -> str:
     )
 
 
+def _invitation_html(invited_by: str, project_name: str, project_url: str, role: str, accept_url: str) -> str:
+    inviter = invited_by or "A teammate"
+    proj = project_name or "a project"
+    url_display = project_url or ""
+    role_cap = (role or "collaborator").capitalize()
+    return _layout(
+        f"You've been invited to collaborate on {proj}",
+        f"""<h1 style="margin:0 0 12px;font-size:24px;color:{_BRAND_TEXT};">Project invitation</h1>
+<p style="color:{_BRAND_MUTED};margin:0 0 20px;"><strong style="color:{_BRAND_TEXT};">{inviter}</strong> has invited you to collaborate on <strong style="color:{_BRAND_TEXT};">{proj}</strong> as a <strong style="color:{_BRAND_TEXT};">{role_cap}</strong>.</p>
+{f'<p style="color:{_BRAND_MUTED};margin:0 0 20px;font-size:13px;">{url_display}</p>' if url_display else ""}
+<a href="{accept_url}" style="display:inline-block;padding:14px 22px;border-radius:10px;background:{_BRAND_PRIMARY};color:#fff;text-decoration:none;font-weight:700;font-size:16px;">View invitation</a>
+<p style="color:{_BRAND_MUTED};margin:20px 0 0;font-size:13px;">This invitation expires in 7 days. If you don't have a Riviso account yet, you'll be prompted to sign up when you click the button above.</p>""",
+    )
+
+
 def _plan_notification_html(plan_name: str) -> str:
     plan = (plan_name or "your plan").strip()
     return _layout(
@@ -204,3 +219,17 @@ async def send_plan_notification_email(to: str, plan_name: str) -> None:
     import asyncio
     html = _plan_notification_html(plan_name)
     await asyncio.to_thread(_send_html_sync, to, f"Riviso plan update — {plan_name}", html)
+
+
+async def send_invitation_email(
+    to: str,
+    invited_by: str,
+    project_name: str,
+    project_url: str,
+    role: str,
+    accept_url: str,
+) -> None:
+    import asyncio
+    html = _invitation_html(invited_by, project_name, project_url, role, accept_url)
+    subject = f"You've been invited to collaborate on {project_name or 'a project'} — Riviso"
+    await asyncio.to_thread(_send_html_sync, to, subject, html)

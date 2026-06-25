@@ -192,7 +192,14 @@ def _normalize_url(raw: str | None) -> str:
     return s[:2048]
 
 
-def _to_public(p: dict) -> ProjectPublic:
+def _to_public(
+    p: dict,
+    *,
+    is_shared: bool = False,
+    your_role: str | None = None,
+    owner_name: str | None = None,
+    member_count: int = 0,
+) -> ProjectPublic:
     platform = ((p.get("platform") or "wordpress").strip().lower() or "wordpress")
     if platform != "shopify":
         if (p.get("shopify_access_token") or "").strip() or (p.get("shopify_shop") or "").strip():
@@ -223,11 +230,16 @@ def _to_public(p: dict) -> ProjectPublic:
         target_countries_all=bool(p.get("target_countries_all", False)),
         target_cities=[str(x) for x in (p.get("target_cities") or []) if str(x).strip()],
         target_cities_all=bool(p.get("target_cities_all", False)),
+        is_shared=is_shared,
+        your_role=your_role,
+        owner_name=owner_name,
+        member_count=member_count,
     )
 
 
 @router.get("", response_model=list[ProjectPublic])
 async def list_projects(user: dict = Depends(get_current_user)) -> list[ProjectPublic]:
+    st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
     # Workspace project list is always scoped to the signed-in account (including admins).
     # Admins browse other accounts' projects via Manage users → workspace view.
@@ -239,8 +251,34 @@ async def list_projects(user: dict = Depends(get_current_user)) -> list[ProjectP
         owner = (p.get("owner_user_id") or "").strip()
         if not user_ids_equal(owner, uid):
             continue
-        out.append(_to_public(p))
+        collab_count = 0
+        try:
+            collabs = st.get_project_collaborators(p.get("id") or "")
+            collab_count = len(collabs)
+        except Exception:
+            pass
+        out.append(_to_public(p, is_shared=False, your_role="owner", member_count=collab_count))
     out.sort(key=lambda x: (x.name.lower(), x.id))
+
+    # Append shared projects (owned by others, shared with this user)
+    try:
+        shared_rows = st.load_shared_projects_listing(uid)
+        for p in shared_rows:
+            if not isinstance(p, dict):
+                continue
+            shared_role = (p.get("_shared_role") or "viewer").strip()
+            owner_uid = (p.get("owner_user_id") or "").strip()
+            owner_name: str | None = None
+            try:
+                owner_user = st.get_user_by_id(owner_uid)
+                if owner_user:
+                    owner_name = (owner_user.get("full_name") or owner_user.get("email") or "").strip() or None
+            except Exception:
+                pass
+            out.append(_to_public(p, is_shared=True, your_role=shared_role, owner_name=owner_name))
+    except Exception:
+        pass
+
     return out
 
 
@@ -344,6 +382,8 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user)) -
     if not pid:
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
+    sys_role = (user.get("role") or "").strip().lower()
+
     proj = st.get_project_listing_by_id(pid) if hasattr(st, "get_project_listing_by_id") else None
     if not proj:
         projects = (
@@ -354,10 +394,38 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user)) -
         proj = next((p for p in projects if isinstance(p, dict) and (p.get("id") or "") == pid), None)
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
+
+    if sys_role == "admin":
+        return _to_public(proj, your_role="owner")
+
+    ctx = st.get_project_member_context(pid, uid) if hasattr(st, "get_project_member_context") else None
+    if not ctx or not ctx["has_access"]:
         raise HTTPException(status_code=404, detail="Not found")
-    return _to_public(proj)
+
+    is_shared = not ctx["is_owner"]
+    owner_name: str | None = None
+    if is_shared:
+        try:
+            ou = st.get_user_by_id(ctx["owner_user_id"])
+            if ou:
+                owner_name = (ou.get("full_name") or ou.get("email") or "").strip() or None
+        except Exception:
+            pass
+
+    collab_count = 0
+    if ctx["is_owner"]:
+        try:
+            collab_count = len(st.get_project_collaborators(pid))
+        except Exception:
+            pass
+
+    return _to_public(
+        proj,
+        is_shared=is_shared,
+        your_role=ctx["role"],
+        owner_name=owner_name,
+        member_count=collab_count,
+    )
 
 
 @router.patch("/{project_id}", response_model=ProjectPublic)
@@ -517,11 +585,18 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
-        raise HTTPException(status_code=404, detail="Not found")
+    sys_role = (user.get("role") or "").strip().lower()
 
-    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    if sys_role != "admin":
+        ctx = st.get_project_member_context(pid, uid) if hasattr(st, "get_project_member_context") else None
+        if not ctx or not ctx["has_access"]:
+            raise HTTPException(status_code=404, detail="Not found")
+        # For collaborators, use owner's subscription for plan limits
+        effective_sub = ctx.get("owner_subscription_type") or (user.get("subscription_type") or "beta")
+    else:
+        effective_sub = (user.get("subscription_type") or "beta")
+
+    plan_key = (effective_sub or "beta").strip().lower()
     plan: dict = {}
     try:
         plans = st.load_plans() or {}
@@ -531,7 +606,7 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
     except Exception:
         plan = {}
 
-    if role == "admin":
+    if sys_role == "admin":
         return {
             "plan_key": plan_key,
             "is_admin": True,
@@ -594,10 +669,16 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
-        raise HTTPException(status_code=404, detail="Not found")
 
-    plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
+    if role != "admin":
+        ctx = st.get_project_member_context(pid, uid) if hasattr(st, "get_project_member_context") else None
+        if not ctx or not ctx["has_access"]:
+            raise HTTPException(status_code=404, detail="Not found")
+        effective_sub = ctx.get("owner_subscription_type") or (user.get("subscription_type") or "beta")
+    else:
+        effective_sub = (user.get("subscription_type") or "beta")
+
+    plan_key = (effective_sub or "beta").strip().lower()
     try:
         plans = st.load_plans() or {}
         plan = plans.get(plan_key) if isinstance(plans, dict) else {}
@@ -729,6 +810,11 @@ async def delete_project(project_id: str, user: dict = Depends(get_current_user)
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
     if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
+        # Collaborators cannot delete — return 403 instead of silent 204
+        if hasattr(st, "get_collaborator_for_user"):
+            collab = st.get_collaborator_for_user(pid, uid)
+            if collab:
+                raise HTTPException(status_code=403, detail="Only the project owner can delete a project")
         return Response(status_code=204)
     # Delete the project and all resources that reference it (articles, scheduled jobs, settings, prompts, etc.).
     if hasattr(st, "delete_project_and_resources"):

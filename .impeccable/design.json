@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-06T00:00:00Z",
+  "title": "Design System: Riviso",
+  "extensions": {
+    "colorMeta": {
+      "ember":            { "role": "primary",  "displayName": "Ember",         "canonical": "#d97757", "tonalRamp": ["#3d1a0a", "#5c2a10", "#7d3d1b", "#a05028", "#c86a4c", "#d97757", "#e28b6e", "#edaa92", "#f4c7b3", "#fbe5d8"] },
+      "ember-deep":       { "role": "primary",  "displayName": "Ember Deep",    "canonical": "#c86a4c", "tonalRamp": ["#3d1a0a", "#5c2a10", "#7d3d1b", "#a05028", "#c86a4c", "#d97757", "#e28b6e", "#edaa92", "#f4c7b3", "#fbe5d8"] },
+      "void":             { "role": "neutral",  "displayName": "Void",          "canonical": "#0b0b0d", "tonalRamp": ["#0b0b0d", "#121214", "#1a1a1c", "#1f1f21", "#262628", "#313133", "#3d3d3f", "#525254", "#6e6e70", "#9d9da0"] },
+      "void-elevated":    { "role": "neutral",  "displayName": "Void Elevated", "canonical": "#121214", "tonalRamp": ["#0b0b0d", "#121214", "#1a1a1c", "#1f1f21", "#262628", "#313133", "#3d3d3f", "#525254", "#6e6e70", "#9d9da0"] },
+      "coal":             { "role": "neutral",  "displayName": "Coal",          "canonical": "#1f1f1e", "tonalRamp": ["#0b0b0a", "#141413", "#1a1a19", "#1f1f1e", "#262625", "#313130", "#3d3d3c", "#525251", "#6e6e6d", "#9d9d9c"] },
+      "coal-elevated":    { "role": "neutral",  "displayName": "Coal Elevated", "canonical": "#262625", "tonalRamp": ["#0b0b0a", "#141413", "#1a1a19", "#1f1f1e", "#262625", "#313130", "#3d3d3c", "#525251", "#6e6e6d", "#9d9d9c"] },
+      "parchment":        { "role": "neutral",  "displayName": "Parchment",     "canonical": "#fbfbf8", "tonalRamp": ["#4a4a48", "#636360", "#7d7d7a", "#999996", "#b5b5b2", "#d0d0cd", "#e5e5e2", "#efefe9", "#f5f5f2", "#fbfbf8"] },
+      "parchment-cream":  { "role": "neutral",  "displayName": "Parchment Cream", "canonical": "#efede7", "tonalRamp": ["#4a4843", "#636058", "#7d7a6f", "#999688", "#b5b2a4", "#d0cec6", "#dedad2", "#e7e4dc", "#efede7", "#f7f6f2"] },
+      "ink":              { "role": "neutral",  "displayName": "Ink",           "canonical": "#141413", "tonalRamp": ["#141413", "#1f1f1e", "#2c2c2a", "#3d3d3b", "#555553", "#6e6e6c", "#888886", "#a6a6a4", "#c5c5c3", "#e3e3e2"] },
+      "dust":             { "role": "neutral",  "displayName": "Dust",          "canonical": "#64625d", "tonalRamp": ["#1a1917", "#282621", "#37352f", "#48463f", "#64625d", "#7a7872", "#939190", "#aeacab", "#cac8c7", "#e5e4e3"] },
+      "on-dark":          { "role": "neutral",  "displayName": "On Dark",       "canonical": "#faf9f5", "tonalRamp": ["#4a4944", "#636258", "#7d7b6f", "#999789", "#b5b3a5", "#d0cec6", "#dedad2", "#e7e5dc", "#f3f2ec", "#faf9f5"] },
+      "success":          { "role": "tertiary", "displayName": "Moss Green",    "canonical": "#5db872", "tonalRamp": ["#0e2c16", "#183f23", "#245c35", "#32784a", "#469e61", "#5db872", "#79ca8d", "#99d8a8", "#bce8c5", "#def4e2"] },
+      "warning":          { "role": "tertiary", "displayName": "Amber",         "canonical": "#d4a017", "tonalRamp": ["#2e1f00", "#4a3200", "#6b4900", "#8e6200", "#b37d00", "#d4a017", "#e0b545", "#eac874", "#f2daa2", "#f9ecd1"] },
+      "error":            { "role": "tertiary", "displayName": "Ember Error",   "canonical": "#c64545", "tonalRamp": ["#2e0909", "#4a1010", "#6b1b1b", "#8e2a2a", "#ae3838", "#c64545", "#d46d6d", "#df9393", "#ebb8b8", "#f5dcdc"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display",  "purpose": "Article titles in the editor, dashboard hero headlines only. Signals content context, never UI." },
+      "headline": { "displayName": "Headline", "purpose": "Section headers, page titles, modal headings." },
+      "title":    { "displayName": "Title",    "purpose": "Card titles, widget headings, tab labels." },
+      "body":     { "displayName": "Body",     "purpose": "All interface copy, descriptions, article previews. Max 70ch in reading contexts." },
+      "label":    { "displayName": "Label",    "purpose": "Metadata, chips, status badges, column headers. Short strings only." },
+      "mono":     { "displayName": "Mono",     "purpose": "Terminal output, code snippets, log lines, URL display." }
+    },
+    "shadows": [
+      { "name": "overlay-ambient", "value": "0 24px 70px rgba(20,20,19,0.18), 0 0 0 1px rgba(250,249,245,0.06) inset", "purpose": "Loading panels and modal sheets only. Not for static cards." },
+      { "name": "glow-accent",     "value": "0 0 26px rgba(204,120,92,0.18)",                                           "purpose": "Active generation spinner and loading ring only." }
+    ],
+    "motion": [
+      { "name": "ease-standard",  "value": "cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Default easing for state transitions (hover, focus, active)." },
+      { "name": "ease-out-quick", "value": "cubic-bezier(0, 0, 0.2, 1)",   "purpose": "Enter transitions — elements coming onto screen." },
+      { "name": "duration-fast",  "value": "150ms",                         "purpose": "Micro-interactions: button hover, input focus." },
+      { "name": "duration-base",  "value": "200ms",                         "purpose": "Component state changes: nav active, card expand." },
+      { "name": "duration-slow",  "value": "300ms",                         "purpose": "Panel open/close, modal enter/exit." }
+    ],
+    "breakpoints": [
+      { "name": "sm",  "value": "640px" },
+      { "name": "md",  "value": "768px" },
+      { "name": "lg",  "value": "1024px" },
+      { "name": "xl",  "value": "1280px" },
+      { "name": "2xl", "value": "1536px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single action the user should take now. Ember background; used sparingly.",
+      "html": "<button class=\"ds-btn-primary\">Publish article</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; gap: 6px; background: #d97757; color: #ffffff; padding: 10px 20px; border-radius: 6px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 500; border: none; cursor: pointer; transition: background 0.15s ease, transform 0.1s ease; } .ds-btn-primary:hover { background: #c86a4c; transform: translateY(-1px); } .ds-btn-primary:active { background: #b85e40; transform: translateY(0); } .ds-btn-primary:focus-visible { outline: 2px solid #d97757; outline-offset: 2px; } .ds-btn-primary:disabled { background: #757575; color: rgba(255,255,255,0.6); cursor: not-allowed; transform: none; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary actions on dark surfaces. Transparent with hairline border.",
+      "html": "<button class=\"ds-btn-ghost\">Cancel</button>",
+      "css": ".ds-btn-ghost { display: inline-flex; align-items: center; gap: 6px; background: transparent; color: rgba(250,249,245,0.86); padding: 9px 16px; border-radius: 6px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 500; border: 1px solid rgba(255,255,255,0.10); cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; } .ds-btn-ghost:hover { background: rgba(18,18,20,0.72); border-color: rgba(255,255,255,0.18); } .ds-btn-ghost:active { background: rgba(30,30,32,0.88); } .ds-btn-ghost:focus-visible { outline: 2px solid #d97757; outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": null,
+      "description": "Standard text field on dark surfaces. Clean border-focus, no glow.",
+      "html": "<div class=\"ds-input-wrap\"><label class=\"ds-input-label\" for=\"i1\">Article title</label><input class=\"ds-input\" id=\"i1\" type=\"text\" placeholder=\"Enter title…\"></div>",
+      "css": ".ds-input-wrap { display: flex; flex-direction: column; gap: 6px; } .ds-input-label { font-family: Inter, system-ui, sans-serif; font-size: 12px; font-weight: 500; color: rgba(250,249,245,0.62); letter-spacing: 0.02em; } .ds-input { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10); border-radius: 6px; padding: 9px 12px; font-family: Inter, system-ui, sans-serif; font-size: 14px; color: rgba(250,249,245,0.92); outline: none; transition: border-color 0.15s ease; width: 100%; } .ds-input::placeholder { color: rgba(160,157,150,0.6); } .ds-input:focus { border-color: #d97757; } .ds-input:disabled { opacity: 0.4; cursor: not-allowed; }"
+    },
+    {
+      "name": "Sidebar Nav Item",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "Vertical sidebar navigation on the dark coal surface. Active state uses a 3px left ember indicator.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item\" href=\"#\">Articles</a><a class=\"ds-nav-item ds-nav-item--active\" href=\"#\">Performance</a><a class=\"ds-nav-item\" href=\"#\">Settings</a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; gap: 2px; padding: 8px; background: #1f1f1e; width: 200px; } .ds-nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 6px; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 500; color: #a09d96; text-decoration: none; cursor: pointer; transition: background 0.15s ease, color 0.15s ease; border-left: 3px solid transparent; } .ds-nav-item:hover { background: rgba(18,18,20,0.72); color: #faf9f5; } .ds-nav-item--active { background: rgba(18,18,20,0.72); color: #faf9f5; border-left-color: #d97757; } .ds-nav-item:focus-visible { outline: 2px solid #d97757; outline-offset: -2px; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Standard content card on the void canvas. Flat at rest, no shadow.",
+      "html": "<div class=\"ds-card\"><p class=\"ds-card-title\">Article performance</p><p class=\"ds-card-body\">Track how your published articles perform in Google Search Console.</p></div>",
+      "css": ".ds-card { background: rgba(18,18,20,0.72); border: 1px solid rgba(255,255,255,0.10); border-radius: 12px; padding: 24px; } .ds-card-title { font-family: Inter, system-ui, sans-serif; font-size: 15px; font-weight: 500; color: rgba(250,249,245,0.94); margin-bottom: 8px; } .ds-card-body { font-family: Inter, system-ui, sans-serif; font-size: 14px; color: rgba(250,249,245,0.62); line-height: 1.55; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "Pipeline stage indicators and article status chips. Pill shape, ember tint for active/published.",
+      "html": "<span class=\"ds-badge ds-badge--active\">Published</span><span class=\"ds-badge ds-badge--neutral\">Draft</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 9999px; font-family: Inter, system-ui, sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; } .ds-badge--active { background: rgba(204,120,92,0.16); color: rgba(250,249,245,0.92); border: 1px solid rgba(204,120,92,0.28); } .ds-badge--neutral { background: rgba(255,255,255,0.06); color: rgba(160,157,150,0.9); border: 1px solid rgba(255,255,255,0.10); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Operations Room",
+    "overview": "Riviso is a tool for people who run content at scale. The interface reflects that: it lives almost entirely in dark mode — a matte, near-black void broken by precise typography, hairline borders, and the warm ember accent that marks every action worth taking. There is no decoration. Every element is load-bearing.\n\nThe tension that defines the system is between the analytical and the editorial. The UI chrome is sparse and purposeful — dense information, not cluttered. The only serif font (Cormorant Garamond) appears in article titles and display contexts, a quiet nod to the craft of the content being produced. Everything else is Inter: neutral, readable, unobtrusive at any size.\n\nThe system explicitly rejects the hyped startup aesthetic: no gradient text, no glassmorphism as default, no hero metrics dressed up with glow. It equally rejects the generic SaaS cream palette. The workspace is dark because the work is concentrated.",
+    "keyCharacteristics": [
+      "Dark-first: the project workspace and article editor default to dark mode",
+      "One accent: ember orange (#d97757) is the single non-neutral color with semantic meaning",
+      "Flat with tonal depth: no decorative shadows, depth from surface opacity layering",
+      "Compact density: 4px base grid, 14px default body text, information-rich panels",
+      "Editorial/analytical hybrid: Cormorant Garamond for display; Inter for all UI"
+    ],
+    "rules": [
+      { "name": "The One Accent Rule",        "body": "Ember is the only non-neutral color in the system. It appears on ≤15% of any given screen. If two elements are both ember on the same view, one of them shouldn't be.", "section": "colors" },
+      { "name": "The Dark-First Rule",        "body": "The primary application surfaces (project workspace, article editor) are dark mode by default. Light mode is for outward-facing and lightweight surfaces only.", "section": "colors" },
+      { "name": "The Serif Boundary Rule",    "body": "Cormorant Garamond appears only where the context is genuinely about text content — article titles, editor display, reading surfaces. Never on navigation, buttons, form labels, or data tables.", "section": "typography" },
+      { "name": "The No-Uppercase-Body Rule", "body": "Uppercase is reserved for badge/chip labels (≤4 words) and the rare pipeline stage indicator. Never applied to sentences, paragraphs, or heading copy.", "section": "typography" },
+      { "name": "The Flat-by-Default Rule",   "body": "Surfaces at rest are flat. Shadows are reserved for content that has physically escaped its container — modals, overlays, floating panels.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use ember (#d97757) on every primary button, active nav state, link hover, and focus ring — it is the action signal.",
+      "Do keep the project workspace and article editor dark by default.",
+      "Do use Cormorant Garamond only for article titles and genuine content display contexts.",
+      "Do achieve depth through surface-color layering (void → void-elevated → coal).",
+      "Do keep body text at 14px minimum and line length ≤70ch in reading contexts.",
+      "Do label every interactive element with a verb + object (Publish article, Delete project).",
+      "Do provide explicit :focus-visible rings (2px solid ember) on every interactive element.",
+      "Do pair color state changes with icons or text labels — color alone is insufficient."
+    ],
+    "donts": [
+      "Don't use gradient text (background-clip: text). Ever.",
+      "Don't use glassmorphism as a default card style.",
+      "Don't use side-stripe borders (border-left >1px) as card accents — only the active nav indicator uses a left border.",
+      "Don't introduce a second accent color. The system has one: ember.",
+      "Don't use Cormorant Garamond on UI labels, nav items, buttons, or form elements.",
+      "Don't use a warm-tinted light-mode canvas — parchment (#fbfbf8) is already at the warm edge.",
+      "Don't put numbered section eyebrows (01/02/03) on every section of any marketing surface.",
+      "Don't build identical card grids (same icon + heading + text, repeated).",
+      "Don't animate layout properties or use bounce/elastic easing."
+    ]
+  }
+}

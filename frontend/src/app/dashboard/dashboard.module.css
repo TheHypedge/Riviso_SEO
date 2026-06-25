@@ -1282,3 +1282,393 @@
   }
 }
 
+
+/* ── Collaboration: Filter tabs ──────────────────────────────────────────── */
+.projectFilterRow {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 20px;
+}
+
+.projectFilterBtn {
+  padding: 6px 14px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: var(--aa-on-dark-soft, #a09d96);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.projectFilterBtn:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--aa-on-dark, #faf9f5);
+}
+
+.projectFilterBtnActive {
+  background: rgba(217, 119, 87, 0.12);
+  border-color: rgba(217, 119, 87, 0.3);
+  color: var(--aa-primary, #d97757);
+}
+
+/* ── Collaboration: Project card extras ─────────────────────────────────── */
+.projectCardShared {
+  border-color: rgba(217, 119, 87, 0.18);
+}
+.projectCardShared:hover {
+  border-color: rgba(217, 119, 87, 0.28);
+}
+
+.sharedBadgeRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.sharedBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: rgba(217, 119, 87, 0.12);
+  color: var(--aa-primary, #d97757);
+  border: 1px solid rgba(217, 119, 87, 0.25);
+}
+
+.roleBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(160, 157, 150, 0.1);
+  color: var(--aa-on-dark-soft, #a09d96);
+  border: 1px solid rgba(160, 157, 150, 0.18);
+}
+
+.projectOwnerRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.projectOwnerLabel {
+  font-size: 12px;
+  color: rgba(160, 157, 150, 0.65);
+}
+
+.memberCountChip {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(160, 157, 150, 0.7);
+}
+
+/* ── Collaboration: Share modal ─────────────────────────────────────────── */
+.shareModalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  z-index: var(--z-modal-bg, 300);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.shareModal {
+  background: var(--aa-void-elevated, #121214);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--aa-r-lg, 12px);
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.1) transparent;
+  z-index: var(--z-modal, 400);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.55);
+}
+
+.shareModalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  position: sticky;
+  top: 0;
+  background: var(--aa-void-elevated, #121214);
+  z-index: 1;
+}
+
+.shareModalTitle {
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--aa-on-dark, #faf9f5);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 340px;
+}
+
+.shareModalClose {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--aa-r-sm, 6px);
+  border: none;
+  background: transparent;
+  color: var(--aa-on-dark-soft, #a09d96);
+  font-size: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s ease;
+}
+.shareModalClose:hover {
+  background: rgba(255,255,255,0.07);
+  color: var(--aa-on-dark, #faf9f5);
+}
+
+.shareInviteForm {
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.shareInviteRow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.shareEmailInput {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--aa-r-sm, 6px);
+  color: var(--aa-on-dark, #faf9f5);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+.shareEmailInput:focus {
+  border-color: var(--aa-primary, #d97757);
+}
+.shareEmailInput::placeholder {
+  color: rgba(160, 157, 150, 0.55);
+}
+
+.shareRoleSelect {
+  padding: 9px 10px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--aa-r-sm, 6px);
+  color: var(--aa-on-dark, #faf9f5);
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+}
+.shareRoleSelect:focus {
+  border-color: var(--aa-primary, #d97757);
+}
+
+.shareInviteBtn {
+  padding: 9px 16px;
+  background: var(--aa-primary, #d97757);
+  border: none;
+  border-radius: var(--aa-r-sm, 6px);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s ease;
+}
+.shareInviteBtn:hover:not(:disabled) {
+  background: var(--aa-primary-hover, #c86a4c);
+}
+.shareInviteBtn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.shareInviteError {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--aa-error, #c64545);
+}
+
+.shareLoadingRow {
+  padding: 20px 24px;
+  font-size: 13px;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+
+.shareNoMembers {
+  padding: 20px 24px;
+  font-size: 13px;
+  color: var(--aa-on-dark-soft, #a09d96);
+  margin: 0;
+}
+
+.shareMembersList {
+  padding: 8px 0;
+}
+
+.shareMembersSection {
+  padding: 0 0 8px;
+}
+
+.shareMembersSectionLabel {
+  display: block;
+  padding: 8px 24px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(160, 157, 150, 0.55);
+}
+
+.shareMemberRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 24px;
+  transition: background 0.1s ease;
+}
+.shareMemberRow:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.shareMemberAvatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(217, 119, 87, 0.15);
+  color: var(--aa-primary, #d97757);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.shareMemberAvatarPending {
+  background: rgba(255,255,255,0.06);
+  color: rgba(160,157,150,0.5);
+}
+
+.shareMemberInfo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.shareMemberName {
+  font-size: 13px;
+  color: var(--aa-on-dark, #faf9f5);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shareMemberEmail {
+  font-size: 12px;
+  color: var(--aa-on-dark-soft, #a09d96);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shareMemberRoleSelect {
+  padding: 5px 8px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--aa-r-sm, 6px);
+  color: var(--aa-on-dark, #faf9f5);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  outline: none;
+}
+.shareMemberRoleSelect:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.shareMemberRemoveBtn {
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid rgba(196, 69, 69, 0.3);
+  border-radius: var(--aa-r-sm, 6px);
+  color: var(--aa-error, #c64545);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s ease;
+}
+.shareMemberRemoveBtn:hover:not(:disabled) {
+  background: rgba(196, 69, 69, 0.1);
+}
+.shareMemberRemoveBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.shareResendBtn {
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--aa-r-sm, 6px);
+  color: var(--aa-on-dark-soft, #a09d96);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s ease;
+}
+.shareResendBtn:hover:not(:disabled) {
+  background: rgba(255,255,255,0.05);
+  color: var(--aa-on-dark, #faf9f5);
+}
+.shareResendBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+@media (max-width: 600px) {
+  .shareInviteRow { flex-wrap: wrap; }
+  .shareEmailInput { min-width: 0; flex: 1 1 100%; }
+  .shareRoleSelect { flex: 1; }
+  .shareInviteBtn { flex: 1; }
+  .shareMemberRow { flex-wrap: wrap; }
+  .shareMemberRoleSelect { order: 3; }
+  .shareMemberRemoveBtn { order: 4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .projectFilterBtn,
+  .shareModalClose,
+  .shareEmailInput,
+  .shareInviteBtn,
+  .shareMemberRow { transition: none; }
+}

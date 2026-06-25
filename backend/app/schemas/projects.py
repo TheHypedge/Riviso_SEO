@@ -11,6 +11,11 @@ class ProjectPublic(BaseModel):
     platform: str = "wordpress"
     shopify_connected: bool = False
     shopify_sync_status: str | None = None
+    # Collaboration fields — populated for shared projects
+    is_shared: bool = False
+    your_role: str | None = None        # "owner" | "admin" | "editor" | "viewer"
+    owner_name: str | None = None       # populated for shared projects
+    member_count: int = 0               # active collaborator count
     # Legacy free-text representation. Always present (auto-derived from the
     # structured fields below when they are set) so the article generation
     # pipeline keeps working without changes.

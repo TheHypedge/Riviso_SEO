@@ -26,9 +26,13 @@ import {
   ArticlePublic,
   BulkUploadRow,
   clearAuth,
+  CollaboratorPublic,
+  CollaboratorRole,
   downloadWordpressPlugin,
   getAccessToken,
+  InvitationPublic,
   invalidateProjectSettingsCache,
+  MembersResponse,
   mergeTopicClusterInList,
   PromptListResponse,
   ResearchIdeaRow as ApiResearchIdeaRow,
@@ -63,7 +67,8 @@ type TabKey =
   | "context_links"
   | "tools"
   | "performance"
-  | "project_settings";
+  | "project_settings"
+  | "members";
 
 type ResearchSubTabKey = "cluster" | "curations";
 
@@ -82,6 +87,7 @@ const TAB_KEYS: ReadonlySet<TabKey> = new Set<TabKey>([
   "tools",
   "performance",
   "project_settings",
+  "members",
 ]);
 
 /** Sidebar section order — Overview appears directly above Articles. */
@@ -95,6 +101,7 @@ const SIDEBAR_TAB_ORDER: TabKey[] = [
   "context_links",
   "tools",
   "performance",
+  "members",
   "project_settings",
 ];
 
@@ -750,6 +757,18 @@ export default function ProjectPage() {
   const [deletingProject, setDeletingProject] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+
+  // Members tab state
+  const [membersData, setMembersData] = useState<MembersResponse | null>(null);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [membersInviteEmail, setMembersInviteEmail] = useState("");
+  const [membersInviteRole, setMembersInviteRole] = useState<CollaboratorRole>("editor");
+  const [membersInviteBusy, setMembersInviteBusy] = useState(false);
+  const [membersInviteError, setMembersInviteError] = useState<string | null>(null);
+  const [membersRoleChangeBusy, setMembersRoleChangeBusy] = useState<string | null>(null);
+  const [membersRemoveBusy, setMembersRemoveBusy] = useState<string | null>(null);
+  const [membersResendBusy, setMembersResendBusy] = useState<string | null>(null);
+  const [membersCancelBusy, setMembersCancelBusy] = useState<string | null>(null);
 
   // Shared accessible replacement for window.confirm — focus-trapped, themed,
   // and keyboard-dismissible, so destructive/disruptive actions across every
@@ -2873,6 +2892,91 @@ export default function ProjectPage() {
     })();
   }, [projectId, tab, token, isShopifyProject]);
 
+  useEffect(() => {
+    if (!token) return;
+    if (tab !== "members") return;
+    (async () => {
+      setMembersLoading(true);
+      try {
+        const data = await api.getProjectMembers(projectId);
+        setMembersData(data);
+      } catch { setMembersData(null); }
+      setMembersLoading(false);
+    })();
+  }, [projectId, tab, token]);
+
+  // Members tab helpers
+  async function handleMembersInvite() {
+    if (!membersInviteEmail.trim()) { setMembersInviteError("Enter an email address"); return; }
+    setMembersInviteBusy(true);
+    setMembersInviteError(null);
+    try {
+      await api.inviteCollaborator(projectId, membersInviteEmail.trim(), membersInviteRole);
+      setMembersInviteEmail("");
+      const data = await api.getProjectMembers(projectId);
+      setMembersData(data);
+      setToast({ message: `Invitation sent to ${membersInviteEmail.trim()}`, tone: "success" });
+    } catch (e) {
+      setMembersInviteError(e instanceof Error ? e.message : "Failed to send invitation");
+    }
+    setMembersInviteBusy(false);
+  }
+
+  async function handleMembersChangeRole(collaboratorId: string, newRole: CollaboratorRole) {
+    setMembersRoleChangeBusy(collaboratorId);
+    try {
+      const updated = await api.changeCollaboratorRole(projectId, collaboratorId, newRole);
+      setMembersData(prev => prev ? {
+        ...prev,
+        collaborators: prev.collaborators.map(c => c.id === collaboratorId ? updated : c),
+      } : prev);
+    } catch (e) {
+      setToast({ message: e instanceof Error ? e.message : "Failed to change role", tone: "error" });
+    }
+    setMembersRoleChangeBusy(null);
+  }
+
+  async function handleMembersRemove(collab: CollaboratorPublic) {
+    setMembersRemoveBusy(collab.id);
+    try {
+      await api.removeCollaborator(projectId, collab.id);
+      setMembersData(prev => prev ? {
+        ...prev,
+        collaborators: prev.collaborators.filter(c => c.id !== collab.id),
+      } : prev);
+      setToast({ message: `${collab.user_name || collab.user_email} removed`, tone: "success" });
+    } catch (e) {
+      setToast({ message: e instanceof Error ? e.message : "Failed to remove member", tone: "error" });
+    }
+    setMembersRemoveBusy(null);
+  }
+
+  async function handleMembersResend(invitationId: string) {
+    setMembersResendBusy(invitationId);
+    try {
+      await api.resendInvitation(projectId, invitationId);
+      setToast({ message: "Invitation resent", tone: "success" });
+    } catch (e) {
+      setToast({ message: e instanceof Error ? e.message : "Failed to resend", tone: "error" });
+    }
+    setMembersResendBusy(null);
+  }
+
+  async function handleMembersCancel(invitationId: string) {
+    setMembersCancelBusy(invitationId);
+    try {
+      await api.cancelInvitation(projectId, invitationId);
+      setMembersData(prev => prev ? {
+        ...prev,
+        pending_invitations: prev.pending_invitations.filter(i => i.id !== invitationId),
+      } : prev);
+      setToast({ message: "Invitation cancelled", tone: "success" });
+    } catch (e) {
+      setToast({ message: e instanceof Error ? e.message : "Failed to cancel", tone: "error" });
+    }
+    setMembersCancelBusy(null);
+  }
+
   async function loadShopifyCatalogIfNeeded() {
     if (!projectId || !isShopifyProject) return;
     if (shopifyCatalogLoading) return;
@@ -4334,6 +4438,7 @@ export default function ProjectPage() {
     // both conditions are true (see ``visibleTabs`` below). The label still lives
     // in this map so deep-links and persistence keep working.
     performance: "Performance & Analysis",
+    members: "Members",
     project_settings: "Project Settings",
   };
 
@@ -10827,6 +10932,155 @@ export default function ProjectPage() {
                 </div>
               </>
             ) : null}
+          </div>
+        ) : null}
+
+        {tab === "members" ? (
+          <div className={styles.settingsPage}>
+            <div className={styles.intro}>
+              <h1 style={{ margin: 0 }}>Members</h1>
+              <p style={{ marginBottom: 0 }}>Manage who has access to this project.</p>
+            </div>
+
+            {/* Invite form — only owner/admin */}
+            {projectMeta && (!projectMeta.is_shared || projectMeta.your_role === "admin" || projectMeta.your_role === "owner") && (
+              <div className={projectsDark.membersCard}>
+                <h2 className={projectsDark.membersSectionTitle}>Invite collaborator</h2>
+                <div className={projectsDark.membersInviteRow}>
+                  <input
+                    type="email"
+                    className={projectsDark.membersEmailInput}
+                    placeholder="Email address"
+                    value={membersInviteEmail}
+                    onChange={e => { setMembersInviteEmail(e.target.value); setMembersInviteError(null); }}
+                    onKeyDown={e => { if (e.key === "Enter") void handleMembersInvite(); }}
+                    aria-label="Invite email"
+                  />
+                  <select
+                    className={projectsDark.membersRoleSelect}
+                    value={membersInviteRole}
+                    onChange={e => setMembersInviteRole(e.target.value as CollaboratorRole)}
+                    aria-label="Role"
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="editor">Editor</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+                  <button
+                    type="button"
+                    className={styles.button}
+                    disabled={membersInviteBusy}
+                    onClick={() => void handleMembersInvite()}
+                  >
+                    {membersInviteBusy ? "Sending…" : "Send invite"}
+                  </button>
+                </div>
+                {membersInviteError && (
+                  <p className={projectsDark.membersInviteError} role="alert">{membersInviteError}</p>
+                )}
+              </div>
+            )}
+
+            {membersLoading ? (
+              <div className={projectsDark.membersCard}>
+                <p className={projectsDark.membersMuted}>Loading members…</p>
+              </div>
+            ) : (
+              <>
+                {/* Current members */}
+                <div className={projectsDark.membersCard}>
+                  <h2 className={projectsDark.membersSectionTitle}>Current members</h2>
+
+                  {/* Owner row */}
+                  <div className={projectsDark.memberRow}>
+                    <div className={projectsDark.memberAvatar}>
+                      {projectMeta?.owner_name ? projectMeta.owner_name.slice(0, 2).toUpperCase() : "OW"}
+                    </div>
+                    <div className={projectsDark.memberInfo}>
+                      <span className={projectsDark.memberName}>{projectMeta?.owner_name || "Project Owner"}</span>
+                      <span className={projectsDark.memberEmail}>Owner</span>
+                    </div>
+                    <span className={projectsDark.ownerBadge}>Owner</span>
+                  </div>
+
+                  {/* Collaborators */}
+                  {(membersData?.collaborators || []).map(c => (
+                    <div key={c.id} className={projectsDark.memberRow}>
+                      <div className={projectsDark.memberAvatar}>{c.user_avatar_initials || "?"}</div>
+                      <div className={projectsDark.memberInfo}>
+                        <span className={projectsDark.memberName}>{c.user_name || c.user_email}</span>
+                        <span className={projectsDark.memberEmail}>{c.user_email}</span>
+                      </div>
+                      {projectMeta && (!projectMeta.is_shared || projectMeta.your_role === "admin" || projectMeta.your_role === "owner") ? (
+                        <>
+                          <select
+                            className={projectsDark.membersRoleSelect}
+                            value={c.role}
+                            disabled={membersRoleChangeBusy === c.id}
+                            onChange={e => void handleMembersChangeRole(c.id, e.target.value as CollaboratorRole)}
+                            aria-label={`Role for ${c.user_name || c.user_email}`}
+                          >
+                            <option value="admin">Admin</option>
+                            <option value="editor">Editor</option>
+                            <option value="viewer">Viewer</option>
+                          </select>
+                          <button
+                            type="button"
+                            className={projectsDark.memberRemoveBtn}
+                            disabled={membersRemoveBusy === c.id}
+                            onClick={() => void handleMembersRemove(c)}
+                          >
+                            {membersRemoveBusy === c.id ? "…" : "Remove"}
+                          </button>
+                        </>
+                      ) : (
+                        <span className={projectsDark.memberRoleBadge}>{c.role}</span>
+                      )}
+                    </div>
+                  ))}
+
+                  {(membersData?.collaborators || []).length === 0 && (
+                    <p className={projectsDark.membersMuted}>No collaborators yet.</p>
+                  )}
+                </div>
+
+                {/* Pending invitations */}
+                {(membersData?.pending_invitations || []).length > 0 && (
+                  <div className={projectsDark.membersCard}>
+                    <h2 className={projectsDark.membersSectionTitle}>Pending invitations</h2>
+                    {(membersData?.pending_invitations || []).map((inv: InvitationPublic) => (
+                      <div key={inv.id} className={projectsDark.memberRow}>
+                        <div className={`${projectsDark.memberAvatar} ${projectsDark.memberAvatarPending}`}>?</div>
+                        <div className={projectsDark.memberInfo}>
+                          <span className={projectsDark.memberName}>{inv.invited_email}</span>
+                          <span className={projectsDark.memberEmail}>{inv.role} · Pending</span>
+                        </div>
+                        {projectMeta && (!projectMeta.is_shared || projectMeta.your_role === "admin" || projectMeta.your_role === "owner") && (
+                          <>
+                            <button
+                              type="button"
+                              className={projectsDark.memberResendBtn}
+                              disabled={membersResendBusy === inv.id}
+                              onClick={() => void handleMembersResend(inv.id)}
+                            >
+                              {membersResendBusy === inv.id ? "…" : "Resend"}
+                            </button>
+                            <button
+                              type="button"
+                              className={projectsDark.memberRemoveBtn}
+                              disabled={membersCancelBusy === inv.id}
+                              onClick={() => void handleMembersCancel(inv.id)}
+                            >
+                              {membersCancelBusy === inv.id ? "…" : "Cancel"}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         ) : null}
 

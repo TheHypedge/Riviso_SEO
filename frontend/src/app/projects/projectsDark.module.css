@@ -39,3 +39,179 @@
   color: color-mix(in oklab, var(--aa-primary), #fff 30%);
 }
 
+
+/* ── Members tab ─────────────────────────────────────────────────────────── */
+.membersCard {
+  background: var(--aa-void-elevated, #121214);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--aa-r-lg, 12px);
+  padding: 24px;
+  margin-bottom: 16px;
+}
+
+.membersSectionTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--aa-on-dark, #faf9f5);
+  margin: 0 0 16px;
+  letter-spacing: 0.01em;
+}
+
+.membersMuted {
+  font-size: 13px;
+  color: var(--aa-on-dark-soft, #a09d96);
+  margin: 0;
+}
+
+.membersInviteRow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+
+.membersEmailInput {
+  flex: 1;
+  min-width: 200px;
+  padding: 9px 12px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--aa-r-sm, 6px);
+  color: var(--aa-on-dark, #faf9f5);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+.membersEmailInput:focus { border-color: var(--aa-primary, #d97757); }
+.membersEmailInput::placeholder { color: rgba(160, 157, 150, 0.55); }
+
+.membersRoleSelect {
+  padding: 9px 10px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--aa-r-sm, 6px);
+  color: var(--aa-on-dark, #faf9f5);
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+}
+.membersRoleSelect:focus { border-color: var(--aa-primary, #d97757); }
+.membersRoleSelect:disabled { opacity: 0.5; cursor: default; }
+
+.membersInviteError {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--aa-error, #c64545);
+}
+
+.memberRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.memberRow:last-child { border-bottom: none; }
+
+.memberAvatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(217, 119, 87, 0.15);
+  color: var(--aa-primary, #d97757);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.memberAvatarPending {
+  background: rgba(255,255,255,0.06);
+  color: rgba(160,157,150,0.5);
+}
+
+.memberInfo {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.memberName {
+  font-size: 13px;
+  color: var(--aa-on-dark, #faf9f5);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.memberEmail {
+  font-size: 12px;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+
+.ownerBadge {
+  padding: 3px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(217, 119, 87, 0.12);
+  color: var(--aa-primary, #d97757);
+  border: 1px solid rgba(217, 119, 87, 0.25);
+  flex-shrink: 0;
+}
+
+.memberRoleBadge {
+  padding: 3px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(160, 157, 150, 0.1);
+  color: var(--aa-on-dark-soft, #a09d96);
+  border: 1px solid rgba(160, 157, 150, 0.18);
+  flex-shrink: 0;
+}
+
+.memberRemoveBtn {
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid rgba(196, 69, 69, 0.3);
+  border-radius: var(--aa-r-sm, 6px);
+  color: var(--aa-error, #c64545);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s ease;
+}
+.memberRemoveBtn:hover:not(:disabled) { background: rgba(196, 69, 69, 0.1); }
+.memberRemoveBtn:disabled { opacity: 0.45; cursor: default; }
+
+.memberResendBtn {
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: var(--aa-r-sm, 6px);
+  color: var(--aa-on-dark-soft, #a09d96);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s ease;
+}
+.memberResendBtn:hover:not(:disabled) {
+  background: rgba(255,255,255,0.05);
+  color: var(--aa-on-dark, #faf9f5);
+}
+.memberResendBtn:disabled { opacity: 0.45; cursor: default; }
+
+@media (prefers-reduced-motion: reduce) {
+  .memberRemoveBtn, .memberResendBtn, .membersEmailInput { transition: none; }
+}

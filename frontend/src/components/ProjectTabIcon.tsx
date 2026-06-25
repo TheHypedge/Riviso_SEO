@@ -14,7 +14,8 @@ export type ProjectTabKey =
   | "context_links"
   | "tools"
   | "performance"
-  | "project_settings";
+  | "project_settings"
+  | "members";
 
 type IconProps = { className?: string };
 
@@ -112,6 +113,15 @@ export function ProjectTabIcon({ tab, className }: { tab: ProjectTabKey; classNa
             d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"
             {...S}
           />
+        </Svg>
+      );
+    case "members":
+      return (
+        <Svg className={className}>
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" {...S} />
+          <circle cx="9" cy="7" r="4" {...S} />
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87" {...S} />
+          <path d="M16 3.13a4 4 0 0 1 0 7.75" {...S} />
         </Svg>
       );
     default:

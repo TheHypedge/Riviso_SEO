@@ -5214,6 +5214,459 @@ def delete_shopify_products_for_project(project_id: str) -> int:
     return int(res.deleted_count or 0)
 
 
+# =============================================================================
+# PROJECT COLLABORATION — collaborators, invitations, notifications, activity
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Normalise helpers
+# ---------------------------------------------------------------------------
+
+def _normalize_collaborator_dict(d: dict[str, Any]) -> dict[str, Any]:
+    cid = (d.get("id") or "").strip()
+    if not cid:
+        raise ValueError("collaborator id is required")
+    return {
+        "id": cid,
+        "project_id": (d.get("project_id") or "").strip(),
+        "user_id": (d.get("user_id") or "").strip(),
+        "role": (d.get("role") or "editor").strip().lower()[:32],
+        "status": (d.get("status") or "active").strip().lower()[:32],
+        "invited_at": (d.get("invited_at") or "").strip()[:64],
+        "joined_at": (d.get("joined_at") or "").strip()[:64],
+        "invited_by_user_id": (d.get("invited_by_user_id") or "").strip(),
+    }
+
+
+def _normalize_invitation_dict(d: dict[str, Any]) -> dict[str, Any]:
+    iid = (d.get("id") or "").strip()
+    if not iid:
+        raise ValueError("invitation id is required")
+    return {
+        "id": iid,
+        "project_id": (d.get("project_id") or "").strip(),
+        "project_name": (d.get("project_name") or "")[:500],
+        "project_website_url": (d.get("project_website_url") or "")[:2048],
+        "invited_email": (d.get("invited_email") or "").strip().lower()[:500],
+        "invited_user_id": (d.get("invited_user_id") or "").strip(),
+        "invited_by_user_id": (d.get("invited_by_user_id") or "").strip(),
+        "invited_by_name": (d.get("invited_by_name") or "")[:200],
+        "role": (d.get("role") or "editor").strip().lower()[:32],
+        "status": (d.get("status") or "pending").strip().lower()[:32],
+        "token": (d.get("token") or "").strip()[:128],
+        "created_at": (d.get("created_at") or "").strip()[:64],
+        "expires_at": (d.get("expires_at") or "").strip()[:64],
+        "responded_at": (d.get("responded_at") or "").strip()[:64],
+    }
+
+
+def _normalize_notification_dict(d: dict[str, Any]) -> dict[str, Any]:
+    nid = (d.get("id") or "").strip()
+    if not nid:
+        raise ValueError("notification id is required")
+    return {
+        "id": nid,
+        "user_id": (d.get("user_id") or "").strip(),
+        "type": (d.get("type") or "")[:64],
+        "title": (d.get("title") or "")[:500],
+        "body": (d.get("body") or "")[:2000],
+        "data": dict(d.get("data") or {}),
+        "read": bool(d.get("read", False)),
+        "created_at": (d.get("created_at") or "").strip()[:64],
+    }
+
+
+def _normalize_activity_dict(d: dict[str, Any]) -> dict[str, Any]:
+    aid = (d.get("id") or "").strip()
+    if not aid:
+        raise ValueError("activity id is required")
+    return {
+        "id": aid,
+        "project_id": (d.get("project_id") or "").strip(),
+        "actor_user_id": (d.get("actor_user_id") or "").strip(),
+        "actor_name": (d.get("actor_name") or "")[:200],
+        "action": (d.get("action") or "")[:64],
+        "data": dict(d.get("data") or {}),
+        "created_at": (d.get("created_at") or "").strip()[:64],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Collaborators
+# ---------------------------------------------------------------------------
+
+def get_project_collaborators(project_id: str) -> list[dict[str, Any]]:
+    """Return all active collaborator records for a project."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    if _storage_mode != "mongo":
+        return []
+    cur = get_db().project_collaborators.find(
+        {"project_id": pid, "status": "active"}, {"_id": 0}
+    )
+    return [_normalize_collaborator_dict(doc) for doc in cur]
+
+
+def get_collaborator(collaborator_id: str) -> dict[str, Any] | None:
+    cid = (collaborator_id or "").strip()
+    if not cid:
+        return None
+    if _storage_mode != "mongo":
+        return None
+    doc = get_db().project_collaborators.find_one({"id": cid}, {"_id": 0})
+    return _normalize_collaborator_dict(doc) if doc else None
+
+
+def get_collaborator_for_user(project_id: str, user_id: str) -> dict[str, Any] | None:
+    pid = (project_id or "").strip()
+    uid = (user_id or "").strip()
+    if not pid or not uid:
+        return None
+    if _storage_mode != "mongo":
+        return None
+    doc = get_db().project_collaborators.find_one(
+        {"project_id": pid, "user_id": uid, "status": "active"}, {"_id": 0}
+    )
+    return _normalize_collaborator_dict(doc) if doc else None
+
+
+def insert_collaborator(data: dict[str, Any]) -> None:
+    norm = _normalize_collaborator_dict(data)
+    if _storage_mode != "mongo":
+        return
+    with _db_write_lock:
+        get_db().project_collaborators.insert_one({**norm, "_id": norm["id"]})
+
+
+def patch_collaborator_fields(collaborator_id: str, updates: dict[str, Any]) -> bool:
+    cid = (collaborator_id or "").strip()
+    if not cid or not updates:
+        return False
+    if _storage_mode != "mongo":
+        return False
+    with _db_write_lock:
+        res = get_db().project_collaborators.update_one({"id": cid}, {"$set": updates})
+    return bool(res.modified_count)
+
+
+def delete_collaborator(collaborator_id: str) -> bool:
+    cid = (collaborator_id or "").strip()
+    if not cid:
+        return False
+    if _storage_mode != "mongo":
+        return False
+    with _db_write_lock:
+        res = get_db().project_collaborators.delete_one({"id": cid})
+    return bool(res.deleted_count)
+
+
+def get_projects_shared_with_user(user_id: str) -> list[dict[str, Any]]:
+    """Return {project_id, role, joined_at} for all projects shared with user_id."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return []
+    if _storage_mode != "mongo":
+        return []
+    cur = get_db().project_collaborators.find(
+        {"user_id": uid, "status": "active"},
+        {"_id": 0, "project_id": 1, "role": 1, "joined_at": 1},
+    )
+    out = []
+    for doc in cur:
+        pid = (doc.get("project_id") or "").strip()
+        if pid:
+            out.append({
+                "project_id": pid,
+                "role": (doc.get("role") or "editor").strip().lower(),
+                "joined_at": (doc.get("joined_at") or "").strip(),
+            })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Invitations
+# ---------------------------------------------------------------------------
+
+def get_pending_invitations_for_email(email: str) -> list[dict[str, Any]]:
+    em = (email or "").strip().lower()
+    if not em:
+        return []
+    if _storage_mode != "mongo":
+        return []
+    cur = get_db().project_invitations.find(
+        {"invited_email": em, "status": "pending"}, {"_id": 0}
+    )
+    return [_normalize_invitation_dict(doc) for doc in cur]
+
+
+def get_pending_invitations_for_user_id(user_id: str) -> list[dict[str, Any]]:
+    uid = (user_id or "").strip()
+    if not uid:
+        return []
+    if _storage_mode != "mongo":
+        return []
+    cur = get_db().project_invitations.find(
+        {"invited_user_id": uid, "status": "pending"}, {"_id": 0}
+    ).sort("created_at", -1)
+    return [_normalize_invitation_dict(doc) for doc in cur]
+
+
+def get_invitation(invitation_id: str) -> dict[str, Any] | None:
+    iid = (invitation_id or "").strip()
+    if not iid:
+        return None
+    if _storage_mode != "mongo":
+        return None
+    doc = get_db().project_invitations.find_one({"id": iid}, {"_id": 0})
+    return _normalize_invitation_dict(doc) if doc else None
+
+
+def get_invitation_by_token(token: str) -> dict[str, Any] | None:
+    tok = (token or "").strip()
+    if not tok:
+        return None
+    if _storage_mode != "mongo":
+        return None
+    doc = get_db().project_invitations.find_one({"token": tok}, {"_id": 0})
+    return _normalize_invitation_dict(doc) if doc else None
+
+
+def get_project_invitations(project_id: str) -> list[dict[str, Any]]:
+    """Return all invitations for a project (all statuses, newest first)."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    if _storage_mode != "mongo":
+        return []
+    cur = get_db().project_invitations.find(
+        {"project_id": pid}, {"_id": 0}
+    ).sort("created_at", -1)
+    return [_normalize_invitation_dict(doc) for doc in cur]
+
+
+def insert_invitation(data: dict[str, Any]) -> None:
+    norm = _normalize_invitation_dict(data)
+    if _storage_mode != "mongo":
+        return
+    with _db_write_lock:
+        get_db().project_invitations.insert_one({**norm, "_id": norm["id"]})
+
+
+def patch_invitation_fields(invitation_id: str, updates: dict[str, Any]) -> bool:
+    iid = (invitation_id or "").strip()
+    if not iid or not updates:
+        return False
+    if _storage_mode != "mongo":
+        return False
+    with _db_write_lock:
+        res = get_db().project_invitations.update_one({"id": iid}, {"$set": updates})
+    return bool(res.modified_count)
+
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+def get_notifications_for_user(
+    user_id: str, *, unread_only: bool = False, limit: int = 50
+) -> list[dict[str, Any]]:
+    uid = (user_id or "").strip()
+    if not uid:
+        return []
+    if _storage_mode != "mongo":
+        return []
+    q: dict[str, Any] = {"user_id": uid}
+    if unread_only:
+        q["read"] = False
+    cur = get_db().notifications.find(q, {"_id": 0}).sort("created_at", -1).limit(limit)
+    return [_normalize_notification_dict(doc) for doc in cur]
+
+
+def get_unread_notification_count(user_id: str) -> int:
+    uid = (user_id or "").strip()
+    if not uid:
+        return 0
+    if _storage_mode != "mongo":
+        return 0
+    return int(get_db().notifications.count_documents({"user_id": uid, "read": False}))
+
+
+def insert_notification(data: dict[str, Any]) -> None:
+    norm = _normalize_notification_dict(data)
+    if _storage_mode != "mongo":
+        return
+    with _db_write_lock:
+        get_db().notifications.insert_one({**norm, "_id": norm["id"]})
+
+
+def mark_notification_read(notification_id: str, user_id: str) -> bool:
+    nid = (notification_id or "").strip()
+    uid = (user_id or "").strip()
+    if not nid or not uid:
+        return False
+    if _storage_mode != "mongo":
+        return False
+    with _db_write_lock:
+        res = get_db().notifications.update_one(
+            {"id": nid, "user_id": uid}, {"$set": {"read": True}}
+        )
+    return bool(res.modified_count)
+
+
+def mark_all_notifications_read(user_id: str) -> int:
+    uid = (user_id or "").strip()
+    if not uid:
+        return 0
+    if _storage_mode != "mongo":
+        return 0
+    with _db_write_lock:
+        res = get_db().notifications.update_many(
+            {"user_id": uid, "read": False}, {"$set": {"read": True}}
+        )
+    return int(res.modified_count)
+
+
+# ---------------------------------------------------------------------------
+# Activity timeline
+# ---------------------------------------------------------------------------
+
+def insert_activity(data: dict[str, Any]) -> None:
+    norm = _normalize_activity_dict(data)
+    if _storage_mode != "mongo":
+        return
+    with _db_write_lock:
+        get_db().project_activity.insert_one({**norm, "_id": norm["id"]})
+
+
+def get_project_activity(project_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    if _storage_mode != "mongo":
+        return []
+    cur = (
+        get_db().project_activity.find({"project_id": pid}, {"_id": 0})
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    return [_normalize_activity_dict(doc) for doc in cur]
+
+
+# ---------------------------------------------------------------------------
+# Central member-context resolver
+# ---------------------------------------------------------------------------
+
+def get_project_member_context(
+    project_id: str, user_id: str
+) -> dict[str, Any] | None:
+    """
+    Returns the collaboration context for (project, user).
+
+    Return value:
+        None            — project not found
+        dict with keys:
+            has_access (bool)
+            is_owner (bool)
+            role (str)  — "owner" | "admin" | "editor" | "viewer" | None
+            owner_user_id (str)
+            owner_subscription_type (str)  — always the project owner's plan
+
+    No exceptions raised; caller decides what to do with the result.
+    """
+    pid = (project_id or "").strip()
+    uid = (user_id or "").strip()
+    if not pid or not uid:
+        return None
+
+    proj = get_project_access_row(pid)
+    if not proj:
+        return None
+
+    owner_uid = _coerce_user_id_str(proj.get("owner_user_id"))
+
+    # Resolve owner's subscription for feature-limit inheritance.
+    owner_sub = "beta"
+    try:
+        owner_user = get_user_by_id(owner_uid) if owner_uid else None
+        if owner_user:
+            owner_sub = ((owner_user.get("subscription_type") or "beta").strip().lower() or "beta")
+    except Exception:
+        pass
+
+    # Check ownership first (includes case-insensitive UUID comparison).
+    from app.core.ids import user_ids_equal  # local import avoids circular deps
+    if user_ids_equal(owner_uid, uid):
+        return {
+            "has_access": True,
+            "is_owner": True,
+            "role": "owner",
+            "owner_user_id": owner_uid,
+            "owner_subscription_type": owner_sub,
+        }
+
+    # Check active collaborator record.
+    collab = get_collaborator_for_user(pid, uid)
+    if collab and collab.get("status") == "active":
+        return {
+            "has_access": True,
+            "is_owner": False,
+            "role": collab.get("role") or "viewer",
+            "owner_user_id": owner_uid,
+            "owner_subscription_type": owner_sub,
+        }
+
+    return {
+        "has_access": False,
+        "is_owner": False,
+        "role": None,
+        "owner_user_id": owner_uid,
+        "owner_subscription_type": owner_sub,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Shared project listing
+# ---------------------------------------------------------------------------
+
+def load_shared_projects_listing(user_id: str) -> list[dict[str, Any]]:
+    """
+    Return lightweight project listing rows for projects shared with user_id.
+    Uses _PROJECT_LISTING_MONGO_PROJECTION so callers get the same shape as
+    load_projects_listing().
+    """
+    uid = (user_id or "").strip()
+    if not uid or _storage_mode != "mongo":
+        return []
+
+    shares = get_projects_shared_with_user(uid)
+    if not shares:
+        return []
+
+    pids = [s["project_id"] for s in shares if s.get("project_id")]
+    if not pids:
+        return []
+
+    role_map = {s["project_id"]: s["role"] for s in shares}
+    joined_map = {s["project_id"]: s.get("joined_at", "") for s in shares}
+
+    db = get_db()
+    cur = db.projects.find(
+        {"id": {"$in": pids}},
+        _PROJECT_LISTING_MONGO_PROJECTION,
+    )
+    out = []
+    for doc in cur:
+        try:
+            norm = _normalize_project_dict(doc)
+            norm["_shared_role"] = role_map.get(norm["id"], "viewer")
+            norm["_shared_joined_at"] = joined_map.get(norm["id"], "")
+            out.append(norm)
+        except Exception:
+            continue
+    return out
+
+
 def init_storage() -> None:
     global _storage_mode, _storage_init_error
     force_json = (os.environ.get("FORCE_JSON_STORAGE") or "").strip().lower() in {"1", "true", "yes", "on"}

@@ -244,6 +244,11 @@ export type ProjectPublic = {
   target_cities?: string[] | null;
   /** ``true`` means "every city in the listed countries"; ignores the cities list. */
   target_cities_all?: boolean | null;
+  // Collaboration fields — populated by the server
+  is_shared?: boolean;
+  your_role?: "owner" | "admin" | "editor" | "viewer" | null;
+  owner_name?: string | null;
+  member_count?: number;
 };
 
 export type ProjectSettings = {
@@ -1010,6 +1015,63 @@ export type ContextLinkItem = {
   id: string;
   label: string;
   url: string;
+};
+
+// ---------------------------------------------------------------------------
+// Collaboration types
+// ---------------------------------------------------------------------------
+
+export type CollaboratorRole = "admin" | "editor" | "viewer";
+export type InvitationStatus = "pending" | "accepted" | "declined" | "cancelled" | "expired";
+
+export type CollaboratorPublic = {
+  id: string;
+  project_id: string;
+  user_id: string;
+  user_name: string;
+  user_email: string;
+  user_avatar_initials: string;
+  role: CollaboratorRole;
+  status: string;
+  invited_at: string;
+  joined_at?: string | null;
+};
+
+export type InvitationPublic = {
+  id: string;
+  project_id: string;
+  project_name: string;
+  project_website_url?: string | null;
+  invited_email: string;
+  invited_by_name: string;
+  role: CollaboratorRole;
+  status: InvitationStatus;
+  created_at: string;
+  expires_at: string;
+  responded_at?: string | null;
+};
+
+export type MembersResponse = {
+  collaborators: CollaboratorPublic[];
+  pending_invitations: InvitationPublic[];
+};
+
+export type NotificationPublic = {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  data: Record<string, unknown>;
+  read: boolean;
+  created_at: string;
+};
+
+export type ActivityRecord = {
+  id: string;
+  actor_name: string;
+  action: string;
+  data: Record<string, unknown>;
+  created_at: string;
 };
 
 const ENV_API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").trim().replace(/\/+$/, "");
@@ -3366,6 +3428,69 @@ export const api = {
   },
   async adminUpsertPlan(planKey: string, payload: Partial<PlanPublic>) {
     return apiFetch<PlanPublic>(`/api/admin/plans/${encodeURIComponent(planKey)}`, { method: "PUT", body: JSON.stringify(payload) });
+  },
+
+  // ---------------------------------------------------------------------------
+  // Collaboration — project-scoped
+  // ---------------------------------------------------------------------------
+  async getProjectMembers(projectId: string): Promise<MembersResponse> {
+    return apiFetch<MembersResponse>(`/api/projects/${projectId}/collaboration/members`, undefined, { skipGlobalLoading: true });
+  },
+  async inviteCollaborator(projectId: string, email: string, role: CollaboratorRole): Promise<InvitationPublic> {
+    return apiFetch<InvitationPublic>(`/api/projects/${projectId}/collaboration/invite`, {
+      method: "POST",
+      body: JSON.stringify({ email, role }),
+    });
+  },
+  async changeCollaboratorRole(projectId: string, collaboratorId: string, role: CollaboratorRole): Promise<CollaboratorPublic> {
+    return apiFetch<CollaboratorPublic>(`/api/projects/${projectId}/collaboration/members/${collaboratorId}/role`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    });
+  },
+  async removeCollaborator(projectId: string, collaboratorId: string): Promise<void> {
+    await apiFetch<unknown>(`/api/projects/${projectId}/collaboration/members/${collaboratorId}`, { method: "DELETE" });
+  },
+  async resendInvitation(projectId: string, invitationId: string): Promise<void> {
+    await apiFetch<unknown>(`/api/projects/${projectId}/collaboration/invitations/${invitationId}/resend`, { method: "POST" });
+  },
+  async cancelInvitation(projectId: string, invitationId: string): Promise<void> {
+    await apiFetch<unknown>(`/api/projects/${projectId}/collaboration/invitations/${invitationId}`, { method: "DELETE" });
+  },
+  async getProjectActivity(projectId: string): Promise<ActivityRecord[]> {
+    return apiFetch<ActivityRecord[]>(`/api/projects/${projectId}/collaboration/activity`, undefined, { skipGlobalLoading: true });
+  },
+
+  // ---------------------------------------------------------------------------
+  // Invitations — user-scoped
+  // ---------------------------------------------------------------------------
+  async getMyInvitations(): Promise<InvitationPublic[]> {
+    return apiFetch<InvitationPublic[]>("/api/invitations", undefined, { skipGlobalLoading: true });
+  },
+  async acceptInvitation(invitationId: string): Promise<{ invitation: InvitationPublic; project: ProjectPublic | null }> {
+    return apiFetch<{ invitation: InvitationPublic; project: ProjectPublic | null }>(`/api/invitations/${invitationId}/accept`, { method: "POST" });
+  },
+  async declineInvitation(invitationId: string): Promise<void> {
+    await apiFetch<unknown>(`/api/invitations/${invitationId}/decline`, { method: "POST" });
+  },
+  async getInvitationByToken(token: string): Promise<InvitationPublic> {
+    return apiFetch<InvitationPublic>(`/api/invitations/by-token/${encodeURIComponent(token)}`, undefined, { skipGlobalLoading: true });
+  },
+
+  // ---------------------------------------------------------------------------
+  // Notifications
+  // ---------------------------------------------------------------------------
+  async getNotifications(): Promise<NotificationPublic[]> {
+    return apiFetch<NotificationPublic[]>("/api/notifications", undefined, { skipGlobalLoading: true });
+  },
+  async getUnreadNotificationCount(): Promise<{ count: number }> {
+    return apiFetch<{ count: number }>("/api/notifications/count", undefined, { skipGlobalLoading: true });
+  },
+  async markNotificationRead(notificationId: string): Promise<void> {
+    await apiFetch<unknown>(`/api/notifications/${notificationId}/read`, { method: "PATCH" });
+  },
+  async markAllNotificationsRead(): Promise<void> {
+    await apiFetch<unknown>("/api/notifications/read-all", { method: "POST" });
   },
 };
 

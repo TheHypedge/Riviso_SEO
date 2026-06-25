@@ -10,6 +10,7 @@ import { ShopifyManualConnectGuide } from "@/components/shopify/ShopifyManualCon
 import { TutorialStepperModal } from "@/components/TutorialStepperModal";
 import { WorkspaceProjectOverview } from "@/components/WorkspaceProjectOverview";
 import { DashboardProjectsSkeleton, DetailPanelSkeleton, FormFieldsSkeleton } from "@/components/skeleton";
+import NotificationBell from "@/components/NotificationBell";
 import styles from "../page.module.css";
 import dashStyles from "./dashboard.module.css";
 import {
@@ -18,9 +19,13 @@ import {
   AdminWorkspaceResponse,
   api,
   clearAuth,
+  CollaboratorPublic,
+  CollaboratorRole,
   downloadWordpressPlugin,
   getAccessToken,
   invalidateProjectSettingsCache,
+  InvitationPublic,
+  MembersResponse,
   PlanPublic,
   ProfilePublic,
   ProjectPlatform,
@@ -194,12 +199,129 @@ export default function DashboardPage() {
   const token = useMemo(() => getAccessToken(), []);
   const isAdmin = (meRole || "").trim().toLowerCase() === "admin";
 
+  // ---------------------------------------------------------------------------
+  // Collaboration state
+  // ---------------------------------------------------------------------------
+  type ProjectFilter = "all" | "owned" | "shared";
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
+
+  const [shareTargetProject, setShareTargetProject] = useState<ProjectPublic | null>(null);
+  const [shareMembers, setShareMembers] = useState<MembersResponse | null>(null);
+  const [shareMembersLoading, setShareMembersLoading] = useState(false);
+  const [shareInviteEmail, setShareInviteEmail] = useState("");
+  const [shareInviteRole, setShareInviteRole] = useState<CollaboratorRole>("editor");
+  const [shareInviteBusy, setShareInviteBusy] = useState(false);
+  const [shareInviteError, setShareInviteError] = useState<string | null>(null);
+  const [shareRoleChangeBusy, setShareRoleChangeBusy] = useState<string | null>(null);
+  const [shareRemoveBusy, setShareRemoveBusy] = useState<string | null>(null);
+  const [shareResendBusy, setShareResendBusy] = useState<string | null>(null);
+  const [shareCancelBusy, setShareCancelBusy] = useState<string | null>(null);
+  const shareTrapRef = useFocusTrap(!!shareTargetProject);
+
   const addProjectTrapRef = useFocusTrap(showAddProject);
   const shopifyConnectTrapRef = useFocusTrap(showShopifyConnect && !!shopifyProject);
   const wpConnectTrapRef = useFocusTrap(showWpConnect && !!wpProject);
   const userDetailsTrapRef = useFocusTrap(!!(userDetailsLoading || userDetails));
   const workspaceTrapRef = useFocusTrap(!!(userWorkspaceLoading || userWorkspace));
   const deleteUserTrapRef = useFocusTrap(!!deleteUserTarget);
+
+  // ---------------------------------------------------------------------------
+  // Collaboration helpers
+  // ---------------------------------------------------------------------------
+  const openShareModal = async (p: ProjectPublic) => {
+    setShareTargetProject(p);
+    setShareMembers(null);
+    setShareInviteEmail("");
+    setShareInviteError(null);
+    setShareMembersLoading(true);
+    try {
+      const data = await api.getProjectMembers(p.id);
+      setShareMembers(data);
+    } catch { /* show empty state */ }
+    setShareMembersLoading(false);
+  };
+
+  const closeShareModal = () => {
+    setShareTargetProject(null);
+    setShareMembers(null);
+    setShareInviteEmail("");
+    setShareInviteError(null);
+  };
+
+  const handleShareInvite = async () => {
+    if (!shareTargetProject) return;
+    setShareInviteError(null);
+    if (!shareInviteEmail.trim()) { setShareInviteError("Enter an email address"); return; }
+    setShareInviteBusy(true);
+    try {
+      const inv = await api.inviteCollaborator(shareTargetProject.id, shareInviteEmail.trim(), shareInviteRole);
+      setShareMembers(prev => prev ? { ...prev, pending_invitations: [inv, ...prev.pending_invitations] } : prev);
+      setShareInviteEmail("");
+    } catch (e: unknown) {
+      const err = e instanceof Error ? e.message : "Failed to send invitation";
+      setShareInviteError(err);
+    }
+    setShareInviteBusy(false);
+  };
+
+  const handleChangeRole = async (collaboratorId: string, newRole: CollaboratorRole) => {
+    if (!shareTargetProject) return;
+    setShareRoleChangeBusy(collaboratorId);
+    try {
+      const updated = await api.changeCollaboratorRole(shareTargetProject.id, collaboratorId, newRole);
+      setShareMembers(prev => prev ? {
+        ...prev,
+        collaborators: prev.collaborators.map(c => c.id === collaboratorId ? updated : c),
+      } : prev);
+    } catch {}
+    setShareRoleChangeBusy(null);
+  };
+
+  const handleRemoveCollaborator = async (collaborator: CollaboratorPublic) => {
+    if (!shareTargetProject) return;
+    setShareRemoveBusy(collaborator.id);
+    try {
+      await api.removeCollaborator(shareTargetProject.id, collaborator.id);
+      setShareMembers(prev => prev ? {
+        ...prev,
+        collaborators: prev.collaborators.filter(c => c.id !== collaborator.id),
+      } : prev);
+      // Update project card member count
+      setProjects(prev => prev.map(p => p.id === shareTargetProject.id
+        ? { ...p, member_count: Math.max(0, (p.member_count ?? 1) - 1) }
+        : p
+      ));
+    } catch {}
+    setShareRemoveBusy(null);
+  };
+
+  const handleResendInvitation = async (invitationId: string) => {
+    if (!shareTargetProject) return;
+    setShareResendBusy(invitationId);
+    try {
+      await api.resendInvitation(shareTargetProject.id, invitationId);
+    } catch {}
+    setShareResendBusy(null);
+  };
+
+  const handleCancelInvitation = async (invitationId: string) => {
+    if (!shareTargetProject) return;
+    setShareCancelBusy(invitationId);
+    try {
+      await api.cancelInvitation(shareTargetProject.id, invitationId);
+      setShareMembers(prev => prev ? {
+        ...prev,
+        pending_invitations: prev.pending_invitations.filter(i => i.id !== invitationId),
+      } : prev);
+    } catch {}
+    setShareCancelBusy(null);
+  };
+
+  const filteredProjects = useMemo(() => {
+    if (projectFilter === "owned") return projects.filter(p => !p.is_shared);
+    if (projectFilter === "shared") return projects.filter(p => p.is_shared);
+    return projects;
+  }, [projects, projectFilter]);
 
   function normalizePlatform(p: ProjectPublic | null | undefined): ProjectPlatform {
     const raw = ((p?.platform || "") as string).trim().toLowerCase();
@@ -1031,6 +1153,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
                     <div className={dashStyles.cardHeaderRight}>
+                      <NotificationBell />
                       <button
                         type="button"
                         className={styles.btnSecondary}
@@ -1053,17 +1176,47 @@ export default function DashboardPage() {
                     </div>
                   </div>
 
-                  {!loading && projects.length === 0 ? <p className={styles.muted}>No projects yet.</p> : null}
+                  {/* Project filter tabs */}
+                  {projects.length > 0 && (
+                    <div className={dashStyles.projectFilterRow} role="group" aria-label="Filter projects">
+                      {(["all", "owned", "shared"] as const).map(f => (
+                        <button
+                          key={f}
+                          type="button"
+                          className={`${dashStyles.projectFilterBtn} ${projectFilter === f ? dashStyles.projectFilterBtnActive : ""}`}
+                          onClick={() => setProjectFilter(f)}
+                          aria-pressed={projectFilter === f ? "true" : "false"}
+                        >
+                          {f === "all" ? `All (${projects.length})` : f === "owned" ? `Owned (${projects.filter(p => !p.is_shared).length})` : `Shared (${projects.filter(p => p.is_shared).length})`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {!loading && filteredProjects.length === 0 && projects.length === 0 ? <p className={styles.muted}>No projects yet.</p> : null}
+                  {!loading && filteredProjects.length === 0 && projects.length > 0 ? (
+                    <p className={styles.muted}>No {projectFilter} projects.</p>
+                  ) : null}
 
                   {loading && projects.length === 0 ? (
                     <DashboardProjectsSkeleton />
                   ) : (
                   <div className={styles.grid}>
-                    {projects.map((p) => (
+                    {filteredProjects.map((p) => (
                       <article
                         key={p.id}
-                        className={styles.projectCard}
+                        className={`${styles.projectCard} ${p.is_shared ? dashStyles.projectCardShared : ""}`}
                       >
+                        {/* Shared badge */}
+                        {p.is_shared && (
+                          <div className={dashStyles.sharedBadgeRow}>
+                            <span className={dashStyles.sharedBadge}>Shared</span>
+                            {p.your_role && p.your_role !== "owner" && (
+                              <span className={dashStyles.roleBadge}>{p.your_role.charAt(0).toUpperCase() + p.your_role.slice(1)}</span>
+                            )}
+                          </div>
+                        )}
+
                         <div className={styles.projectCardTop}>
                           <Link
                             href={`/projects/${p.id}`}
@@ -1101,18 +1254,33 @@ export default function DashboardPage() {
                                 >
                                   Open
                                 </button>
-                                <button
-                                  type="button"
-                                  className={styles.projectMenuItem}
-                                  role="menuitem"
-                                  onClick={() => {
-                                    setProjectMenuOpen(null);
-                                    router.push(`/projects/${p.id}?tab=project_settings`);
-                                  }}
-                                >
-                                  Project settings
-                                </button>
-                                {normalizePlatform(p) === "shopify" ? (
+                                {!p.is_shared && (
+                                  <button
+                                    type="button"
+                                    className={styles.projectMenuItem}
+                                    role="menuitem"
+                                    onClick={() => {
+                                      setProjectMenuOpen(null);
+                                      router.push(`/projects/${p.id}?tab=project_settings`);
+                                    }}
+                                  >
+                                    Project settings
+                                  </button>
+                                )}
+                                {(!p.is_shared || p.your_role === "admin") && (
+                                  <button
+                                    type="button"
+                                    className={styles.projectMenuItem}
+                                    role="menuitem"
+                                    onClick={() => {
+                                      setProjectMenuOpen(null);
+                                      void openShareModal(p);
+                                    }}
+                                  >
+                                    Share project
+                                  </button>
+                                )}
+                                {normalizePlatform(p) === "shopify" && !p.is_shared ? (
                                   <button
                                     type="button"
                                     className={styles.projectMenuItem}
@@ -1129,6 +1297,20 @@ export default function DashboardPage() {
                             ) : null}
                           </div>
                         </div>
+
+                        {/* Owner attribution */}
+                        <div className={dashStyles.projectOwnerRow}>
+                          {p.is_shared && p.owner_name
+                            ? <span className={dashStyles.projectOwnerLabel}>Owner: {p.owner_name}</span>
+                            : <span className={dashStyles.projectOwnerLabel}>Owner: You</span>
+                          }
+                          {!p.is_shared && (p.member_count ?? 0) > 0 && (
+                            <span className={dashStyles.memberCountChip}>
+                              {p.member_count} {p.member_count === 1 ? "member" : "members"}
+                            </span>
+                          )}
+                        </div>
+
                         <div className={styles.muted}>{p.website_url || "—"}</div>
                         <div className={styles.projectPlatformRow} aria-label={`Platform ${normalizePlatform(p)}`}>
                           {normalizePlatform(p) === "shopify" ? (
@@ -1156,6 +1338,146 @@ export default function DashboardPage() {
                 </div>
               </>
             ) : null}
+
+            {/* ── Share project modal ─────────────────────────────────── */}
+            {shareTargetProject && (
+              <div className={dashStyles.shareModalBackdrop} role="presentation">
+                <div
+                  ref={shareTrapRef}
+                  className={dashStyles.shareModal}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="share-modal-title"
+                >
+                  <div className={dashStyles.shareModalHeader}>
+                    <h2 id="share-modal-title" className={dashStyles.shareModalTitle}>
+                      Share &ldquo;{shareTargetProject.name}&rdquo;
+                    </h2>
+                    <button
+                      type="button"
+                      className={dashStyles.shareModalClose}
+                      aria-label="Close share dialog"
+                      onClick={closeShareModal}
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Invite form */}
+                  <div className={dashStyles.shareInviteForm}>
+                    <div className={dashStyles.shareInviteRow}>
+                      <input
+                        type="email"
+                        className={dashStyles.shareEmailInput}
+                        placeholder="Email address"
+                        value={shareInviteEmail}
+                        onChange={e => { setShareInviteEmail(e.target.value); setShareInviteError(null); }}
+                        onKeyDown={e => { if (e.key === "Enter") void handleShareInvite(); }}
+                        aria-label="Invite email"
+                      />
+                      <select
+                        className={dashStyles.shareRoleSelect}
+                        value={shareInviteRole}
+                        onChange={e => setShareInviteRole(e.target.value as CollaboratorRole)}
+                        aria-label="Select role"
+                      >
+                        <option value="admin">Admin</option>
+                        <option value="editor">Editor</option>
+                        <option value="viewer">Viewer</option>
+                      </select>
+                      <button
+                        type="button"
+                        className={dashStyles.shareInviteBtn}
+                        disabled={shareInviteBusy}
+                        onClick={() => void handleShareInvite()}
+                      >
+                        {shareInviteBusy ? "Sending…" : "Invite"}
+                      </button>
+                    </div>
+                    {shareInviteError && (
+                      <p className={dashStyles.shareInviteError} role="alert">{shareInviteError}</p>
+                    )}
+                  </div>
+
+                  {/* Members list */}
+                  {shareMembersLoading ? (
+                    <div className={dashStyles.shareLoadingRow}>Loading members…</div>
+                  ) : shareMembers && (shareMembers.collaborators.length > 0 || shareMembers.pending_invitations.length > 0) ? (
+                    <div className={dashStyles.shareMembersList}>
+                      <div className={dashStyles.shareMembersSection}>
+                        <span className={dashStyles.shareMembersSectionLabel}>Members</span>
+                        {shareMembers.collaborators.map(c => (
+                          <div key={c.id} className={dashStyles.shareMemberRow}>
+                            <div className={dashStyles.shareMemberAvatar}>{c.user_avatar_initials || "?"}</div>
+                            <div className={dashStyles.shareMemberInfo}>
+                              <span className={dashStyles.shareMemberName}>{c.user_name || c.user_email}</span>
+                              <span className={dashStyles.shareMemberEmail}>{c.user_email}</span>
+                            </div>
+                            <select
+                              className={dashStyles.shareMemberRoleSelect}
+                              value={c.role}
+                              disabled={shareRoleChangeBusy === c.id}
+                              onChange={e => void handleChangeRole(c.id, e.target.value as CollaboratorRole)}
+                              aria-label={`Role for ${c.user_name || c.user_email}`}
+                            >
+                              <option value="admin">Admin</option>
+                              <option value="editor">Editor</option>
+                              <option value="viewer">Viewer</option>
+                            </select>
+                            <button
+                              type="button"
+                              className={dashStyles.shareMemberRemoveBtn}
+                              disabled={shareRemoveBusy === c.id}
+                              onClick={() => void handleRemoveCollaborator(c)}
+                              aria-label={`Remove ${c.user_name || c.user_email}`}
+                            >
+                              {shareRemoveBusy === c.id ? "…" : "Remove"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {shareMembers.pending_invitations.length > 0 && (
+                        <div className={dashStyles.shareMembersSection}>
+                          <span className={dashStyles.shareMembersSectionLabel}>Pending invitations</span>
+                          {shareMembers.pending_invitations.map(inv => (
+                            <div key={inv.id} className={dashStyles.shareMemberRow}>
+                              <div className={`${dashStyles.shareMemberAvatar} ${dashStyles.shareMemberAvatarPending}`}>?</div>
+                              <div className={dashStyles.shareMemberInfo}>
+                                <span className={dashStyles.shareMemberName}>{inv.invited_email}</span>
+                                <span className={dashStyles.shareMemberEmail}>
+                                  {inv.role} · Pending
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                className={dashStyles.shareResendBtn}
+                                disabled={shareResendBusy === inv.id}
+                                onClick={() => void handleResendInvitation(inv.id)}
+                                aria-label={`Resend invitation to ${inv.invited_email}`}
+                              >
+                                {shareResendBusy === inv.id ? "…" : "Resend"}
+                              </button>
+                              <button
+                                type="button"
+                                className={dashStyles.shareMemberRemoveBtn}
+                                disabled={shareCancelBusy === inv.id}
+                                onClick={() => void handleCancelInvitation(inv.id)}
+                                aria-label={`Cancel invitation for ${inv.invited_email}`}
+                              >
+                                {shareCancelBusy === inv.id ? "…" : "Cancel"}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : !shareMembersLoading ? (
+                    <p className={dashStyles.shareNoMembers}>No collaborators yet. Invite someone above.</p>
+                  ) : null}
+                </div>
+              </div>
+            )}
 
             {section === "users" && isAdmin ? (
               <>

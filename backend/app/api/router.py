@@ -30,6 +30,9 @@ from app.api.routes import project_topic_cluster
 from app.api.routes import research
 from app.api.routes import user_subscription
 from app.api.routes import workspace
+from app.api.routes import project_collaboration
+from app.api.routes import invitations
+from app.api.routes import notifications
 
 api_router = APIRouter()
 
@@ -56,4 +59,7 @@ api_router.include_router(project_cluster_validation.router)
 api_router.include_router(research.router)
 api_router.include_router(user_subscription.router)
 api_router.include_router(workspace.router)
+api_router.include_router(project_collaboration.router)
+api_router.include_router(invitations.router)
+api_router.include_router(notifications.router)
 
