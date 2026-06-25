@@ -27,7 +27,6 @@ import {
   InvitationPublic,
   MembersResponse,
   PlanPublic,
-  ProfilePublic,
   ProjectPlatform,
   ProjectPublic,
   ProjectSettings,
@@ -38,6 +37,7 @@ import { cachedProjectsAgeMs, loadCachedProjects, saveCachedProjects } from "@/l
 import { connectionErrorMessage, isAuthError, isNetworkError } from "@/lib/networkErrors";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { AdminPlansModule } from "@/components/admin/AdminPlansModule";
+import { UserProfileModule } from "@/components/profile/UserProfileModule";
 
 type DashSection = "overview" | "projects" | "users" | "limits" | "profile";
 
@@ -101,37 +101,6 @@ export default function DashboardPage() {
   const [userWorkspace, setUserWorkspace] = useState<AdminWorkspaceResponse | null>(null);
   const [userWorkspaceLoading, setUserWorkspaceLoading] = useState(false);
   const [plans, setPlans] = useState<PlanPublic[]>([]);
-  const [profile, setProfile] = useState<ProfilePublic | null>(null);
-  const [profileLoading, setProfileLoading] = useState(false);
-  const [profileClockTick, setProfileClockTick] = useState(0);
-
-  function normalizeTimeZoneId(tz: string) {
-    const raw = (tz || "").trim();
-    if (!raw) return "";
-    // Keep frontend display aligned with backend normalization + IANA canonical IDs.
-    if (raw === "Asia/Calcutta") return "Asia/Kolkata";
-    return raw;
-  }
-
-  const browserTimeZone = useMemo(() => {
-    try {
-      return normalizeTimeZoneId(Intl.DateTimeFormat().resolvedOptions().timeZone || "");
-    } catch {
-      return "";
-    }
-  }, []);
-
-  const timeZoneOptions = useMemo(() => {
-    const intlAny = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
-    const raw = typeof intlAny.supportedValuesOf === "function" ? intlAny.supportedValuesOf("timeZone") : [];
-    const list = Array.isArray(raw) && raw.length ? raw : [browserTimeZone, "UTC"].filter(Boolean);
-    const uniq = Array.from(new Set(list.filter(Boolean)));
-    uniq.sort((a, b) => a.localeCompare(b));
-    if (browserTimeZone && !uniq.includes(browserTimeZone)) uniq.unshift(browserTimeZone);
-    if (!uniq.includes("UTC")) uniq.push("UTC");
-    return uniq;
-  }, [browserTimeZone]);
-
   const users = useMemo(
     () => savedUsers.map((u) => ({ ...u, ...(userEdits[u.id] ?? {}) })),
     [savedUsers, userEdits],
@@ -570,22 +539,14 @@ export default function DashboardPage() {
           setSavedUsers(userItems);
           setUserEdits({});
           setPlans(planItems);
-        } else if (section === "profile") {
-          setProfileLoading(true);
-          const me = await api.profileMe();
-          setProfile({
-            ...me,
-            timezone: normalizeTimeZoneId(me.timezone || browserTimeZone || "").trim() || null,
-          });
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load admin module");
       } finally {
         setUsersLoading(false);
-        setProfileLoading(false);
       }
     })();
-  }, [browserTimeZone, isAdmin, section, token]);
+  }, [isAdmin, section, token]);
 
   useEffect(() => {
     if (!usersDirty || section !== "users") return;
@@ -596,33 +557,6 @@ export default function DashboardPage() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [usersDirty, section]);
-
-  useEffect(() => {
-    if (section !== "profile") return;
-    const id = window.setInterval(() => setProfileClockTick((t) => t + 1), 1000);
-    return () => window.clearInterval(id);
-  }, [section]);
-
-  function formatWallClockInTz(tz: string | null | undefined, tick: number) {
-    void tick;
-    const z = ((tz || "").trim() || "UTC").trim();
-    try {
-      return new Intl.DateTimeFormat("en-CA", {
-        timeZone: z,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-      })
-        .format(new Date())
-        .replace(",", "");
-    } catch {
-      return "—";
-    }
-  }
 
   function openAddProject() {
     setError(null);
@@ -812,21 +746,6 @@ export default function DashboardPage() {
       setError(e instanceof Error ? e.message : "Failed to deactivate user");
     } finally {
       setDeleteUserTarget(null);
-    }
-  }
-
-  async function saveProfile() {
-    if (!profile) return;
-    setError(null);
-    try {
-      const saved = await api.updateProfileMe({
-        full_name: profile.full_name || "",
-        phone: profile.phone || "",
-        timezone: profile.timezone || "",
-      });
-      setProfile(saved);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save profile");
     }
   }
 
@@ -1544,82 +1463,7 @@ export default function DashboardPage() {
               <AdminPlansModule users={users} />
             ) : null}
 
-            {section === "profile" ? (
-              <>
-                <div className={styles.intro}>
-                  <h1>User profile</h1>
-                  <p>Update your personal details (email is read-only).</p>
-                </div>
-
-                <div className={`${styles.card} ${styles.cardWide}`}>
-                  {profileLoading ? <FormFieldsSkeleton fields={4} /> : null}
-                  {profile ? (
-                    <div className={dashStyles.profileGrid}>
-                      <label className={styles.label}>
-                        Full name
-                        <input className={styles.input} value={profile.full_name || ""} onChange={(e) => setProfile((p) => (p ? { ...p, full_name: e.target.value } : p))} />
-                      </label>
-                      <label className={styles.label}>
-                        Phone
-                        <input className={styles.input} value={profile.phone || ""} onChange={(e) => setProfile((p) => (p ? { ...p, phone: e.target.value } : p))} />
-                      </label>
-                      <div className={styles.label}>
-                        <div className={dashStyles.flexBetween}>
-                          <span>Timezone</span>
-                          <button
-                            type="button"
-                            className={`${styles.btnSecondary} ${dashStyles.autoDetectBtn}`}
-                            onClick={() => setProfile((p) => (p ? { ...p, timezone: normalizeTimeZoneId(browserTimeZone || "UTC") } : p))}
-                            title="Auto-detect your current timezone"
-                          >
-                            Auto-detect
-                          </button>
-                        </div>
-                        <select
-                          className={styles.input}
-                          value={profile.timezone || ""}
-                          onChange={(e) => setProfile((p) => (p ? { ...p, timezone: e.target.value } : p))}
-                        >
-                          {timeZoneOptions.map((tz) => (
-                            <option key={tz} value={tz}>
-                              {tz}
-                            </option>
-                          ))}
-                        </select>
-                        <div className={`${styles.muted} ${dashStyles.tzHelper}`}>
-                          <div>
-                            <strong>Current time</strong> in this timezone:{" "}
-                            <span>{formatWallClockInTz(profile.timezone, profileClockTick)}</span>
-                          </div>
-                          <div className={dashStyles.tzHelperSpacer}>
-                            <strong>UTC</strong> (server reference):{" "}
-                            <span>{formatWallClockInTz("UTC", profileClockTick)}</span>
-                          </div>
-                        </div>
-                      </div>
-                      <label className={styles.label}>
-                        Email (read-only)
-                        <input className={styles.input} value={profile.email} readOnly />
-                      </label>
-                      <label className={styles.label}>
-                        Current plan
-                        <input className={styles.input} value={profile.subscription_type || "—"} readOnly />
-                      </label>
-                      <label className={styles.label}>
-                        Joined on
-                        <input className={styles.input} value={profile.created_at || "—"} readOnly />
-                      </label>
-                    </div>
-                  ) : null}
-
-                  <div className={`${styles.row} ${dashStyles.rowEnd}`}>
-                    <button className={styles.button} type="button" onClick={saveProfile} disabled={!profile}>
-                      Save profile
-                    </button>
-                  </div>
-                </div>
-              </>
-            ) : null}
+            {section === "profile" ? <UserProfileModule /> : null}
           </section>
         </div>
       </main>
