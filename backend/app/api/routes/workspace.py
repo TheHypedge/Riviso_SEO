@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 from app.api.routes.articles import _derive_listing_status
 from app.core.deps import get_current_user
 from app.schemas.workspace import (
+    ProjectSummary,
     WorkspaceActivityDay,
     WorkspaceFeedItem,
     WorkspaceOverviewResponse,
@@ -20,8 +21,8 @@ from app.services.mongo_listings_async import fetch_workspace_overview_bundle
 router = APIRouter(prefix="/workspace", tags=["workspace"])
 log = logging.getLogger(__name__)
 
-_FEED_LIMIT = 6
-_UPCOMING_LIMIT = 6
+_FEED_LIMIT = 10
+_UPCOMING_LIMIT = 10
 _ACTIVITY_DAYS = 14
 
 
@@ -199,6 +200,62 @@ async def workspace_overview(user: dict = Depends(get_current_user)) -> Workspac
     upcoming.sort(key=lambda x: (x[0], x[1].title.lower()))
     stats.upcoming_scheduled = len(upcoming)
 
+    # ── Per-project summary ───────────────────────────────────────────────
+    proj_pub: dict[str, int] = {}
+    proj_pend: dict[str, int] = {}
+    proj_draft: dict[str, int] = {}
+    proj_total: dict[str, int] = {}
+    proj_last: dict[str, float] = {}
+
+    for a in raw_articles:
+        if not isinstance(a, dict):
+            continue
+        pid = (a.get("project_id") or "").strip()
+        if not pid or pid not in by_id:
+            continue
+        st = _derive_listing_status(a)
+        proj_total[pid] = proj_total.get(pid, 0) + 1
+        act_ms = _parse_ms((a.get("posted_at") or a.get("updated_at") or a.get("created_at") or ""))
+        if act_ms and act_ms > proj_last.get(pid, 0):
+            proj_last[pid] = act_ms
+        if st == "published":
+            proj_pub[pid] = proj_pub.get(pid, 0) + 1
+        elif st == "pending":
+            proj_pend[pid] = proj_pend.get(pid, 0) + 1
+        elif st == "draft":
+            proj_draft[pid] = proj_draft.get(pid, 0) + 1
+
+    proj_sched: dict[str, int] = {}
+    for jid_data in (upcoming or []):
+        _, item = jid_data
+        if item.project_id:
+            proj_sched[item.project_id] = proj_sched.get(item.project_id, 0) + 1
+
+    project_summaries: list[ProjectSummary] = []
+    for pid in pids:
+        proj = by_id.get(pid) or {}
+        last_ts = proj_last.get(pid)
+        last_at: str | None = None
+        if last_ts:
+            try:
+                last_at = datetime.fromtimestamp(last_ts, tz=timezone.utc).isoformat()
+            except Exception:
+                pass
+        project_summaries.append(ProjectSummary(
+            project_id=pid,
+            name=str(proj.get("name") or "").strip() or pid,
+            website_url=(proj.get("website_url") or None),
+            platform=(proj.get("platform") or None),
+            published=proj_pub.get(pid, 0),
+            pending=proj_pend.get(pid, 0),
+            draft=proj_draft.get(pid, 0),
+            upcoming_scheduled=proj_sched.get(pid, 0),
+            total_articles=proj_total.get(pid, 0),
+            last_activity_at=last_at,
+        ))
+    project_summaries.sort(key=lambda x: x.published, reverse=True)
+    # ─────────────────────────────────────────────────────────────────────
+
     published_rows.sort(key=lambda x: x[0], reverse=True)
     pending_rows.sort(key=lambda x: x[0], reverse=True)
     draft_rows.sort(key=lambda x: x[0], reverse=True)
@@ -225,4 +282,5 @@ async def workspace_overview(user: dict = Depends(get_current_user)) -> Workspac
         recently_published=take(published_rows, "published", _FEED_LIMIT),
         pending=take(pending_rows, "pending", _FEED_LIMIT),
         drafts=take(draft_rows, "draft", _FEED_LIMIT),
+        project_summaries=project_summaries,
     )

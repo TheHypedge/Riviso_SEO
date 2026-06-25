@@ -31,6 +31,19 @@ class WorkspaceActivityDay(BaseModel):
     scheduled: int = 0
 
 
+class ProjectSummary(BaseModel):
+    project_id: str
+    name: str
+    website_url: str | None = None
+    platform: str | None = None
+    published: int = 0
+    pending: int = 0
+    draft: int = 0
+    upcoming_scheduled: int = 0
+    total_articles: int = 0
+    last_activity_at: str | None = None
+
+
 class WorkspaceOverviewResponse(BaseModel):
     stats: WorkspaceOverviewStats
     activity_series: list[WorkspaceActivityDay] = Field(default_factory=list)
@@ -38,3 +51,4 @@ class WorkspaceOverviewResponse(BaseModel):
     recently_published: list[WorkspaceFeedItem] = Field(default_factory=list)
     pending: list[WorkspaceFeedItem] = Field(default_factory=list)
     drafts: list[WorkspaceFeedItem] = Field(default_factory=list)
+    project_summaries: list[ProjectSummary] = Field(default_factory=list)

@@ -703,6 +703,19 @@ export type WorkspaceActivityDay = {
   scheduled: number;
 };
 
+export type ProjectSummary = {
+  project_id: string;
+  name: string;
+  website_url?: string | null;
+  platform?: string | null;
+  published: number;
+  pending: number;
+  draft: number;
+  upcoming_scheduled: number;
+  total_articles: number;
+  last_activity_at?: string | null;
+};
+
 export type WorkspaceOverviewResponse = {
   stats: WorkspaceOverviewStats;
   activity_series: WorkspaceActivityDay[];
@@ -710,6 +723,7 @@ export type WorkspaceOverviewResponse = {
   recently_published: WorkspaceFeedItem[];
   pending: WorkspaceFeedItem[];
   drafts: WorkspaceFeedItem[];
+  project_summaries: ProjectSummary[];
 };
 
 /** Paginated Articles tab row — no body HTML (see GET .../articles). */

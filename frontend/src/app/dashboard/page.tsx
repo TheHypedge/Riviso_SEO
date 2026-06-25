@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import { DashboardNavIcon } from "@/components/DashboardNavIcon";
 import { ShopifyManualConnectGuide } from "@/components/shopify/ShopifyManualConnectGuide";
 import { TutorialStepperModal } from "@/components/TutorialStepperModal";
-import { WorkspaceProjectOverview } from "@/components/WorkspaceProjectOverview";
+import { ProjectOverviewDashboard } from "@/components/overview/ProjectOverviewDashboard";
 import { DashboardProjectsSkeleton, DetailPanelSkeleton, FormFieldsSkeleton } from "@/components/skeleton";
 import NotificationBell from "@/components/NotificationBell";
 import styles from "../page.module.css";
@@ -31,7 +31,6 @@ import {
   ProjectPublic,
   ProjectSettings,
   WordpressVerifyResponse,
-  WorkspaceOverviewResponse,
 } from "@/lib/api";
 import { cachedProjectsAgeMs, loadCachedProjects, saveCachedProjects } from "@/lib/projectsCache";
 import { connectionErrorMessage, isAuthError, isNetworkError } from "@/lib/networkErrors";
@@ -51,9 +50,6 @@ export default function DashboardPage() {
   const [mePlan, setMePlan] = useState<string>("");
   const [meRole, setMeRole] = useState<string>("");
   const [projects, setProjects] = useState<ProjectPublic[]>([]);
-  const [workspaceOverview, setWorkspaceOverview] = useState<WorkspaceOverviewResponse | null>(null);
-  const [workspaceOverviewLoading, setWorkspaceOverviewLoading] = useState(false);
-  const [workspaceOverviewError, setWorkspaceOverviewError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [website, setWebsite] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -363,7 +359,6 @@ export default function DashboardPage() {
       setIsOnline(true);
       setError(null);
       void reloadProjects({ silent: true, fresh: true });
-      if (section === "overview") void reloadWorkspaceOverview();
     };
     const onOffline = () => setIsOnline(false);
     window.addEventListener("online", onOnline);
@@ -458,21 +453,6 @@ export default function DashboardPage() {
     }
   }
 
-  async function reloadWorkspaceOverview() {
-    if (!token || !navigator.onLine) return;
-    setWorkspaceOverviewLoading(true);
-    setWorkspaceOverviewError(null);
-    try {
-      const data = await api.workspaceOverview({ fresh: true, skipGlobalLoading: true });
-      setWorkspaceOverview(data);
-    } catch (e) {
-      setWorkspaceOverview(null);
-      setWorkspaceOverviewError(connectionErrorMessage(e));
-    } finally {
-      setWorkspaceOverviewLoading(false);
-    }
-  }
-
   // If a project is renamed inside `/projects/[id]`, Next may keep this page mounted.
   // Refresh the list on focus/visibility so the dashboard always shows the latest name.
   useEffect(() => {
@@ -499,12 +479,6 @@ export default function DashboardPage() {
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
-
-  useEffect(() => {
-    if (!token || section !== "overview") return;
-    void reloadWorkspaceOverview();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [section, token]);
 
   // Per-project GSC flow now redirects directly to /projects/{id}?tab=tools, so the
   // dashboard no longer needs to handle Search Console OAuth callbacks. If a stale
@@ -901,20 +875,9 @@ export default function DashboardPage() {
             ) : null}
 
             {section === "overview" ? (
-              <>
-                <div className={styles.intro}>
-                  <h1>Project overview</h1>
-                  <p>Content operations across all projects — upcoming schedules, recent posts, and queues.</p>
-                </div>
-                <WorkspaceProjectOverview
-                  data={workspaceOverview}
-                  loading={!sectionReady || (workspaceOverviewLoading && !workspaceOverview)}
-                  error={workspaceOverviewError}
-                  styles={dashStyles as unknown as Record<string, string>}
-                  onGoProjects={() => goSection("projects")}
-                  onOpenTutorial={() => setShowTutorial(true)}
-                />
-              </>
+              <ProjectOverviewDashboard
+                onGoProjects={() => goSection("projects")}
+              />
             ) : null}
 
             {section === "projects" ? (
