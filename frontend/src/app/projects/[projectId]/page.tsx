@@ -765,6 +765,9 @@ export default function ProjectPage() {
   const [membersInviteRole, setMembersInviteRole] = useState<CollaboratorRole>("editor");
   const [membersInviteBusy, setMembersInviteBusy] = useState(false);
   const [membersInviteError, setMembersInviteError] = useState<string | null>(null);
+  const [membersEmailLookup, setMembersEmailLookup] = useState<{ found: boolean; name?: string | null } | null>(null);
+  const [membersEmailLookupBusy, setMembersEmailLookupBusy] = useState(false);
+  const membersEmailLookupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [membersRoleChangeBusy, setMembersRoleChangeBusy] = useState<string | null>(null);
   const [membersRemoveBusy, setMembersRemoveBusy] = useState<string | null>(null);
   const [membersResendBusy, setMembersResendBusy] = useState<string | null>(null);
@@ -2906,16 +2909,46 @@ export default function ProjectPage() {
   }, [projectId, tab, token]);
 
   // Members tab helpers
+  function handleMembersEmailChange(val: string) {
+    setMembersInviteEmail(val);
+    setMembersInviteError(null);
+    setMembersEmailLookup(null);
+    if (membersEmailLookupTimer.current) clearTimeout(membersEmailLookupTimer.current);
+    const trimmed = val.trim();
+    if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      setMembersEmailLookupBusy(false);
+      return;
+    }
+    setMembersEmailLookupBusy(true);
+    membersEmailLookupTimer.current = setTimeout(async () => {
+      try {
+        const result = await api.lookupUserEmail(trimmed);
+        setMembersEmailLookup(result);
+      } catch {
+        setMembersEmailLookup(null);
+      }
+      setMembersEmailLookupBusy(false);
+    }, 600);
+  }
+
   async function handleMembersInvite() {
-    if (!membersInviteEmail.trim()) { setMembersInviteError("Enter an email address"); return; }
+    const email = membersInviteEmail.trim();
+    if (!email) { setMembersInviteError("Enter an email address"); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setMembersInviteError("Enter a valid email address"); return; }
+    if (membersEmailLookupBusy) { setMembersInviteError("Validating email…"); return; }
+    if (membersEmailLookup !== null && !membersEmailLookup.found) {
+      setMembersInviteError("This email is not registered on Riviso. Ask them to create an account first.");
+      return;
+    }
     setMembersInviteBusy(true);
     setMembersInviteError(null);
     try {
-      await api.inviteCollaborator(projectId, membersInviteEmail.trim(), membersInviteRole);
+      await api.inviteCollaborator(projectId, email, membersInviteRole);
       setMembersInviteEmail("");
+      setMembersEmailLookup(null);
       const data = await api.getProjectMembers(projectId);
       setMembersData(data);
-      setToast({ message: `Invitation sent to ${membersInviteEmail.trim()}`, tone: "success" });
+      setToast({ message: `Invitation sent to ${email}`, tone: "success" });
     } catch (e) {
       setMembersInviteError(e instanceof Error ? e.message : "Failed to send invitation");
     }
@@ -10947,15 +10980,24 @@ export default function ProjectPage() {
               <div className={projectsDark.membersCard}>
                 <h2 className={projectsDark.membersSectionTitle}>Invite collaborator</h2>
                 <div className={projectsDark.membersInviteRow}>
-                  <input
-                    type="email"
-                    className={projectsDark.membersEmailInput}
-                    placeholder="Email address"
-                    value={membersInviteEmail}
-                    onChange={e => { setMembersInviteEmail(e.target.value); setMembersInviteError(null); }}
-                    onKeyDown={e => { if (e.key === "Enter") void handleMembersInvite(); }}
-                    aria-label="Invite email"
-                  />
+                  <div className={projectsDark.membersEmailWrap}>
+                    <input
+                      type="email"
+                      className={`${projectsDark.membersEmailInput} ${membersEmailLookup?.found ? projectsDark.membersEmailInputValid : membersEmailLookup?.found === false ? projectsDark.membersEmailInputInvalid : ""}`}
+                      placeholder="Email address"
+                      value={membersInviteEmail}
+                      onChange={e => handleMembersEmailChange(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") void handleMembersInvite(); }}
+                      aria-label="Invite email"
+                      aria-describedby="members-email-status"
+                    />
+                    {membersEmailLookupBusy && (
+                      <span className={projectsDark.membersEmailSpinner} aria-hidden="true" />
+                    )}
+                    {!membersEmailLookupBusy && membersEmailLookup?.found && (
+                      <span className={projectsDark.membersEmailCheck} aria-label="Registered user">✓</span>
+                    )}
+                  </div>
                   <select
                     className={projectsDark.membersRoleSelect}
                     value={membersInviteRole}
@@ -10969,15 +11011,27 @@ export default function ProjectPage() {
                   <button
                     type="button"
                     className={styles.button}
-                    disabled={membersInviteBusy}
+                    disabled={membersInviteBusy || membersEmailLookupBusy || (membersEmailLookup !== null && !membersEmailLookup.found)}
                     onClick={() => void handleMembersInvite()}
                   >
                     {membersInviteBusy ? "Sending…" : "Send invite"}
                   </button>
                 </div>
-                {membersInviteError && (
-                  <p className={projectsDark.membersInviteError} role="alert">{membersInviteError}</p>
-                )}
+                <div id="members-email-status" aria-live="polite">
+                  {!membersInviteError && membersEmailLookup?.found && (
+                    <p className={projectsDark.membersEmailStatusOk}>
+                      ✓ {membersEmailLookup.name ? `${membersEmailLookup.name} is registered on Riviso` : "Registered user"}
+                    </p>
+                  )}
+                  {!membersInviteError && membersEmailLookup !== null && !membersEmailLookup.found && (
+                    <p className={projectsDark.membersEmailStatusWarn}>
+                      This email is not registered on Riviso. Ask them to create an account first.
+                    </p>
+                  )}
+                  {membersInviteError && (
+                    <p className={projectsDark.membersInviteError} role="alert">{membersInviteError}</p>
+                  )}
+                </div>
               </div>
             )}
 

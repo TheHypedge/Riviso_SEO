@@ -23,7 +23,7 @@ from app.schemas.collaboration import (
     MembersResponse,
 )
 
-router = APIRouter(prefix="/api/projects/{project_id}/collaboration", tags=["collaboration"])
+router = APIRouter(prefix="/projects/{project_id}/collaboration", tags=["collaboration"])
 
 _ROLE_RANK = {"owner": 4, "admin": 3, "editor": 2, "viewer": 1}
 

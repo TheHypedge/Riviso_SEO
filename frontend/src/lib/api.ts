@@ -3433,6 +3433,10 @@ export const api = {
   // ---------------------------------------------------------------------------
   // Collaboration — project-scoped
   // ---------------------------------------------------------------------------
+  async lookupUserEmail(email: string): Promise<{ found: boolean; name?: string | null }> {
+    const enc = encodeURIComponent(email.trim().toLowerCase());
+    return apiFetch<{ found: boolean; name?: string | null }>(`/api/profile/lookup-email?email=${enc}`, undefined, { skipGlobalLoading: true });
+  },
   async getProjectMembers(projectId: string): Promise<MembersResponse> {
     return apiFetch<MembersResponse>(`/api/projects/${projectId}/collaboration/members`, undefined, { skipGlobalLoading: true });
   },

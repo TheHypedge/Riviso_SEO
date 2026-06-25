@@ -11,7 +11,7 @@ from app.core.deps import get_current_user
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.collaboration import NotificationCountResponse, NotificationPublic
 
-router = APIRouter(prefix="/api/notifications", tags=["notifications"])
+router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
 @router.get("", response_model=list[NotificationPublic])

@@ -103,13 +103,29 @@ def _invitation_html(invited_by: str, project_name: str, project_url: str, role:
     proj = project_name or "a project"
     url_display = project_url or ""
     role_cap = (role or "collaborator").capitalize()
+    role_desc = {
+        "Admin": "full management rights (invite members, change settings, generate content)",
+        "Editor": "create and edit content in this project",
+        "Viewer": "view content and reports in this project",
+    }.get(role_cap, "collaborate on this project")
     return _layout(
-        f"You've been invited to collaborate on {proj}",
-        f"""<h1 style="margin:0 0 12px;font-size:24px;color:{_BRAND_TEXT};">Project invitation</h1>
-<p style="color:{_BRAND_MUTED};margin:0 0 20px;"><strong style="color:{_BRAND_TEXT};">{inviter}</strong> has invited you to collaborate on <strong style="color:{_BRAND_TEXT};">{proj}</strong> as a <strong style="color:{_BRAND_TEXT};">{role_cap}</strong>.</p>
-{f'<p style="color:{_BRAND_MUTED};margin:0 0 20px;font-size:13px;">{url_display}</p>' if url_display else ""}
-<a href="{accept_url}" style="display:inline-block;padding:14px 22px;border-radius:10px;background:{_BRAND_PRIMARY};color:#fff;text-decoration:none;font-weight:700;font-size:16px;">View invitation</a>
-<p style="color:{_BRAND_MUTED};margin:20px 0 0;font-size:13px;">This invitation expires in 7 days. If you don't have a Riviso account yet, you'll be prompted to sign up when you click the button above.</p>""",
+        f"{inviter} shared {proj} with you on Riviso",
+        f"""<h1 style="margin:0 0 8px;font-size:24px;color:{_BRAND_TEXT};">Project access shared</h1>
+<p style="color:{_BRAND_MUTED};margin:0 0 20px;font-size:15px;line-height:1.6;">
+  <strong style="color:{_BRAND_TEXT};">{inviter}</strong> has shared the project
+  <strong style="color:{_BRAND_TEXT};">{proj}</strong> with you on Riviso.
+</p>
+<table style="width:100%;border-collapse:collapse;margin:0 0 24px;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);">
+  <tr><td style="padding:12px 16px;background:rgba(255,255,255,0.04);color:{_BRAND_MUTED};font-size:13px;width:80px;">Project</td>
+      <td style="padding:12px 16px;background:rgba(255,255,255,0.02);color:{_BRAND_TEXT};font-size:13px;font-weight:600;">{proj}</td></tr>
+  {f'<tr><td style="padding:12px 16px;background:rgba(255,255,255,0.04);color:{_BRAND_MUTED};font-size:13px;">Website</td><td style="padding:12px 16px;background:rgba(255,255,255,0.02);color:{_BRAND_TEXT};font-size:13px;">{url_display}</td></tr>' if url_display else ""}
+  <tr><td style="padding:12px 16px;background:rgba(255,255,255,0.04);color:{_BRAND_MUTED};font-size:13px;">Your role</td>
+      <td style="padding:12px 16px;background:rgba(255,255,255,0.02);color:{_BRAND_PRIMARY};font-size:13px;font-weight:700;">{role_cap}</td></tr>
+  <tr><td style="padding:12px 16px;background:rgba(255,255,255,0.04);color:{_BRAND_MUTED};font-size:13px;">Access</td>
+      <td style="padding:12px 16px;background:rgba(255,255,255,0.02);color:{_BRAND_TEXT};font-size:13px;">{role_desc}</td></tr>
+</table>
+<a href="{accept_url}" style="display:inline-block;padding:14px 28px;border-radius:10px;background:{_BRAND_PRIMARY};color:#fff;text-decoration:none;font-weight:700;font-size:16px;letter-spacing:0.01em;">Accept &amp; open project</a>
+<p style="color:{_BRAND_MUTED};margin:24px 0 0;font-size:13px;line-height:1.6;">This invitation expires in 7 days. Sign in to your Riviso account to accept — the project will immediately appear in your dashboard.</p>""",
     )
 
 
@@ -231,5 +247,5 @@ async def send_invitation_email(
 ) -> None:
     import asyncio
     html = _invitation_html(invited_by, project_name, project_url, role, accept_url)
-    subject = f"You've been invited to collaborate on {project_name or 'a project'} — Riviso"
+    subject = f"{invited_by or 'A teammate'} shared {project_name or 'a project'} with you on Riviso"
     await asyncio.to_thread(_send_html_sync, to, subject, html)

@@ -16,7 +16,7 @@ from app.legacy.storage import get_legacy_storage_module
 from app.schemas.collaboration import InvitationPublic
 from app.schemas.projects import ProjectPublic
 
-router = APIRouter(prefix="/api/invitations", tags=["invitations"])
+router = APIRouter(prefix="/invitations", tags=["invitations"])
 
 
 def _utcnow_iso() -> str:

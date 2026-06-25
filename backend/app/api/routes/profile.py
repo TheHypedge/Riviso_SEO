@@ -74,3 +74,35 @@ async def delete_me(response: Response, user: dict = Depends(get_current_user)) 
     response.status_code = 204
     return response
 
+
+
+class _UserLookupResult(dict):
+    pass
+
+
+from pydantic import BaseModel as _BM
+
+class UserLookupResponse(_BM):
+    found: bool
+    name: str | None = None
+
+
+@router.get("/lookup-email", response_model=UserLookupResponse)
+async def lookup_user_by_email(
+    email: str,
+    user: dict = Depends(get_current_user),
+) -> UserLookupResponse:
+    """
+    Check if an email address belongs to a registered Riviso user.
+    Returns {found: bool, name?: str}. Never exposes passwords or IDs.
+    """
+    st = get_legacy_storage_module()
+    em = (email or "").strip().lower()
+    if not em:
+        return UserLookupResponse(found=False)
+    target = st.get_user_by_email(em)
+    if not target:
+        return UserLookupResponse(found=False)
+    # Don't expose the caller's own details back (redundant but safe)
+    name = (target.get("full_name") or "").strip() or None
+    return UserLookupResponse(found=True, name=name)

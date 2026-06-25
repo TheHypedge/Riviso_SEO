@@ -212,6 +212,9 @@ export default function DashboardPage() {
   const [shareInviteRole, setShareInviteRole] = useState<CollaboratorRole>("editor");
   const [shareInviteBusy, setShareInviteBusy] = useState(false);
   const [shareInviteError, setShareInviteError] = useState<string | null>(null);
+  const [shareEmailLookup, setShareEmailLookup] = useState<{ found: boolean; name?: string | null } | null>(null);
+  const [shareEmailLookupBusy, setShareEmailLookupBusy] = useState(false);
+  const shareEmailLookupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [shareRoleChangeBusy, setShareRoleChangeBusy] = useState<string | null>(null);
   const [shareRemoveBusy, setShareRemoveBusy] = useState<string | null>(null);
   const [shareResendBusy, setShareResendBusy] = useState<string | null>(null);
@@ -246,17 +249,50 @@ export default function DashboardPage() {
     setShareMembers(null);
     setShareInviteEmail("");
     setShareInviteError(null);
+    setShareEmailLookup(null);
+    setShareEmailLookupBusy(false);
+    if (shareEmailLookupTimer.current) clearTimeout(shareEmailLookupTimer.current);
+  };
+
+  const handleShareEmailChange = (val: string) => {
+    setShareInviteEmail(val);
+    setShareInviteError(null);
+    setShareEmailLookup(null);
+    if (shareEmailLookupTimer.current) clearTimeout(shareEmailLookupTimer.current);
+    const trimmed = val.trim();
+    if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      setShareEmailLookupBusy(false);
+      return;
+    }
+    setShareEmailLookupBusy(true);
+    shareEmailLookupTimer.current = setTimeout(async () => {
+      try {
+        const result = await api.lookupUserEmail(trimmed);
+        setShareEmailLookup(result);
+      } catch {
+        setShareEmailLookup(null);
+      }
+      setShareEmailLookupBusy(false);
+    }, 600);
   };
 
   const handleShareInvite = async () => {
     if (!shareTargetProject) return;
     setShareInviteError(null);
-    if (!shareInviteEmail.trim()) { setShareInviteError("Enter an email address"); return; }
+    const email = shareInviteEmail.trim();
+    if (!email) { setShareInviteError("Enter an email address"); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { setShareInviteError("Enter a valid email address"); return; }
+    if (shareEmailLookupBusy) { setShareInviteError("Validating email…"); return; }
+    if (shareEmailLookup !== null && !shareEmailLookup.found) {
+      setShareInviteError("This email is not registered on Riviso. Ask them to create an account first.");
+      return;
+    }
     setShareInviteBusy(true);
     try {
-      const inv = await api.inviteCollaborator(shareTargetProject.id, shareInviteEmail.trim(), shareInviteRole);
+      const inv = await api.inviteCollaborator(shareTargetProject.id, email, shareInviteRole);
       setShareMembers(prev => prev ? { ...prev, pending_invitations: [inv, ...prev.pending_invitations] } : prev);
       setShareInviteEmail("");
+      setShareEmailLookup(null);
     } catch (e: unknown) {
       const err = e instanceof Error ? e.message : "Failed to send invitation";
       setShareInviteError(err);
@@ -1366,15 +1402,24 @@ export default function DashboardPage() {
                   {/* Invite form */}
                   <div className={dashStyles.shareInviteForm}>
                     <div className={dashStyles.shareInviteRow}>
-                      <input
-                        type="email"
-                        className={dashStyles.shareEmailInput}
-                        placeholder="Email address"
-                        value={shareInviteEmail}
-                        onChange={e => { setShareInviteEmail(e.target.value); setShareInviteError(null); }}
-                        onKeyDown={e => { if (e.key === "Enter") void handleShareInvite(); }}
-                        aria-label="Invite email"
-                      />
+                      <div className={dashStyles.shareEmailWrap}>
+                        <input
+                          type="email"
+                          className={`${dashStyles.shareEmailInput} ${shareEmailLookup?.found ? dashStyles.shareEmailInputValid : shareEmailLookup?.found === false ? dashStyles.shareEmailInputInvalid : ""}`}
+                          placeholder="Email address"
+                          value={shareInviteEmail}
+                          onChange={e => handleShareEmailChange(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter") void handleShareInvite(); }}
+                          aria-label="Invite email"
+                          aria-describedby="share-email-status"
+                        />
+                        {shareEmailLookupBusy && (
+                          <span className={dashStyles.shareEmailSpinner} aria-hidden="true" />
+                        )}
+                        {!shareEmailLookupBusy && shareEmailLookup?.found && (
+                          <span className={dashStyles.shareEmailCheck} aria-label="Registered user">✓</span>
+                        )}
+                      </div>
                       <select
                         className={dashStyles.shareRoleSelect}
                         value={shareInviteRole}
@@ -1388,15 +1433,31 @@ export default function DashboardPage() {
                       <button
                         type="button"
                         className={dashStyles.shareInviteBtn}
-                        disabled={shareInviteBusy}
+                        disabled={shareInviteBusy || shareEmailLookupBusy || (shareEmailLookup !== null && !shareEmailLookup.found)}
                         onClick={() => void handleShareInvite()}
                       >
-                        {shareInviteBusy ? "Sending…" : "Invite"}
+                        {shareInviteBusy ? "Sending…" : "Send invite"}
                       </button>
                     </div>
-                    {shareInviteError && (
-                      <p className={dashStyles.shareInviteError} role="alert">{shareInviteError}</p>
-                    )}
+                    {/* Email lookup status line */}
+                    <div id="share-email-status" aria-live="polite">
+                      {!shareInviteError && shareEmailLookup?.found && shareEmailLookup.name && (
+                        <p className={dashStyles.shareEmailStatusOk}>
+                          ✓ {shareEmailLookup.name} is registered on Riviso
+                        </p>
+                      )}
+                      {!shareInviteError && shareEmailLookup?.found && !shareEmailLookup.name && (
+                        <p className={dashStyles.shareEmailStatusOk}>✓ Registered user</p>
+                      )}
+                      {!shareInviteError && shareEmailLookup !== null && !shareEmailLookup.found && (
+                        <p className={dashStyles.shareEmailStatusWarn}>
+                          This email is not registered on Riviso. Ask them to create an account first.
+                        </p>
+                      )}
+                      {shareInviteError && (
+                        <p className={dashStyles.shareInviteError} role="alert">{shareInviteError}</p>
+                      )}
+                    </div>
                   </div>
 
                   {/* Members list */}

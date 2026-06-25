@@ -215,3 +215,60 @@
 @media (prefers-reduced-motion: reduce) {
   .memberRemoveBtn, .memberResendBtn, .membersEmailInput { transition: none; }
 }
+
+/* ── Members tab — email validation ─────────────────────────────────────── */
+.membersEmailWrap {
+  position: relative;
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  align-items: center;
+}
+
+.membersEmailWrap .membersEmailInput {
+  width: 100%;
+  padding-right: 32px;
+}
+
+.membersEmailInputValid {
+  border-color: var(--aa-success, #5db872) !important;
+}
+
+.membersEmailInputInvalid {
+  border-color: var(--aa-error, #c64545) !important;
+}
+
+.membersEmailSpinner {
+  position: absolute;
+  right: 10px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,0.12);
+  border-top-color: var(--aa-primary, #d97757);
+  border-radius: 50%;
+  animation: membersSpinKf 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes membersSpinKf { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .membersEmailSpinner { animation: none; } }
+
+.membersEmailCheck {
+  position: absolute;
+  right: 10px;
+  color: var(--aa-success, #5db872);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.membersEmailStatusOk {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--aa-success, #5db872);
+}
+
+.membersEmailStatusWarn {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--aa-warning, #d4a017);
+}
