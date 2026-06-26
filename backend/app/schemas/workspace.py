@@ -13,6 +13,16 @@ class WorkspaceOverviewStats(BaseModel):
     upcoming_scheduled: int = 0
 
 
+class FilteredStats(BaseModel):
+    """Stats scoped to the selected date range."""
+    published: int = 0
+    pending: int = 0
+    draft: int = 0
+    total_articles: int = 0
+    period_start: str | None = None
+    period_end: str | None = None
+
+
 class WorkspaceFeedItem(BaseModel):
     id: str
     article_id: str
@@ -46,6 +56,10 @@ class ProjectSummary(BaseModel):
 
 class WorkspaceOverviewResponse(BaseModel):
     stats: WorkspaceOverviewStats
+    filtered_stats: FilteredStats | None = None
+    comparison_stats: FilteredStats | None = None
+    date_range_start: str | None = None
+    date_range_end: str | None = None
     activity_series: list[WorkspaceActivityDay] = Field(default_factory=list)
     upcoming_scheduled: list[WorkspaceFeedItem] = Field(default_factory=list)
     recently_published: list[WorkspaceFeedItem] = Field(default_factory=list)

@@ -716,8 +716,21 @@ export type ProjectSummary = {
   last_activity_at?: string | null;
 };
 
+export type WorkspaceFilteredStats = {
+  published: number;
+  pending: number;
+  draft: number;
+  total_articles: number;
+  period_start?: string | null;
+  period_end?: string | null;
+};
+
 export type WorkspaceOverviewResponse = {
   stats: WorkspaceOverviewStats;
+  filtered_stats?: WorkspaceFilteredStats | null;
+  comparison_stats?: WorkspaceFilteredStats | null;
+  date_range_start?: string | null;
+  date_range_end?: string | null;
   activity_series: WorkspaceActivityDay[];
   upcoming_scheduled: WorkspaceFeedItem[];
   recently_published: WorkspaceFeedItem[];
@@ -1766,8 +1779,20 @@ export const api = {
       throw e;
     }
   },
-  async workspaceOverview(opts?: ApiFetchOptions) {
-    return apiFetch<WorkspaceOverviewResponse>("/api/workspace/overview", undefined, opts);
+  async workspaceOverview(
+    params?: { startDate?: string; endDate?: string; projectIds?: string[] },
+    opts?: ApiFetchOptions,
+  ) {
+    let url = "/api/workspace/overview";
+    if (params) {
+      const q = new URLSearchParams();
+      if (params.startDate) q.set("start_date", params.startDate);
+      if (params.endDate) q.set("end_date", params.endDate);
+      if (params.projectIds?.length) q.set("project_ids", params.projectIds.join(","));
+      const qs = q.toString();
+      if (qs) url += `?${qs}`;
+    }
+    return apiFetch<WorkspaceOverviewResponse>(url, undefined, opts);
   },
   async createProject(name: string, platform: ProjectPlatform, website_url?: string) {
     const result = await apiFetch<ProjectPublic>("/api/projects", {

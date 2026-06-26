@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 from app.api.routes.articles import _derive_listing_status
 from app.core.deps import get_current_user
 from app.schemas.workspace import (
+    FilteredStats,
     ProjectSummary,
     WorkspaceActivityDay,
     WorkspaceFeedItem,
@@ -23,7 +24,6 @@ log = logging.getLogger(__name__)
 
 _FEED_LIMIT = 10
 _UPCOMING_LIMIT = 10
-_ACTIVITY_DAYS = 14
 
 
 def _parse_ms(raw: str | None) -> float:
@@ -34,6 +34,80 @@ def _parse_ms(raw: str | None) -> float:
         return t if t > 0 else 0.0
     except Exception:
         return 0.0
+
+
+def _parse_date_range(start_date: str | None, end_date: str | None) -> tuple[datetime, datetime]:
+    """Return (start_dt, end_dt) in UTC. Defaults to last 14 days."""
+    utc = timezone.utc
+    today = datetime.now(utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if end_date:
+        try:
+            ed = datetime.strptime(end_date.strip(), "%Y-%m-%d").replace(tzinfo=utc)
+        except ValueError:
+            ed = today
+    else:
+        ed = today
+
+    end_dt = ed.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    if start_date:
+        try:
+            sd = datetime.strptime(start_date.strip(), "%Y-%m-%d").replace(tzinfo=utc)
+        except ValueError:
+            sd = today - timedelta(days=13)
+    else:
+        sd = today - timedelta(days=13)
+
+    return sd, end_dt
+
+
+def _compute_filtered_stats(
+    raw_articles: list[dict],
+    start_dt: datetime,
+    end_dt: datetime,
+) -> FilteredStats:
+    utc = timezone.utc
+    stats = FilteredStats(
+        period_start=start_dt.strftime("%Y-%m-%d"),
+        period_end=end_dt.strftime("%Y-%m-%d"),
+    )
+    for a in raw_articles:
+        if not isinstance(a, dict):
+            continue
+        status = _derive_listing_status(a)
+
+        # Use created_at to place article in time for all status types.
+        # For published articles, use posted_at so the KPI reflects publishing activity.
+        if status == "published":
+            date_raw = a.get("posted_at") or a.get("updated_at") or a.get("created_at")
+        else:
+            date_raw = a.get("created_at") or a.get("updated_at")
+
+        if not date_raw:
+            continue
+
+        ms = _parse_ms(str(date_raw))
+        if not ms:
+            continue
+
+        try:
+            dt = datetime.fromtimestamp(ms, tz=utc)
+        except Exception:
+            continue
+
+        if not (start_dt <= dt <= end_dt):
+            continue
+
+        stats.total_articles += 1
+        if status == "published":
+            stats.published += 1
+        elif status == "pending":
+            stats.pending += 1
+        elif status == "draft":
+            stats.draft += 1
+
+    return stats
 
 
 def _article_feed_item(a: dict, *, by_id: dict[str, dict], status_tag: str, sort_at: str | None) -> WorkspaceFeedItem | None:
@@ -65,15 +139,19 @@ def _day_key_from_ms(ms: float) -> str | None:
 def _build_activity_series(
     raw_articles: list[dict],
     scheduled_run_ats: list[str],
+    start_dt: datetime,
+    end_dt: datetime,
 ) -> list[WorkspaceActivityDay]:
-    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Build daily buckets spanning the full date range
     keys: list[str] = []
     buckets: dict[str, dict[str, int | str]] = {}
-    for i in range(_ACTIVITY_DAYS - 1, -1, -1):
-        day = end - timedelta(days=i)
-        key = day.strftime("%Y-%m-%d")
+    cur = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_day = end_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    while cur <= end_day:
+        key = cur.strftime("%Y-%m-%d")
         keys.append(key)
         buckets[key] = {"date": key, "published": 0, "pending": 0, "scheduled": 0}
+        cur += timedelta(days=1)
 
     for a in raw_articles:
         if not isinstance(a, dict):
@@ -113,16 +191,51 @@ def _build_activity_series(
 
 
 @router.get("/overview", response_model=WorkspaceOverviewResponse)
-async def workspace_overview(user: dict = Depends(get_current_user)) -> WorkspaceOverviewResponse:
+async def workspace_overview(
+    start_date: str | None = None,
+    end_date: str | None = None,
+    project_ids: str | None = None,
+    user: dict = Depends(get_current_user),
+) -> WorkspaceOverviewResponse:
     uid = (user.get("id") or "").strip()
     bundle = await fetch_workspace_overview_bundle(uid, article_limit=1500)
-    by_id: dict[str, dict] = bundle.get("projects_by_id") or {}
-    pids: list[str] = bundle.get("pids") or []
-    if not pids:
+    all_by_id: dict[str, dict] = bundle.get("projects_by_id") or {}
+    all_pids: list[str] = bundle.get("pids") or []
+
+    if not all_pids:
         return WorkspaceOverviewResponse(stats=WorkspaceOverviewStats(), activity_series=[])
 
-    raw_articles: list[dict] = bundle.get("articles") or []
+    # Parse date range (defaults to last 14 days)
+    start_dt, end_dt = _parse_date_range(start_date, end_date)
 
+    # Compute comparison period (same duration, immediately before)
+    duration_days = (end_dt.date() - start_dt.date()).days + 1
+    comp_end = start_dt - timedelta(seconds=1)
+    comp_start_date = comp_end.date() - timedelta(days=duration_days - 1)
+    comp_start_dt = datetime(comp_start_date.year, comp_start_date.month, comp_start_date.day, tzinfo=timezone.utc)
+    comp_end_dt = datetime(comp_end.year, comp_end.month, comp_end.day, 23, 59, 59, tzinfo=timezone.utc)
+
+    # Apply project filter
+    requested_pids: set[str] | None = None
+    if project_ids:
+        requested_pids = {p.strip() for p in project_ids.split(",") if p.strip()}
+
+    pids = [p for p in all_pids if requested_pids is None or p in requested_pids]
+    pids_set = set(pids)
+
+    # Filter by_id to only selected projects so downstream pid-in-by_id checks work correctly
+    by_id = {pid: proj for pid, proj in all_by_id.items() if pid in pids_set}
+
+    raw_articles: list[dict] = [
+        a for a in (bundle.get("articles") or [])
+        if isinstance(a, dict) and (a.get("project_id") or "").strip() in pids_set
+    ]
+
+    # Compute filtered and comparison stats
+    filtered_stats = _compute_filtered_stats(raw_articles, start_dt, end_dt)
+    comparison_stats = _compute_filtered_stats(raw_articles, comp_start_dt, comp_end_dt)
+
+    # Compute lifetime stats
     title_by_id: dict[str, str] = {}
     published_rows: list[tuple[float, dict]] = []
     pending_rows: list[tuple[float, dict]] = []
@@ -200,7 +313,7 @@ async def workspace_overview(user: dict = Depends(get_current_user)) -> Workspac
     upcoming.sort(key=lambda x: (x[0], x[1].title.lower()))
     stats.upcoming_scheduled = len(upcoming)
 
-    # ── Per-project summary ───────────────────────────────────────────────
+    # Per-project summary
     proj_pub: dict[str, int] = {}
     proj_pend: dict[str, int] = {}
     proj_draft: dict[str, int] = {}
@@ -226,8 +339,7 @@ async def workspace_overview(user: dict = Depends(get_current_user)) -> Workspac
             proj_draft[pid] = proj_draft.get(pid, 0) + 1
 
     proj_sched: dict[str, int] = {}
-    for jid_data in (upcoming or []):
-        _, item = jid_data
+    for _, item in (upcoming or []):
         if item.project_id:
             proj_sched[item.project_id] = proj_sched.get(item.project_id, 0) + 1
 
@@ -254,7 +366,6 @@ async def workspace_overview(user: dict = Depends(get_current_user)) -> Workspac
             last_activity_at=last_at,
         ))
     project_summaries.sort(key=lambda x: x.published, reverse=True)
-    # ─────────────────────────────────────────────────────────────────────
 
     published_rows.sort(key=lambda x: x[0], reverse=True)
     pending_rows.sort(key=lambda x: x[0], reverse=True)
@@ -273,10 +384,14 @@ async def workspace_overview(user: dict = Depends(get_current_user)) -> Workspac
                 out.append(item)
         return out
 
-    activity_series = _build_activity_series(raw_articles, scheduled_run_ats)
+    activity_series = _build_activity_series(raw_articles, scheduled_run_ats, start_dt, end_dt)
 
     return WorkspaceOverviewResponse(
         stats=stats,
+        filtered_stats=filtered_stats,
+        comparison_stats=comparison_stats,
+        date_range_start=start_dt.strftime("%Y-%m-%d"),
+        date_range_end=end_dt.strftime("%Y-%m-%d"),
         activity_series=activity_series,
         upcoming_scheduled=[x[1] for x in upcoming[:_UPCOMING_LIMIT]],
         recently_published=take(published_rows, "published", _FEED_LIMIT),
