@@ -93,7 +93,7 @@ async def list_users(_: dict = Depends(require_admin)) -> list[AdminUserPublic]:
 
 
 @router.patch("/users/{user_id}", response_model=AdminUserPublic)
-async def update_user(user_id: str, payload: AdminUserUpdate, _: dict = Depends(require_admin)) -> AdminUserPublic:
+async def update_user(user_id: str, payload: AdminUserUpdate, admin: dict = Depends(require_admin)) -> AdminUserPublic:
     st = get_legacy_storage_module()
     uid = (user_id or "").strip()
     if not uid:
@@ -101,6 +101,13 @@ async def update_user(user_id: str, payload: AdminUserUpdate, _: dict = Depends(
 
     updates = payload.model_dump(exclude_unset=True)
     prev = st.get_user_by_id(uid) if uid else None
+    if prev and (prev.get("role") or "").strip().lower() == "admin":
+        new_status = (updates.get("account_status") or "").strip().lower()
+        if new_status in {"deleted", "deactivated"}:
+            raise HTTPException(status_code=403, detail="Admin accounts cannot be deactivated or deleted via the admin panel")
+        new_role = (updates.get("role") or "").strip().lower()
+        if new_role and new_role != "admin":
+            raise HTTPException(status_code=403, detail="Admin role cannot be changed via the admin panel")
     if "timezone" in updates and isinstance(updates.get("timezone"), str):
         updates["timezone"] = normalize_user_timezone(updates["timezone"])
     if "account_status" in updates and isinstance(updates.get("account_status"), str):
@@ -165,6 +172,11 @@ async def bulk_update_users(
         if not prev:
             errors.append({"user_id": uid, "error": "User not found"})
             continue
+        if (prev.get("role") or "").strip().lower() == "admin":
+            new_role = (patch.get("role") or "").strip().lower()
+            if new_role and new_role != "admin":
+                errors.append({"user_id": uid, "error": "Admin role cannot be changed via bulk update"})
+                continue
         ok = st.update_user_fields(uid, patch)
         if not ok:
             errors.append({"user_id": uid, "error": "Update failed"})
@@ -203,6 +215,11 @@ async def delete_user(user_id: str, admin: dict = Depends(require_admin)) -> Res
         raise HTTPException(status_code=400, detail="user_id is required")
     if uid == (admin.get("id") or "").strip():
         raise HTTPException(status_code=400, detail="Admins cannot delete their own account from the admin panel")
+    target = await run_sync(lambda: st.get_user_by_id(uid))
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if (target.get("role") or "").strip().lower() == "admin":
+        raise HTTPException(status_code=403, detail="Admin accounts cannot be deleted from the admin panel")
     ok = st.delete_user(uid)
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")
