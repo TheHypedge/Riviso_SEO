@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import s from "./UserProfileModule.module.css";
 import { api } from "@/lib/api";
 import type { ProfilePublic } from "@/lib/api";
 import { useSubscription } from "@/components/subscription/SubscriptionProvider";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 
 // ── Prefs (localStorage) ──────────────────────────────────────────────────────
 type Prefs = {
@@ -120,6 +122,7 @@ const UPGRADE_HREF = "mailto:support@riviso.com?subject=Riviso%20plan%20upgrade"
 // ── Main component ────────────────────────────────────────────────────────────
 export function UserProfileModule() {
   const { status: subStatus, trialExpired, openUpgradeModal } = useSubscription();
+  const router = useRouter();
 
   // Profile state
   const [profile, setProfile] = useState<ProfilePublic | null>(null);
@@ -128,6 +131,13 @@ export function UserProfileModule() {
   const [saving, setSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<"success" | "error" | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Delete account state
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmEmail, setDeleteConfirmEmail] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deleteTrapRef = useFocusTrap(showDeleteModal);
 
   // Clock tick for live timezone display
   const [tick, setTick] = useState(0);
@@ -223,6 +233,42 @@ export function UserProfileModule() {
     }
   }
 
+  function openDeleteModal() {
+    setDeleteConfirmEmail("");
+    setDeleteError(null);
+    setShowDeleteModal(true);
+  }
+
+  function closeDeleteModal() {
+    if (deleting) return;
+    setShowDeleteModal(false);
+    setDeleteConfirmEmail("");
+    setDeleteError(null);
+  }
+
+  async function handleDeleteAccount() {
+    if (deleting) return;
+    const expected = (profile?.email || "").trim().toLowerCase();
+    if (deleteConfirmEmail.trim().toLowerCase() !== expected) {
+      setDeleteError("Email does not match. Please type your exact email address.");
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.deleteMe();
+      // Clear local state, redirect to login
+      localStorage.removeItem("rvs_trial_banner_dismiss");
+      localStorage.removeItem("rvs_trial_welcome_seen");
+      localStorage.removeItem("rvs_user_prefs");
+      localStorage.removeItem("rvs_overview_filters");
+      router.push("/?deleted=1");
+    } catch {
+      setDeleteError("Failed to delete account. Please try again or contact support.");
+      setDeleting(false);
+    }
+  }
+
   // Derived subscription info
   const planKey = (profile?.subscription_type || "").toLowerCase().trim() || "beta";
   const planName = subStatus?.plan_name || subStatus?.plan_key || planKey;
@@ -276,6 +322,7 @@ export function UserProfileModule() {
   const color = avatarColor(profile?.email || "");
 
   return (
+    <>
     <div className={s.wrap}>
 
       {/* ── Section 1: Profile Summary ── */}
@@ -556,7 +603,7 @@ export function UserProfileModule() {
           </div>
 
           {/* ── Section 5: Help & Support ── */}
-          <div className={s.card}>
+          <div className={s.card} id="help-support">
             <div className={s.cardHeader}>
               <h2 className={s.cardTitle}>
                 <span className={s.cardTitleIcon} aria-hidden="true">💬</span>
@@ -602,7 +649,101 @@ export function UserProfileModule() {
 
         </div>
       </div>
+
+      {/* ── Section 6: Danger Zone ── */}
+      <div className={s.dangerCard}>
+        <div className={s.dangerHeader}>
+          <div>
+            <h2 className={s.dangerTitle}>Danger Zone</h2>
+            <p className={s.dangerDesc}>
+              Permanently delete your account and all associated data. This action cannot be undone.
+            </p>
+          </div>
+          <button
+            type="button"
+            className={s.dangerBtn}
+            onClick={openDeleteModal}
+          >
+            Delete Account
+          </button>
+        </div>
+      </div>
+
     </div>
+
+    {/* ── Delete confirmation modal ── */}
+    {showDeleteModal && (
+      <div className={s.modalBackdrop} role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+        <div className={s.modal} ref={deleteTrapRef}>
+          <div className={s.modalHeader}>
+            <h2 className={s.modalTitle} id="delete-modal-title">Delete Your Account</h2>
+            <button
+              type="button"
+              className={s.modalClose}
+              onClick={closeDeleteModal}
+              aria-label="Close"
+              disabled={deleting}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className={s.modalBody}>
+            <div className={s.deleteWarningBox}>
+              <span className={s.deleteWarningIcon} aria-hidden="true">⚠</span>
+              <div>
+                <div className={s.deleteWarningTitle}>This will permanently delete:</div>
+                <ul className={s.deleteWarningList}>
+                  <li>Your account and profile data</li>
+                  <li>All your projects and articles</li>
+                  <li>All scheduled jobs and research data</li>
+                  <li>Your subscription record</li>
+                </ul>
+              </div>
+            </div>
+
+            <label className={s.deleteConfirmLabel}>
+              <span className={s.deleteConfirmLabelText}>
+                Type your email address <strong>{profile?.email}</strong> to confirm:
+              </span>
+              <input
+                className={s.deleteConfirmInput}
+                type="email"
+                value={deleteConfirmEmail}
+                onChange={(e) => { setDeleteConfirmEmail(e.target.value); setDeleteError(null); }}
+                placeholder={profile?.email || "your@email.com"}
+                autoComplete="off"
+                disabled={deleting}
+              />
+            </label>
+
+            {deleteError && (
+              <div className={s.deleteError} role="alert">{deleteError}</div>
+            )}
+          </div>
+
+          <div className={s.modalFooter}>
+            <button
+              type="button"
+              className={s.modalCancelBtn}
+              onClick={closeDeleteModal}
+              disabled={deleting}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className={s.modalDeleteBtn}
+              onClick={() => void handleDeleteAccount()}
+              disabled={deleting || deleteConfirmEmail.trim().toLowerCase() !== (profile?.email || "").trim().toLowerCase()}
+            >
+              {deleting ? "Deleting…" : "Delete My Account"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 

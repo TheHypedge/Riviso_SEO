@@ -524,6 +524,229 @@
 .helpDesc { font-size: 11px; color: var(--aa-on-dark-soft, #a09d96); }
 .helpArrow { font-size: 12px; color: rgba(160,157,150,0.5); }
 
+/* ── Danger Zone ─────────────────────────────────────────────────────────────── */
+.dangerCard {
+  border-radius: var(--aa-r-lg, 12px);
+  border: 1px solid rgba(198, 69, 69, 0.3);
+  background: rgba(198, 69, 69, 0.04);
+  padding: 20px 24px;
+}
+
+.dangerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.dangerTitle {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #c64545;
+}
+
+.dangerDesc {
+  margin: 0;
+  font-size: 12px;
+  color: rgba(160, 157, 150, 0.75);
+  line-height: 1.5;
+  max-width: 520px;
+}
+
+.dangerBtn {
+  flex-shrink: 0;
+  padding: 8px 18px;
+  border-radius: var(--aa-r-md, 8px);
+  border: 1px solid rgba(198, 69, 69, 0.5);
+  background: rgba(198, 69, 69, 0.08);
+  color: #c64545;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.dangerBtn:hover {
+  background: rgba(198, 69, 69, 0.16);
+  border-color: rgba(198, 69, 69, 0.7);
+}
+
+/* ── Delete confirmation modal ───────────────────────────────────────────────── */
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal-bg, 300);
+  padding: 20px;
+}
+
+.modal {
+  width: 100%;
+  max-width: 460px;
+  border-radius: var(--aa-r-lg, 12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--aa-surface-card, #141414);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  z-index: var(--z-modal, 400);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.modalTitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #c64545;
+}
+
+.modalClose {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: rgba(160, 157, 150, 0.6);
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+.modalClose:hover { color: var(--aa-on-dark, #faf9f5); }
+.modalClose:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.modalBody {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.deleteWarningBox {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--aa-r-md, 8px);
+  background: rgba(198, 69, 69, 0.07);
+  border: 1px solid rgba(198, 69, 69, 0.2);
+}
+
+.deleteWarningIcon {
+  font-size: 18px;
+  color: #c64545;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.deleteWarningTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: #c64545;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.deleteWarningList {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 12px;
+  color: rgba(160, 157, 150, 0.9);
+  line-height: 1.8;
+}
+
+.deleteConfirmLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.deleteConfirmLabelText {
+  font-size: 12px;
+  color: var(--aa-on-dark-soft, #a09d96);
+  line-height: 1.5;
+}
+
+.deleteConfirmLabelText strong {
+  color: var(--aa-on-dark, #faf9f5);
+  font-weight: 600;
+}
+
+.deleteConfirmInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border-radius: var(--aa-r-md, 8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--aa-on-dark, #faf9f5);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.deleteConfirmInput:focus {
+  border-color: rgba(198, 69, 69, 0.5);
+}
+.deleteConfirmInput:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.deleteError {
+  font-size: 12px;
+  color: #c64545;
+  background: rgba(198, 69, 69, 0.07);
+  border: 1px solid rgba(198, 69, 69, 0.2);
+  border-radius: var(--aa-r-md, 8px);
+  padding: 8px 12px;
+  line-height: 1.5;
+}
+
+.modalFooter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 24px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.modalCancelBtn {
+  padding: 8px 18px;
+  border-radius: var(--aa-r-md, 8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: var(--aa-on-dark-soft, #a09d96);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.modalCancelBtn:hover { background: rgba(255, 255, 255, 0.05); }
+.modalCancelBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.modalDeleteBtn {
+  padding: 8px 18px;
+  border-radius: var(--aa-r-md, 8px);
+  border: 1px solid rgba(198, 69, 69, 0.5);
+  background: #c64545;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.modalDeleteBtn:hover:not(:disabled) { background: #b03b3b; }
+.modalDeleteBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* ── Skeleton loader ────────────────────────────────────────────────────────── */
 .skeletonLine {
   height: 14px;

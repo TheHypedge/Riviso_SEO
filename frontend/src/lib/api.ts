@@ -1771,6 +1771,11 @@ export const api = {
     _cacheProfileMe.delete("_");
     return result;
   },
+  async deleteMe() {
+    await apiFetch<void>("/api/profile/me", { method: "DELETE" }, { skipGlobalLoading: true });
+    _cacheProfileMe.delete("_");
+    _cacheListProjects.delete("_");
+  },
   async gscStatus() {
     return apiFetch<GscStatus>("/api/gsc/status");
   },

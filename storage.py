@@ -2109,14 +2109,36 @@ def hard_delete_user(user_id: str) -> bool:
 def purge_user_data(user_id: str) -> bool:
     """Hard-delete ALL data owned by a user (L6.5 GDPR account erasure).
 
-    Deletes in order: all projects + their articles/jobs, subscription record,
-    then the user row itself. Returns True if the user existed and was removed.
+    Deletes in order:
+      1. Per-project resources (articles, scheduled_jobs, collaborators,
+         invitations, activity, site_maps, shopify_products) for every
+         project owned by this user
+      2. User-level collections (topic_clusters, research_serp,
+         research_ideas_runs, notifications, collaborator memberships in
+         other projects, outbound invitations, subscription)
+      3. The user row itself
+    Returns True if the user existed and was removed.
     """
     uid = (user_id or "").strip()
     if not uid:
         return False
 
-    for pid in project_ids_for_owner(uid):
+    pids = project_ids_for_owner(uid)
+
+    if _storage_mode == "mongo":
+        with _db_write_lock:
+            db = get_db()
+            if pids:
+                # Per-project collections not covered by delete_project_and_resources
+                db.project_collaborators.delete_many({"project_id": {"$in": pids}})
+                db.project_invitations.delete_many({"project_id": {"$in": pids}})
+                db.project_activity.delete_many({"project_id": {"$in": pids}})
+                db.site_maps.delete_many({"project_id": {"$in": pids}})
+                db.shopify_products.delete_many({"project_id": {"$in": pids}})
+                db.topic_clusters.delete_many({"project_id": {"$in": pids}})
+                db.content_monitors.delete_many({"project_id": {"$in": pids}})
+
+    for pid in pids:
         try:
             delete_project_and_resources(pid)
         except Exception:
@@ -2125,7 +2147,16 @@ def purge_user_data(user_id: str) -> bool:
     if _storage_mode == "mongo":
         with _db_write_lock:
             db = get_db()
+            # User-level collections
             db.subscriptions.delete_one({"user_id": uid})
+            db.topic_clusters.delete_many({"owner_user_id": uid})
+            db.research_serp.delete_many({"user_id": uid})
+            db.research_ideas_runs.delete_many({"user_id": uid})
+            db.notifications.delete_many({"user_id": uid})
+            # Collaborator memberships in other people's projects
+            db.project_collaborators.delete_many({"user_id": uid})
+            # Invitations sent by this user to other projects
+            db.project_invitations.delete_many({"invited_by_user_id": uid})
     elif _storage_mode == "json":
         pass  # JSON mode has no separate subscriptions file
 
