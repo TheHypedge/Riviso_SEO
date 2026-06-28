@@ -50,6 +50,14 @@ class VerifyEmailResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class CheckEmailRequest(BaseModel):
+    email: EmailStr
+
+
+class CheckEmailResponse(BaseModel):
+    exists: bool
+
+
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
@@ -59,8 +67,12 @@ class ForgotPasswordResponse(BaseModel):
     message: str = "If that email is registered, a password reset link has been sent."
 
 
+class ValidateResetTokenResponse(BaseModel):
+    valid: bool
+    reason: str | None = None  # "expired" | "invalid" | None when valid
+
+
 class ResetPasswordRequest(BaseModel):
-    email: EmailStr
     token: str = Field(min_length=8, max_length=128)
     password: str = Field(min_length=8, max_length=2000)
 

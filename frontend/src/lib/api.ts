@@ -1537,6 +1537,9 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
       path !== "/api/auth/verify-email" &&
       path !== "/api/auth/resend-verification" &&
       path !== "/api/auth/forgot-password" &&
+      path !== "/api/auth/check-email" &&
+      !path.startsWith("/api/auth/validate-reset-token") &&
+      path !== "/api/auth/reset-password" &&
       path !== "/api/auth/reactivate" &&
       path !== "/api/auth/refresh"
     ) {
@@ -1689,6 +1692,16 @@ export const api = {
       { skipGlobalLoading: true },
     );
   },
+  async checkEmail(email: string) {
+    return apiFetch<{ exists: boolean }>(
+      "/api/auth/check-email",
+      {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      },
+      { skipGlobalLoading: true },
+    );
+  },
   async forgotPassword(email: string) {
     return apiFetch<{ ok: boolean; message: string }>(
       "/api/auth/forgot-password",
@@ -1699,12 +1712,19 @@ export const api = {
       { skipGlobalLoading: true },
     );
   },
-  async resetPassword(email: string, token: string, password: string) {
+  async validateResetToken(token: string) {
+    return apiFetch<{ valid: boolean; reason: string | null }>(
+      `/api/auth/validate-reset-token?token=${encodeURIComponent(token)}`,
+      { method: "GET" },
+      { skipGlobalLoading: true },
+    );
+  },
+  async resetPassword(token: string, password: string) {
     return apiFetch<{ ok: boolean; message: string }>(
       "/api/auth/reset-password",
       {
         method: "POST",
-        body: JSON.stringify({ email, token, password }),
+        body: JSON.stringify({ token, password }),
       },
       { skipGlobalLoading: true },
     );

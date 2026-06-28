@@ -30,11 +30,12 @@ _log = logging.getLogger("riviso.email")
 # ---------------------------------------------------------------------------
 # Brand constants — keep in sync with backend/email/emailService.ts
 # ---------------------------------------------------------------------------
-_BRAND_PRIMARY = "#6d5efc"
-_BRAND_DARK = "#101218"
-_BRAND_BG = "#0b0d14"
-_BRAND_TEXT = "#eef2ff"
-_BRAND_MUTED = "#9aa3b8"
+_BRAND_PRIMARY = "#d97757"   # ember — Riviso action colour
+_BRAND_PRIMARY_DARK = "#c86a4c"
+_BRAND_DARK = "#121214"     # void-elevated
+_BRAND_BG = "#0b0b0d"       # void
+_BRAND_TEXT = "#faf9f5"     # on-dark
+_BRAND_MUTED = "#a09d96"    # on-dark-soft
 
 
 # ---------------------------------------------------------------------------
@@ -86,15 +87,16 @@ def _password_reset_html(to: str, reset_token: str) -> str:
         _raw_url = os.environ.get("FRONTEND_BASE_URL") or ""
     frontend = (_raw_url or "http://localhost:3000").rstrip("/")
     from urllib.parse import quote
-    # Link goes to /reset-password?token=TOKEN&email=EMAIL so the dedicated
-    # reset page can read both params without re-routing through /login.
-    link = f"{frontend}/reset-password?token={quote(reset_token)}&email={quote(to)}"
+    # Token-only link — email is never exposed in the URL.
+    link = f"{frontend}/reset-password?token={quote(reset_token)}"
     return _layout(
         "Reset your Riviso password",
-        f"""<h1 style="margin:0 0 12px;font-size:24px;color:{_BRAND_TEXT};">Reset your password</h1>
-<p style="color:{_BRAND_MUTED};margin:0 0 20px;">This link is valid for <strong style="color:{_BRAND_TEXT};">1 hour</strong>. If you did not request a password reset, you can safely ignore this email.</p>
-<a href="{link}" style="display:inline-block;padding:14px 22px;border-radius:10px;background:{_BRAND_PRIMARY};color:#fff;text-decoration:none;font-weight:700;font-size:16px;">Set new password</a>
-<p style="color:{_BRAND_MUTED};margin:20px 0 0;font-size:13px;">Button not working? Copy and paste this link into your browser:<br/><span style="color:{_BRAND_TEXT};word-break:break-all;">{link}</span></p>""",
+        f"""<h1 style="margin:0 0 8px;font-size:24px;font-weight:700;color:{_BRAND_TEXT};">Reset your password</h1>
+<p style="color:{_BRAND_MUTED};margin:0 0 8px;font-size:14px;line-height:1.6;">A password reset was requested for <strong style="color:{_BRAND_TEXT};">{to}</strong>.</p>
+<p style="color:{_BRAND_MUTED};margin:0 0 24px;font-size:14px;line-height:1.6;">Click the button below to set a new password. This link expires in <strong style="color:{_BRAND_TEXT};">1 hour</strong> and can only be used once.</p>
+<a href="{link}" style="display:inline-block;padding:14px 28px;border-radius:8px;background:{_BRAND_PRIMARY};color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;letter-spacing:0.01em;">Set New Password</a>
+<p style="color:{_BRAND_MUTED};margin:24px 0 0;font-size:13px;line-height:1.6;">If you didn't request this, you can safely ignore this email — your password won't change.</p>
+<p style="color:{_BRAND_MUTED};margin:16px 0 0;font-size:12px;">Button not working? Copy this link into your browser:<br/><span style="color:{_BRAND_TEXT};word-break:break-all;">{link}</span></p>""",
     )
 
 

@@ -121,7 +121,6 @@ export default function AuthPage() {
   const [awaitingVerification, setAwaitingVerification] = useState(false);
   const [verificationCode, setVerificationCode] = useState("");
   const [info, setInfo] = useState<string | null>(null);
-  const [forgotSent, setForgotSent] = useState(false);
   const { seconds: resendCooldown, startCooldown: startResendCooldown } = useResendCooldown();
   const [resending, setResending] = useState(false);
 
@@ -186,26 +185,6 @@ export default function AuthPage() {
       setError(connectionErrorMessage(err) || "Could not resend verification email.");
     } finally {
       setResending(false);
-    }
-  }
-
-  async function onForgotPassword() {
-    setError(null);
-    setInfo(null);
-    setForgotSent(false);
-    if (!email.trim()) {
-      setError("Enter your email address first.");
-      return;
-    }
-    setLoading(true);
-    try {
-      const res = await api.forgotPassword(email.trim());
-      setForgotSent(true);
-      setInfo(res.message);
-    } catch (err) {
-      setError(connectionErrorMessage(err) || "Could not send reset email.");
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -455,8 +434,11 @@ export default function AuthPage() {
                   <button
                     type="button"
                     className={styles.authForgotLink}
-                    onClick={onForgotPassword}
-                    disabled={loading}
+                    onClick={() =>
+                      router.push(
+                        `/forgot-password${email.trim() ? `?email=${encodeURIComponent(email.trim())}` : ""}`,
+                      )
+                    }
                   >
                     Forgot password?
                   </button>

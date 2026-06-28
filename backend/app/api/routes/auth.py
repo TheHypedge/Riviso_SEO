@@ -37,6 +37,10 @@ from app.services.to_thread import run_sync
 
 from app.schemas.auth import (
 
+    CheckEmailRequest,
+
+    CheckEmailResponse,
+
     ForgotPasswordRequest,
 
     ForgotPasswordResponse,
@@ -58,6 +62,8 @@ from app.schemas.auth import (
     TokenPair,
 
     UserPublic,
+
+    ValidateResetTokenResponse,
 
     VerifyEmailRequest,
 
@@ -590,7 +596,31 @@ async def verify_email(payload: VerifyEmailRequest, request: Request, response: 
 
 
 
-@limiter.limit("5/minute")
+@limiter.limit("10/minute")
+
+@router.post("/check-email", response_model=CheckEmailResponse)
+
+async def check_email(payload: CheckEmailRequest, request: Request) -> CheckEmailResponse:
+
+    """Check whether an email address is registered. Used by the forgot-password page."""
+
+    st = get_legacy_storage_module()
+
+    email = str(payload.email).strip().lower()
+
+    try:
+
+        user = await run_sync(call_storage, st.get_user_by_email, email)
+
+    except Exception:
+
+        return CheckEmailResponse(exists=False)
+
+    return CheckEmailResponse(exists=bool(user))
+
+
+
+@limiter.limit("3/hour")
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
 
@@ -614,7 +644,7 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request) -> F
 
         return generic
 
-    reset_token = uuid.uuid4().hex
+    reset_token = secrets.token_urlsafe(32)
 
     expires_at = datetime.utcnow() + timedelta(hours=1)
 
@@ -646,6 +676,40 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request) -> F
 
 
 
+@limiter.limit("20/minute")
+
+@router.get("/validate-reset-token", response_model=ValidateResetTokenResponse)
+
+async def validate_reset_token(token: str, request: Request) -> ValidateResetTokenResponse:
+
+    """Validate a password reset token without consuming it."""
+
+    st = get_legacy_storage_module()
+
+    tok = (token or "").strip()
+
+    if not tok:
+
+        return ValidateResetTokenResponse(valid=False, reason="invalid")
+
+    try:
+
+        status = await run_sync(st.validate_reset_token_status, tok)
+
+    except Exception:
+
+        return ValidateResetTokenResponse(valid=False, reason="invalid")
+
+    return ValidateResetTokenResponse(
+
+        valid=(status == "valid"),
+
+        reason=None if status == "valid" else status,
+
+    )
+
+
+
 
 
 @limiter.limit("5/minute")
@@ -656,8 +720,6 @@ async def reset_password(payload: ResetPasswordRequest, request: Request) -> Res
 
     st = get_legacy_storage_module()
 
-    email = str(payload.email).strip().lower()
-
     token = (payload.token or "").strip()
 
     pw = payload.password or ""
@@ -666,17 +728,15 @@ async def reset_password(payload: ResetPasswordRequest, request: Request) -> Res
 
         raise HTTPException(status_code=400, detail="Password must include letters, numbers, and a special character")
 
-    if not hasattr(st, "complete_password_reset"):
+    if not hasattr(st, "complete_password_reset_by_token"):
 
         raise HTTPException(status_code=501, detail="Password reset is not available")
 
     try:
 
-        ok, message = await run_sync(
+        ok, message, _email = await run_sync(
 
-            st.complete_password_reset,
-
-            email=email,
+            st.complete_password_reset_by_token,
 
             token=token,
 

@@ -76,32 +76,41 @@ def _smtp_configured() -> bool:
         )
 
 
+async def _send_smtp(kind: str, to_clean: str, payload: str) -> None:
+    from app.services.email_smtp import (
+        send_password_reset_email,
+        send_plan_notification_email,
+        send_verification_email,
+    )
+    if kind == "verification":
+        await send_verification_email(to_clean, payload)
+    elif kind == "password_reset":
+        await send_password_reset_email(to_clean, payload)
+    elif kind == "plan_notification":
+        await send_plan_notification_email(to_clean, payload)
+    else:
+        raise ValueError(f"Unknown email kind: {kind!r}")
+
+
 async def _run_email(kind: str, to: str, payload: str) -> None:
     to_clean = (to or "").strip()
     if not to_clean:
         return
 
     if _smtp_configured():
-        from app.services.email_smtp import (
-            send_password_reset_email,
-            send_plan_notification_email,
-            send_verification_email,
-        )
-        try:
-            if kind == "verification":
-                await send_verification_email(to_clean, payload)
-            elif kind == "password_reset":
-                await send_password_reset_email(to_clean, payload)
-            elif kind == "plan_notification":
-                await send_plan_notification_email(to_clean, payload)
-            else:
-                log.warning("Unknown email kind %r; not sent", kind)
+        # Attempt with one retry on transient failures.
+        for attempt in range(2):
+            try:
+                await _send_smtp(kind, to_clean, payload)
+                log.info("Email sent kind=%s to=%s attempt=%d", kind, to_clean, attempt + 1)
                 return
-            log.info("Email sent kind=%s to=%s", kind, to_clean)
-            return
-        except Exception:
-            log.exception("Python SMTP send failed kind=%s to=%s", kind, to_clean)
-            return
+            except Exception:
+                if attempt == 0:
+                    log.warning("SMTP attempt 1 failed kind=%s to=%s — retrying in 5s", kind, to_clean)
+                    await asyncio.sleep(5)
+                else:
+                    log.exception("SMTP retry failed kind=%s to=%s", kind, to_clean)
+        return
 
     # Fall back to Node subprocess when SMTP is not configured via env.
     await _run_email_node(kind, to_clean, payload)

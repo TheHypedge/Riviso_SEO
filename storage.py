@@ -1927,9 +1927,69 @@ def complete_password_reset(*, email: str, token: str, password_hash: str) -> tu
             "password_reset_token": "",
             "password_reset_expires": "",
             "password_reset_expires_at": None,
+            "refresh_session_jtis": [],
         },
     )
     return (True, "Password updated successfully.") if ok else (False, "Could not update password.")
+
+
+def get_user_by_reset_token_only(token: str) -> dict[str, Any] | None:
+    """Look up a user by reset token alone (no email required)."""
+    tok = (token or "").strip()
+    if not tok:
+        return None
+    if _storage_mode == "mongo":
+        doc = get_db().users.find_one({"password_reset_token": tok})
+        if not doc:
+            return None
+        return _normalize_user_dict(doc)
+    # JSON fallback: linear scan
+    for u in _load_json_users():
+        if (u.get("password_reset_token") or "").strip() == tok:
+            return _normalize_user_dict(u)
+    return None
+
+
+def validate_reset_token_status(token: str) -> str:
+    """Return 'valid', 'expired', or 'invalid' for a reset token."""
+    tok = (token or "").strip()
+    if not tok:
+        return "invalid"
+    user = get_user_by_reset_token_only(tok)
+    if not user:
+        return "invalid"
+    exp = _parse_iso_ts((user.get("password_reset_expires") or "").strip())
+    if not exp or datetime.utcnow() > exp:
+        return "expired"
+    return "valid"
+
+
+def complete_password_reset_by_token(*, token: str, password_hash: str) -> tuple[bool, str, str]:
+    """Reset password using token only (no email needed). Returns (ok, message, email)."""
+    tok = (token or "").strip()
+    if not tok:
+        return False, "Invalid or expired reset link.", ""
+    user = get_user_by_reset_token_only(tok)
+    if not user:
+        return False, "Invalid or expired reset link.", ""
+    exp = _parse_iso_ts((user.get("password_reset_expires") or "").strip())
+    if not exp or datetime.utcnow() > exp:
+        return False, "This reset link has expired. Please request a new one.", ""
+    uid = (user.get("id") or "").strip()
+    email = (user.get("email") or "").strip()
+    if not uid:
+        return False, "Invalid or expired reset link.", ""
+    ok = update_user_fields(
+        uid,
+        {
+            "password_hash": password_hash,
+            "password_reset_token": "",
+            "password_reset_expires": "",
+            "password_reset_expires_at": None,
+            "refresh_session_jtis": [],
+        },
+    )
+    return (True, "Password updated successfully.", email) if ok else (False, "Could not update password.", email)
 
 
 def insert_user(user: dict[str, Any]) -> None:
