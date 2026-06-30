@@ -51,6 +51,8 @@ from app.schemas.auth import (
 
     RegisterRequest,
 
+    ResendResetRequest,
+
     ResendVerificationRequest,
 
     ResendVerificationResponse,
@@ -620,7 +622,7 @@ async def check_email(payload: CheckEmailRequest, request: Request) -> CheckEmai
 
 
 
-@limiter.limit("3/hour")
+@limiter.limit("20/minute")
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
 
@@ -652,7 +654,7 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request) -> F
 
         try:
 
-            saved = await run_sync(
+            ok, retry_after = await run_sync(
 
                 st.set_password_reset_token,
 
@@ -666,9 +668,27 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request) -> F
 
         except Exception:
 
-            saved = False
+            return generic
 
-        if saved:
+        if retry_after > 0:
+
+            raise HTTPException(
+
+                status_code=429,
+
+                detail={
+
+                    "code": "reset_cooldown",
+
+                    "message": f"Please wait {retry_after} seconds before requesting another reset link.",
+
+                    "retry_after_seconds": retry_after,
+
+                },
+
+            )
+
+        if ok:
 
             dispatch_password_reset_email(to=email, token=reset_token)
 
@@ -694,7 +714,7 @@ async def validate_reset_token(token: str, request: Request) -> ValidateResetTok
 
     try:
 
-        status = await run_sync(st.validate_reset_token_status, tok)
+        status, email_hint = await run_sync(st.validate_reset_token_status, tok)
 
     except Exception:
 
@@ -705,6 +725,8 @@ async def validate_reset_token(token: str, request: Request) -> ValidateResetTok
         valid=(status == "valid"),
 
         reason=None if status == "valid" else status,
+
+        email_hint=email_hint,
 
     )
 
@@ -962,6 +984,90 @@ async def refresh_token(request: Request, response: Response) -> TokenPair:
 def _clear_auth_cookies(response: Response) -> None:
     for name in ("aa_access", "aa_refresh"):
         response.delete_cookie(name, path="/", domain=settings.cookie_domain)
+
+
+@limiter.limit("10/minute")
+
+@router.post("/resend-reset", response_model=ForgotPasswordResponse)
+
+async def resend_reset(payload: ResendResetRequest, request: Request) -> ForgotPasswordResponse:
+
+    """Resend a password reset email using an old (possibly expired) reset token.
+
+    Lets users on the /reset-password page request a new link without
+    re-entering their email address.
+    """
+
+    st = get_legacy_storage_module()
+
+    tok = (payload.token or "").strip()
+
+    generic = ForgotPasswordResponse()
+
+    if not tok or not hasattr(st, "resend_reset_by_token"):
+
+        return generic
+
+    try:
+
+        status, retry_after, email, email_hint = await run_sync(st.resend_reset_by_token, tok)
+
+    except Exception:
+
+        return generic
+
+    if status == "invalid":
+
+        return generic
+
+    if status == "cooldown":
+
+        raise HTTPException(
+
+            status_code=429,
+
+            detail={
+
+                "code": "reset_cooldown",
+
+                "message": f"Please wait {retry_after} seconds before requesting another reset link.",
+
+                "retry_after_seconds": retry_after,
+
+                "email_hint": email_hint,
+
+            },
+
+        )
+
+    # status == "ok" — issue a fresh token and send the email
+    reset_token = secrets.token_urlsafe(32)
+
+    expires_at = datetime.utcnow() + timedelta(hours=1)
+
+    try:
+
+        ok, _ = await run_sync(
+
+            st.set_password_reset_token,
+
+            email=email,
+
+            token=reset_token,
+
+            expires_at=expires_at,
+
+        )
+
+    except Exception:
+
+        return generic
+
+    if ok:
+
+        dispatch_password_reset_email(to=email, token=reset_token)
+
+    return generic
 
 
 @router.post("/logout", status_code=200)

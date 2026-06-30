@@ -22,6 +22,7 @@ _SKIP_PREFIXES = (
     "/api/auth/reset-password",
     "/api/auth/check-email",
     "/api/auth/validate-reset-token",
+    "/api/auth/resend-reset",
     "/api/auth/reactivate",
     "/api/auth/refresh",
     "/api/health",

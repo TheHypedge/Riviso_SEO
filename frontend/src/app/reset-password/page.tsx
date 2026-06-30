@@ -2,8 +2,9 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+
 
 import styles from "@/app/page.module.css";
 import { ApiError, api } from "@/lib/api";
@@ -11,6 +12,7 @@ import { ApiError, api } from "@/lib/api";
 // ─── Token validation states ─────────────────────────────────────────────────
 
 type TokenStatus = "checking" | "valid" | "expired" | "invalid";
+type ResendState = "idle" | "sending" | "sent" | "cooldown";
 
 // ─── Password strength ────────────────────────────────────────────────────────
 
@@ -27,88 +29,145 @@ function usePasswordRules(pw: string) {
   );
 }
 
+// ─── Countdown hook ───────────────────────────────────────────────────────────
+
+function useCountdown(seconds: number, active: boolean) {
+  const [remaining, setRemaining] = useState(seconds);
+  useEffect(() => {
+    if (!active) { setRemaining(seconds); return; }
+    setRemaining(seconds);
+    const id = setInterval(() => setRemaining((s) => (s <= 1 ? 0 : s - 1)), 1000);
+    return () => clearInterval(id);
+  }, [seconds, active]);
+  return remaining;
+}
+
 // ─── Skeleton card shown while validating the token ──────────────────────────
 
 function CheckingCard() {
   return (
     <div className={styles.authCard}>
-      <div
-        style={{
-          height: 24,
-          width: "60%",
-          borderRadius: 6,
-          background: "rgba(255,255,255,0.06)",
-          marginBottom: 12,
-          animation: "pulse 1.5s ease-in-out infinite",
-        }}
-      />
-      <div
-        style={{
-          height: 16,
-          width: "85%",
-          borderRadius: 6,
-          background: "rgba(255,255,255,0.04)",
-          animation: "pulse 1.5s ease-in-out infinite",
-        }}
-      />
+      <div style={{ height: 24, width: "60%", borderRadius: 6, background: "rgba(255,255,255,0.06)", marginBottom: 12, animation: "pulse 1.5s ease-in-out infinite" }} />
+      <div style={{ height: 16, width: "85%", borderRadius: 6, background: "rgba(255,255,255,0.04)", animation: "pulse 1.5s ease-in-out infinite" }} />
     </div>
   );
 }
 
-// ─── Invalid / expired / used states ─────────────────────────────────────────
+// ─── Expired card — inline resend with countdown ──────────────────────────────
 
-function ErrorCard({ status }: { status: "expired" | "invalid" }) {
-  const isExpired = status === "expired";
+function ExpiredCard({ token, emailHint }: { token: string; emailHint: string | null }) {
+  const [resendState, setResendState] = useState<ResendState>("idle");
+  const [cooldownSecs, setCooldownSecs] = useState(120);
+  const remaining = useCountdown(cooldownSecs, resendState === "cooldown");
+  const timerDoneRef = useRef(false);
+
+  useEffect(() => {
+    if (resendState === "cooldown" && remaining === 0 && !timerDoneRef.current) {
+      timerDoneRef.current = true;
+      setResendState("idle");
+    }
+  }, [resendState, remaining]);
+
+  async function handleResend() {
+    if (resendState !== "idle") return;
+    setResendState("sending");
+    try {
+      await api.resendReset(token);
+      setResendState("sent");
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 429) {
+        const detail = err.detail as Record<string, unknown> | null;
+        const secs = typeof detail?.retry_after_seconds === "number" ? detail.retry_after_seconds : 120;
+        setCooldownSecs(secs);
+        timerDoneRef.current = false;
+        setResendState("cooldown");
+      } else {
+        // Fallback: still show sent state so user goes to check inbox
+        setResendState("sent");
+      }
+    }
+  }
+
+  if (resendState === "sent") {
+    return (
+      <div className={styles.authCard}>
+        <div style={{ textAlign: "center", marginBottom: 16 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 52, height: 52, borderRadius: "50%", background: "rgba(93,184,114,0.12)", border: "1px solid rgba(93,184,114,0.3)", color: "#5db872", fontSize: 24 }}>✓</div>
+        </div>
+        <div className={styles.authCardTitle} style={{ textAlign: "center" }}>New Link Sent</div>
+        <div className={styles.authCardSub} style={{ textAlign: "center" }}>
+          A fresh reset link has been sent{emailHint ? <> to <strong style={{ color: "rgba(250,249,245,0.9)" }}>{emailHint}</strong></> : ""}. Check your inbox and click the new link.
+        </div>
+        <div style={{ marginTop: 24 }}>
+          <Link href="/" className={`${styles.button} ${styles.authButton}`} style={{ display: "block", textAlign: "center" }}>Back to Login</Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.authCard}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          marginBottom: 12,
-        }}
-      >
-        <span
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            width: 36,
-            height: 36,
-            borderRadius: "50%",
-            background: "rgba(198,69,69,0.12)",
-            border: "1px solid rgba(198,69,69,0.3)",
-            color: "#c64545",
-            fontSize: 18,
-            flexShrink: 0,
-          }}
-        >
-          ✕
-        </span>
-        <div className={styles.authCardTitle} style={{ margin: 0 }}>
-          {isExpired ? "Reset Link Expired" : "Invalid Reset Link"}
-        </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: "50%", background: "rgba(212,160,23,0.12)", border: "1px solid rgba(212,160,23,0.3)", color: "#d4a017", fontSize: 18, flexShrink: 0 }}>⏱</span>
+        <div className={styles.authCardTitle} style={{ margin: 0 }}>Reset Link Expired</div>
       </div>
 
       <div className={styles.authCardSub}>
-        {isExpired
-          ? "This password reset link has expired. Reset links are valid for 1 hour. Please request a new one."
-          : "This password reset link is invalid or has already been used. Please request a new link."}
+        This password reset link has expired — links are valid for 1 hour.
+        {emailHint && <> The link was sent to <strong style={{ color: "rgba(250,249,245,0.88)" }}>{emailHint}</strong>.</>}
       </div>
 
+      <div style={{ marginTop: 20, padding: "14px 16px", background: "rgba(255,255,255,0.04)", borderRadius: 8, border: "1px solid rgba(255,255,255,0.08)" }}>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: "var(--aa-on-dark-soft, #a09d96)", lineHeight: 1.5 }}>
+          Click below to receive a new reset link{emailHint ? ` at ${emailHint}` : ""}.
+        </p>
+        {resendState === "cooldown" ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "rgba(212,160,23,0.08)", borderRadius: 6, border: "1px solid rgba(212,160,23,0.2)" }}>
+            <span style={{ color: "#d4a017", fontSize: 15 }}>⏳</span>
+            <span style={{ fontSize: 13, color: "#d4a017" }}>
+              Next link available in <strong>{remaining}s</strong>
+            </span>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className={`${styles.button} ${styles.authButton}`}
+            style={{ width: "100%" }}
+            disabled={resendState === "sending"}
+            onClick={() => void handleResend()}
+          >
+            {resendState === "sending" ? "Sending…" : "Resend Reset Link"}
+          </button>
+        )}
+      </div>
+
+      <div style={{ marginTop: 16, textAlign: "center" }}>
+        <Link href="/forgot-password" className={styles.authForgotLink}>Use a different email</Link>
+        <span style={{ margin: "0 8px", color: "rgba(160,157,150,0.4)" }}>·</span>
+        <Link href="/" className={styles.authForgotLink}>Back to Login</Link>
+      </div>
+    </div>
+  );
+}
+
+// ─── Invalid / already-used state ────────────────────────────────────────────
+
+function InvalidCard() {
+  return (
+    <div className={styles.authCard}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 36, height: 36, borderRadius: "50%", background: "rgba(198,69,69,0.12)", border: "1px solid rgba(198,69,69,0.3)", color: "#c64545", fontSize: 18, flexShrink: 0 }}>✕</span>
+        <div className={styles.authCardTitle} style={{ margin: 0 }}>Invalid Reset Link</div>
+      </div>
+      <div className={styles.authCardSub}>
+        This password reset link is invalid or has already been used. If you need to reset your password, please request a new link.
+      </div>
       <div style={{ marginTop: 24, display: "flex", flexDirection: "column", gap: 10 }}>
-        <Link
-          href="/forgot-password"
-          className={`${styles.button} ${styles.authButton}`}
-          style={{ display: "block", textAlign: "center" }}
-        >
-          {isExpired ? "Send New Reset Link" : "Request New Link"}
+        <Link href="/forgot-password" className={`${styles.button} ${styles.authButton}`} style={{ display: "block", textAlign: "center" }}>
+          Request New Link
         </Link>
         <div style={{ textAlign: "center" }}>
-          <Link href="/" className={styles.authForgotLink}>
-            Back to Login
-          </Link>
+          <Link href="/" className={styles.authForgotLink}>Back to Login</Link>
         </div>
       </div>
     </div>
@@ -161,11 +220,11 @@ function SuccessCard() {
 // ─── Main reset form ──────────────────────────────────────────────────────────
 
 function ResetPasswordForm() {
-  const router = useRouter();
   const params = useSearchParams();
   const token = (params.get("token") || "").trim();
 
   const [tokenStatus, setTokenStatus] = useState<TokenStatus>("checking");
+  const [emailHint, setEmailHint] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -188,15 +247,14 @@ function ResetPasswordForm() {
     api
       .validateResetToken(token)
       .then((r) => {
-        if (!cancelled)
-          setTokenStatus(r.valid ? "valid" : ((r.reason as TokenStatus) ?? "invalid"));
+        if (cancelled) return;
+        if (r.email_hint) setEmailHint(r.email_hint);
+        setTokenStatus(r.valid ? "valid" : ((r.reason as TokenStatus) ?? "invalid"));
       })
       .catch(() => {
         if (!cancelled) setTokenStatus("invalid");
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [token]);
 
   async function onSubmit(e: React.FormEvent) {
@@ -228,11 +286,12 @@ function ResetPasswordForm() {
             : null) ||
           err.message ||
           "Password reset failed. The link may have expired.";
-        // If the token was already used / expired during form submission
-        if (
-          msg.toLowerCase().includes("expired") ||
-          msg.toLowerCase().includes("invalid")
-        ) {
+        // Token expired or used while the form was open — switch to expired card
+        if (msg.toLowerCase().includes("expired")) {
+          setTokenStatus("expired");
+          return;
+        }
+        if (msg.toLowerCase().includes("invalid")) {
           setTokenStatus("invalid");
           return;
         }
@@ -247,8 +306,8 @@ function ResetPasswordForm() {
 
   // Render states
   if (tokenStatus === "checking") return <CheckingCard />;
-  if (tokenStatus === "expired") return <ErrorCard status="expired" />;
-  if (tokenStatus === "invalid") return <ErrorCard status="invalid" />;
+  if (tokenStatus === "expired") return <ExpiredCard token={token} emailHint={emailHint} />;
+  if (tokenStatus === "invalid") return <InvalidCard />;
   if (success) return <SuccessCard />;
 
   return (

@@ -65,11 +65,17 @@ class ForgotPasswordRequest(BaseModel):
 class ForgotPasswordResponse(BaseModel):
     ok: bool = True
     message: str = "If that email is registered, a password reset link has been sent."
+    retry_after_seconds: int | None = None
 
 
 class ValidateResetTokenResponse(BaseModel):
     valid: bool
     reason: str | None = None  # "expired" | "invalid" | None when valid
+    email_hint: str | None = None  # masked email e.g. "t***@example.com"
+
+
+class ResendResetRequest(BaseModel):
+    token: str = Field(min_length=8, max_length=128)
 
 
 class ResetPasswordRequest(BaseModel):

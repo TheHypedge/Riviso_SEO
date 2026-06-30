@@ -516,6 +516,7 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "password_reset_token": (d.get("password_reset_token") or "").strip()[:128],
         "password_reset_expires": (d.get("password_reset_expires") or "").strip()[:64],
         "password_reset_expires_at": d.get("password_reset_expires_at"),
+        "password_reset_sent_at": d.get("password_reset_sent_at"),
         # Google Search Console OAuth (stored per-user)
         "gsc_access_token": (d.get("gsc_access_token") or "").strip()[:5000],
         "gsc_refresh_token": (d.get("gsc_refresh_token") or "").strip()[:5000],
@@ -1877,24 +1878,51 @@ def verify_email_with_token(*, email: str, token: str) -> tuple[bool, str]:
     return (ok, "Email verified successfully.") if ok else (False, "Could not activate account.")
 
 
-def set_password_reset_token(*, email: str, token: str, expires_at: datetime) -> bool:
+def _mask_email(email: str) -> str:
+    """Return a privacy-safe hint: tanish@thehypedge.com → t***@thehypedge.com"""
+    em = (email or "").strip().lower()
+    if "@" not in em:
+        return "***"
+    local, domain = em.split("@", 1)
+    if len(local) <= 1:
+        return f"{local}***@{domain}"
+    return f"{local[0]}{'*' * min(3, len(local) - 1)}@{domain}"
+
+
+_RESET_COOLDOWN_SECONDS = 120
+
+
+def set_password_reset_token(*, email: str, token: str, expires_at: datetime) -> tuple[bool, int]:
+    """Set a password reset token with a per-account cooldown.
+
+    Returns ``(ok, retry_after_seconds)``.  When ``retry_after_seconds > 0``
+    the account is still on cooldown and no token was saved.
+    """
     em = (email or "").strip().lower()
     tok = (token or "").strip()[:128]
     if not em or not tok:
-        return False
+        return False, 0
     user = get_user_by_email(em)
     if not user:
-        return False
+        return False, 0
+    # Per-account cooldown: prevent spamming reset emails
+    sent_raw = user.get("password_reset_sent_at")
+    if isinstance(sent_raw, datetime):
+        elapsed = (datetime.utcnow() - sent_raw).total_seconds()
+        if elapsed < _RESET_COOLDOWN_SECONDS:
+            return False, max(1, int(_RESET_COOLDOWN_SECONDS - elapsed))
     uid = (user.get("id") or "").strip()
     exp_iso = expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return update_user_fields(
+    ok = update_user_fields(
         uid,
         {
             "password_reset_token": tok,
             "password_reset_expires": exp_iso,
             "password_reset_expires_at": expires_at,
+            "password_reset_sent_at": datetime.utcnow(),
         },
     )
+    return ok, 0
 
 
 def get_user_by_password_reset_token(*, email: str, token: str) -> dict[str, Any] | None:
@@ -1950,18 +1978,52 @@ def get_user_by_reset_token_only(token: str) -> dict[str, Any] | None:
     return None
 
 
-def validate_reset_token_status(token: str) -> str:
-    """Return 'valid', 'expired', or 'invalid' for a reset token."""
+def validate_reset_token_status(token: str) -> tuple[str, str | None]:
+    """Return ``(status, email_hint)`` for a reset token.
+
+    *status* is ``'valid'``, ``'expired'``, or ``'invalid'``.
+    *email_hint* is a masked email (e.g. ``'t***@example.com'``) when the
+    token is found (valid or expired), ``None`` when the token is unknown.
+    """
     tok = (token or "").strip()
     if not tok:
-        return "invalid"
+        return "invalid", None
     user = get_user_by_reset_token_only(tok)
     if not user:
-        return "invalid"
+        return "invalid", None
+    email_hint = _mask_email(user.get("email") or "")
     exp = _parse_iso_ts((user.get("password_reset_expires") or "").strip())
     if not exp or datetime.utcnow() > exp:
-        return "expired"
-    return "valid"
+        return "expired", email_hint
+    return "valid", email_hint
+
+
+def resend_reset_by_token(token: str) -> tuple[str, int, str, str]:
+    """Look up the user associated with a (possibly expired) reset token and
+    return enough info for the auth route to issue a new reset email.
+
+    Returns ``(status, retry_after_seconds, email, email_hint)`` where:
+    - *status*: ``'ok'`` | ``'cooldown'`` | ``'invalid'``
+    - *retry_after_seconds*: seconds remaining in cooldown (0 when status != cooldown)
+    - *email*: the user's actual email (only populated when status == 'ok')
+    - *email_hint*: masked email for display (populated when status in ok/cooldown)
+    """
+    tok = (token or "").strip()
+    if not tok:
+        return "invalid", 0, "", ""
+    user = get_user_by_reset_token_only(tok)
+    if not user:
+        return "invalid", 0, "", ""
+    email = (user.get("email") or "").strip().lower()
+    email_hint = _mask_email(email)
+    if not email:
+        return "invalid", 0, "", ""
+    sent_raw = user.get("password_reset_sent_at")
+    if isinstance(sent_raw, datetime):
+        elapsed = (datetime.utcnow() - sent_raw).total_seconds()
+        if elapsed < _RESET_COOLDOWN_SECONDS:
+            return "cooldown", max(1, int(_RESET_COOLDOWN_SECONDS - elapsed)), "", email_hint
+    return "ok", 0, email, email_hint
 
 
 def complete_password_reset_by_token(*, token: str, password_hash: str) -> tuple[bool, str, str]:

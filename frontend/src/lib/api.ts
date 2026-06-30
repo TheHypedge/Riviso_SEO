@@ -1703,7 +1703,7 @@ export const api = {
     );
   },
   async forgotPassword(email: string) {
-    return apiFetch<{ ok: boolean; message: string }>(
+    return apiFetch<{ ok: boolean; message: string; retry_after_seconds?: number | null }>(
       "/api/auth/forgot-password",
       {
         method: "POST",
@@ -1713,9 +1713,19 @@ export const api = {
     );
   },
   async validateResetToken(token: string) {
-    return apiFetch<{ valid: boolean; reason: string | null }>(
+    return apiFetch<{ valid: boolean; reason: string | null; email_hint: string | null }>(
       `/api/auth/validate-reset-token?token=${encodeURIComponent(token)}`,
       { method: "GET" },
+      { skipGlobalLoading: true },
+    );
+  },
+  async resendReset(token: string) {
+    return apiFetch<{ ok: boolean; message: string }>(
+      "/api/auth/resend-reset",
+      {
+        method: "POST",
+        body: JSON.stringify({ token }),
+      },
       { skipGlobalLoading: true },
     );
   },
