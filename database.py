@@ -266,8 +266,10 @@ def init_db() -> None:
     db.subscriptions.create_index("user_id", unique=True)
     db.subscriptions.create_index("trial_end_date")
     db.plans.create_index("is_trial_plan")
-    db.users.create_index("email_verification_expires_at", expireAfterSeconds=0, sparse=True)
-    db.users.create_index("password_reset_expires_at", expireAfterSeconds=0, sparse=True)
+    # NOTE: TTL indexes on users.email_verification_expires_at and
+    # users.password_reset_expires_at were removed because they caused MongoDB
+    # to delete entire user documents after a password reset or unverified
+    # registration. Token expiry is enforced in application code instead.
     db.projects.create_index([("owner_user_id", 1), ("created_at", 1)])
 
     # Shopify product catalog (one document per product; not embedded on projects)
