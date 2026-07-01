@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import settings
 from app.core.deps import get_current_user
-from app.core.ids import user_ids_equal
+from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.services import gsc as gsc_service
 
@@ -48,18 +48,12 @@ def _public_api_url(path: str) -> str:
     return f"{base}{p}"
 
 
-def _require_project(*, st, user: dict, project_id: str) -> dict:
-    pid = (project_id or "").strip()
-    if not pid:
-        raise HTTPException(status_code=404, detail="Project not found")
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
-    if not isinstance(proj, dict):
-        raise HTTPException(status_code=404, detail="Project not found")
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
-        raise HTTPException(status_code=404, detail="Project not found")
-    return proj
+def _require_project(*, st, user: dict, project_id: str, allow_collaborators: bool = False) -> dict:
+    # allow_collaborators=True is for read-only content endpoints (status, sitemaps,
+    # analytics, insights) that shared collaborators must be able to view. Connect-url,
+    # property linking, and disconnect (GSC account setup) keep the default
+    # (owner or global-admin only).
+    return require_project_access(st=st, user=user, project_id=project_id, full=True, allow_collaborators=allow_collaborators)
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +71,7 @@ class ProjectGscStatus(BaseModel):
 @router.get("/status", response_model=ProjectGscStatus)
 async def status(project_id: str, user: dict = Depends(get_current_user)) -> ProjectGscStatus:
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
     rt = (proj.get("gsc_refresh_token") or "").strip()
     return ProjectGscStatus(
         configured=gsc_service.oauth_configured(),
@@ -209,7 +203,7 @@ async def list_sitemaps(project_id: str, user: dict = Depends(get_current_user))
     from app.services.gsc_actions import list_sitemaps_for_project  # local import to avoid cycles
 
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
     try:
         sitemaps = await list_sitemaps_for_project(st=st, proj=proj)
     except Exception as e:
@@ -239,7 +233,7 @@ async def submit_sitemap(
     from app.services.gsc_actions import submit_sitemap_for_project  # local import to avoid cycles
 
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
     try:
         return await submit_sitemap_for_project(
             st=st,
@@ -260,7 +254,7 @@ async def delete_sitemap(
     from app.services.gsc_actions import delete_sitemap_for_project  # local import to avoid cycles
 
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
     try:
         return await delete_sitemap_for_project(st=st, proj=proj, sitemap_url=sitemap_url)
     except Exception as e:
@@ -320,7 +314,7 @@ async def analytics(
     from app.services.to_thread import run_sync
 
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
 
     if not (proj.get("gsc_property_url") or "").strip():
         raise HTTPException(status_code=400, detail="Search Console property is not linked for this project. Open Tools → Search Console.")
@@ -501,7 +495,7 @@ async def insights(
     from app.services.to_thread import run_sync
 
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
 
     if not (proj.get("gsc_property_url") or "").strip():
         raise HTTPException(

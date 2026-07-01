@@ -1016,7 +1016,7 @@ export default function DashboardPage() {
                                     Project settings
                                   </button>
                                 )}
-                                {(!p.is_shared || p.your_role === "admin") && (
+                                {!p.is_shared && (
                                   <button
                                     type="button"
                                     className={styles.projectMenuItem}

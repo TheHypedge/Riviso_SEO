@@ -87,7 +87,8 @@ def _heal_stale_posting_jobs(*, st, project_id: str, rows: list[dict]) -> list[d
 
 async def _require_project_access(*, st, user: dict, project_id: str) -> dict:
     # P2.3: use Motor-backed async lookup to keep blocking I/O off the event loop.
-    return await async_require_project_access(user=user, project_id=project_id, full=False)
+    # allow_collaborators=True: scheduling is a content operation shared members must access.
+    return await async_require_project_access(user=user, project_id=project_id, full=False, allow_collaborators=True)
 
 
 def _require_verified_website(proj: dict) -> None:

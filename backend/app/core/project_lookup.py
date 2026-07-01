@@ -12,6 +12,7 @@ async def async_require_project_access(
     user: dict,
     project_id: str,
     full: bool = False,
+    allow_collaborators: bool = False,
 ) -> dict:
     """
     Async project access check — uses Motor (non-blocking) for the hot read.
@@ -19,6 +20,11 @@ async def async_require_project_access(
     P2.3 / P4.8: replaces the direct sync `require_project_access` call in
     async route handlers so PyMongo never blocks the event loop on this path.
     Falls back to the sync helper if Motor is unavailable.
+
+    ``allow_collaborators=True`` additionally grants access to an active
+    project collaborator (any role) — use this for content operations.
+    Administrative/settings/credential endpoints must keep the default
+    (owner or global-admin only).
     """
     pid = (project_id or "").strip()
     if not pid:
@@ -54,9 +60,21 @@ async def async_require_project_access(
 
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
-        raise HTTPException(status_code=404, detail="Project not found")
-    return proj
+    if role == "admin" or user_ids_equal(proj.get("owner_user_id"), uid):
+        return proj
+    if allow_collaborators:
+        from app.legacy.storage import get_legacy_storage_module
+        from app.services.storage_db import call_storage
+        from app.services.to_thread import run_sync
+        st = get_legacy_storage_module()
+        if hasattr(st, "get_collaborator_for_user"):
+            try:
+                collab = await run_sync(call_storage, st.get_collaborator_for_user, pid, uid)
+            except Exception:
+                collab = None
+            if isinstance(collab, dict):
+                return proj
+    raise HTTPException(status_code=404, detail="Project not found")
 
 
 def require_project_access(
@@ -65,12 +83,18 @@ def require_project_access(
     user: dict,
     project_id: str,
     full: bool = False,
+    allow_collaborators: bool = False,
 ) -> dict:
     """
     Resolve a project the caller may access.
 
     ``full=False`` (default for listings/auth) avoids loading ``shopify_catalog``,
     prompt arrays, and credential blobs. Use ``full=True`` for generation/settings writes.
+
+    ``allow_collaborators=True`` additionally grants access to an active
+    project collaborator (any role) — use this for content operations.
+    Administrative/settings/credential endpoints must keep the default
+    (owner or global-admin only).
     """
     pid = (project_id or "").strip()
     if not pid:
@@ -100,6 +124,11 @@ def require_project_access(
 
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
-        raise HTTPException(status_code=404, detail="Project not found")
-    return proj
+    if role == "admin" or user_ids_equal(proj.get("owner_user_id"), uid):
+        return proj
+    if allow_collaborators and hasattr(st, "get_collaborator_for_user"):
+        from app.services.storage_db import call_storage
+        collab = call_storage(st.get_collaborator_for_user, pid, uid)
+        if isinstance(collab, dict):
+            return proj
+    raise HTTPException(status_code=404, detail="Project not found")

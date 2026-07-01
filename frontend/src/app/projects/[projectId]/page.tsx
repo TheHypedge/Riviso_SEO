@@ -4513,11 +4513,27 @@ export default function ProjectPage() {
   const performanceTabAvailable = Boolean(
     gscStatus?.connected && gscStatus?.property_url && analytics && (analytics.series || []).length > 0,
   );
+  // Project Settings (and everything nested inside it — WordPress/Shopify
+  // connection, project deletion) is owner-only. Fail closed: hide the tab
+  // until projectMeta confirms the viewer is the owner, not just when it
+  // confirms they aren't.
+  const isProjectOwner = Boolean(projectMeta && !projectMeta.is_shared);
   const visibleTabs: TabKey[] = SIDEBAR_TAB_ORDER.filter((k) => {
     if (k === "products") return isShopifyProject;
     if (k === "performance") return performanceTabAvailable;
+    if (k === "project_settings") return isProjectOwner;
     return true;
   });
+
+  // Defense in depth: a shared member can force `?tab=project_settings` in the
+  // address bar. Bounce them back once projectMeta confirms they aren't the
+  // owner — the backend is the real backstop (settings endpoints already 404
+  // for non-owners), this just avoids showing a broken/empty settings page.
+  useEffect(() => {
+    if (tab === "project_settings" && projectMeta && projectMeta.is_shared) {
+      setTab("articles");
+    }
+  }, [tab, projectMeta, setTab]);
 
   function renderNavLabel(k: TabKey) {
     return (
@@ -10976,7 +10992,7 @@ export default function ProjectPage() {
             </div>
 
             {/* Invite form — only owner/admin */}
-            {projectMeta && (!projectMeta.is_shared || projectMeta.your_role === "admin" || projectMeta.your_role === "owner") && (
+            {projectMeta && !projectMeta.is_shared && (
               <div className={projectsDark.membersCard}>
                 <h2 className={projectsDark.membersSectionTitle}>Invite collaborator</h2>
                 <div className={projectsDark.membersInviteRow}>
@@ -11065,7 +11081,7 @@ export default function ProjectPage() {
                         <span className={projectsDark.memberName}>{c.user_name || c.user_email}</span>
                         <span className={projectsDark.memberEmail}>{c.user_email}</span>
                       </div>
-                      {projectMeta && (!projectMeta.is_shared || projectMeta.your_role === "admin" || projectMeta.your_role === "owner") ? (
+                      {projectMeta && !projectMeta.is_shared ? (
                         <>
                           <select
                             className={projectsDark.membersRoleSelect}
@@ -11109,7 +11125,7 @@ export default function ProjectPage() {
                           <span className={projectsDark.memberName}>{inv.invited_email}</span>
                           <span className={projectsDark.memberEmail}>{inv.role} · Pending</span>
                         </div>
-                        {projectMeta && (!projectMeta.is_shared || projectMeta.your_role === "admin" || projectMeta.your_role === "owner") && (
+                        {projectMeta && !projectMeta.is_shared && (
                           <>
                             <button
                               type="button"
@@ -11138,7 +11154,7 @@ export default function ProjectPage() {
           </div>
         ) : null}
 
-        {tab === "project_settings" ? (
+        {tab === "project_settings" && isProjectOwner ? (
           <div className={styles.settingsPage}>
             {(() => {
               const connectionOkForSave = isShopifyProject

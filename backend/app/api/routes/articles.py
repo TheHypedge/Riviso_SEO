@@ -433,7 +433,10 @@ def _to_list_item(a: dict) -> ArticleListItem:
 async def _require_project_access(*, st, user: dict, project_id: str, full: bool = False) -> dict:
     # Use Motor-backed async lookup (P2.3) — keeps blocking I/O off the event loop
     # and benefits from the run_with_retry reset on stale Atlas connections.
-    return await async_require_project_access(user=user, project_id=project_id, full=full)
+    # allow_collaborators=True: every endpoint in this file is a content
+    # operation (view/create/edit/generate/publish/schedule articles) that
+    # shared project collaborators must be able to perform.
+    return await async_require_project_access(user=user, project_id=project_id, full=full, allow_collaborators=True)
 
 
 def _require_verified_website(proj: dict) -> None:

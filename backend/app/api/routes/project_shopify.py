@@ -71,8 +71,11 @@ def _public_api_url(path: str) -> str:
     return f"{base}{p}"
 
 
-def _require_project(*, st, user: dict, project_id: str) -> dict:
-    return require_project_access(st=st, user=user, project_id=project_id, full=False)
+def _require_project(*, st, user: dict, project_id: str, allow_collaborators: bool = False) -> dict:
+    # allow_collaborators=True is for read/sync content endpoints (status, catalog,
+    # sync). Connect/reauthorize/verify/disconnect (credential setup) keep the
+    # default (owner or global-admin only).
+    return require_project_access(st=st, user=user, project_id=project_id, full=False, allow_collaborators=allow_collaborators)
 
 
 def _platform(proj: dict) -> str:
@@ -328,11 +331,11 @@ async def reauthorize_url(
 @router.get("/status", response_model=ShopifyStatus)
 async def status(project_id: str, user: dict = Depends(get_current_user)) -> ShopifyStatus:
     st = get_legacy_storage_module()
-    require_project_access(st=st, user=user, project_id=project_id, full=False)
+    require_project_access(st=st, user=user, project_id=project_id, full=False, allow_collaborators=True)
     proj = (
         st.get_project_shopify_status_doc(project_id)
         if hasattr(st, "get_project_shopify_status_doc")
-        else _require_project(st=st, user=user, project_id=project_id)
+        else _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
     )
     if not isinstance(proj, dict):
         raise HTTPException(status_code=404, detail="Project not found")
@@ -729,7 +732,7 @@ async def disconnect(project_id: str, user: dict = Depends(get_current_user)) ->
 @router.post("/sync")
 async def sync_catalog(project_id: str, user: dict = Depends(get_current_user)) -> ShopifyStatus:
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
     try:
         proj, client = await _shopify_client_for_project(st=st, proj=proj, force_token_refresh=True)
     except ValueError:
@@ -773,10 +776,10 @@ async def sync_catalog(project_id: str, user: dict = Depends(get_current_user)) 
 @router.get("/catalog", response_model=ShopifyCatalog)
 async def get_catalog(project_id: str, user: dict = Depends(get_current_user)) -> ShopifyCatalog:
     st = get_legacy_storage_module()
-    _require_project(st=st, user=user, project_id=project_id)
+    _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
     raw_doc = st.get_project_shopify_catalog_doc(project_id) if hasattr(st, "get_project_shopify_catalog_doc") else None
     if not isinstance(raw_doc, dict):
-        raw_doc = _require_project(st=st, user=user, project_id=project_id)
+        raw_doc = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
     raw = raw_doc.get("shopify_catalog") if isinstance(raw_doc.get("shopify_catalog"), dict) else {}
     products: list[dict] = []
     if hasattr(st, "list_shopify_products"):

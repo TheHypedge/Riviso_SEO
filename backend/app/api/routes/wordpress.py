@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.core.deps import get_current_user
-from app.core.ids import user_ids_equal
+from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.wordpress import WordpressCategory, WordpressPostType
 from app.services.wordpress_client import RIVISO_WP_USER_AGENT, WordpressClient
@@ -473,16 +473,12 @@ async def _probe_riviso_plugin(
         )
 
 
-def _require_project_access(*, st, user: dict, project_id: str) -> dict:
-    pid = (project_id or "").strip()
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
-        raise HTTPException(status_code=404, detail="Project not found")
-    return proj
+def _require_project_access(*, st, user: dict, project_id: str, allow_collaborators: bool = False) -> dict:
+    # allow_collaborators=True is for content endpoints (WP categories/post-types/
+    # sync-linked-articles) that shared collaborators must be able to use. Project
+    # Settings, connection verify, and other credential-bearing endpoints keep the
+    # default (owner or global-admin only).
+    return require_project_access(st=st, user=user, project_id=project_id, full=True, allow_collaborators=allow_collaborators)
 
 
 def _is_shopify_project(proj: dict) -> bool:
@@ -894,7 +890,7 @@ async def verify_wordpress_connection(
 @router.get("/projects/{project_id}/wordpress/post-types", response_model=list[WordpressPostType])
 async def wordpress_post_types(project_id: str, user: dict = Depends(get_current_user)) -> list[WordpressPostType]:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, allow_collaborators=True)
     if _is_shopify_project(proj):
         return []
     wp = _get_wp_client_for_project(proj)
@@ -914,7 +910,7 @@ async def wordpress_post_types(project_id: str, user: dict = Depends(get_current
 @router.get("/projects/{project_id}/wordpress/categories", response_model=list[WordpressCategory])
 async def wordpress_categories(project_id: str, user: dict = Depends(get_current_user)) -> list[WordpressCategory]:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, allow_collaborators=True)
     if _is_shopify_project(proj):
         return []
 
@@ -952,7 +948,7 @@ async def sync_linked_articles_from_wordpress(
     from app.services.wordpress_sync import resolve_wp_post_id, sync_article_from_wordpress
 
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, allow_collaborators=True)
     if _is_shopify_project(proj):
         raise HTTPException(status_code=400, detail="WordPress sync is not available for Shopify projects.")
     if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
@@ -1020,7 +1016,7 @@ async def sync_linked_articles_from_wordpress(
     from app.services.wordpress_sync import resolve_wp_post_id, sync_article_from_wordpress
 
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = _require_project_access(st=st, user=user, project_id=project_id, allow_collaborators=True)
     if _is_shopify_project(proj):
         raise HTTPException(status_code=400, detail="WordPress sync is not available for Shopify projects.")
     if (proj.get("wp_verified_status") or "").strip().lower() != "connected":

@@ -34,7 +34,8 @@ router = APIRouter(prefix="/projects/{project_id}/topic-clusters", tags=["topic-
 
 
 def _require_project(*, st, user: dict, project_id: str, full: bool = False) -> dict:
-    return require_project_access(st=st, user=user, project_id=project_id, full=full)
+    # Cluster planning is a content operation — active project collaborators may access it.
+    return require_project_access(st=st, user=user, project_id=project_id, full=full, allow_collaborators=True)
 
 
 def _plan_for_user(*, st, user: dict) -> tuple[str, dict]:

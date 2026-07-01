@@ -169,7 +169,7 @@ async def invite_collaborator(
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
     ctx = _get_member_context_or_403(st, project_id, uid)
-    _require_owner_or_admin(ctx)
+    _require_owner(ctx)
 
     invited_email = (payload.email or "").strip().lower()
     if not invited_email:
@@ -374,7 +374,7 @@ async def resend_invitation(
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
     ctx = _get_member_context_or_403(st, project_id, uid)
-    _require_owner_or_admin(ctx)
+    _require_owner(ctx)
 
     inv = st.get_invitation(invite_id)
     if not inv or inv.get("project_id") != project_id:
@@ -418,7 +418,7 @@ async def cancel_invitation(
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
     ctx = _get_member_context_or_403(st, project_id, uid)
-    _require_owner_or_admin(ctx)
+    _require_owner(ctx)
 
     inv = st.get_invitation(invite_id)
     if not inv or inv.get("project_id") != project_id:

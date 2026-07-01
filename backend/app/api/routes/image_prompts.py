@@ -5,7 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.core.deps import get_current_user
-from app.core.ids import user_ids_equal
+from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.prompts import PromptCreate, PromptItem, PromptListResponse, PromptUpdate, SetDefaultRequest
 from app.services.prompt_validation import validate_image_prompt
@@ -84,15 +84,10 @@ def _ensure_default_image_prompt(*, st, project_id: str, proj: dict) -> dict:
 
 
 def _require_project_access(*, st, user: dict, project_id: str) -> dict:
-    pid = (project_id or "").strip()
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
-        raise HTTPException(status_code=404, detail="Project not found")
-    return proj
+    # Image prompts are a content operation — active project collaborators may manage them.
+    # full=True: callers read/mutate proj["image_prompts"] / proj["default_image_prompt_id"],
+    # which are not present in the lightweight access-row projection.
+    return require_project_access(st=st, user=user, project_id=project_id, full=True, allow_collaborators=True)
 
 
 def _coerce_prompt_item(x: dict) -> PromptItem | None:

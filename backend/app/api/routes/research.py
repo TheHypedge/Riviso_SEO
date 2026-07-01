@@ -76,7 +76,7 @@ async def research_ideas_job_status(
 ) -> dict:
     """Poll async research curation status or fetch a completed cached result."""
     st = get_legacy_storage_module()
-    await async_require_project_access(user=user, project_id=project_id, full=False)
+    await async_require_project_access(user=user, project_id=project_id, full=False, allow_collaborators=True)
     key = (cache_key or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="cache_key is required")
@@ -110,7 +110,7 @@ async def research_ideas(
     user: dict = Depends(require_plan_action_for_project(PlanAction.CUSTOM_RESEARCH, consume=False)),
 ) -> ResearchIdeasResponse | JSONResponse:
     st = get_legacy_storage_module()
-    await async_require_project_access(user=user, project_id=project_id, full=False)
+    await async_require_project_access(user=user, project_id=project_id, full=False, allow_collaborators=True)
 
     seeds = [str(x).strip() for x in (payload.seed_keywords or []) if str(x).strip()][:25]
     if not seeds:
