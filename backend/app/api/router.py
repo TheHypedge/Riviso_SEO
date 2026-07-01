@@ -33,6 +33,7 @@ from app.api.routes import workspace
 from app.api.routes import project_collaboration
 from app.api.routes import invitations
 from app.api.routes import notifications
+from app.api.routes import wordpress_sync
 
 api_router = APIRouter()
 
@@ -62,4 +63,5 @@ api_router.include_router(workspace.router)
 api_router.include_router(project_collaboration.router)
 api_router.include_router(invitations.router)
 api_router.include_router(notifications.router)
+api_router.include_router(wordpress_sync.router)
 

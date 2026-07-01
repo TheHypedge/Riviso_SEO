@@ -2388,6 +2388,16 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "has_body": bool((d.get("article") or "").strip()),
         "listing_status": _derive_article_listing_status(d),
         "wp_category_ids": (d.get("wp_category_ids") or "")[:800],
+        # WordPress Sync & Self-Healing
+        "sync_status": (d.get("sync_status") or "unknown")[:32],
+        "sync_issue_type": (d.get("sync_issue_type") or "")[:64],
+        "last_synced_at": (d.get("last_synced_at") or "")[:64],
+        "last_successful_sync": (d.get("last_successful_sync") or "")[:64],
+        "last_fix_at": (d.get("last_fix_at") or "")[:64],
+        "repair_count": int(d.get("repair_count") or 0),
+        "last_verified_hash": (d.get("last_verified_hash") or "")[:256],
+        "ignored_sync_issue": bool(d.get("ignored_sync_issue", False)),
+        "sync_history": list(d.get("sync_history") or [])[:20],
     }
 
 
@@ -2571,6 +2581,15 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "integrity_flagged_paragraphs",
             "integrity_last_audited_at",
             "wp_category_ids",
+            "sync_status",
+            "sync_issue_type",
+            "last_synced_at",
+            "last_successful_sync",
+            "last_fix_at",
+            "repair_count",
+            "last_verified_hash",
+            "ignored_sync_issue",
+            "sync_history",
         ):
             a[k] = v
 
@@ -3252,6 +3271,31 @@ def get_published_articles_missing_wp_categories(project_id: str) -> list[dict[s
         ],
     }
     return list(get_db().articles.find(query, {"_id": 0, "id": 1, "wp_post_id": 1, "wp_rest_base": 1}))
+
+
+def load_wp_published_articles_for_project(project_id: str, limit: int = 500) -> list[dict[str, Any]]:
+    """Return full article dicts for articles that have been published to WordPress (have wp_post_id)."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    if _storage_mode == "mongo":
+        query = {
+            "project_id": pid,
+            "$and": [
+                {"wp_post_id": {"$exists": True}},
+                {"wp_post_id": {"$not": {"$in": [None, 0, ""]}}},
+            ],
+        }
+        return [
+            _normalize_article_dict(dict(a))
+            for a in get_db().articles.find(query, {"_id": 0}).limit(limit)
+        ]
+    # JSON fallback
+    rows = [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
+    return [
+        r for r in rows
+        if (r.get("project_id") or "").strip() == pid and r.get("wp_post_id")
+    ][:limit]
 
 
 def load_articles_by_ids_for_project(project_id: str, article_ids: list[str]) -> dict[str, dict[str, Any]]:

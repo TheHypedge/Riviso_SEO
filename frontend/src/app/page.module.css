@@ -2154,6 +2154,7 @@
     minmax(0, 0.85fr)
     minmax(0, 0.95fr)
     minmax(0, 130px)
+    minmax(0, 110px)
     minmax(64px, 88px)
     minmax(0, 148px);
   gap: 10px 12px;
@@ -2183,7 +2184,7 @@
   white-space: nowrap;
 }
 
-.articlesTableHead span:nth-child(7) {
+.articlesTableHead span:nth-child(8) {
   text-align: right;
 }
 
@@ -9006,4 +9007,492 @@ a.secondary {
   .card {
     border-radius: var(--aa-r-lg);
   }
+}
+
+/* ==========================================================================
+   WordPress Sync & Self-Healing
+   ========================================================================== */
+
+/* Sync status badges */
+.syncBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.syncBadgeSynced {
+  background: rgba(93, 184, 114, 0.12);
+  color: #5db872;
+  border: 1px solid rgba(93, 184, 114, 0.28);
+}
+
+.syncBadgeMissing {
+  background: rgba(198, 69, 69, 0.12);
+  color: #c64545;
+  border: 1px solid rgba(198, 69, 69, 0.28);
+}
+
+.syncBadgeTrashed {
+  background: rgba(198, 69, 69, 0.12);
+  color: #c64545;
+  border: 1px solid rgba(198, 69, 69, 0.28);
+}
+
+.syncBadgeDraft {
+  background: rgba(212, 160, 23, 0.12);
+  color: #d4a017;
+  border: 1px solid rgba(212, 160, 23, 0.28);
+}
+
+.syncBadgeUrlMismatch {
+  background: rgba(212, 160, 23, 0.12);
+  color: #d4a017;
+  border: 1px solid rgba(212, 160, 23, 0.28);
+}
+
+.syncBadgeMetadataMismatch {
+  background: rgba(212, 160, 23, 0.12);
+  color: #d4a017;
+  border: 1px solid rgba(212, 160, 23, 0.28);
+}
+
+.syncBadgeContentMismatch {
+  background: rgba(217, 119, 87, 0.12);
+  color: #d97757;
+  border: 1px solid rgba(217, 119, 87, 0.28);
+}
+
+.syncBadgeImageMissing {
+  background: rgba(212, 160, 23, 0.12);
+  color: #d4a017;
+  border: 1px solid rgba(212, 160, 23, 0.28);
+}
+
+.syncBadgeCategoryMismatch {
+  background: rgba(212, 160, 23, 0.12);
+  color: #d4a017;
+  border: 1px solid rgba(212, 160, 23, 0.28);
+}
+
+.syncBadgeNeedsAttention {
+  background: rgba(198, 69, 69, 0.12);
+  color: #c64545;
+  border: 1px solid rgba(198, 69, 69, 0.28);
+}
+
+.syncBadgeUnknown {
+  background: rgba(160, 157, 150, 0.10);
+  color: var(--aa-muted);
+  border: 1px solid rgba(160, 157, 150, 0.20);
+}
+
+.syncBadgeChecking {
+  background: rgba(112, 144, 200, 0.12);
+  color: #7090c8;
+  border: 1px solid rgba(112, 144, 200, 0.28);
+}
+
+/* Sync Website button in toolbar */
+.syncWebsiteBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  background: var(--aa-primary);
+  color: #fff;
+  border: none;
+  border-radius: var(--aa-r-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.syncWebsiteBtn:hover:not(:disabled) {
+  background: var(--aa-primary-active);
+  transform: translateY(-1px);
+}
+
+.syncWebsiteBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Sync report modal */
+.syncReportBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: var(--z-modal-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.syncReportModal {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: #1a1a1e;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 14px;
+  width: min(580px, calc(100% - 24px));
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  z-index: var(--z-modal);
+  box-shadow: 0 24px 70px rgba(20,20,19,0.28), 0 0 0 1px rgba(250,249,245,0.04) inset;
+}
+
+.syncReportHeader {
+  padding: 20px 24px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.syncReportTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--aa-on-dark);
+  margin: 0;
+}
+
+.syncReportClose {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--aa-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+  transition: background 0.12s;
+}
+.syncReportClose:hover { background: rgba(255,255,255,0.06); color: var(--aa-on-dark); }
+
+.syncReportBody {
+  padding: 16px 24px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.syncReportStats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.syncStatCard {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  padding: 12px 14px;
+  text-align: center;
+}
+
+.syncStatValue {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--aa-on-dark);
+  line-height: 1.1;
+}
+
+.syncStatValueGood { color: #5db872; }
+.syncStatValueBad { color: #c64545; }
+
+.syncStatLabel {
+  font-size: 11px;
+  color: var(--aa-muted);
+  margin-top: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.syncBreakdown {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+
+.syncBreakdownTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--aa-muted);
+  margin-bottom: 10px;
+}
+
+.syncBreakdownRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.syncBreakdownLabel { color: var(--aa-on-dark-soft); }
+.syncBreakdownCount { font-weight: 600; color: var(--aa-on-dark); }
+
+.syncResultList {
+  margin-bottom: 8px;
+}
+
+.syncResultRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  font-size: 13px;
+}
+.syncResultRow:last-child { border-bottom: none; }
+
+.syncResultTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--aa-on-dark);
+}
+
+.syncResultActions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.syncFixBtn {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--aa-primary);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+  white-space: nowrap;
+}
+.syncFixBtn:hover:not(:disabled) { background: var(--aa-primary-active); }
+.syncFixBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.syncIgnoreBtn {
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--aa-muted);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+.syncIgnoreBtn:hover:not(:disabled) { background: rgba(255,255,255,0.06); color: var(--aa-on-dark); }
+.syncIgnoreBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.syncReportFooter {
+  padding: 16px 24px;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
+}
+
+/* Sync details drawer */
+.syncDetailsBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: var(--z-modal-bg);
+}
+
+.syncDetailsDrawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 380px;
+  max-width: 95vw;
+  background: #1a1a1e;
+  border-left: 1px solid rgba(255,255,255,0.10);
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -8px 0 40px rgba(0,0,0,0.4);
+}
+
+.syncDrawerHeader {
+  padding: 20px 20px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.syncDrawerTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--aa-on-dark);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.syncDrawerClose {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--aa-muted);
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.syncDrawerClose:hover { background: rgba(255,255,255,0.06); color: var(--aa-on-dark); }
+
+.syncDrawerBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+}
+
+.syncDrawerSection {
+  margin-bottom: 16px;
+}
+
+.syncDrawerSectionTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--aa-muted);
+  margin-bottom: 8px;
+}
+
+.syncDrawerRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.syncDrawerRow:last-child { border-bottom: none; }
+
+.syncDrawerRowLabel { color: var(--aa-muted); flex-shrink: 0; }
+.syncDrawerRowValue { color: var(--aa-on-dark); text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.syncHistoryEntry {
+  padding: 6px 0;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.syncHistoryEntry:last-child { border-bottom: none; }
+.syncHistoryTs { color: var(--aa-muted); font-size: 11px; }
+.syncHistoryDetail { color: var(--aa-on-dark-soft); margin-top: 2px; }
+
+.syncDrawerFooter {
+  padding: 14px 20px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  display: flex;
+  gap: 8px;
+}
+
+/* Bulk repair progress modal — overlays syncReportModal, inherits fixed positioning */
+.bulkRepairModal {
+  max-width: 460px;
+  padding: 24px;
+}
+
+.bulkRepairTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--aa-on-dark);
+  margin-bottom: 16px;
+}
+
+.bulkRepairProgress {
+  width: 100%;
+  height: 6px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 9999px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.bulkRepairProgressFill {
+  height: 100%;
+  background: var(--aa-primary);
+  border-radius: 9999px;
+  transition: width 0.3s ease;
+  transform-origin: left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bulkRepairProgressFill { transition: none; }
+}
+
+.bulkRepairSummary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.bulkRepairStat {
+  text-align: center;
+  padding: 10px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+}
+
+.bulkRepairStatValue {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--aa-on-dark);
+}
+
+.bulkRepairStatValueGood { color: #5db872; }
+.bulkRepairStatValueBad { color: #c64545; }
+
+.bulkRepairStatLabel {
+  font-size: 11px;
+  color: var(--aa-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }

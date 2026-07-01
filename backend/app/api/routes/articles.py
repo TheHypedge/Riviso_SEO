@@ -422,6 +422,7 @@ def _to_list_item(a: dict) -> ArticleListItem:
         wp_link=(a.get("wp_link") or "").strip() or None,
         monitor_status=(a.get("monitor_status") or "").strip() or None,
         wp_category_ids=(a.get("wp_category_ids") or ""),
+        sync_status=(a.get("sync_status") or "unknown").strip(),
     )
 
 

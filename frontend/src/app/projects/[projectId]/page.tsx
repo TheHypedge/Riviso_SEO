@@ -24,6 +24,8 @@ import {
   ApiError,
   ArticleListItem,
   ArticlePublic,
+  ArticleSyncResult,
+  BulkRepairResponse,
   BulkUploadRow,
   clearAuth,
   CollaboratorPublic,
@@ -34,6 +36,7 @@ import {
   invalidateProjectSettingsCache,
   MembersResponse,
   mergeTopicClusterInList,
+  ProjectSyncResponse,
   PromptListResponse,
   ResearchIdeaRow as ApiResearchIdeaRow,
   TOPIC_CLUSTER_BUSY_STATUSES,
@@ -1124,6 +1127,19 @@ export default function ProjectPage() {
   const [bulkUploadRows, setBulkUploadRows] = useState<BulkUploadRow[]>([]);
   const [bulkUploading, setBulkUploading] = useState(false);
   const [bulkParseDupTitles, setBulkParseDupTitles] = useState<string[]>([]);
+  // WordPress Sync state
+  const [syncRunning, setSyncRunning] = useState(false);
+  const [syncReport, setSyncReport] = useState<ProjectSyncResponse | null>(null);
+  const [showSyncReport, setShowSyncReport] = useState(false);
+  const [syncDetailFor, setSyncDetailFor] = useState<ArticleSyncResult | null>(null);
+  const [repairBusy, setRepairBusy] = useState<Record<string, boolean>>({});
+  const [ignoreBusy, setIgnoreBusy] = useState<Record<string, boolean>>({});
+  const [bulkRepairRunning, setBulkRepairRunning] = useState(false);
+  const [bulkRepairResult, setBulkRepairResult] = useState<BulkRepairResponse | null>(null);
+  const [showBulkRepair, setShowBulkRepair] = useState(false);
+  const syncReportRef = useFocusTrap(showSyncReport);
+  const syncDetailRef = useFocusTrap(!!syncDetailFor);
+  const bulkRepairRef = useFocusTrap(showBulkRepair);
   const [postImportDupTitles, setPostImportDupTitles] = useState<string[] | null>(null);
   const [postImportProjectSkipped, setPostImportProjectSkipped] = useState(0);
   const [bulkProjectDupModal, setBulkProjectDupModal] = useState<{
@@ -4341,6 +4357,111 @@ export default function ProjectPage() {
     return parts.length ? parts.join(", ") : "—";
   }
 
+  function syncBadgeClass(status: string): string {
+    switch (status) {
+      case "synced": return `${styles.syncBadge} ${styles.syncBadgeSynced}`;
+      case "missing": return `${styles.syncBadge} ${styles.syncBadgeMissing}`;
+      case "trashed": return `${styles.syncBadge} ${styles.syncBadgeTrashed}`;
+      case "draft": return `${styles.syncBadge} ${styles.syncBadgeDraft}`;
+      case "url_mismatch": return `${styles.syncBadge} ${styles.syncBadgeUrlMismatch}`;
+      case "metadata_mismatch": return `${styles.syncBadge} ${styles.syncBadgeMetadataMismatch}`;
+      case "content_mismatch": return `${styles.syncBadge} ${styles.syncBadgeContentMismatch}`;
+      case "image_missing": return `${styles.syncBadge} ${styles.syncBadgeImageMissing}`;
+      case "category_mismatch": return `${styles.syncBadge} ${styles.syncBadgeCategoryMismatch}`;
+      case "needs_attention": return `${styles.syncBadge} ${styles.syncBadgeNeedsAttention}`;
+      default: return `${styles.syncBadge} ${styles.syncBadgeUnknown}`;
+    }
+  }
+
+  function syncBadgeLabel(status: string): string {
+    switch (status) {
+      case "synced": return "Synced";
+      case "missing": return "Missing";
+      case "trashed": return "Trashed";
+      case "draft": return "WP Draft";
+      case "url_mismatch": return "URL Changed";
+      case "metadata_mismatch": return "Meta Off";
+      case "content_mismatch": return "Content Off";
+      case "image_missing": return "Img Missing";
+      case "category_mismatch": return "Category Off";
+      case "needs_attention": return "Needs Fix";
+      default: return "Unknown";
+    }
+  }
+
+  async function runSyncProject() {
+    if (syncRunning) return;
+    setSyncRunning(true);
+    try {
+      const report = await api.syncProject(projectId);
+      setSyncReport(report);
+      setShowSyncReport(true);
+    } catch (err) {
+      console.error("Sync failed", err);
+    } finally {
+      setSyncRunning(false);
+    }
+  }
+
+  async function runRepairArticle(result: ArticleSyncResult) {
+    setRepairBusy((prev) => ({ ...prev, [result.article_id]: true }));
+    try {
+      await api.repairArticle(projectId, result.article_id);
+      // Re-sync the single article to get fresh status
+      const fresh = await api.syncArticle(projectId, result.article_id);
+      setSyncReport((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          results: prev.results.map((r) => r.article_id === result.article_id ? fresh : r),
+        };
+      });
+      if (syncDetailFor?.article_id === result.article_id) {
+        setSyncDetailFor(fresh);
+      }
+    } catch (err) {
+      console.error("Repair failed", err);
+    } finally {
+      setRepairBusy((prev) => ({ ...prev, [result.article_id]: false }));
+    }
+  }
+
+  async function runIgnoreArticle(result: ArticleSyncResult, ignored: boolean) {
+    setIgnoreBusy((prev) => ({ ...prev, [result.article_id]: true }));
+    try {
+      await api.setSyncIgnore(projectId, result.article_id, ignored);
+      const updated: ArticleSyncResult = { ...result, ignored_sync_issue: ignored };
+      setSyncReport((prev) => {
+        if (!prev) return prev;
+        return { ...prev, results: prev.results.map((r) => r.article_id === result.article_id ? updated : r) };
+      });
+      if (syncDetailFor?.article_id === result.article_id) {
+        setSyncDetailFor(updated);
+      }
+    } catch (err) {
+      console.error("Ignore failed", err);
+    } finally {
+      setIgnoreBusy((prev) => ({ ...prev, [result.article_id]: false }));
+    }
+  }
+
+  async function runBulkRepair() {
+    setBulkRepairRunning(true);
+    setShowBulkRepair(true);
+    setBulkRepairResult(null);
+    try {
+      const result = await api.repairAll(projectId);
+      setBulkRepairResult(result);
+      // Refresh the sync report
+      const report = await api.syncProject(projectId);
+      setSyncReport(report);
+    } catch (err) {
+      console.error("Bulk repair failed", err);
+    } finally {
+      setBulkRepairRunning(false);
+    }
+  }
+
   function renderArticleActions(a: ArticleListItem, title: string, iconBtnClass: string) {
     const inProgressStatus = (a.status || "").toLowerCase();
     if (inProgressStatus === "queued") {
@@ -6601,6 +6722,17 @@ export default function ProjectPage() {
                         ) : null}
                       </div>
                     ) : null}
+                    {websiteConnected && !isShopifyProject ? (
+                      <button
+                        className={styles.syncWebsiteBtn}
+                        type="button"
+                        disabled={syncRunning}
+                        onClick={runSyncProject}
+                        aria-label="Sync website — check all published articles against WordPress"
+                      >
+                        {syncRunning ? "Syncing…" : "Sync Website"}
+                      </button>
+                    ) : null}
                     <button
                       className={styles.articlesToolbarBtn}
                       type="button"
@@ -6661,6 +6793,7 @@ export default function ProjectPage() {
                     <span>Focus Keyphrase</span>
                     <span>Supporting Keywords</span>
                     <span>Category</span>
+                    <span>WP Sync</span>
                     <span>Status</span>
                     <span>Actions</span>
                   </div>
@@ -6754,6 +6887,72 @@ export default function ProjectPage() {
                                   <span className={styles.articlesTableCellEmpty}>—</span>
                                 )}
                               </div>
+                              {websiteConnected && !isShopifyProject ? (
+                                <div
+                                  className={styles.articlesTableCell}
+                                  data-mobile-label="WP Sync"
+                                  title={`WP Sync: ${syncBadgeLabel(a.sync_status || "unknown")}. Click for details.`}
+                                >
+                                  <button
+                                    type="button"
+                                    className={syncBadgeClass(a.sync_status || "unknown")}
+                                    style={{ cursor: "pointer", border: "none" }}
+                                    onClick={async () => {
+                                      // First try syncReport (already scanned this session)
+                                      const cached = syncReport?.results.find((r) => r.article_id === a.id);
+                                      if (cached) {
+                                        setSyncDetailFor(cached);
+                                        return;
+                                      }
+                                      // Fallback: fetch live sync for this article
+                                      if ((a.status || "").toLowerCase() !== "published" && !(a.wp_link)) {
+                                        // Not published to WP — show stub
+                                        setSyncDetailFor({
+                                          article_id: a.id,
+                                          article_title: a.title || "(Untitled)",
+                                          wp_post_id: null,
+                                          wp_link: a.wp_link || null,
+                                          sync_status: a.sync_status || "unknown",
+                                          issues: [],
+                                          last_synced_at: null,
+                                          last_successful_sync: null,
+                                          last_fix_at: null,
+                                          repair_count: 0,
+                                          ignored_sync_issue: false,
+                                          sync_history: [],
+                                        });
+                                        return;
+                                      }
+                                      try {
+                                        const fresh = await api.syncArticle(projectId, a.id);
+                                        setSyncDetailFor(fresh);
+                                      } catch {
+                                        setSyncDetailFor({
+                                          article_id: a.id,
+                                          article_title: a.title || "(Untitled)",
+                                          wp_post_id: null,
+                                          wp_link: a.wp_link || null,
+                                          sync_status: a.sync_status || "unknown",
+                                          issues: [],
+                                          last_synced_at: null,
+                                          last_successful_sync: null,
+                                          last_fix_at: null,
+                                          repair_count: 0,
+                                          ignored_sync_issue: false,
+                                          sync_history: [],
+                                        });
+                                      }
+                                    }}
+                                    aria-label={`WP sync status: ${syncBadgeLabel(a.sync_status || "unknown")}. Click for details.`}
+                                  >
+                                    {syncBadgeLabel(a.sync_status || "unknown")}
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className={styles.articlesTableCell}>
+                                  <span className={`${styles.syncBadge} ${styles.syncBadgeUnknown}`}>—</span>
+                                </div>
+                              )}
                               <div className={styles.articlesTableStatusCol} data-mobile-label="Status" title={statusTitle}>
                                 <span className={statusPillClass(a.status)}>{statusLabel}</span>
                               </div>
@@ -6867,6 +7066,16 @@ export default function ProjectPage() {
                                 </div>
                               ) : null}
                             </dl>
+                            {websiteConnected && !isShopifyProject ? (
+                              <div className={styles.articlesMobileMetaRow}>
+                                <dt>WP Sync</dt>
+                                <dd>
+                                  <span className={syncBadgeClass(a.sync_status || "unknown")}>
+                                    {syncBadgeLabel(a.sync_status || "unknown")}
+                                  </span>
+                                </dd>
+                              </div>
+                            ) : null}
                             <div className={styles.articlesMobileActions}>
                               {renderArticleActions(a, title, styles.articlesMobileIconBtn)}
                             </div>
@@ -7629,6 +7838,379 @@ export default function ProjectPage() {
                       OK
                     </button>
                   </div>
+                </div>
+              </>
+            ) : null}
+
+            {/* ================================================================
+                WordPress Sync Report modal
+                ================================================================ */}
+            {showSyncReport && syncReport ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.modalBackdrop}
+                  aria-label="Close sync report"
+                  onClick={() => setShowSyncReport(false)}
+                />
+                <div
+                  ref={syncReportRef}
+                  className={styles.syncReportModal}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="WordPress sync report"
+                >
+                  <div className={styles.syncReportHeader}>
+                    <h3 className={styles.syncReportTitle}>WordPress Sync Report</h3>
+                    <button
+                      type="button"
+                      className={styles.syncReportClose}
+                      onClick={() => setShowSyncReport(false)}
+                      aria-label="Close"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className={styles.syncReportBody}>
+                    <div className={styles.syncReportStats}>
+                      <div className={styles.syncStatCard}>
+                        <div className={styles.syncStatValue}>{syncReport.total}</div>
+                        <div className={styles.syncStatLabel}>Total</div>
+                      </div>
+                      <div className={styles.syncStatCard}>
+                        <div className={`${styles.syncStatValue} ${styles.syncStatValueGood}`}>{syncReport.healthy}</div>
+                        <div className={styles.syncStatLabel}>Healthy</div>
+                      </div>
+                      <div className={styles.syncStatCard}>
+                        <div className={`${styles.syncStatValue} ${syncReport.needs_attention > 0 ? styles.syncStatValueBad : styles.syncStatValue}`}>{syncReport.needs_attention}</div>
+                        <div className={styles.syncStatLabel}>Issues</div>
+                      </div>
+                    </div>
+
+                    {Object.keys(syncReport.by_status).length > 0 ? (
+                      <div className={styles.syncBreakdown}>
+                        <div className={styles.syncBreakdownTitle}>By Status</div>
+                        {Object.entries(syncReport.by_status).map(([s, count]) => (
+                          <div key={s} className={styles.syncBreakdownRow}>
+                            <span className={styles.syncBreakdownLabel}>
+                              <span className={syncBadgeClass(s)}>{syncBadgeLabel(s)}</span>
+                            </span>
+                            <span className={styles.syncBreakdownCount}>{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+
+                    {syncReport.results.filter((r) => r.sync_status !== "synced" && r.sync_status !== "unknown").length > 0 ? (
+                      <div className={styles.syncResultList}>
+                        <div className={styles.syncBreakdownTitle} style={{ marginBottom: 8 }}>Articles needing attention</div>
+                        {syncReport.results
+                          .filter((r) => r.sync_status !== "synced" && r.sync_status !== "unknown")
+                          .map((r) => (
+                            <div key={r.article_id} className={styles.syncResultRow}>
+                              <span className={syncBadgeClass(r.sync_status)}>{syncBadgeLabel(r.sync_status)}</span>
+                              <span
+                                className={styles.syncResultTitle}
+                                title={r.article_title}
+                              >
+                                {r.article_title || r.article_id}
+                              </span>
+                              <div className={styles.syncResultActions}>
+                                {!r.ignored_sync_issue ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className={styles.syncFixBtn}
+                                      disabled={repairBusy[r.article_id]}
+                                      onClick={() => runRepairArticle(r)}
+                                    >
+                                      {repairBusy[r.article_id] ? "Fixing…" : "Fix"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className={styles.syncIgnoreBtn}
+                                      disabled={ignoreBusy[r.article_id]}
+                                      onClick={() => runIgnoreArticle(r, true)}
+                                    >
+                                      Ignore
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className={styles.syncIgnoreBtn}
+                                    disabled={ignoreBusy[r.article_id]}
+                                    onClick={() => runIgnoreArticle(r, false)}
+                                  >
+                                    Unignore
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  className={styles.syncIgnoreBtn}
+                                  onClick={() => { setSyncDetailFor(r); }}
+                                >
+                                  Details
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                      </div>
+                    ) : syncReport.total > 0 ? (
+                      <p style={{ textAlign: "center", color: "var(--aa-muted)", fontSize: 13, padding: "16px 0" }}>
+                        All articles are in sync with WordPress.
+                      </p>
+                    ) : (
+                      <p style={{ textAlign: "center", color: "var(--aa-muted)", fontSize: 13, padding: "16px 0" }}>
+                        No published articles found in this project.
+                      </p>
+                    )}
+                  </div>
+                  <div className={styles.syncReportFooter}>
+                    {syncReport.needs_attention > 0 ? (
+                      <button
+                        type="button"
+                        className={styles.syncWebsiteBtn}
+                        disabled={bulkRepairRunning}
+                        onClick={runBulkRepair}
+                      >
+                        {bulkRepairRunning ? "Repairing all…" : `Fix All (${syncReport.needs_attention})`}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={runSyncProject}
+                      disabled={syncRunning}
+                    >
+                      {syncRunning ? "Syncing…" : "Re-scan"}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => setShowSyncReport(false)}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            {/* ================================================================
+                WordPress Sync Detail Drawer
+                ================================================================ */}
+            {syncDetailFor ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.syncDetailsBackdrop}
+                  aria-label="Close sync details"
+                  onClick={() => setSyncDetailFor(null)}
+                />
+                <div
+                  ref={syncDetailRef}
+                  className={styles.syncDetailsDrawer}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label={`Sync details: ${syncDetailFor.article_title}`}
+                >
+                  <div className={styles.syncDrawerHeader}>
+                    <div className={styles.syncDrawerTitle} title={syncDetailFor.article_title}>
+                      {syncDetailFor.article_title || syncDetailFor.article_id}
+                    </div>
+                    <button
+                      type="button"
+                      className={styles.syncDrawerClose}
+                      onClick={() => setSyncDetailFor(null)}
+                      aria-label="Close"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className={styles.syncDrawerBody}>
+                    <div className={styles.syncDrawerSection}>
+                      <div className={styles.syncDrawerSectionTitle}>Sync Status</div>
+                      <div style={{ marginBottom: 8 }}>
+                        <span className={syncBadgeClass(syncDetailFor.sync_status)}>
+                          {syncBadgeLabel(syncDetailFor.sync_status)}
+                        </span>
+                      </div>
+                      {syncDetailFor.issues.length > 0 ? (
+                        <div style={{ fontSize: 12, color: "var(--aa-muted)", marginTop: 4 }}>
+                          Issues: {syncDetailFor.issues.join(", ")}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className={styles.syncDrawerSection}>
+                      <div className={styles.syncDrawerSectionTitle}>WordPress Post</div>
+                      <div className={styles.syncDrawerRow}>
+                        <span className={styles.syncDrawerRowLabel}>Post ID</span>
+                        <span className={styles.syncDrawerRowValue}>{syncDetailFor.wp_post_id ?? "—"}</span>
+                      </div>
+                      {syncDetailFor.wp_link ? (
+                        <div className={styles.syncDrawerRow}>
+                          <span className={styles.syncDrawerRowLabel}>Live URL</span>
+                          <a
+                            href={syncDetailFor.wp_link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={styles.syncDrawerRowValue}
+                            style={{ color: "var(--aa-primary)" }}
+                          >
+                            {syncDetailFor.wp_link}
+                          </a>
+                        </div>
+                      ) : null}
+                      {syncDetailFor.wp_live_status ? (
+                        <div className={styles.syncDrawerRow}>
+                          <span className={styles.syncDrawerRowLabel}>WP Status</span>
+                          <span className={styles.syncDrawerRowValue}>{syncDetailFor.wp_live_status}</span>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className={styles.syncDrawerSection}>
+                      <div className={styles.syncDrawerSectionTitle}>Timeline</div>
+                      <div className={styles.syncDrawerRow}>
+                        <span className={styles.syncDrawerRowLabel}>Last synced</span>
+                        <span className={styles.syncDrawerRowValue}>
+                          {syncDetailFor.last_synced_at ? new Date(syncDetailFor.last_synced_at).toLocaleString() : "—"}
+                        </span>
+                      </div>
+                      <div className={styles.syncDrawerRow}>
+                        <span className={styles.syncDrawerRowLabel}>Last healthy</span>
+                        <span className={styles.syncDrawerRowValue}>
+                          {syncDetailFor.last_successful_sync ? new Date(syncDetailFor.last_successful_sync).toLocaleString() : "—"}
+                        </span>
+                      </div>
+                      {syncDetailFor.last_fix_at ? (
+                        <div className={styles.syncDrawerRow}>
+                          <span className={styles.syncDrawerRowLabel}>Last fixed</span>
+                          <span className={styles.syncDrawerRowValue}>{new Date(syncDetailFor.last_fix_at).toLocaleString()}</span>
+                        </div>
+                      ) : null}
+                      <div className={styles.syncDrawerRow}>
+                        <span className={styles.syncDrawerRowLabel}>Repair count</span>
+                        <span className={styles.syncDrawerRowValue}>{syncDetailFor.repair_count}</span>
+                      </div>
+                    </div>
+
+                    {syncDetailFor.sync_history.length > 0 ? (
+                      <div className={styles.syncDrawerSection}>
+                        <div className={styles.syncDrawerSectionTitle}>Recent history</div>
+                        {syncDetailFor.sync_history.slice().reverse().map((entry, i) => (
+                          <div key={i} className={styles.syncHistoryEntry}>
+                            <div className={styles.syncHistoryTs}>{new Date(entry.ts).toLocaleString()} — {entry.action}</div>
+                            <div className={styles.syncHistoryDetail}>{entry.detail}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className={styles.syncDrawerFooter}>
+                    {!syncDetailFor.ignored_sync_issue && syncDetailFor.sync_status !== "synced" && syncDetailFor.sync_status !== "unknown" ? (
+                      <>
+                        <button
+                          type="button"
+                          className={styles.syncFixBtn}
+                          disabled={repairBusy[syncDetailFor.article_id]}
+                          onClick={() => runRepairArticle(syncDetailFor)}
+                          style={{ flex: 1 }}
+                        >
+                          {repairBusy[syncDetailFor.article_id] ? "Fixing…" : "Fix Issue"}
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.syncIgnoreBtn}
+                          disabled={ignoreBusy[syncDetailFor.article_id]}
+                          onClick={() => runIgnoreArticle(syncDetailFor, true)}
+                        >
+                          Ignore
+                        </button>
+                      </>
+                    ) : syncDetailFor.ignored_sync_issue ? (
+                      <button
+                        type="button"
+                        className={styles.syncIgnoreBtn}
+                        disabled={ignoreBusy[syncDetailFor.article_id]}
+                        onClick={() => runIgnoreArticle(syncDetailFor, false)}
+                        style={{ flex: 1 }}
+                      >
+                        Unignore
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => setSyncDetailFor(null)}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            {/* ================================================================
+                Bulk Repair progress/result modal
+                ================================================================ */}
+            {showBulkRepair ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.modalBackdrop}
+                  aria-label="Close bulk repair"
+                  onClick={() => { if (!bulkRepairRunning) setShowBulkRepair(false); }}
+                />
+                <div
+                  ref={bulkRepairRef}
+                  className={`${styles.syncReportModal} ${styles.bulkRepairModal}`}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Bulk repair progress"
+                  aria-busy={bulkRepairRunning}
+                >
+                  <div className={styles.bulkRepairTitle}>
+                    {bulkRepairRunning ? "Repairing articles…" : "Bulk Repair Complete"}
+                  </div>
+                  {bulkRepairRunning ? (
+                    <div className={styles.bulkRepairProgress}>
+                      <div className={styles.bulkRepairProgressFill} style={{ width: "100%", animation: "none", opacity: 0.7 }} />
+                    </div>
+                  ) : null}
+                  {bulkRepairResult ? (
+                    <div className={styles.bulkRepairSummary}>
+                      <div className={styles.bulkRepairStat}>
+                        <div className={`${styles.bulkRepairStatValue} ${styles.bulkRepairStatValueGood}`}>
+                          {bulkRepairResult.repaired}
+                        </div>
+                        <div className={styles.bulkRepairStatLabel}>Fixed</div>
+                      </div>
+                      <div className={styles.bulkRepairStat}>
+                        <div className={`${styles.bulkRepairStatValue} ${bulkRepairResult.failed > 0 ? styles.bulkRepairStatValueBad : styles.bulkRepairStatValue}`}>
+                          {bulkRepairResult.failed}
+                        </div>
+                        <div className={styles.bulkRepairStatLabel}>Failed</div>
+                      </div>
+                      <div className={styles.bulkRepairStat}>
+                        <div className={styles.bulkRepairStatValue}>{bulkRepairResult.skipped}</div>
+                        <div className={styles.bulkRepairStatLabel}>Skipped</div>
+                      </div>
+                    </div>
+                  ) : null}
+                  {!bulkRepairRunning ? (
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <button
+                        type="button"
+                        className={styles.btnSecondary}
+                        onClick={() => setShowBulkRepair(false)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               </>
             ) : null}

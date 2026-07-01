@@ -23,6 +23,7 @@ class ArticleListItem(BaseModel):
     wp_link: str | None = Field(default=None, description="Live URL when published; enables indexing/monitor actions.")
     monitor_status: str | None = Field(default=None, description="Rank monitor state for refresh actions.")
     wp_category_ids: str = Field(default="", description="Comma-separated WordPress category IDs assigned to this article.")
+    sync_status: str = Field(default="unknown", description="WordPress sync health: synced | missing | draft | trashed | url_mismatch | metadata_mismatch | content_mismatch | image_missing | category_mismatch | needs_attention | unknown")
 
 
 class ArticleListPageResponse(BaseModel):

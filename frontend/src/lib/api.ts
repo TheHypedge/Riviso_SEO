@@ -751,6 +751,7 @@ export type ArticleListItem = {
   wp_link?: string | null;
   monitor_status?: string | null;
   wp_category_ids?: string;
+  sync_status?: string | null;
 };
 
 export type ArticlePublic = {
@@ -1099,6 +1100,60 @@ export type ActivityRecord = {
   action: string;
   data: Record<string, unknown>;
   created_at: string;
+};
+
+// ---------------------------------------------------------------------------
+// WordPress Sync & Self-Healing types
+// ---------------------------------------------------------------------------
+
+export type SyncHistoryEntry = {
+  ts: string;
+  action: string;
+  detail: string;
+};
+
+export type ArticleSyncResult = {
+  article_id: string;
+  article_title: string;
+  wp_post_id: number | null;
+  wp_link: string | null;
+  sync_status: string;
+  issues: string[];
+  wp_live_status?: string | null;
+  wp_live_slug?: string | null;
+  wp_live_link?: string | null;
+  last_synced_at: string | null;
+  last_successful_sync: string | null;
+  last_fix_at: string | null;
+  repair_count: number;
+  ignored_sync_issue: boolean;
+  sync_history: SyncHistoryEntry[];
+};
+
+export type ProjectSyncResponse = {
+  project_id: string;
+  total: number;
+  healthy: number;
+  needs_attention: number;
+  by_status: Record<string, number>;
+  results: ArticleSyncResult[];
+  synced_at: string;
+};
+
+export type RepairResult = {
+  article_id: string;
+  ok: boolean;
+  operation: string;
+  error: string | null;
+  new_wp_post_id?: number | null;
+  new_wp_link?: string | null;
+};
+
+export type BulkRepairResponse = {
+  repaired: number;
+  failed: number;
+  skipped: number;
+  results: RepairResult[];
 };
 
 const ENV_API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "").trim().replace(/\/+$/, "");
@@ -3569,6 +3624,35 @@ export const api = {
   },
   async markAllNotificationsRead(): Promise<void> {
     await apiFetch<unknown>("/api/notifications/read-all", { method: "POST" });
+  },
+
+  // ---------------------------------------------------------------------------
+  // WordPress Sync & Self-Healing
+  // ---------------------------------------------------------------------------
+  async syncProject(projectId: string): Promise<ProjectSyncResponse> {
+    return apiFetch<ProjectSyncResponse>(`/api/projects/${projectId}/wordpress/sync`, { method: "POST" });
+  },
+  async syncArticle(projectId: string, articleId: string): Promise<ArticleSyncResult> {
+    return apiFetch<ArticleSyncResult>(
+      `/api/projects/${projectId}/wordpress/articles/${articleId}/sync`,
+      { method: "POST" },
+      { skipGlobalLoading: true },
+    );
+  },
+  async repairArticle(projectId: string, articleId: string): Promise<RepairResult> {
+    return apiFetch<RepairResult>(
+      `/api/projects/${projectId}/wordpress/articles/${articleId}/repair`,
+      { method: "POST" },
+    );
+  },
+  async repairAll(projectId: string): Promise<BulkRepairResponse> {
+    return apiFetch<BulkRepairResponse>(`/api/projects/${projectId}/wordpress/repair-all`, { method: "POST" });
+  },
+  async setSyncIgnore(projectId: string, articleId: string, ignored: boolean): Promise<{ ok: boolean; ignored: boolean }> {
+    return apiFetch<{ ok: boolean; ignored: boolean }>(
+      `/api/projects/${projectId}/wordpress/articles/${articleId}/sync-ignore`,
+      { method: "PATCH", body: JSON.stringify({ ignored }) },
+    );
   },
 };
 
