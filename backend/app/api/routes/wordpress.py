@@ -11,6 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.core.deps import get_current_user
+from app.core.ids import user_ids_equal
 from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.wordpress import WordpressCategory, WordpressPostType
@@ -536,7 +537,16 @@ async def download_plugin(user: dict = Depends(get_current_user)) -> Response:
 @router.get("/projects/{project_id}/settings", response_model=ProjectSettingsPublic)
 async def get_project_settings(project_id: str, user: dict = Depends(get_current_user)) -> ProjectSettingsPublic:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    # allow_collaborators=True: shared members need connection status (wp_verified_status,
+    # default post type/status/categories, gsc_property_url, etc.) to use content
+    # operations (generate/schedule/publish). Identifier-ish fields (wp_username,
+    # shopify_client_id) are redacted below for non-owners; the mutating PATCH stays
+    # strict owner-only, and the Project Settings tab that surfaces this data is
+    # already hidden from non-owners in the frontend.
+    proj = _require_project_access(st=st, user=user, project_id=project_id, allow_collaborators=True)
+    uid = (user.get("id") or "").strip()
+    role = (user.get("role") or "").strip().lower()
+    is_owner = role == "admin" or user_ids_equal(proj.get("owner_user_id"), uid)
     pid = (proj.get("id") or "").strip()
     wp_site_url = _normalize_url(proj.get("wp_site_url") or proj.get("website_url") or "")
     wp_user = (proj.get("wp_username") or "").strip() or None
@@ -576,7 +586,7 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
             (proj.get("shopify_verified_status") or "").strip().lower() == "connected"
             and bool((proj.get("shopify_verified_at") or "").strip())
         ),
-        shopify_client_id=shop_client_id,
+        shopify_client_id=shop_client_id if is_owner else None,
         shopify_client_secret_set=bool(shop_client_secret),
         shopify_access_token_set=bool(shop_token),
         shopify_access_token=None,
@@ -586,7 +596,7 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
         shopify_product_aware_enabled=product_aware,
         wp_internal_link_aware_enabled=wp_link_aware,
         wp_site_url=wp_site_url or None,
-        wp_username=wp_user,
+        wp_username=wp_user if is_owner else None,
         wp_app_password_set=bool(app_pw),
         # Verification state — set by ``POST /wordpress/verify`` and cleared
         # by ``PATCH /settings`` when the user changes site URL / username /
