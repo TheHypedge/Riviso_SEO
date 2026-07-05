@@ -7,6 +7,9 @@ class TokenPair(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
+    # Non-secret metadata (seconds until the access token expires) so the client
+    # can schedule a proactive silent renewal instead of waiting for a 401.
+    expires_in: int = 0
 
 
 class LoginRequest(BaseModel):
@@ -48,6 +51,7 @@ class VerifyEmailResponse(BaseModel):
     access_token: str | None = None
     refresh_token: str | None = None
     token_type: str = "bearer"
+    expires_in: int = 0
 
 
 class CheckEmailRequest(BaseModel):

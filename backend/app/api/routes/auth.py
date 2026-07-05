@@ -204,6 +204,104 @@ async def _persist_refresh_jtis(st, uid: str, jtis: list[str]) -> None:
         pass
 
 
+# S1.1 follow-up: refresh-token rotation is single-use, which is correct in
+# isolation but races when 2+ requests hit a 401 around the same moment (a
+# page firing several parallel widget loads, a polling interval, or two open
+# tabs sharing the same cookies) — each independently calls /refresh with the
+# same not-yet-rotated token, only one wins, and the losers used to get a
+# hard 401 that force-cleared the client's session marker even though the
+# session was, at the cookie level, completely fine. This short grace window
+# lets a just-rotated jti keep working for a few seconds so concurrent
+# callers get the *same* freshly-issued pair instead of an error.
+_REFRESH_GRACE_SECONDS = 20
+_refresh_grace_redis = None
+_refresh_grace_redis_unavailable = False
+
+
+def _refresh_grace_redis_client():
+    """Lazily-created Redis client for the refresh grace window.
+
+    Kept independent from app.services.generation_queue's client so a problem
+    in the generation subsystem can never affect auth. Returns None (and
+    stays None thereafter) if Redis is unreachable — the grace window is then
+    simply disabled and refresh falls back to today's strict single-use
+    rotation, it never hard-fails auth on a cache outage.
+    """
+    global _refresh_grace_redis, _refresh_grace_redis_unavailable
+    if _refresh_grace_redis_unavailable:
+        return None
+    if _refresh_grace_redis is not None:
+        return _refresh_grace_redis
+    try:
+        import redis.asyncio as redis_async
+
+        _refresh_grace_redis = redis_async.from_url(
+            (settings.redis_url or "").strip() or "redis://localhost:6379/0",
+            decode_responses=True,
+            socket_connect_timeout=2.0,
+            socket_timeout=2.0,
+        )
+        return _refresh_grace_redis
+    except Exception:
+        _refresh_grace_redis_unavailable = True
+        return None
+
+
+async def _store_refresh_grace(old_jti: str, new_jti: str, access: str, refresh: str) -> None:
+    r = _refresh_grace_redis_client()
+    if r is None or not old_jti:
+        return
+    try:
+        await r.setex(f"refresh_grace:{old_jti}", _REFRESH_GRACE_SECONDS, f"{access}|{refresh}")
+        if new_jti:
+            # Predecessor pointer so a later logout of new_jti can chase back
+            # and purge the grace record it superseded (see
+            # _delete_refresh_grace_chain) — otherwise the just-rotated-away
+            # token could still resurrect the now-logged-out pair for up to
+            # _REFRESH_GRACE_SECONDS after logout.
+            await r.setex(f"refresh_grace_predecessor:{new_jti}", _REFRESH_GRACE_SECONDS, old_jti)
+    except Exception:
+        pass
+
+
+async def _consume_refresh_grace(jti: str):
+    r = _refresh_grace_redis_client()
+    if r is None or not jti:
+        return None
+    try:
+        raw = await r.get(f"refresh_grace:{jti}")
+    except Exception:
+        return None
+    if not raw or "|" not in raw:
+        return None
+    access, _, refresh = raw.partition("|")
+    return access, refresh
+
+
+async def _delete_refresh_grace_chain(jti: str) -> None:
+    """Delete the grace record for jti and walk back any predecessor chain.
+
+    A normal concurrent-rotation race is one hop (the token being revoked was
+    itself the product of a single prior rotation), but this walks back a few
+    hops defensively so a revoked session can never be resurrected via a
+    still-live grace record from an earlier step in its own rotation history.
+    """
+    r = _refresh_grace_redis_client()
+    if r is None or not jti:
+        return
+    current = jti
+    for _ in range(5):
+        try:
+            await r.delete(f"refresh_grace:{current}")
+            predecessor = await r.get(f"refresh_grace_predecessor:{current}")
+            await r.delete(f"refresh_grace_predecessor:{current}")
+        except Exception:
+            return
+        if not predecessor:
+            return
+        current = predecessor
+
+
 async def _issue_tokens(st, user: dict, response: Response) -> TokenPair:
 
     uid = (user.get("id") or "").strip()
@@ -220,7 +318,7 @@ async def _issue_tokens(st, user: dict, response: Response) -> TokenPair:
 
     _set_auth_cookies(response, access, refresh)
 
-    return TokenPair(access_token=access, refresh_token=refresh)
+    return TokenPair(access_token=access, refresh_token=refresh, expires_in=settings.access_token_ttl_seconds)
 
 
 
@@ -591,6 +689,8 @@ async def verify_email(payload: VerifyEmailRequest, request: Request, response: 
         access_token=tokens.access_token,
 
         refresh_token=tokens.refresh_token,
+
+        expires_in=tokens.expires_in,
 
     )
 
@@ -964,7 +1064,22 @@ async def refresh_token(request: Request, response: Response) -> TokenPair:
 
     if not presented_jti or presented_jti not in active:
 
-        raise HTTPException(status_code=401, detail="Refresh token is no longer valid")
+        # Not (or no longer) in the active allowlist — before rejecting, check
+        # whether this is a concurrent straggler for a rotation that already
+        # succeeded a moment ago (see _store_refresh_grace). A hit replays the
+        # same pair the winner already got; a miss is a genuinely dead token.
+        grace_hit = await _consume_refresh_grace(presented_jti) if presented_jti else None
+
+        if grace_hit is None:
+            raise HTTPException(status_code=401, detail="Refresh token is no longer valid")
+
+        grace_access, grace_refresh = grace_hit
+        _set_auth_cookies(response, grace_access, grace_refresh)
+        return TokenPair(
+            access_token=grace_access,
+            refresh_token=grace_refresh,
+            expires_in=settings.access_token_ttl_seconds,
+        )
 
     new_jti = uuid.uuid4().hex
 
@@ -976,9 +1091,11 @@ async def refresh_token(request: Request, response: Response) -> TokenPair:
 
     refresh = create_refresh_token(subject=uid, extra_claims={"role": role, "jti": new_jti})
 
+    await _store_refresh_grace(presented_jti, new_jti, access, refresh)
+
     _set_auth_cookies(response, access, refresh)
 
-    return TokenPair(access_token=access, refresh_token=refresh)
+    return TokenPair(access_token=access, refresh_token=refresh, expires_in=settings.access_token_ttl_seconds)
 
 
 def _clear_auth_cookies(response: Response) -> None:
@@ -1092,6 +1209,10 @@ async def logout(request: Request, response: Response) -> dict:
                 if user:
                     remaining = [j for j in _active_refresh_jtis(user) if j != jti]
                     await _persist_refresh_jtis(st, uid, remaining)
+                # Also drop any grace record (and its predecessor chain) so a
+                # just-logged-out session can't be replayed during its
+                # rotation grace window.
+                await _delete_refresh_grace_chain(jti)
         except Exception:
             # Best-effort revocation; always clear cookies regardless.
             pass

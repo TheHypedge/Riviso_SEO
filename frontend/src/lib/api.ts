@@ -2,6 +2,7 @@ export type TokenPair = {
   access_token: string;
   refresh_token: string;
   token_type: "bearer";
+  expires_in?: number;
 };
 
 export type RegisterPendingResponse = {
@@ -24,6 +25,7 @@ export type VerifyEmailResponse = {
   access_token?: string | null;
   refresh_token?: string | null;
   token_type?: string;
+  expires_in?: number;
 };
 
 export type UserPublic = {
@@ -1277,11 +1279,14 @@ export function hasSession(): boolean {
 }
 
 /** Record that the user just authenticated (cookies carry the real tokens). */
-export function markSession() {
+export function markSession(expiresInSeconds?: number) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(SESSION_KEY, "1");
   // Purge any JWTs persisted by older builds so they cannot linger in storage.
   for (const k of LEGACY_TOKEN_KEYS) window.localStorage.removeItem(k);
+  if (typeof expiresInSeconds === "number" && expiresInSeconds > 0) {
+    scheduleProactiveRefresh(expiresInSeconds);
+  }
 }
 
 /**
@@ -1294,8 +1299,8 @@ export function getAccessToken(): string | null {
 }
 
 /** Deprecated shims: tokens now arrive via httpOnly cookies; only mark the session. */
-export function setAccessToken(_token?: string) {
-  markSession();
+export function setAccessToken(_token?: string, expiresInSeconds?: number) {
+  markSession(expiresInSeconds);
 }
 export function setRefreshToken(_token?: string) {
   markSession();
@@ -1308,6 +1313,81 @@ function clearSessionMarker() {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(SESSION_KEY);
   for (const k of LEGACY_TOKEN_KEYS) window.localStorage.removeItem(k);
+  if (_proactiveRefreshTimer) {
+    clearTimeout(_proactiveRefreshTimer);
+    _proactiveRefreshTimer = null;
+  }
+}
+
+// S1.1 follow-up: de-duplicate concurrent refresh attempts within this tab.
+// Without this, several requests hitting a 401 around the same moment (a
+// page mount firing parallel widget loads, a polling interval landing at the
+// same time as a user action) would each independently POST /auth/refresh —
+// harmless on its own, but combined with the backend's single-use rotation
+// it meant only one call could ever "win"; see the grace-window comment in
+// backend/app/api/routes/auth.py for the other half of this fix (the
+// cross-tab case a same-tab mutex can't reach).
+let _refreshInFlight: Promise<boolean> | null = null;
+
+async function performRefresh(): Promise<boolean> {
+  if (_refreshInFlight) return _refreshInFlight;
+  _refreshInFlight = (async () => {
+    try {
+      const refreshSignal = createTimeoutSignal(AUTH_REFRESH_TIMEOUT_MS);
+      const refreshed = await fetch(apiUrl("/api/auth/refresh"), {
+        method: "POST",
+        headers: { "x-requested-with": "XMLHttpRequest" },
+        credentials: "include",
+        signal: refreshSignal,
+      });
+      if (refreshed.ok) {
+        try {
+          const body = await refreshed.json();
+          if (body && typeof body.expires_in === "number" && body.expires_in > 0) {
+            scheduleProactiveRefresh(body.expires_in);
+          }
+        } catch {
+          // Body parse is best-effort only — the refresh itself already succeeded.
+        }
+        return true;
+      }
+      if (refreshed.status === 401 || refreshed.status === 403) {
+        // Refresh token was rejected even after the backend's rotation grace
+        // window — the session is genuinely dead, not just a race straggler.
+        clearSessionMarker();
+      }
+      return false;
+    } catch {
+      return false;
+    } finally {
+      _refreshInFlight = null;
+    }
+  })();
+  return _refreshInFlight;
+}
+
+let _proactiveRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Silently renew the access token before it expires so the reactive 401 path
+ * above is rarely exercised during normal use. Re-armed after every
+ * successful login/refresh with that call's own `expires_in`.
+ */
+function scheduleProactiveRefresh(expiresInSeconds: number) {
+  if (typeof window === "undefined") return;
+  if (_proactiveRefreshTimer) clearTimeout(_proactiveRefreshTimer);
+  const delayMs = Math.max(5_000, expiresInSeconds * 800); // ~80% of TTL
+  _proactiveRefreshTimer = setTimeout(() => void attemptProactiveRefresh(), delayMs);
+}
+
+async function attemptProactiveRefresh(): Promise<void> {
+  if (!hasSession()) return;
+  if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+    // Idle/background tab — check back soon instead of refreshing now.
+    _proactiveRefreshTimer = setTimeout(() => void attemptProactiveRefresh(), 30_000);
+    return;
+  }
+  await performRefresh();
 }
 
 export function clearAuth() {
@@ -1604,16 +1684,12 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
       // Only attempt when we believe a session exists, to avoid hammering /refresh
       // for anonymous visitors. On success the backend rotates and re-sets the
       // aa_access / aa_refresh cookies, so we simply retry the original request.
+      // performRefresh() de-dupes concurrent callers within this tab (see its
+      // definition above) instead of each firing its own /refresh call.
       if (hasSession()) {
         try {
-          const refreshSignal = createTimeoutSignal(AUTH_REFRESH_TIMEOUT_MS);
-          const refreshed = await fetch(apiUrl("/api/auth/refresh"), {
-            method: "POST",
-            headers: { "x-requested-with": "XMLHttpRequest" },
-            credentials: "include",
-            signal: refreshSignal,
-          });
-          if (refreshed.ok) {
+          const ok = await performRefresh();
+          if (ok) {
             try {
               res = await doFetch(headers);
             } catch (e) {
@@ -1622,9 +1698,6 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
               }
               throw e;
             }
-          } else if (refreshed.status === 401 || refreshed.status === 403) {
-            // Refresh token was rejected or rotated away — the session is dead.
-            clearSessionMarker();
           }
         } catch (e) {
           if (e instanceof ApiError) throw e;

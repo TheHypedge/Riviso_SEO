@@ -271,6 +271,9 @@ def _user_row_to_public(u: dict[str, Any]) -> dict[str, Any]:
         "gsc_scope": (u.get("gsc_scope") or "").strip(),
         "gsc_email": (u.get("gsc_email") or "").strip(),
         "gsc_connected_at": (u.get("gsc_connected_at") or "").strip(),
+        # S1.1: refresh-token rotation allowlist — see _normalize_user_dict for why
+        # this must be kept in lockstep with the write-side whitelist.
+        "refresh_session_jtis": [str(x) for x in (u.get("refresh_session_jtis") or []) if str(x).strip()],
     }
 
 
@@ -524,6 +527,11 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "gsc_scope": (d.get("gsc_scope") or "").strip()[:2000],
         "gsc_email": (d.get("gsc_email") or "").strip()[:500],
         "gsc_connected_at": (d.get("gsc_connected_at") or "").strip()[:64],
+        # S1.1: refresh-token rotation allowlist (jtis of currently-valid refresh
+        # tokens). Must round-trip through update_user_fields() untouched, or
+        # every /api/auth/refresh call fails with "no longer valid" because the
+        # allowlist silently reverts to empty on every write.
+        "refresh_session_jtis": [str(x) for x in (d.get("refresh_session_jtis") or []) if str(x).strip()][-50:],
     }
 
 
@@ -1671,6 +1679,9 @@ def _user_doc_to_public(doc: dict[str, Any] | None) -> dict[str, Any] | None:
         "gsc_scope": (doc.get("gsc_scope") or "").strip(),
         "gsc_email": (doc.get("gsc_email") or "").strip(),
         "gsc_connected_at": (doc.get("gsc_connected_at") or "").strip(),
+        # S1.1: refresh-token rotation allowlist — see _normalize_user_dict for why
+        # this must be kept in lockstep with the write-side whitelist.
+        "refresh_session_jtis": [str(x) for x in (doc.get("refresh_session_jtis") or []) if str(x).strip()],
     }
 
 

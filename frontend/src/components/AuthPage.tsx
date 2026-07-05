@@ -140,7 +140,7 @@ export default function AuthPage() {
     try {
       if (awaitingVerification) {
         const verified = await api.verifyEmail(email, verificationCode.trim());
-        if (verified.access_token) setAccessToken(verified.access_token);
+        if (verified.access_token) setAccessToken(verified.access_token, verified.expires_in);
         if (verified.refresh_token) setRefreshToken(verified.refresh_token);
         router.push("/dashboard");
         return;
@@ -155,7 +155,7 @@ export default function AuthPage() {
         return;
       }
       const tokens = await api.login(email, password);
-      setAccessToken(tokens.access_token);
+      setAccessToken(tokens.access_token, tokens.expires_in);
       setRefreshToken(tokens.refresh_token);
       router.push("/dashboard");
     } catch (err) {
@@ -193,7 +193,7 @@ export default function AuthPage() {
     setReactivating(true);
     try {
       const tokens = await api.reactivateAccount(email, password);
-      setAccessToken(tokens.access_token);
+      setAccessToken(tokens.access_token, tokens.expires_in);
       setRefreshToken(tokens.refresh_token);
       router.push("/dashboard");
     } catch (err) {
