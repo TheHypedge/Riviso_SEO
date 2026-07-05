@@ -56,6 +56,8 @@ class ProjectSummary(BaseModel):
 
 class WorkspaceOverviewResponse(BaseModel):
     stats: WorkspaceOverviewStats
+    degraded: bool = False
+    warnings: list[str] = Field(default_factory=list)
     filtered_stats: FilteredStats | None = None
     comparison_stats: FilteredStats | None = None
     date_range_start: str | None = None

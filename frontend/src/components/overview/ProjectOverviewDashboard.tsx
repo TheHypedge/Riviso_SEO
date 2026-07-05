@@ -934,6 +934,12 @@ export function ProjectOverviewDashboard({ onGoProjects }: { onGoProjects?: () =
   return (
     <div className={s.shell}>
 
+      {data.degraded && (
+        <div className={s.degradedBanner} role="status">
+          Some data couldn&apos;t be loaded right now, so this view may be incomplete. Refresh to try again.
+        </div>
+      )}
+
       {/* ── Header ── */}
       <div className={s.header}>
         <div className={s.headerLeft}>

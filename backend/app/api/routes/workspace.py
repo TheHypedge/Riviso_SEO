@@ -201,9 +201,15 @@ async def workspace_overview(
     bundle = await fetch_workspace_overview_bundle(uid, article_limit=1500)
     all_by_id: dict[str, dict] = bundle.get("projects_by_id") or {}
     all_pids: list[str] = bundle.get("pids") or []
+    warnings: list[str] = bundle.get("warnings") or []
+    if warnings:
+        log.warning("workspace overview degraded for user %s: %s", uid, warnings)
 
     if not all_pids:
-        return WorkspaceOverviewResponse(stats=WorkspaceOverviewStats(), activity_series=[])
+        return WorkspaceOverviewResponse(
+            stats=WorkspaceOverviewStats(), activity_series=[],
+            degraded=bool(warnings), warnings=warnings,
+        )
 
     # Parse date range (defaults to last 14 days)
     start_dt, end_dt = _parse_date_range(start_date, end_date)
@@ -388,6 +394,8 @@ async def workspace_overview(
 
     return WorkspaceOverviewResponse(
         stats=stats,
+        degraded=bool(warnings),
+        warnings=warnings,
         filtered_stats=filtered_stats,
         comparison_stats=comparison_stats,
         date_range_start=start_dt.strftime("%Y-%m-%d"),

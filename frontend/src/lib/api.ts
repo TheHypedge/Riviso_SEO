@@ -727,6 +727,8 @@ export type WorkspaceFilteredStats = {
 
 export type WorkspaceOverviewResponse = {
   stats: WorkspaceOverviewStats;
+  degraded?: boolean;
+  warnings?: string[];
   filtered_stats?: WorkspaceFilteredStats | null;
   comparison_stats?: WorkspaceFilteredStats | null;
   date_range_start?: string | null;

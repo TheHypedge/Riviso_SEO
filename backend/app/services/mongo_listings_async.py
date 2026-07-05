@@ -79,6 +79,74 @@ def _storage():
     return get_legacy_storage_module()
 
 
+async def _aggregate_with_retry(
+    coll: Any,
+    pipeline: list[dict[str, Any]],
+    *,
+    limit: int,
+    attempts: int = 2,
+) -> list[dict[str, Any]]:
+    """Run aggregate().to_list() with retry on transient Mongo errors.
+
+    PyMongo's retryReads only covers the initial command, not ``getMore`` —
+    a network blip mid-cursor otherwise bubbles up as an uncaught
+    NetworkTimeout even though the operation is a plain read. Re-running the
+    whole aggregation is safe here since these are read-only listing queries.
+    """
+    is_transient = _database_module().is_transient_mongo_error
+    last_exc: BaseException | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            return await coll.aggregate(pipeline, allowDiskUse=False).to_list(length=limit)
+        except Exception as e:
+            last_exc = e
+            if not is_transient(e) or attempt >= attempts - 1:
+                raise
+            log.warning("Transient Mongo error on aggregate (attempt %s/%s): %s", attempt + 1, attempts, e)
+            await asyncio.sleep(0.3 * (attempt + 1))
+    assert last_exc is not None
+    raise last_exc
+
+
+async def _aggregate_sort_fallback(
+    coll: Any,
+    match: dict[str, Any],
+    project: dict[str, Any],
+    sort: dict[str, int],
+    *,
+    limit: int | None,
+    label: str,
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    """Run a $match/$project/$sort[/$limit] aggregation; if the in-memory sort
+    exceeds Mongo's 32MB cap (this cluster's tier does not support allowDiskUse
+    external sort), fall back to the same query without the $sort stage rather
+    than failing the whole dashboard.
+
+    Ordering only matters for truncation (picking the "most recent N" when the
+    result set exceeds ``limit``) — every downstream consumer of these rows
+    re-sorts in Python by its own timestamp field, so an unsorted fallback is
+    fully correct whenever the account is under the limit, and a graceful
+    degradation (arbitrary N instead of most-recent N) otherwise.
+    """
+    from pymongo.errors import OperationFailure
+
+    pipeline: list[dict[str, Any]] = [{"$match": match}, {"$project": project}, {"$sort": sort}]
+    if limit is not None:
+        pipeline.append({"$limit": limit})
+    try:
+        return await _aggregate_with_retry(coll, pipeline, limit=limit or 5000)
+    except OperationFailure as e:
+        if "memory limit" not in str(e).lower():
+            raise
+        log.warning("%s: sort exceeded memory limit, falling back to unsorted fetch", label)
+        warnings.append(label)
+        fallback: list[dict[str, Any]] = [{"$match": match}, {"$project": project}]
+        if limit is not None:
+            fallback.append({"$limit": limit})
+        return await _aggregate_with_retry(coll, fallback, limit=limit or 5000)
+
+
 async def fetch_user_by_id(user_id: str) -> dict[str, Any] | None:
     """Non-blocking user point-read (P4.8) — runs on the busiest auth path.
 
@@ -170,13 +238,12 @@ async def fetch_workspace_overview_bundle(
 
     match = _mongo_owner_user_id_filter(owner) if owner else {}
     db = _database_module().get_async_db()
+    warnings: list[str] = []
 
-    project_pipeline: list[dict[str, Any]] = [
-        {"$match": match},
-        {"$project": _PROJECT_LISTING_AGGREGATE_PROJECT},
-        {"$sort": {"created_at": 1}},
-    ]
-    project_docs = await db.projects.aggregate(project_pipeline, allowDiskUse=False).to_list(length=500)
+    project_docs = await _aggregate_sort_fallback(
+        db.projects, match, _PROJECT_LISTING_AGGREGATE_PROJECT, {"created_at": 1},
+        limit=500, label="projects", warnings=warnings,
+    )
     projects = [_mongo_doc_to_project(doc) for doc in project_docs if isinstance(doc, dict)]
     by_id: dict[str, dict[str, Any]] = {}
     for p in projects:
@@ -185,15 +252,9 @@ async def fetch_workspace_overview_bundle(
             by_id[pid] = p
     pids = sorted(by_id.keys())
     if not pids:
-        return {"projects_by_id": {}, "pids": [], "articles": [], "scheduled_jobs": []}
+        return {"projects_by_id": {}, "pids": [], "articles": [], "scheduled_jobs": [], "warnings": warnings}
 
     lim = max(1, min(int(article_limit or 1500), 5000))
-    article_pipeline: list[dict[str, Any]] = [
-        {"$match": {"project_id": {"$in": pids}}},
-        {"$project": _WORKSPACE_ARTICLE_AGGREGATE_PROJECT},
-        {"$sort": {"created_at": -1}},
-        {"$limit": lim},
-    ]
     jobs_pipeline: list[dict[str, Any]] = [
         {
             "$match": {
@@ -204,10 +265,36 @@ async def fetch_workspace_overview_bundle(
         {"$project": _SCHEDULED_JOB_OVERVIEW_PROJECT},
     ]
 
-    articles_raw, jobs_raw = await asyncio.gather(
-        db.articles.aggregate(article_pipeline, allowDiskUse=False).to_list(length=lim),
-        db.scheduled_jobs.aggregate(jobs_pipeline, allowDiskUse=False).to_list(length=2000),
+    # Articles and scheduled jobs are independent widgets: one failing (even
+    # after retries/fallback) must not take down the other or the whole
+    # dashboard — collect results with return_exceptions and degrade gracefully.
+    articles_result, jobs_result = await asyncio.gather(
+        _aggregate_sort_fallback(
+            db.articles,
+            {"project_id": {"$in": pids}},
+            _WORKSPACE_ARTICLE_AGGREGATE_PROJECT,
+            {"created_at": -1},
+            limit=lim, label="articles", warnings=warnings,
+        ),
+        _aggregate_with_retry(db.scheduled_jobs, jobs_pipeline, limit=2000),
+        return_exceptions=True,
     )
+
+    articles_raw: list[dict[str, Any]]
+    if isinstance(articles_result, BaseException):
+        log.exception("workspace overview: articles fetch failed for user %s", owner, exc_info=articles_result)
+        warnings.append("articles")
+        articles_raw = []
+    else:
+        articles_raw = articles_result
+
+    jobs_raw: list[dict[str, Any]]
+    if isinstance(jobs_result, BaseException):
+        log.exception("workspace overview: scheduled_jobs fetch failed for user %s", owner, exc_info=jobs_result)
+        warnings.append("scheduled_jobs")
+        jobs_raw = []
+    else:
+        jobs_raw = jobs_result
 
     articles: list[dict[str, Any]] = []
     for row in articles_raw:
@@ -226,6 +313,7 @@ async def fetch_workspace_overview_bundle(
         "pids": pids,
         "articles": articles,
         "scheduled_jobs": scheduled_jobs,
+        "warnings": warnings,
     }
 
 

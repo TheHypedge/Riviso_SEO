@@ -1005,6 +1005,21 @@
 .quickBtn:hover { border-color: rgba(255,255,255,0.18); color: var(--aa-on-dark, #faf9f5); background: rgba(255,255,255,0.04); }
 .quickBtn:focus { outline: 1px solid var(--aa-primary, #d97757); }
 
+/* ── Degraded-data banner ────────────────────────────────────────────────────── */
+.degradedBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  margin-bottom: 16px;
+  border-radius: var(--aa-r-sm, 6px);
+  border: 1px solid rgba(217, 160, 23, 0.3);
+  background: rgba(217, 160, 23, 0.08);
+  color: var(--aa-on-dark-soft, #a09d96);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 /* ── Error / Empty ───────────────────────────────────────────────────────────── */
 .errorState {
   padding: 56px 24px;
