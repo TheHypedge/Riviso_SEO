@@ -6515,6 +6515,92 @@
   margin-top: 14px;
 }
 
+.settingsDangerDisclosure {
+  border: 1px solid color-mix(in oklab, var(--aa-error), transparent 42%);
+  border-radius: var(--aa-r-lg);
+  background: color-mix(in oklab, var(--aa-error), transparent 96%);
+  overflow: hidden;
+}
+
+.settingsDangerDisclosure .settingsDangerCard {
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+
+.settingsDangerSummary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 20px;
+  font-size: 13px;
+  font-weight: 750;
+  color: color-mix(in oklab, var(--aa-error), #fff 12%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settingsDangerSummary::-webkit-details-marker {
+  display: none;
+}
+
+.settingsDangerSummary::before {
+  content: "▸";
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.settingsDangerDisclosure[open] .settingsDangerSummary::before {
+  transform: rotate(90deg);
+}
+
+.settingsSubNav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  border-radius: var(--aa-r-lg);
+  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 8%);
+  background: color-mix(in oklab, var(--aa-canvas), #000 4%);
+}
+
+.settingsSubNavItem {
+  padding: 8px 12px;
+  border-radius: var(--aa-r-sm);
+  border: none;
+  background: transparent;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 25%);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.settingsSubNavItem:hover {
+  background: color-mix(in oklab, var(--aa-canvas), #000 8%);
+  color: var(--aa-body-strong);
+}
+
+.settingsGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  scroll-margin-top: 52px;
+}
+
+.settingsGroupHeading {
+  margin: 4px 2px 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 30%);
+}
+
 .settingsChipScroll {
   max-height: 200px;
   overflow-y: auto;

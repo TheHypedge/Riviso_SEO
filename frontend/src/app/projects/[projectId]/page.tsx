@@ -11738,6 +11738,25 @@ export default function ProjectPage() {
 
         {tab === "project_settings" && isProjectOwner ? (
           <div className={styles.settingsPage}>
+            <nav className={styles.settingsSubNav} aria-label="Project settings sections">
+              {[
+                { id: "settings-group-connection", label: "Connection" },
+                { id: "settings-group-content", label: "Content & targeting" },
+                { id: "settings-group-integrations", label: "Integrations" },
+                { id: "settings-group-danger", label: "Danger zone" },
+              ].map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className={styles.settingsSubNavItem}
+                  onClick={() =>
+                    document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth", block: "start" })
+                  }
+                >
+                  {s.label}
+                </button>
+              ))}
+            </nav>
             {(() => {
               const connectionOkForSave = isShopifyProject
                 ? (settings?.shopify_verified_status || "").toLowerCase() === "connected" &&
@@ -11768,6 +11787,8 @@ export default function ProjectPage() {
 
             {!settingsLoading && settings ? (
               <>
+              <div id="settings-group-connection" className={styles.settingsGroup}>
+              <h2 className={styles.settingsGroupHeading}>Connection</h2>
               {isShopifyProject ? (
                 <ShopifyProjectSettings
                   projectId={projectId}
@@ -12014,6 +12035,69 @@ export default function ProjectPage() {
                 </section>
               ) : null}
 
+              {!isShopifyProject && settings &&
+                (settings.wp_verified_status || "").toLowerCase() === "connected" &&
+                !!(settings.wp_verified_at || "").trim() ? (
+              <section className={styles.settingsSectionCard}>
+                <p className={styles.settingsSectionKicker}>Publishing</p>
+                <h3 className={styles.settingsSectionTitle}>WordPress defaults</h3>
+                <p className={styles.settingsSectionDesc}>
+                  Pre-selected when publishing articles. You can still override per article.
+                </p>
+
+                <div className={styles.settingsFieldsGrid} style={{ marginTop: 16 }}>
+                  <label className={styles.label}>
+                    Default post type
+                    <select className={styles.input} value={sWpDefaultPostType} onChange={(e) => setSWpDefaultPostType(e.target.value)}>
+                      <option value="posts">Posts</option>
+                      <option value="pages">Pages</option>
+                      {settingsPostTypes
+                        .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
+                        .map((t) => (
+                          <option key={t.rest_base} value={t.rest_base}>
+                            {t.name || t.rest_base}
+                          </option>
+                        ))}
+                    </select>
+                  </label>
+
+                  <label className={styles.label}>
+                    Default status
+                    <select className={styles.input} value={sWpDefaultStatus} onChange={(e) => setSWpDefaultStatus(e.target.value as "draft" | "publish")}>
+                      <option value="draft">Draft</option>
+                      <option value="publish">Publish</option>
+                    </select>
+                  </label>
+                </div>
+
+                <label className={styles.label} style={{ marginTop: 10 }}>
+                  Default category
+                  <select
+                    className={styles.input}
+                    multiple
+                    value={sWpDefaultCategoryIds.map(String)}
+                    onChange={(e) => {
+                      const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
+                      setSWpDefaultCategoryIds(ids);
+                    }}
+                    style={{ minHeight: 120 }}
+                  >
+                    {settingsCategories.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                    Hold Cmd/Ctrl to select multiple categories.
+                  </div>
+                </label>
+              </section>
+              ) : null}
+              </div>
+
+              <div id="settings-group-content" className={styles.settingsGroup}>
+              <h2 className={styles.settingsGroupHeading}>Content &amp; targeting</h2>
                 {(() => {
                   if (!settings) return null;
                   const wpVerifiedOk = isShopifyProject
@@ -12528,67 +12612,13 @@ export default function ProjectPage() {
                       </div>
                       </section>
 
-                      {!isShopifyProject ? (
-                      <section className={styles.settingsSectionCard}>
-                        <p className={styles.settingsSectionKicker}>Publishing</p>
-                        <h3 className={styles.settingsSectionTitle}>WordPress defaults</h3>
-                        <p className={styles.settingsSectionDesc}>
-                          Pre-selected when publishing articles. You can still override per article.
-                        </p>
-
-                        <div className={styles.settingsFieldsGrid} style={{ marginTop: 16 }}>
-                          <label className={styles.label}>
-                            Default post type
-                            <select className={styles.input} value={sWpDefaultPostType} onChange={(e) => setSWpDefaultPostType(e.target.value)}>
-                              <option value="posts">Posts</option>
-                              <option value="pages">Pages</option>
-                              {settingsPostTypes
-                                .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
-                                .map((t) => (
-                                  <option key={t.rest_base} value={t.rest_base}>
-                                    {t.name || t.rest_base}
-                                  </option>
-                                ))}
-                            </select>
-                          </label>
-
-                          <label className={styles.label}>
-                            Default status
-                            <select className={styles.input} value={sWpDefaultStatus} onChange={(e) => setSWpDefaultStatus(e.target.value as "draft" | "publish")}>
-                              <option value="draft">Draft</option>
-                              <option value="publish">Publish</option>
-                            </select>
-                          </label>
-                        </div>
-
-                        <label className={styles.label} style={{ marginTop: 10 }}>
-                          Default category
-                          <select
-                            className={styles.input}
-                            multiple
-                            value={sWpDefaultCategoryIds.map(String)}
-                            onChange={(e) => {
-                              const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
-                              setSWpDefaultCategoryIds(ids);
-                            }}
-                            style={{ minHeight: 120 }}
-                          >
-                            {settingsCategories.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {c.name}
-                              </option>
-                            ))}
-                          </select>
-                          <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                            Hold Cmd/Ctrl to select multiple categories.
-                          </div>
-                        </label>
-                      </section>
-                      ) : null}
                     </>
                   );
                 })()}
+              </div>
 
+              <div id="settings-group-integrations" className={styles.settingsGroup}>
+              <h2 className={styles.settingsGroupHeading}>Integrations</h2>
                 <div className={styles.settingsInfoCard}>
                   <h3 className={styles.settingsInfoCardTitle}>Google Search Console</h3>
                   <p className={styles.settingsInfoCardDesc}>
@@ -12599,9 +12629,11 @@ export default function ProjectPage() {
                     . Each project connects to its own Google account and chooses its property there.
                   </p>
                 </div>
+              </div>
 
+              <details id="settings-group-danger" className={styles.settingsDangerDisclosure}>
+                <summary className={styles.settingsDangerSummary}>Danger zone</summary>
                 <div className={styles.settingsDangerCard}>
-                  <h3 className={styles.settingsDangerCardTitle}>Danger zone</h3>
                   <p className={styles.settingsDangerCardDesc}>
                     Deleting a project removes it permanently, including all settings, website connections, prompts, scheduled jobs, and articles.
                   </p>
@@ -12611,6 +12643,7 @@ export default function ProjectPage() {
                     </button>
                   </div>
                 </div>
+              </details>
               </>
             ) : null}
           </div>
