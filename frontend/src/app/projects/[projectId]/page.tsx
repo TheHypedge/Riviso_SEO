@@ -311,6 +311,20 @@ function makeResearchKey(title: string, focus: string): string {
   return `${(title || "").trim().toLowerCase()}::${(focus || "").trim().toLowerCase()}`;
 }
 
+const GENERATE_MORE_MIN = 1;
+const GENERATE_MORE_MAX = 10;
+const GENERATE_MORE_DEFAULT = 5;
+
+function parseGenerateMoreCount(raw: string): { value: number | null; error: string | null } {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return { value: null, error: "Enter how many article ideas to generate." };
+  if (!/^\d+$/.test(trimmed)) return { value: null, error: "Enter a whole number." };
+  const n = Number(trimmed);
+  if (n < GENERATE_MORE_MIN) return { value: null, error: `Minimum is ${GENERATE_MORE_MIN} article.` };
+  if (n > GENERATE_MORE_MAX) return { value: null, error: `Maximum is ${GENERATE_MORE_MAX} articles.` };
+  return { value: n, error: null };
+}
+
 /**
  * Dependency-free SVG line chart for the GSC ROI Dashboard.
  *
@@ -1187,6 +1201,13 @@ export default function ProjectPage() {
     wouldCreateCount: number;
   } | null>(null);
   const researchDupModalTrapRef = useFocusTrap(!!researchImportDupModal);
+
+  // "Generate more" continuation modal — count picker before re-running research
+  // in append mode with the existing curation context.
+  const [showGenerateMoreModal, setShowGenerateMoreModal] = useState(false);
+  const [generateMoreCountInput, setGenerateMoreCountInput] = useState("5");
+  const [generateMoreError, setGenerateMoreError] = useState<string | null>(null);
+  const generateMoreModalTrapRef = useFocusTrap(showGenerateMoreModal);
 
   // Prompts module state (staged edits; saved on demand)
   const [writingPrompts, setWritingPrompts] = useState<PromptListResponse | null>(null);
@@ -5183,7 +5204,9 @@ export default function ProjectPage() {
     tone: ResearchTone;
     country: string;
     language: string;
-  }) {
+    maxIdeas?: number;
+    excludeTitles?: string[];
+  }): Promise<boolean> {
     setError(null);
     setResearchMsg(null);
     setResearchImportMsg(null);
@@ -5192,14 +5215,14 @@ export default function ProjectPage() {
     const seeds = (opts.seeds || []).map((s) => s.trim()).filter(Boolean).slice(0, 25);
     if (!seeds.length) {
       setResearchMsg("Add at least one seed keyword/topic.");
-      return;
+      return false;
     }
     const researchQuota = featureLimits?.custom_research;
     if (researchQuota && !researchQuota.unlimited && (researchQuota.month_remaining ?? 0) <= 0) {
       setResearchMsg(
         `Monthly Custom Curations limit reached for your ${featureLimits?.plan_key || "current"} plan.`
       );
-      return;
+      return false;
     }
 
     if (opts.mode === "append") setResearchGeneratingMore(true);
@@ -5213,11 +5236,16 @@ export default function ProjectPage() {
         seed_keywords: seeds,
         country: opts.country,
         language: opts.language,
+        ...(opts.maxIdeas ? { max_ideas: opts.maxIdeas } : {}),
+        ...(opts.excludeTitles?.length ? { exclude_titles: opts.excludeTitles } : {}),
       });
       const rows = (res?.ideas || []) as ApiResearchIdeaRow[];
       const ka = (res as unknown as { keyword_analysis?: unknown })?.keyword_analysis;
 
-      const runId = `run_${Date.now()}`;
+      // Append mode continues the current "latest" bucket instead of starting a
+      // new one, so newly generated ideas stay visible alongside the existing
+      // results under whatever filter the user currently has selected.
+      const runId = opts.mode === "append" && researchLatestRunId ? researchLatestRunId : `run_${Date.now()}`;
       const generatedAt = new Date().toISOString();
 
       const incoming: ResearchIdeaRow[] = Array.isArray(rows)
@@ -5245,6 +5273,9 @@ export default function ProjectPage() {
         : [];
 
       // Merge incoming with persisted (dedupe by title+focus_keyphrase, preserve imported flag).
+      // newAddedCount is a pure function of (base, incoming) each time the updater
+      // runs, so recomputing it on a hypothetical double-invocation is harmless.
+      let newAddedCount = 0;
       setResearchResults((prev) => {
         const base = opts.mode === "replace" ? [] : prev;
         const indexByKey = new Map<string, number>();
@@ -5276,15 +5307,34 @@ export default function ProjectPage() {
             };
           }
         }
+        newAddedCount = merged.length - base.length;
         return merged;
       });
 
       setResearchLatestRunId(runId);
-      setResearchFilter("latest");
-      setResearchSelected(new Set());
+      // Only a brand-new ("Run research") session should reset the view — a
+      // "Generate more" continuation must leave the user's current filter,
+      // sort, and selection exactly where they were so the list simply expands.
+      if (opts.mode !== "append") {
+        setResearchFilter("latest");
+        setResearchSelected(new Set());
+      }
       void refreshFeatureLimits();
 
-      if (!incoming.length) setResearchMsg("No results returned. Try different seeds.");
+      if (opts.mode === "append") {
+        if (!incoming.length) {
+          setResearchMsg("No results returned. Try again in a moment.");
+        } else if (newAddedCount === 0) {
+          setResearchMsg("No new unique ideas this time — everything generated matched an existing result. Try again.");
+        } else {
+          setToast({
+            message: `${newAddedCount} new idea${newAddedCount === 1 ? "" : "s"} added to your research results`,
+            tone: "success",
+          });
+        }
+      } else if (!incoming.length) {
+        setResearchMsg("No results returned. Try different seeds.");
+      }
 
       if (ka && typeof ka === "object" && ka !== null) {
         const obj = ka as Record<string, unknown>;
@@ -5310,12 +5360,54 @@ export default function ProjectPage() {
           });
         }
       }
+      return true;
     } catch (e) {
-      setResearchMsg(e instanceof Error ? e.message : "Research failed");
+      const msg = e instanceof Error ? e.message : "Research failed";
+      setResearchMsg(msg);
+      if (opts.mode === "append") setGenerateMoreError(msg);
+      return false;
     } finally {
       setResearchBusy(false);
       setResearchGeneratingMore(false);
     }
+  }
+
+  function openGenerateMoreModal() {
+    if (researchBusy || researchGeneratingMore || !researchSeeds.length || customResearchLimitReached) return;
+    setGenerateMoreCountInput(String(GENERATE_MORE_DEFAULT));
+    setGenerateMoreError(null);
+    setShowGenerateMoreModal(true);
+  }
+
+  function closeGenerateMoreModal() {
+    if (researchGeneratingMore) return; // don't let the session get dropped mid-request
+    setShowGenerateMoreModal(false);
+    setGenerateMoreError(null);
+  }
+
+  async function confirmGenerateMore() {
+    if (researchGeneratingMore) return; // guards double-submit (rapid Enter/click)
+    const { value, error } = parseGenerateMoreCount(generateMoreCountInput);
+    if (error || value == null) {
+      setGenerateMoreError(error || "Enter a valid number.");
+      return;
+    }
+    setGenerateMoreError(null);
+    const excludeTitles = Array.from(new Set(researchResults.map((r) => r.title).filter(Boolean)));
+    const ok = await runResearch({
+      mode: "append",
+      seeds: researchSeeds,
+      brandNiche: researchBrandNiche,
+      intent: researchIntent,
+      tone: researchTone,
+      country: researchCountry,
+      language: researchLanguage,
+      maxIdeas: value,
+      excludeTitles,
+    });
+    if (ok) setShowGenerateMoreModal(false);
+    // On failure, the modal stays open with generateMoreError set inside
+    // runResearch's catch block so the user can retry without losing context.
   }
 
   async function importResearchIdeaRows(
@@ -8925,17 +9017,7 @@ export default function ProjectPage() {
                     type="button"
                     className={styles.btnSecondary}
                     disabled={researchBusy || researchGeneratingMore || researchSeeds.length === 0 || customResearchLimitReached}
-                    onClick={() =>
-                      runResearch({
-                        mode: "append",
-                        seeds: researchSeeds,
-                        brandNiche: researchBrandNiche,
-                        intent: researchIntent,
-                        tone: researchTone,
-                        country: researchCountry,
-                        language: researchLanguage,
-                      })
-                    }
+                    onClick={openGenerateMoreModal}
                     title={
                       customResearchLimitReached
                         ? "Monthly Custom Curations limit reached for your plan."
@@ -9163,6 +9245,120 @@ export default function ProjectPage() {
                       onClick={() => importSelectedIdeas({ skipDuplicates: true })}
                     >
                       Import unique only
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+
+            {showGenerateMoreModal ? (
+              <>
+                <button type="button" className={styles.modalBackdrop} aria-label="Close" onClick={closeGenerateMoreModal} />
+                <div
+                  ref={generateMoreModalTrapRef}
+                  className={styles.modalPanel}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="generate-more-modal-title"
+                  aria-describedby="generate-more-modal-desc"
+                  style={{ maxWidth: 460 }}
+                >
+                  <div className={styles.modalHead}>
+                    <h3 id="generate-more-modal-title" className={styles.modalTitle}>
+                      Generate more ideas
+                    </h3>
+                    <button type="button" className={styles.btnSecondary} onClick={closeGenerateMoreModal} disabled={researchGeneratingMore}>
+                      Close
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <p id="generate-more-modal-desc" style={{ marginTop: 0, lineHeight: 1.55 }}>
+                      We&apos;ll generate additional article ideas using your current research configuration
+                      — brand niche, intent, tone, country, language, and seed keywords stay exactly as they
+                      are. No need to re-enter anything.
+                    </p>
+                    <label style={{ display: "block", marginTop: 14 }}>
+                      <span className={styles.muted} style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
+                        Number of new article ideas
+                      </span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <button
+                          type="button"
+                          className={styles.btnSecondary}
+                          aria-label="Decrease count"
+                          disabled={researchGeneratingMore}
+                          onClick={() => {
+                            const { value } = parseGenerateMoreCount(generateMoreCountInput);
+                            const base = value ?? GENERATE_MORE_DEFAULT;
+                            const next = Math.max(GENERATE_MORE_MIN, base - 1);
+                            setGenerateMoreCountInput(String(next));
+                            setGenerateMoreError(null);
+                          }}
+                        >
+                          −
+                        </button>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          className={styles.input}
+                          style={{ width: 80, textAlign: "center" }}
+                          min={GENERATE_MORE_MIN}
+                          max={GENERATE_MORE_MAX}
+                          step={1}
+                          value={generateMoreCountInput}
+                          disabled={researchGeneratingMore}
+                          aria-invalid={!!generateMoreError}
+                          aria-describedby={generateMoreError ? "generate-more-count-error" : undefined}
+                          onChange={(e) => {
+                            setGenerateMoreCountInput(e.target.value);
+                            setGenerateMoreError(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void confirmGenerateMore();
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className={styles.btnSecondary}
+                          aria-label="Increase count"
+                          disabled={researchGeneratingMore}
+                          onClick={() => {
+                            const { value } = parseGenerateMoreCount(generateMoreCountInput);
+                            const base = value ?? GENERATE_MORE_DEFAULT;
+                            const next = Math.min(GENERATE_MORE_MAX, base + 1);
+                            setGenerateMoreCountInput(String(next));
+                            setGenerateMoreError(null);
+                          }}
+                        >
+                          +
+                        </button>
+                      </div>
+                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                        Choose {GENERATE_MORE_MIN}–{GENERATE_MORE_MAX} articles (default {GENERATE_MORE_DEFAULT}).
+                        New results will be added to your current research results — nothing existing is
+                        replaced or removed.
+                      </div>
+                      {generateMoreError ? (
+                        <p id="generate-more-count-error" role="alert" className={styles.error} style={{ marginTop: 8, marginBottom: 0 }}>
+                          {generateMoreError}
+                        </p>
+                      ) : null}
+                    </label>
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button type="button" className={styles.btnSecondary} onClick={closeGenerateMoreModal} disabled={researchGeneratingMore}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.button}
+                      disabled={researchGeneratingMore || !!parseGenerateMoreCount(generateMoreCountInput).error}
+                      onClick={() => void confirmGenerateMore()}
+                    >
+                      {researchGeneratingMore ? "Generating…" : "Generate"}
                     </button>
                   </div>
                 </div>

@@ -123,6 +123,22 @@ async def research_ideas(
     hl = (payload.language or "en").strip()[:8] or "en"
     max_ideas = int(payload.max_ideas or 30)
 
+    # Dedup + cap: this list can grow across repeated "Generate more" clicks in
+    # one session, so bound it before it goes into the cache key / LLM prompt.
+    seen_exclude: set[str] = set()
+    exclude_titles: list[str] = []
+    for t in payload.exclude_titles or []:
+        norm = " ".join(str(t or "").strip().split())
+        if not norm:
+            continue
+        k = norm.casefold()
+        if k in seen_exclude:
+            continue
+        seen_exclude.add(k)
+        exclude_titles.append(norm)
+        if len(exclude_titles) >= 200:
+            break
+
     cache_key = build_research_cache_key(
         project_id=project_id,
         brand_niche=brand_niche,
@@ -132,6 +148,7 @@ async def research_ideas(
         gl=gl,
         hl=hl,
         max_ideas=max_ideas,
+        exclude_titles=exclude_titles,
     )
 
     if hasattr(st, "get_research_cache"):
@@ -168,6 +185,7 @@ async def research_ideas(
         "country": gl,
         "language": hl,
         "max_ideas": max_ideas,
+        "exclude_titles": exclude_titles,
     }
 
     # Research always runs synchronously — the user waits for results and the

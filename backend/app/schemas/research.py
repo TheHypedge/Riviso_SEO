@@ -42,7 +42,15 @@ class ResearchIdeasRequest(BaseModel):
     seed_keywords: list[str] = Field(default_factory=list, description="Seed keywords/topics (1 per line).")
     country: str | None = Field(default="US", description="Market country code (gl).")
     language: str | None = Field(default="en", description="Language code (hl).")
-    max_ideas: int | None = Field(default=30, ge=5, le=80)
+    max_ideas: int | None = Field(default=30, ge=1, le=80)
+    exclude_titles: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Titles already shown to the user in this research session (e.g. current "
+            "Research Results list) that must not be repeated — used by 'Generate more' "
+            "to continue a session with fresh, non-duplicate ideas."
+        ),
+    )
 
 
 class ResearchIdeaRow(BaseModel):

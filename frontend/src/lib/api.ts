@@ -3616,6 +3616,7 @@ export const api = {
       country?: string;
       language?: string;
       max_ideas?: number;
+      exclude_titles?: string[];
     },
   ) {
     return apiFetch<ResearchIdeasResponse>(`/api/projects/${projectId}/research/ideas`, {

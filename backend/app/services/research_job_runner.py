@@ -68,7 +68,15 @@ def build_research_cache_key(
     gl: str,
     hl: str,
     max_ideas: int,
+    exclude_titles: list[str] | None = None,
 ) -> str:
+    # exclude_titles is part of the key deliberately: "Generate more" resends the
+    # exact same brand/intent/tone/seeds as the original run, so without this the
+    # cache key would collide with the original request and every "Generate more"
+    # click would just re-serve the same cached ideas (making the button look like
+    # a no-op). Growing exclude_titles across repeated clicks naturally busts the
+    # cache each time real prior results exist, while an identical retry (same
+    # exclude set) still reuses the cache as intended.
     return hashlib.sha256(
         json.dumps(
             {
@@ -80,6 +88,7 @@ def build_research_cache_key(
                 "gl": gl,
                 "hl": hl,
                 "max_ideas": max_ideas,
+                "exclude_titles": sorted({(t or "").strip().casefold() for t in (exclude_titles or [])}),
             },
             sort_keys=True,
             ensure_ascii=False,
@@ -112,6 +121,7 @@ async def execute_research_ideas(payload: dict[str, Any]) -> dict[str, Any]:
     gl = (payload.get("country") or "US").strip()[:8] or "US"
     hl = (payload.get("language") or "en").strip()[:8] or "en"
     max_ideas = int(payload.get("max_ideas") or 30)
+    exclude_titles = [str(x).strip() for x in (payload.get("exclude_titles") or []) if str(x).strip()]
 
     history: list[dict[str, Any]] = []
     if hasattr(st, "load_research_serp_history"):
@@ -164,6 +174,14 @@ async def execute_research_ideas(payload: dict[str, Any]) -> dict[str, Any]:
         st=st,
         project_id=project_id,
     )
+    # exclude_titles covers ideas already visible in the caller's current research
+    # session (not yet imported into articles, so absent from existing_titles above)
+    # — the "Generate more" continuation path relies on this to avoid re-suggesting
+    # what the user is already looking at.
+    for t in exclude_titles:
+        tk = _normalize_title_key(t)
+        if tk:
+            existing_titles.add(tk)
 
     gen = await generate_research_ideas(
         brand_niche=brand_niche,
@@ -172,6 +190,7 @@ async def execute_research_ideas(payload: dict[str, Any]) -> dict[str, Any]:
         seed_keywords=seeds,
         serp_blobs=snaps,
         history_blobs=(history or []) + (idea_runs or []),
+        avoid_titles=exclude_titles,
         max_ideas=max_ideas,
     )
     ideas = gen.get("ideas") if isinstance(gen, dict) else []
@@ -198,7 +217,10 @@ async def execute_research_ideas(payload: dict[str, Any]) -> dict[str, Any]:
         seen_title.add(tkey)
         seen_fk.add(fkkey)
         filtered.append(it)
-        if len(filtered) >= max(5, min(max_ideas, 80)):
+        # No floor here (unlike generate_research_ideas' ask-the-LLM buffer below):
+        # "Generate more" needs to return exactly what the user requested (down to
+        # 1), not silently pad the response out to 5.
+        if len(filtered) >= max(1, min(max_ideas, 80)):
             break
 
     return {

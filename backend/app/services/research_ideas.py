@@ -47,11 +47,19 @@ async def generate_research_ideas(
     serp_blobs: list[dict[str, Any]],
     history_blobs: list[dict[str, Any]],
     max_ideas: int,
+    avoid_titles: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Convert SERP + user curation into structured research ideas.
 
     Returns a list of dicts with keys: title, focus_keyphrase, keywords, score?, rationale?
+
+    ``avoid_titles`` (used by the "Generate more" continuation flow) are titles
+    the user already has in front of them in this research session — distinct
+    from ``history_blobs``, which is looser past-run context. These get an
+    explicit, direct instruction rather than just being folded into ``history``,
+    since the goal here isn't "be aware of the past" but "do not repeat this
+    exact list."
     """
     client = OpenAIClient()
     max_ideas_i = max(5, min(int(max_ideas or 30), 80))
@@ -59,6 +67,7 @@ async def generate_research_ideas(
     seeds = _clamp_list(seed_keywords, 25)
     serp_trim = serp_blobs[:8]
     hist_trim = history_blobs[:8]
+    avoid_trim = _clamp_list(avoid_titles or [], 80)
 
     system = (
         "You are Riviso Research. Your job: generate SEO-focused article ideas.\n"
@@ -70,6 +79,14 @@ async def generate_research_ideas(
         "- keywords should be 5-10 supporting terms (no duplicates).\n"
         "- Keep titles concise (<= 90 chars) and clear.\n"
         "- Prefer high-intent, high-clarity, non-clickbait phrasing.\n"
+        + (
+            "- The user is continuing an existing research session and already has the "
+            "titles listed in `avoid_titles` — do NOT repeat any of them or produce close "
+            "variants/rephrasings of them. Generate genuinely different angles, subtopics, "
+            "or facets of the brand niche instead.\n"
+            if avoid_trim
+            else ""
+        )
         + format_research_curation_title_guardrail_system_appendix(serp_blobs=serp_trim)
     )
 
@@ -80,6 +97,7 @@ async def generate_research_ideas(
         "seed_keywords": seeds,
         "serp": serp_trim,
         "history": hist_trim,
+        "avoid_titles": avoid_trim,
         "max_ideas": max_ideas_i,
         "output_schema": {
             "keyword_analysis": {
