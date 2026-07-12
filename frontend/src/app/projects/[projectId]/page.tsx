@@ -3234,9 +3234,17 @@ export default function ProjectPage() {
       const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
       const blob = new Blob([out], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       const el = document.createElement("a");
-      const stamp = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+      const projectLabel =
+        (projectMeta?.name || settings?.name || "project")
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "") || "project";
+      const rangeLabel =
+        exportFrom || exportTo ? `${exportFrom || "start"}_to_${exportTo || "today"}` : "all-dates";
+      const statusLabel = exportStatus ? exportStatus.toLowerCase() : "all-status";
       el.href = URL.createObjectURL(blob);
-      el.download = `articles_${projectId}_${stamp}.xlsx`;
+      el.download = `articles_${projectLabel}_${statusLabel}_${rangeLabel}.xlsx`;
       document.body.appendChild(el);
       el.click();
       el.remove();
