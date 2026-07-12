@@ -7,10 +7,27 @@ import logging
 from typing import Any
 
 import anyio
+from pymongo import ReadPreference
 
 from app.services.storage_db import _database_module
 
 log = logging.getLogger(__name__)
+
+# The global Mongo client (database.py) pins read_preference=PRIMARY everywhere
+# so ordinary read-after-write flows (create a project, see it immediately) stay
+# consistent. Dashboard/workspace listing reads are the one class of query that
+# doesn't need that guarantee — they're summary data tolerant of a few seconds
+# of replica lag — and they're also the queries most exposed to the Atlas
+# primary's occasional flakiness (see fetch_workspace_overview_bundle). Reading
+# from a secondary lets these survive a degraded/unreachable primary instead of
+# hanging for the full socketTimeoutMS on every attempt.
+_LISTING_READ_PREFERENCE = ReadPreference.SECONDARY_PREFERRED
+
+
+def _tolerant(coll: Any) -> Any:
+    """Same collection handle, scoped to secondaryPreferred for this one read."""
+    return coll.with_options(read_preference=_LISTING_READ_PREFERENCE)
+
 
 # Layout-only fields for project dashboard rows (no tokens, catalog, prompts, GSC secrets).
 _PROJECT_LISTING_AGGREGATE_PROJECT: dict[str, int] = {
@@ -140,11 +157,20 @@ async def _aggregate_sort_fallback(
         if "memory limit" not in str(e).lower():
             raise
         log.warning("%s: sort exceeded memory limit, falling back to unsorted fetch", label)
-        warnings.append(label)
         fallback: list[dict[str, Any]] = [{"$match": match}, {"$project": project}]
         if limit is not None:
             fallback.append({"$limit": limit})
-        return await _aggregate_with_retry(coll, fallback, limit=limit or 5000)
+        result = await _aggregate_with_retry(coll, fallback, limit=limit or 5000)
+        if limit is not None and len(result) >= limit:
+            # Only truncation ("most recent N" vs. arbitrary N) is affected when
+            # the unsorted fetch itself got capped at the limit — that's the one
+            # case that's a real, user-visible degradation. When it returns
+            # fewer rows than the limit, the account was under the limit and
+            # every matching row came back; per the docstring above that's fully
+            # correct data, not degraded, so don't surface a "some data
+            # couldn't load" warning over a dataset that loaded completely.
+            warnings.append(label)
+        return result
 
 
 async def fetch_user_by_id(user_id: str) -> dict[str, Any] | None:
@@ -210,9 +236,35 @@ async def fetch_projects_listing(owner_user_id: str) -> list[dict[str, Any]]:
         {"$sort": {"created_at": 1}},
     ]
     db = _database_module().get_async_db()
-    cursor = db.projects.aggregate(pipeline, allowDiskUse=False)
+    cursor = _tolerant(db.projects).aggregate(pipeline, allowDiskUse=False)
     docs = await cursor.to_list(length=500)
     return [_mongo_doc_to_project(doc) for doc in docs if isinstance(doc, dict)]
+
+
+async def _fetch_shared_project_ids(db: Any, user_id: str) -> list[str]:
+    """Project IDs where user_id is an active collaborator (not the owner).
+
+    Mirrors storage.get_projects_shared_with_user()'s query so the workspace
+    overview sees the same "shared with me" set as GET /projects and the
+    dashboard's Members tab — just via Motor so it stays on the non-blocking
+    dashboard hot path instead of a thread-pool round trip.
+    """
+    uid = (user_id or "").strip()
+    if not uid:
+        return []
+    cursor = _tolerant(db.project_collaborators).find(
+        {"user_id": uid, "status": "active"}, {"_id": 0, "project_id": 1}
+    )
+    docs = await cursor.to_list(length=1000)
+    return [d["project_id"] for d in docs if isinstance(d, dict) and d.get("project_id")]
+
+
+def _combine_owner_and_shared_filter(owner_filter: dict[str, Any], shared_pids: list[str]) -> dict[str, Any]:
+    """Union an owner_user_id filter with an explicit set of shared project ids."""
+    if not shared_pids:
+        return owner_filter
+    owner_clauses = owner_filter.get("$or") if "$or" in owner_filter else ([owner_filter] if owner_filter else [])
+    return {"$or": [*owner_clauses, {"id": {"$in": shared_pids}}]}
 
 
 async def fetch_workspace_overview_bundle(
@@ -221,7 +273,8 @@ async def fetch_workspace_overview_bundle(
     article_limit: int = 1500,
 ) -> dict[str, Any]:
     """
-    Cross-project workspace data: projects, recent article listing rows, open scheduled jobs.
+    Cross-project workspace data: owned + shared/collaborator projects, recent
+    article listing rows, open scheduled jobs.
 
     Uses parallel Motor aggregations (no per-project loops, no thread pool on Mongo path).
     """
@@ -236,12 +289,15 @@ async def fetch_workspace_overview_bundle(
         _mongo_owner_user_id_filter,
     )
 
-    match = _mongo_owner_user_id_filter(owner) if owner else {}
+    owner_filter = _mongo_owner_user_id_filter(owner) if owner else {}
     db = _database_module().get_async_db()
     warnings: list[str] = []
 
+    shared_pids = await _fetch_shared_project_ids(db, owner)
+    match = _combine_owner_and_shared_filter(owner_filter, shared_pids)
+
     project_docs = await _aggregate_sort_fallback(
-        db.projects, match, _PROJECT_LISTING_AGGREGATE_PROJECT, {"created_at": 1},
+        _tolerant(db.projects), match, _PROJECT_LISTING_AGGREGATE_PROJECT, {"created_at": 1},
         limit=500, label="projects", warnings=warnings,
     )
     projects = [_mongo_doc_to_project(doc) for doc in project_docs if isinstance(doc, dict)]
@@ -270,13 +326,13 @@ async def fetch_workspace_overview_bundle(
     # dashboard — collect results with return_exceptions and degrade gracefully.
     articles_result, jobs_result = await asyncio.gather(
         _aggregate_sort_fallback(
-            db.articles,
+            _tolerant(db.articles),
             {"project_id": {"$in": pids}},
             _WORKSPACE_ARTICLE_AGGREGATE_PROJECT,
             {"created_at": -1},
             limit=lim, label="articles", warnings=warnings,
         ),
-        _aggregate_with_retry(db.scheduled_jobs, jobs_pipeline, limit=2000),
+        _aggregate_with_retry(_tolerant(db.scheduled_jobs), jobs_pipeline, limit=2000),
         return_exceptions=True,
     )
 
