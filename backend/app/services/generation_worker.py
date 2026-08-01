@@ -436,6 +436,29 @@ async def _handle_research_ideas(payload: dict) -> None:
     await run_research_ideas_job(payload)
 
 
+_inflight_tasks: set[asyncio.Task] = set()
+
+
+async def _run_job(job: GenerationJob) -> None:
+    """Process one dequeued job. Runs as its own task (F1.1) -- actual concurrency
+    is bounded by generation_slot() inside the handlers that do OpenAI-heavy work
+    (settings.max_concurrent_generations), not by this function.
+    """
+    import structlog
+
+    # I5.3: bind a correlation id so worker logs can be matched to the
+    # request/article that enqueued the job. contextvars are copied per-task at
+    # asyncio.create_task() time, so this stays correctly scoped even with
+    # several jobs running concurrently.
+    structlog.contextvars.bind_contextvars(job_id=job.id, job_kind=str(job.kind))
+    try:
+        await process_generation_job(job)
+    except Exception:
+        log.exception("Generation job failed id=%s kind=%s", job.id, job.kind)
+    finally:
+        structlog.contextvars.unbind_contextvars("job_id", "job_kind")
+
+
 async def generation_worker_loop() -> None:
     poll = max(0.1, float(settings.generation_worker_poll_seconds or 0.5))
     log.info(
@@ -443,7 +466,6 @@ async def generation_worker_loop() -> None:
         settings.max_concurrent_generations,
         (settings.redis_url or "").strip() or "default",
     )
-    import structlog
 
     while True:
         try:
@@ -454,15 +476,14 @@ async def generation_worker_loop() -> None:
                 pass
             if job is None:
                 continue
-            # I5.3: bind a correlation id so worker logs can be matched to the
-            # request/article that enqueued the job.
-            structlog.contextvars.bind_contextvars(job_id=job.id, job_kind=str(job.kind))
-            try:
-                await process_generation_job(job)
-            except Exception:
-                log.exception("Generation job failed id=%s kind=%s", job.id, job.kind)
-            finally:
-                structlog.contextvars.unbind_contextvars("job_id", "job_kind")
+            # F1.1: fan out instead of awaiting each job to completion before
+            # dequeuing the next one. Previously this loop processed exactly one
+            # job at a time system-wide regardless of queue depth, even though
+            # generation_slot() already caps the actual heavy-work concurrency at
+            # max_concurrent_generations (default 3) -- that budget just sat unused.
+            task = asyncio.create_task(_run_job(job))
+            _inflight_tasks.add(task)
+            task.add_done_callback(_inflight_tasks.discard)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -486,6 +507,14 @@ async def stop_generation_worker() -> None:
             await _worker_task
         except asyncio.CancelledError:
             pass
+    # F1.1: the loop task above only stops the dequeue loop -- cancel whatever
+    # in-flight jobs it fanned out too, so shutdown doesn't leave orphaned tasks
+    # running (or holding DB/HTTP connections) after the process is meant to stop.
+    if _inflight_tasks:
+        pending = list(_inflight_tasks)
+        for t in pending:
+            t.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
         _worker_task = None
     await close_redis()
 
