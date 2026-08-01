@@ -1,6 +1,9 @@
 .venv/
 backend/.venv/
 backend/.env
+backend/.env.save
+*.env.save
+*.env.bak
 frontend/node_modules/
 backend/email/node_modules/
 frontend/.next/
