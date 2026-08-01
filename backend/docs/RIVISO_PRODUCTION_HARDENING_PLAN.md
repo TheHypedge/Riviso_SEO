@@ -47,62 +47,82 @@ Everything below is scoped to make *this* topology reliable, secure, and fast.
 
 # A. SECURITY WORK (grounded in code audit)
 
-### Phase P0 — Critical stop-the-bleed (do immediately)
+> **✅ STATUS UPDATE 2026-08-01:** A full re-verification pass this session (see `RIVISO_ROADMAP_F0_F1_F2.md` note below and Claude memory `project_f0_hardening.md`) found **every P0 item and nearly every P1 item already shipped in code**, most from a prior commit (`618c424`) that predates this plan being actively tracked. Only S1.6a-c (SSRF) had two real remaining gaps, now closed. Four items **not in this plan at all** were found and fixed the same session — see the addendum after Phase P1.
 
-| ID | Item | Evidence | Fix | Verify |
-|----|------|----------|-----|--------|
-| **S0.1** | Fail-fast on placeholder/short `SECRET_KEY` in production | `core/config.py:47-49`, `core/production.py:67-71` (warn-only) | Raise at startup if `ENVIRONMENT=production` and key is default or <32 chars | Boot with bad key → process exits non-zero |
-| **S0.2** | Remove hardcoded admin seed `Admin@2026` | `app.py:52-78` | Delete seed; replace with env-gated one-time bootstrap CLI | grep shows no literal password; fresh DB has no default admin |
-| **S0.3** | Stop returning WordPress app password in API responses | `routes/wordpress.py:537,584-585`, `schemas/project_settings.py:34-36` | Return `wp_app_password_set: bool` only | Response JSON contains no secret value |
-| **S0.4** | Disallow `MONGODB_TLS_INSECURE=1` and legacy `OAUTHLIB_INSECURE_TRANSPORT` in production | `database.py:88-93`, `app.py:33-36` | Startup check rejects insecure transport when production | Prod boot fails if flags set |
-| **S0.5** | Confirm legacy Flask `app.py` is NOT deployed/reachable | `app.py` (whole) | Remove from deploy target or gate behind disabled flag | No route on prod served by Flask |
+### Phase P0 — Critical stop-the-bleed (do immediately) — ✅ ALL VERIFIED DONE 2026-08-01
 
-### Phase P1 — Security hardening
+| ID | Item | Evidence | Fix | Verify | Status |
+|----|------|----------|-----|--------|--------|
+| **S0.1** | Fail-fast on placeholder/short `SECRET_KEY` in production | `core/config.py:47-49`, `core/production.py:67-71` (warn-only) | Raise at startup if `ENVIRONMENT=production` and key is default or <32 chars | Boot with bad key → process exits non-zero | ✅ `core/production.py` raises `RuntimeError` on short/placeholder key in prod |
+| **S0.2** | Remove hardcoded admin seed `Admin@2026` | `app.py:52-78` | Delete seed; replace with env-gated one-time bootstrap CLI | grep shows no literal password; fresh DB has no default admin | ✅ No literal seed found; moot as of F0.6 (`app.py` itself deleted, dead Flask code) |
+| **S0.3** | Stop returning WordPress app password in API responses | `routes/wordpress.py:537,584-585`, `schemas/project_settings.py:34-36` | Return `wp_app_password_set: bool` only | Response JSON contains no secret value | ✅ `routes/wordpress.py` returns `wp_app_password_set=bool(app_pw)` only |
+| **S0.4** | Disallow `MONGODB_TLS_INSECURE=1` and legacy `OAUTHLIB_INSECURE_TRANSPORT` in production | `database.py:88-93`, `app.py:33-36` | Startup check rejects insecure transport when production | Prod boot fails if flags set | ✅ Both checked and rejected in `core/production.py` |
+| **S0.5** | Confirm legacy Flask `app.py` is NOT deployed/reachable | `app.py` (whole) | Remove from deploy target or gate behind disabled flag | No route on prod served by Flask | ✅ Confirmed unreachable (Procfile already routed `web:` to FastAPI, no process running it), then **deleted** (`app.py` + `wsgi.py`, F0.6, commit `639b1b7`) — stronger than the original "confirm" bar |
+
+### Phase P1 — Security hardening — ✅ ALL VERIFIED DONE 2026-08-01 (S1.6 was the one real gap)
 
 **Auth & sessions**
-| ID | Item | Evidence | Fix |
-|----|------|----------|-----|
-| **S1.1** | Refresh-token rotation + server-side invalidation | `routes/auth.py:700-790` | Issue new RT each refresh; track jti allow/deny list |
-| **S1.2** | Rate-limit `/auth/refresh` | `routes/auth.py:700` | `@limiter.limit("20/minute")` |
-| **S1.3** | Move tokens out of `localStorage` → httpOnly cookies only | `frontend/src/lib/api.ts:1038-1060,1282-1347` | Cookie-only auth; drop localStorage; add CSRF defense (S1.7) |
-| **S1.4** | Cookie `Secure` default true in prod + `max_age` aligned to TTL | `core/config.py:53`, `routes/auth.py:127-163,772-788` | Secure+SameSite+expiry |
-| **S1.5** | Account lockout after N failed logins | `routes/auth.py:187` | Per-email backoff/lockout |
+| ID | Item | Evidence | Fix | Status |
+|----|------|----------|-----|--------|
+| **S1.1** | Refresh-token rotation + server-side invalidation | `routes/auth.py:700-790` | Issue new RT each refresh; track jti allow/deny list | ✅ Shipped separately, commit `efaf6a7` (2026-07-05) — see Claude memory `project_auth_session_fix.md` |
+| **S1.2** | Rate-limit `/auth/refresh` | `routes/auth.py:700` | `@limiter.limit("20/minute")` | ✅ Confirmed present |
+| **S1.3** | Move tokens out of `localStorage` → httpOnly cookies only | `frontend/src/lib/api.ts:1038-1060,1282-1347` | Cookie-only auth; drop localStorage; add CSRF defense (S1.7) | ✅ Confirmed — only a non-sensitive session marker remains in localStorage, real tokens in httpOnly cookies |
+| **S1.4** | Cookie `Secure` default true in prod + `max_age` aligned to TTL | `core/config.py:53`, `routes/auth.py:127-163,772-788` | Secure+SameSite+expiry | ✅ `_cookie_secure_flag()` + `samesite` wired |
+| **S1.5** | Account lockout after N failed logins | `routes/auth.py:187` | Per-email backoff/lockout | ✅ `login_failed_count`/`login_lockout_until` implemented, explicitly commented `# S1.5` in code |
 
-**SSRF (outbound HTTP to user-supplied URLs)**
-| ID | Item | Evidence | Fix |
-|----|------|----------|-----|
-| **S1.6a** | Block private/link-local/metadata IPs on WordPress fetch | `routes/wordpress.py:140-146`, `services/wordpress_client.py:45-81` | URL allowlist + IP guard, restrict redirects |
-| **S1.6b** | SSRF guard on Shopify shop resolution | `services/shopify_oauth.py:132-137` | Require `*.myshopify.com` / Admin API only |
-| **S1.6c** | SSRF guard on featured-image + OpenAI ref-image download | `services/wordpress_client.py:231-237`, `services/shopify_article_image.py:47-61`, `services/openai_client.py:175-178` | HTTPS host allowlist / data-URL only |
+**SSRF (outbound HTTP to user-supplied URLs) — the one real gap, closed 2026-08-01**
+| ID | Item | Evidence | Fix | Status |
+|----|------|----------|-----|--------|
+| **S1.6a** | Block private/link-local/metadata IPs on WordPress fetch | `routes/wordpress.py:140-146`, `services/wordpress_client.py:45-81` | URL allowlist + IP guard, restrict redirects | ✅ `services/url_guard.py` (`assert_public_http_url`, `ssrf_guarded_event_hooks`) already wired into `wordpress_client.py` from an earlier commit. One gap closed 2026-08-01 (F0.3, commit `857e7fb`): `wordpress_publish.py`'s `probe_publish_permission_on_client()` built its own raw unguarded `httpx.AsyncClient` — now uses the same guard. |
+| **S1.6b** | SSRF guard on Shopify shop resolution | `services/shopify_oauth.py:132-137` | Require `*.myshopify.com` / Admin API only | ✅ Already wired (`url_guard.py` imported and used) |
+| **S1.6c** | SSRF guard on featured-image + OpenAI ref-image download | `services/wordpress_client.py:231-237`, `services/shopify_article_image.py:47-61`, `services/openai_client.py:175-178` | HTTPS host allowlist / data-URL only | ✅ Already wired in `openai_client.py`/`shopify_article_image.py`. One gap closed 2026-08-01 (F0.3): `storage.py`'s `_download_and_persist_image_url()` had a stale "URL comes from OpenAI CDN" comment despite being reachable via the generic article-update write path — now validates before fetching. |
 
 **CORS / CSRF / headers / abuse**
-| ID | Item | Evidence | Fix |
-|----|------|----------|-----|
-| **S1.7** | CSRF protection for cookie auth | `core/deps.py:38-46` | Require `X-Requested-With` header on mutations or SameSite=Strict |
-| **S1.8** | Drop localhost origins from prod CORS | `main.py:72-87,234-240` | Env-only strict allowlist in production |
-| **S1.9** | Rate-limit expensive endpoints (generate, bulk-upload, publish, research) | `core/ratelimit.py:13` | Per-user limits on OpenAI-backed routes |
-| **S1.10** | Trust-proxy config so rate-limit key isn't `X-Forwarded-For`-spoofable | `core/ratelimit.py:11-13` | Configure trusted proxy or key by user id |
-| **S1.11** | Split public liveness from detailed readiness `/health` | `routes/health.py:49-60` | Public `{status:ok}`; detail behind auth |
-| **S1.12** | Close plan bypasses: humanize + export-consume | `routes/articles.py:1723` (humanize no gate), `901-936` (client export) | Add `require_plan_action`; server-side export gating |
-| **S1.13** | Authenticate WordPress plugin ZIP download | `routes/wordpress.py:508-527` | Require auth or signed token |
-| **S1.14** | Add Next.js security headers | `frontend/next.config.ts:15-27` | `headers()` with HSTS/CSP/X-Frame |
+| ID | Item | Evidence | Fix | Status |
+|----|------|----------|-----|--------|
+| **S1.7** | CSRF protection for cookie auth | `core/deps.py:38-46` | Require `X-Requested-With` header on mutations or SameSite=Strict | ✅ Confirmed present |
+| **S1.8** | Drop localhost origins from prod CORS | `main.py:72-87,234-240` | Env-only strict allowlist in production | ✅ `_effective_cors_origins()` explicitly excludes localhost/loopback in prod, commented `# S1.8` |
+| **S1.9** | Rate-limit expensive endpoints (generate, bulk-upload, publish, research) | `core/ratelimit.py:13` | Per-user limits on OpenAI-backed routes | ✅ Confirmed on `articles.py`/`research.py` routes |
+| **S1.10** | Trust-proxy config so rate-limit key isn't `X-Forwarded-For`-spoofable | `core/ratelimit.py:11-13` | Configure trusted proxy or key by user id | ✅ `rate_limit_key()` keys by authenticated user id (JWT subject), commented `# S1.10` |
+| **S1.11** | Split public liveness from detailed readiness `/health` | `routes/health.py:49-60` | Public `{status:ok}`; detail behind auth | ✅ `/health` (public, no internals) vs `/health/ready` (authenticated, detailed), commented `# S1.11` |
+| **S1.12** | Close plan bypasses: humanize + export-consume | `routes/articles.py:1723` (humanize no gate), `901-936` (client export) | Add `require_plan_action`; server-side export gating | ✅ Both routes depend on `require_plan_action_for_project(...)` |
+| **S1.13** | Authenticate WordPress plugin ZIP download | `routes/wordpress.py:508-527` | Require auth or signed token | ✅ `download_plugin` depends on `get_current_user` |
+| **S1.14** | Add Next.js security headers | `frontend/next.config.ts:15-27` | `headers()` with HSTS/CSP/X-Frame | ✅ X-Frame-Options/HSTS/Referrer-Policy/Permissions-Policy already present; **Content-Security-Policy added 2026-08-01** (F0.5, commit `ab3408b`) — the one piece that was actually missing. `script-src`/`style-src` still allow `'unsafe-inline'` (no nonce plumbing yet) — real follow-up, not closed. |
+
+### Addendum — found and fixed 2026-08-01, not in the original plan
+
+| ID | Item | Fix | Commit |
+|----|------|-----|--------|
+| **N1** | `wp_app_password`, `gsc_access_token`, `gsc_refresh_token`, `shopify_access_token`, `shopify_client_secret` stored **plaintext** in MongoDB — the original audit's Critical finding, not previously tracked here | Fernet encryption at the two Mongo boundaries in `storage.py` (`_mongo_doc_to_project` decrypts, `_encrypt_project_secrets` encrypts); `FIELD_ENCRYPTION_KEY` required in prod (fails boot without it, same pattern as S0.1); dual-read so old plaintext rows keep working; one-time migration script run against all 24 live projects (17 migrated, 0 failed) | `42da16c` (F0.2) |
+| **N2** | `.gitignore` only matched exact `.env`, not `backend/.env.save` — a live-credential file sat outside its reach | Added `backend/.env.save`, `*.env.save`, `*.env.bak`; deleted the stale file (confirmed never committed) | `61d1181` (F0.1) |
+| **N3** | AI-generated HTML rendered via `dangerouslySetInnerHTML` with no sanitization (stored-XSS path via `marked.parse()` passing through raw HTML in markdown source) | `isomorphic-dompurify` added at the single shared choke point, `markdownToArticleHtml()` in `frontend/src/lib/articleMarkdown.ts` | `ab66644` (F0.4) |
+| **N4** | Password hashing was werkzeug `scrypt` (already memory-hard/OWASP-acceptable — **correction**: the original audit assumed PBKDF2, verified against the live DB to actually be scrypt) | Migrated to Argon2id (OWASP's #1 pick) via `backend/app/core/password_hashing.py`; opportunistic rehash on next successful login, no bulk migration | `b367b68` (F2.3) |
 
 ---
 
 # B. PERFORMANCE WORK (from optimization audit)
 
-### Phase P2 — Performance quick wins (high ROI, low risk)
+### Phase P2 — Performance quick wins (high ROI, low risk) — ✅ ALL DONE, VERIFIED 2026-08-01
 
-| ID | Item | Audit ref | Fix |
-|----|------|-----------|-----|
-| **P2.1** | Request-scoped cache for user/subscription/plan (kills 3–5 reads/req) | Opt §3.3 | Attach to `request.state`; gatekeeper reads it |
-| **P2.2** | TTL cache for `load_plans()` | Opt §1.4B | Module cache (~60s) invalidated on `upsert_plan` |
-| **P2.3** | Wrap all sync storage in `run_sync` on hot async paths | Opt §3.4 | `deps.py`, `project_lookup.py`, `wordpress.py`, `project_shopify.py` |
-| **P2.4** | Add `load_articles_by_ids_for_project` + use in bulk validate / job lookup | Opt §1.1, §3.2 | `$in` query, drop 20k scans |
-| **P2.5** | `asyncio.gather` obvious serial pairs (editor-shell, board, Shopify sync) | Opt §3.1 | Concurrent independent awaits |
-| **P2.6** | Frontend: visibility guard + backoff on all poll loops | Opt §3.7 | `document.hidden` check + backoff |
-| **P2.7** | Frontend: replace `listArticlesAll` (50-page waterfall) with aggregate endpoint on Overview/Tools | Opt §3.2/§3.8 | Use `workspaceOverview()` |
-| **P2.8** | Stop project-shell refetch on tab switch; dedupe GSC analytics fetches | Opt §3.8 | Drop `tab` from deps; share analytics in state |
+> **✅ STATUS UPDATE 2026-08-01:** 7 of 8 items were already shipped in earlier work (each carries its own `P2.x` code comment as a marker). Only P2.3 had a real gap: of the four files it names, `project_shopify.py` was the one where none of the ~17 direct Mongo calls were wrapped — every Shopify credential read/write was blocking the single backend event loop for every other concurrent user. Fixed (F1.3, commit `4b019be`).
+
+| ID | Item | Audit ref | Fix | Status |
+|----|------|-----------|-----|--------|
+| **P2.1** | Request-scoped cache for user/subscription/plan (kills 3–5 reads/req) | Opt §3.3 | Attach to `request.state`; gatekeeper reads it | ✅ `app/core/request_context.py` exists (`RequestContext`, `get_request_context`) |
+| **P2.2** | TTL cache for `load_plans()` | Opt §1.4B | Module cache (~60s) invalidated on `upsert_plan` | ✅ `storage.py` `_PLANS_CACHE`, 60s TTL |
+| **P2.3** | Wrap all sync storage in `run_sync` on hot async paths | Opt §3.4 | `deps.py`, `project_lookup.py`, `wordpress.py`, `project_shopify.py` | ✅ First 3 files already done; **`project_shopify.py` fixed 2026-08-01** — all ~17 call sites wrapped, `verify_connection`'s nested `_persist` closure converted `def`→`async def`. Access-check calls (`require_project_access`) deliberately left un-wrapped, matching the existing convention in `wordpress.py` itself. |
+| **P2.4** | Add `load_articles_by_ids_for_project` + use in bulk validate / job lookup | Opt §1.1, §3.2 | `$in` query, drop 20k scans | ✅ `storage.py` has `load_articles_by_ids_for_project` |
+| **P2.5** | `asyncio.gather` obvious serial pairs (editor-shell, board, Shopify sync) | Opt §3.1 | Concurrent independent awaits | ✅ `asyncio.gather` present in `articles.py` (editor-shell + board). Shopify sync's steps are sequentially dependent (fetch scopes → sync catalog → persist) — no parallelizable pair exists there. |
+| **P2.6** | Frontend: visibility guard + backoff on all poll loops | Opt §3.7 | `document.hidden` check + backoff | ✅ Confirmed in `page.tsx`, commented `// P2.6` |
+| **P2.7** | Frontend: replace `listArticlesAll` (50-page waterfall) with aggregate endpoint on Overview/Tools | Opt §3.2/§3.8 | Use `workspaceOverview()` | ✅ `api.listArticlesAll` already does bounded-concurrency (4-at-a-time) pagination, not a serial waterfall — commented `// P2.7` |
+| **P2.8** | Stop project-shell refetch on tab switch; dedupe GSC analytics fetches | Opt §3.8 | Drop `tab` from deps; share analytics in state | ✅ Confirmed in `page.tsx`, commented `// P2.8` |
+
+### Addendum — found and fixed 2026-08-01, not in the original P2 list
+
+| ID | Item | Fix | Commit |
+|----|------|-----|--------|
+| **N5** | `generation_worker_loop()` awaited each dequeued job to full completion before dequeuing the next — exactly 1 article generation in flight system-wide regardless of queue depth, despite a `generation_slot()` semaphore already coded and logged at `max_concurrent=3` on startup | Loop now spawns each job as its own `asyncio.create_task()`; actual concurrency stays bounded by the existing semaphore inside the OpenAI-heavy handlers, which was already correct — it just never had more than one job to throttle. Tracks in-flight tasks so shutdown cancels them instead of orphaning. Verified in isolation: 6 fake jobs settle into batches of exactly 3 concurrent. | `aaf44bf` (F1.1) |
+| **N6** | `fetch_workspace_overview_bundle()` (dashboard Overview widget data source) had zero caching — a fresh aggregation across up to 500 projects/1500 articles/2000 scheduled jobs on every load | Same 90s TTL pattern as `GoogleConsoleService._CACHE`, keyed on `(owner_user_id, article_limit)` only (date/project filtering happens post-fetch). Degraded (partial-failure) results never cached. | `9f9124b` (F1.4) |
 
 ### Phase P4 — Structural performance refactor (deeper)  ✅ DONE
 
@@ -120,6 +140,8 @@ Everything below is scoped to make *this* topology reliable, secure, and fast.
 ---
 
 # C. INFRASTRUCTURE FOR 50 USERS
+
+> **Status 2026-08-01:** Not started except I3.6-adjacent confirmation (Mongo `maxPoolSize=50` already set, sized fine for current load) and I3.7 (healthchecks already present in `docker-compose.yml`). I3.2 (managed Mongo), I3.3 (managed Redis), and I3.4 (backups) each need an account-level decision (provider, tier, destination) that only the human owner can make — see the pointer at the end of this file for where this is tracked as blocked-on-user, not silently skipped.
 
 ### Phase P3 — Scale & reliability (right-sized)
 
@@ -192,4 +214,6 @@ P6                                  ████
 
 ---
 
-*See `RIVISO_HARDENING_TRACKER.xlsx` for the same items as a trackable backlog (Phase, ID, Category, Severity/Priority, Effort, Status, Owner, Verification).*
+*See `RIVISO_HARDENING_TRACKER.xlsx` for the same items as a trackable backlog (Phase, ID, Category, Severity/Priority, Effort, Status, Owner, Verification) — **not updated with the 2026-08-01 status above, may read as stale until manually synced.***
+
+*For an AI session picking this file up: current status and the reasoning behind it is also in Claude's persistent memory (`project_f0_hardening.md`, `project_f1_throughput.md` at `/root/.claude/projects/-var-www-riviso/memory/`) and in a live-maintained execution-plan artifact (see `reference_audit_roadmap_artifacts.md` in that same memory directory for the URL). Check memory first — it has verification detail and dated commit references this file summarizes but doesn't fully carry.*
