@@ -38,6 +38,7 @@ from app.services.shopify_api_errors import (
 )
 from app.services import shopify_oauth
 from app.services.shopify_client import ShopifyClient
+from app.services.to_thread import run_sync
 from app.services.shopify_credentials import (
     AUTH_FAILED_MESSAGE,
     ShopifyCredentialsError,
@@ -210,7 +211,8 @@ async def connect_shopify(
         )
 
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    st.update_project_fields(
+    await run_sync(
+        st.update_project_fields,
         pid,
         credential_update_fields(
             shop=shop,
@@ -254,7 +256,7 @@ async def connect_shopify(
             access_token=token,
             granted_scope=scope_str,
         )
-        persist_shopify_catalog_sync(st, project_id=pid, catalog=catalog)
+        await run_sync(persist_shopify_catalog_sync, st, project_id=pid, catalog=catalog)
     except Exception:
         pass
 
@@ -315,7 +317,8 @@ async def reauthorize_url(
         return ShopifyReauthorizeUrlResponse(ok=False, message=str(exc), shop=shop)
 
     if hasattr(st, "update_project_fields"):
-        st.update_project_fields(
+        await run_sync(
+            st.update_project_fields,
             (proj.get("id") or "").strip(),
             {"shopify_shop": shop, "website_url": public_url or f"https://{shop}"},
         )
@@ -333,7 +336,7 @@ async def status(project_id: str, user: dict = Depends(get_current_user)) -> Sho
     st = get_legacy_storage_module()
     require_project_access(st=st, user=user, project_id=project_id, full=False, allow_collaborators=True)
     proj = (
-        st.get_project_shopify_status_doc(project_id)
+        await run_sync(st.get_project_shopify_status_doc, project_id)
         if hasattr(st, "get_project_shopify_status_doc")
         else _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
     )
@@ -462,7 +465,7 @@ async def verify_connection(
                 cred_updates["shopify_client_id"] = client_id
             if client_secret:
                 cred_updates["shopify_client_secret"] = client_secret
-            st.update_project_fields(pid, cred_updates)
+            await run_sync(st.update_project_fields, pid, cred_updates)
         except ShopifyCredentialsError as exc:
             return ShopifyVerifyResponse(
                 ok=False,
@@ -480,7 +483,7 @@ async def verify_connection(
             shop=shop,
         )
 
-    def _persist(*, ok: bool, status: str, message: str, catalog: dict | None = None) -> None:
+    async def _persist(*, ok: bool, status: str, message: str, catalog: dict | None = None) -> None:
         if not hasattr(st, "update_project_fields"):
             return
         scope_persist = (
@@ -510,7 +513,7 @@ async def verify_connection(
         else:
             fields["shopify_sync_status"] = "error"
             fields["shopify_sync_message"] = message[:500]
-        st.update_project_fields(pid, fields)
+        await run_sync(st.update_project_fields, pid, fields)
 
     try:
         client = ShopifyClient(shop=shop, access_token=token)
@@ -532,7 +535,7 @@ async def verify_connection(
             except Exception:
                 reauth_url = ""
             msg = missing_scopes_message(missing=missing_scopes, granted=live_scopes)
-            _persist(ok=False, status="needs_reauthorize", message=msg)
+            await _persist(ok=False, status="needs_reauthorize", message=msg)
             return ShopifyVerifyResponse(
                 ok=False,
                 status="needs_reauthorize",
@@ -550,13 +553,13 @@ async def verify_connection(
             granted_scope=granted_scope,
         )
         msg = (catalog.get("sync_message") or f"Connected to {shop_name or shop}.")[:500]
-        _persist(ok=True, status="connected", message=msg, catalog=catalog)
-        persist_shopify_catalog_sync(st, project_id=pid, catalog=catalog)
+        await _persist(ok=True, status="connected", message=msg, catalog=catalog)
+        await run_sync(persist_shopify_catalog_sync, st, project_id=pid, catalog=catalog)
         return ShopifyVerifyResponse(ok=True, status="connected", message=msg, shop=shop, needs_oauth=False)
     except Exception as exc:
         err_msg = f"Shopify credentials failed: {exc}"
         status_key = "auth_failed" if "401" in str(exc) or "403" in str(exc) else "error"
-        _persist(ok=False, status=status_key, message=err_msg)
+        await _persist(ok=False, status=status_key, message=err_msg)
         return ShopifyVerifyResponse(
             ok=False,
             status=status_key,
@@ -627,7 +630,8 @@ async def connect_url(
     url = shopify_oauth.build_authorize_url(shop=shop, redirect_uri=redirect_uri, state=state)
 
     if hasattr(st, "update_project_fields"):
-        st.update_project_fields(
+        await run_sync(
+            st.update_project_fields,
             pid,
             {
                 "platform": "shopify",
@@ -676,7 +680,8 @@ async def manual_connect(
 
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     msg = f"Connected to {shop_name or shop}."
-    st.update_project_fields(
+    await run_sync(
+        st.update_project_fields,
         pid,
         {
             "platform": "shopify",
@@ -706,7 +711,8 @@ async def disconnect(project_id: str, user: dict = Depends(get_current_user)) ->
     proj = _require_project(st=st, user=user, project_id=project_id)
     if not hasattr(st, "update_project_fields"):
         raise HTTPException(status_code=500, detail="Storage missing update_project_fields")
-    st.update_project_fields(
+    await run_sync(
+        st.update_project_fields,
         (proj.get("id") or "").strip(),
         {
             "shopify_access_token": "",
@@ -725,7 +731,7 @@ async def disconnect(project_id: str, user: dict = Depends(get_current_user)) ->
         },
     )
     if hasattr(st, "delete_shopify_products_for_project"):
-        st.delete_shopify_products_for_project((proj.get("id") or "").strip())
+        await run_sync(st.delete_shopify_products_for_project, (proj.get("id") or "").strip())
     return {"ok": True}
 
 
@@ -741,13 +747,13 @@ async def sync_catalog(project_id: str, user: dict = Depends(get_current_user)) 
     token = client.access_token
 
     pid = (proj.get("id") or "").strip()
-    st.update_project_fields(pid, {"shopify_sync_status": "syncing", "shopify_sync_message": "Syncing…"})
+    await run_sync(st.update_project_fields, pid, {"shopify_sync_status": "syncing", "shopify_sync_message": "Syncing…"})
     scope_str = (proj.get("shopify_scope") or "").strip()
     try:
         live_scopes = await client.fetch_access_scopes()
         if live_scopes:
             scope_str = " ".join(live_scopes)
-            st.update_project_fields(pid, {"shopify_scope": scope_str[:2000]})
+            await run_sync(st.update_project_fields, pid, {"shopify_scope": scope_str[:2000]})
     except Exception:
         pass
     try:
@@ -756,9 +762,10 @@ async def sync_catalog(project_id: str, user: dict = Depends(get_current_user)) 
             access_token=token,
             granted_scope=scope_str,
         )
-        persist_shopify_catalog_sync(st, project_id=pid, catalog=catalog)
+        await run_sync(persist_shopify_catalog_sync, st, project_id=pid, catalog=catalog)
     except Exception as exc:
-        st.update_project_fields(
+        await run_sync(
+            st.update_project_fields,
             pid,
             {"shopify_sync_status": "error", "shopify_sync_message": str(exc)[:500]},
         )
@@ -777,13 +784,17 @@ async def sync_catalog(project_id: str, user: dict = Depends(get_current_user)) 
 async def get_catalog(project_id: str, user: dict = Depends(get_current_user)) -> ShopifyCatalog:
     st = get_legacy_storage_module()
     _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
-    raw_doc = st.get_project_shopify_catalog_doc(project_id) if hasattr(st, "get_project_shopify_catalog_doc") else None
+    raw_doc = (
+        await run_sync(st.get_project_shopify_catalog_doc, project_id)
+        if hasattr(st, "get_project_shopify_catalog_doc")
+        else None
+    )
     if not isinstance(raw_doc, dict):
         raw_doc = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
     raw = raw_doc.get("shopify_catalog") if isinstance(raw_doc.get("shopify_catalog"), dict) else {}
     products: list[dict] = []
     if hasattr(st, "list_shopify_products"):
-        products = st.list_shopify_products(project_id)
+        products = await run_sync(st.list_shopify_products, project_id)
     if not products and isinstance(raw.get("products"), list):
         products = [p for p in raw.get("products") if isinstance(p, dict)]
     from app.services.shopify_api_errors import (
