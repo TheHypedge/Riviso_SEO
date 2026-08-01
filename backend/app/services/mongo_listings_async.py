@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import anyio
@@ -12,6 +13,14 @@ from pymongo import ReadPreference
 from app.services.storage_db import _database_module
 
 log = logging.getLogger(__name__)
+
+# F1.4: process-wide micro-cache, same shape as GoogleConsoleService._CACHE
+# (google_console_service.py). Date-range/project filtering in the /overview
+# route happens in Python after this bundle is fetched, so the expensive
+# Mongo aggregation itself is identical for every view of the same user's
+# dashboard -- one cache entry per user covers all of them.
+_OVERVIEW_CACHE: dict[tuple, tuple[float, dict[str, Any]]] = {}
+_OVERVIEW_CACHE_TTL_SECONDS = 90
 
 # The global Mongo client (database.py) pins read_preference=PRIMARY everywhere
 # so ordinary read-after-write flows (create a project, see it immediately) stay
@@ -274,10 +283,31 @@ async def fetch_workspace_overview_bundle(
 ) -> dict[str, Any]:
     """
     Cross-project workspace data: owned + shared/collaborator projects, recent
-    article listing rows, open scheduled jobs.
-
-    Uses parallel Motor aggregations (no per-project loops, no thread pool on Mongo path).
+    article listing rows, open scheduled jobs. Cached for _OVERVIEW_CACHE_TTL_SECONDS
+    (F1.4) -- see _OVERVIEW_CACHE above.
     """
+    key = ((owner_user_id or "").strip(), int(article_limit or 1500))
+    cached = _OVERVIEW_CACHE.get(key)
+    if cached is not None:
+        expires_at, value = cached
+        if expires_at >= time.time():
+            return value
+        _OVERVIEW_CACHE.pop(key, None)
+
+    result = await _fetch_workspace_overview_bundle_uncached(owner_user_id, article_limit=article_limit)
+    # Don't cache a degraded result -- a widget that failed due to primary
+    # flakiness should get to retry on the next request, not serve the same
+    # gap for 90s.
+    if not result.get("warnings"):
+        _OVERVIEW_CACHE[key] = (time.time() + _OVERVIEW_CACHE_TTL_SECONDS, result)
+    return result
+
+
+async def _fetch_workspace_overview_bundle_uncached(
+    owner_user_id: str,
+    *,
+    article_limit: int = 1500,
+) -> dict[str, Any]:
     st = _storage()
     owner = (owner_user_id or "").strip()
     if st.storage_mode() != "mongo":
