@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from database import get_db, init_db
+from app.core.field_encryption import decrypt_field, encrypt_field
 
 _log = logging.getLogger(__name__)
 
@@ -2614,11 +2615,40 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             a[k] = v
 
 
+# F0.2: third-party credentials encrypted at rest. Applied at the two Mongo
+# boundaries only -- _mongo_doc_to_project (every project read) and
+# _encrypt_project_secrets (every project write) -- so none of the ~15 call
+# sites that read/write these fields via the normal project dict need to change.
+_PROJECT_SECRET_FIELDS = (
+    "wp_app_password",
+    "gsc_access_token",
+    "gsc_refresh_token",
+    "shopify_access_token",
+    "shopify_client_secret",
+)
+
+
+def _encrypt_project_secrets(doc: dict[str, Any]) -> dict[str, Any]:
+    """Encrypt secret fields on a project doc right before it's written to Mongo.
+
+    Idempotent -- encrypt_field() leaves already-encrypted values untouched, so
+    this is safe to call on a doc whose secrets are a mix of fresh plaintext
+    (just-submitted) and already-encrypted (unchanged, carried through).
+    """
+    for field in _PROJECT_SECRET_FIELDS:
+        if field in doc:
+            doc[field] = encrypt_field(doc.get(field))
+    return doc
+
+
 def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
     if not doc:
         return {}
     d = dict(doc)
     d.pop("_id", None)
+    for field in _PROJECT_SECRET_FIELDS:
+        if field in d:
+            d[field] = decrypt_field(d.get(field))
     return {
         "id": d.get("id") or "",
         # Required for per-user project lists and access checks (must match _normalize_project_dict).
@@ -4655,7 +4685,7 @@ def save_projects_replace_all(projects: list[dict[str, Any]]) -> None:
             return
         docs = []
         for p in projects:
-            norm = _normalize_project_dict(p)
+            norm = _encrypt_project_secrets(_normalize_project_dict(p))
             docs.append({**norm, "_id": norm["id"]})
         res = db.projects.insert_many(docs)
         if not res.acknowledged or len(res.inserted_ids) != len(docs):
@@ -4672,7 +4702,8 @@ def insert_project(project: dict[str, Any]) -> None:
             rows.append(norm)
             _save_json_projects(rows)
         return
-    doc = {**norm, "_id": norm["id"]}
+    enc = _encrypt_project_secrets(norm)
+    doc = {**enc, "_id": enc["id"]}
     with _db_write_lock:
         res = get_db().projects.insert_one(doc)
         if not res.acknowledged:
@@ -4698,7 +4729,7 @@ def update_project_fields(project_id: str, updates: dict[str, Any]) -> bool:
             return False
         d = _mongo_doc_to_project(doc)
         _apply_project_updates_dict(d, updates)
-        norm = _normalize_project_dict(d)
+        norm = _encrypt_project_secrets(_normalize_project_dict(d))
         new_doc = {**norm, "_id": norm["id"]}
         res = db.projects.replace_one({"id": project_id}, new_doc)
         return bool(res.acknowledged and res.matched_count == 1)
@@ -5897,7 +5928,10 @@ def load_shared_projects_listing(user_id: str) -> list[dict[str, Any]]:
     out = []
     for doc in cur:
         try:
-            norm = _normalize_project_dict(doc)
+            # F0.2: must decrypt here like load_projects_listing() does -- this
+            # projection includes shopify_access_token, and _normalize_project_dict
+            # (unlike _mongo_doc_to_project) has no decrypt step.
+            norm = _mongo_doc_to_project(doc)
             norm["_shared_role"] = role_map.get(norm["id"], "viewer")
             norm["_shared_joined_at"] = joined_map.get(norm["id"], "")
             out.append(norm)

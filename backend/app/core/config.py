@@ -48,6 +48,14 @@ class Settings(BaseSettings):
         default="dev-insecure-change-me",
         description="JWT signing secret; must be a long random string in production.",
     )
+    field_encryption_key: str = Field(
+        default="",
+        validation_alias="FIELD_ENCRYPTION_KEY",
+        description=(
+            "F0.2: Fernet key (Fernet.generate_key()) encrypting WordPress/Shopify/GSC secrets "
+            "at rest on project documents. Required in production."
+        ),
+    )
     access_token_ttl_seconds: int = 60 * 60  # 1 hour
     refresh_token_ttl_seconds: int = 60 * 60 * 24 * 30  # 30 days
     cookie_secure: bool = False

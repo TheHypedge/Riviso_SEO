@@ -78,6 +78,21 @@ def run_startup_checks(settings: Settings) -> None:
             "Set a long random SECRET_KEY in the environment before starting in production."
         )
 
+    # Fatal (F0.2): without this key, WordPress/Shopify/GSC secrets get written and
+    # read as plaintext with no error -- fail the boot instead of degrading silently.
+    from cryptography.fernet import Fernet
+
+    fek = (settings.field_encryption_key or "").strip()
+    if not fek:
+        raise RuntimeError(
+            "PRODUCTION: FIELD_ENCRYPTION_KEY is not set. WordPress/Shopify/GSC secrets would be "
+            "stored in plaintext. Generate one with Fernet.generate_key() and set it before starting."
+        )
+    try:
+        Fernet(fek.encode("ascii"))
+    except Exception as exc:
+        raise RuntimeError(f"PRODUCTION: FIELD_ENCRYPTION_KEY is set but not a valid Fernet key: {exc}") from exc
+
     # Fatal: insecure transport escape hatches must never be enabled in production.
     if _env_flag_enabled("MONGODB_TLS_INSECURE"):
         raise RuntimeError(
