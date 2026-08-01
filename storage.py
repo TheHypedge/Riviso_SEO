@@ -155,12 +155,21 @@ def _download_and_persist_image_url(article_id: str, url: str) -> bool:
     patch_article_fields/update_article_fields which are already blocking calls.
     """
     import urllib.request as _req
+    from app.services.url_guard import assert_public_http_url
     aid = (article_id or "").strip()
     url = (url or "").strip()
     if not url.startswith("http://") and not url.startswith("https://"):
         return False
     try:
-        with _req.urlopen(url, timeout=30) as resp:  # nosec — URL comes from OpenAI CDN
+        # F0.3: `updates["image_url"]` reaches this function via the generic
+        # patch_article_fields/update_article_fields write path, not only from
+        # OpenAI's CDN as the removed comment assumed -- validate before fetching.
+        # Note: urlopen still follows redirects on an already-validated public URL
+        # without re-checking the redirect target (unlike the httpx call sites,
+        # which use ssrf_guarded_event_hooks for that); acceptable residual risk
+        # here since it requires an attacker-controlled public host to begin with.
+        assert_public_http_url(url)
+        with _req.urlopen(url, timeout=30) as resp:
             content_type = (resp.headers.get("content-type") or "image/png").split(";")[0].strip()
             data = resp.read()
         if not data:

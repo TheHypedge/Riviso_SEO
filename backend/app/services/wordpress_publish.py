@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from app.services.url_guard import assert_public_http_url, ssrf_guarded_event_hooks
 from app.services.wordpress_client import WordpressClient
 
 log = logging.getLogger(__name__)
@@ -318,8 +319,15 @@ async def probe_publish_permission(
 async def probe_publish_permission_on_client(wp: WordpressClient) -> tuple[bool, str]:
     """Probe Riviso ``/publish`` validate_only using the client's resolved site URL."""
     base = await wp.ensure_resolved_site_url()
+    # F0.3 / S1.6a: this was the one raw httpx.AsyncClient in the WordPress publish
+    # path that bypassed the SSRF guard already used everywhere else (WordpressClient,
+    # openai_client, shopify_oauth) -- base is the customer's site URL, so it can point
+    # anywhere, and follow_redirects=True followed 3xx targets unchecked.
+    assert_public_http_url(base)
     headers = {**wp.auth_headers(), "content-type": "application/json"}
-    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=15.0, follow_redirects=True, event_hooks=ssrf_guarded_event_hooks()
+    ) as client:
         return await probe_publish_permission(
             wp_site_url=base,
             headers=headers,
