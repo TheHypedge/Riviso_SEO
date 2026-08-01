@@ -15,12 +15,36 @@ import type { NextConfig } from "next";
 // S1.14: security headers applied to all frontend responses. HSTS is only
 // emitted in production so local HTTP dev isn't forced onto HTTPS.
 const isProduction = process.env.NODE_ENV === "production";
+
+// F0.5: Content-Security-Policy. Deliberately permissive on script-src/style-src
+// ('unsafe-inline') because Next.js App Router hydration relies on small inline
+// scripts and no nonce-plumbing exists yet -- tightening to strict-dynamic + nonces
+// is a follow-up, not a blocker for this pass. img-src allows any https: origin
+// (plus data: for base64 previews) because article/featured images are fetched
+// from arbitrary customer WordPress/Shopify sites, not a fixed set of domains.
+// connect-src is scoped to self + Sentry's ingest hosts (Sentry no-ops without a
+// DSN, so this is a no-op allowance when unconfigured). frame-ancestors 'none'
+// backs up X-Frame-Options for browsers that honor CSP over the legacy header.
+const cspDirectives = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "font-src 'self' data:",
+  "connect-src 'self' https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.sentry.io",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join("; ");
+
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "X-DNS-Prefetch-Control", value: "off" },
   { key: "Permissions-Policy", value: "geolocation=(), microphone=(), camera=()" },
+  { key: "Content-Security-Policy", value: cspDirectives },
   ...(isProduction
     ? [{ key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" }]
     : []),
