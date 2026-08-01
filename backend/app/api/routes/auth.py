@@ -13,7 +13,7 @@ import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from werkzeug.security import check_password_hash, generate_password_hash
+from app.core.password_hashing import hash_password, verify_password
 
 
 
@@ -417,11 +417,22 @@ async def login(payload: LoginRequest, request: Request, response: Response) -> 
 
         )
 
-    if not check_password_hash(user["password_hash"], payload.password):
+    pw_ok, upgraded_hash = verify_password(payload.password, user["password_hash"])
+
+    if not pw_ok:
 
         await _register_failed_login(st, user)
 
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if upgraded_hash:
+        # F2.3: opportunistic rehash to Argon2 on successful login with a legacy
+        # (werkzeug scrypt/pbkdf2) hash. Non-fatal -- login must not fail just
+        # because the upgrade write did.
+        try:
+            await run_sync(call_storage, st.update_user_fields, user["id"], {"password_hash": upgraded_hash})
+        except Exception:
+            pass
 
     await _reset_failed_login(st, user)
 
@@ -536,7 +547,7 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterPendin
 
                 "email": email,
 
-                "password_hash": generate_password_hash(payload.password),
+                "password_hash": hash_password(payload.password),
 
                 "role": "user",
 
@@ -862,7 +873,7 @@ async def reset_password(payload: ResetPasswordRequest, request: Request) -> Res
 
             token=token,
 
-            password_hash=generate_password_hash(pw),
+            password_hash=hash_password(pw),
 
         )
 
@@ -906,9 +917,17 @@ async def reactivate(payload: LoginRequest, request: Request, response: Response
 
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    if not check_password_hash(user["password_hash"], payload.password):
+    pw_ok, upgraded_hash = verify_password(payload.password, user["password_hash"])
+
+    if not pw_ok:
 
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if upgraded_hash:
+        try:
+            await run_sync(call_storage, st.update_user_fields, user["id"], {"password_hash": upgraded_hash})
+        except Exception:
+            pass
 
     if not account_is_inactive(user):
 
