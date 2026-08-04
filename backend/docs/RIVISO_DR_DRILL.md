@@ -145,22 +145,22 @@ If the VPS is lost but Atlas data is intact:
 2. Install Docker + Docker Compose.
 
 3. Clone the repo:
-   git clone <repo_url>
-   cd auto-articles
+   git clone <repo_url> riviso
+   cd riviso
 
 4. Restore secrets:
    - Copy .env from secret manager / password vault to the VPS.
    - Verify all required vars are present (see Runbook §5).
 
 5. Point DNS (Cloudflare / registrar):
-   - Update A record for api.riviso.com → new VPS IP.
+   - Update A record for api.riviso.cloud → new VPS IP.
    - TTL: 60 s (reduce before any planned failover; roll back after).
 
 6. Start services:
    docker compose up -d
 
 7. Verify:
-   curl -sf https://api.riviso.com/api/health
+   curl -sf https://api.riviso.cloud/api/health
    # (allow 60 s for DNS to propagate)
 
 8. Monitor for 30 min; watch logs for errors.

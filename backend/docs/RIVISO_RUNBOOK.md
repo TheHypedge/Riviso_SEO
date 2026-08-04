@@ -1,8 +1,10 @@
 # Riviso — Production Runbook
 
 > **Audience:** On-call engineer.  
-> **Scope:** ~50 users, 3-process topology (API + Worker + Scheduler) on VPS / Docker Compose + MongoDB Atlas M10 + managed Redis.  
+> **Scope:** ~50 users, 3-process topology (API + Worker + Scheduler) on a single VPS / Docker Compose. Data layer is **MongoDB Atlas (tier TBD — see I3.2 in `RIVISO_PRODUCTION_HARDENING_PLAN.md`, not yet confirmed as M10)** + **self-hosted Redis in the `redis` Docker Compose container** (AOF persistence to a named volume, survives container restart; does **not** survive VPS/host loss and has no managed failover — migrating to a managed provider is I3.3, still open).  
 > **SLO:** 99.5 % monthly availability on `GET /api/health`; p95 < 1 s for non-generation endpoints.
+>
+> **Note:** Some sections below (2 API instances, managed Redis console, Atlas M10 connection math) describe the *target* topology once I3.2/I3.3/I3.8 land, not the current single-instance reality. Each is flagged inline.
 
 ---
 
@@ -10,14 +12,14 @@
 
 | Resource | Value |
 |----------|-------|
-| Production URL | `https://riviso.com` |
-| API base | `https://api.riviso.com` (or same-origin at `/api`) |
+| Production URL | `https://riviso.cloud` |
+| API base | `https://api.riviso.cloud` (or same-origin at `/api`) |
 | Health check | `GET /api/health` → `{"status":"ok"}` |
 | Readiness check (auth required) | `GET /api/health/ready` |
 | Metrics | `GET /api/metrics` (requires `METRICS_TOKEN`) |
 | Logs | `docker compose logs -f --tail=200 backend worker scheduler` |
-| Atlas console | MongoDB Atlas M10 cluster dashboard |
-| Redis console | Upstash / ElastiCache dashboard |
+| Atlas console | MongoDB Atlas cluster dashboard (tier TBD — I3.2 open) |
+| Redis | `docker compose exec redis redis-cli` — self-hosted, not yet on a managed provider (I3.3 open) |
 
 ### Process inventory
 
@@ -28,7 +30,7 @@
 | `scheduler` | Scheduled publish + daily reset | `ENABLE_SCHEDULER=1 ENABLE_GENERATION_WORKER=0` |
 | `frontend` | Next.js SSR | — |
 | `nginx` | Reverse proxy / TLS | — |
-| `redis` | Queue + pub/sub | AOF persistence |
+| `redis` | Queue + pub/sub | AOF persistence to `redis_data` volume; self-hosted, not managed (I3.3 open) |
 
 ---
 
@@ -74,28 +76,33 @@ docker compose restart frontend
 Verify after restart:
 ```bash
 docker compose ps
-curl -sf https://api.riviso.com/api/health | python3 -m json.tool
+curl -sf https://api.riviso.cloud/api/health | python3 -m json.tool
 ```
 
-### 3.2 Deploy a new release (zero-downtime, 2 API instances)
+### 3.2 Deploy a new release (current: single API instance, brief downtime during backend restart)
+
+**Current reality**: one `backend` container, so a rebuild has a few seconds of unavailability while it restarts — not truly zero-downtime yet. The `--scale backend=2` rolling pattern below is the **target** once I3.8 (2-instance API + LB) is done; don't run it as-is today, it'll leave two `backend` containers running with no load balancer in front to route between them.
 
 ```bash
 git pull origin main
 
-# Build new images
-docker compose build backend frontend
-
-# Rolling restart: API first, then workers
-docker compose up -d --no-deps --scale backend=2 backend
-sleep 30
-docker compose up -d --no-deps backend
-docker compose up -d --no-deps worker scheduler frontend nginx
+# Build only what changed (see project CLAUDE.md deploy flow — smaller blast radius)
+docker compose up -d --build backend worker scheduler   # storage.py / shared backend code
+docker compose up -d --build frontend                     # frontend-only change
 ```
 
 Smoke test after deploy:
 ```bash
-curl -sf https://api.riviso.com/api/health
-curl -sf https://riviso.com | grep -c "Riviso"
+curl -sf https://api.riviso.cloud/api/health
+curl -sf https://riviso.cloud | grep -c "Riviso"
+```
+
+**Target (post-I3.8), for reference only:**
+```bash
+docker compose up -d --no-deps --scale backend=2 backend
+sleep 30
+docker compose up -d --no-deps backend
+docker compose up -d --no-deps worker scheduler frontend nginx
 ```
 
 ### 3.3 View and follow logs
@@ -119,7 +126,7 @@ docker compose logs --tail=5000 backend worker | grep '"request_id":"<id>"'
 
 ```bash
 # Via metrics endpoint
-curl -H "Authorization: Bearer $METRICS_TOKEN" https://api.riviso.com/metrics \
+curl -H "Authorization: Bearer $METRICS_TOKEN" https://api.riviso.cloud/metrics \
   | grep riviso_generation_queue_depth
 
 # Via Redis CLI
@@ -188,11 +195,12 @@ print('Mongo OK')
 Symptom: `connection pool timeout` errors in logs; Atlas connection graph spikes.
 
 ```bash
-# Check per-process maxPoolSize sums < Atlas M10 limit (500)
-# API:        maxPoolSize=20 × 2 instances = 40
-# Worker:     maxPoolSize=10
-# Scheduler:  maxPoolSize=10
-# Total:      60 — well under 500
+# Check per-process maxPoolSize sums < Atlas tier connection limit
+# (see database.py MONGODB_MAX_POOL_SIZE, default 50/process — I3.6)
+# API:        maxPoolSize=50 (single instance today; ×2 once I3.8 lands)
+# Worker:     maxPoolSize=50
+# Scheduler:  maxPoolSize=50
+# Total:      150 today — confirm headroom against the actual Atlas tier (I3.2 open)
 
 # If spiking, find which container is holding connections
 docker compose exec backend python3 -c "
@@ -290,15 +298,15 @@ Verify all of these are set before going live (`GET /api/health/ready` shows ope
 ```
 SECRET_KEY                         # min 32 chars, never a placeholder
 ENVIRONMENT=production
-MONGODB_URI                        # Atlas M10 connection string with TLS
-REDIS_URL                          # managed Redis with auth (rediss://)
+MONGODB_URI                        # Atlas connection string with TLS (tier TBD, I3.2 open)
+REDIS_URL                          # self-hosted redis:// today (redis://redis:6379/0); managed rediss:// once I3.3 lands
 OPENAI_API_KEY
 GOOGLE_OAUTH_CLIENT_ID
 GOOGLE_OAUTH_CLIENT_SECRET
 SHOPIFY_API_KEY
 SHOPIFY_API_SECRET
 COOKIE_SECURE=true
-CORS_ORIGINS=https://riviso.com,https://www.riviso.com
+CORS_ORIGINS=https://riviso.cloud,https://www.riviso.cloud   # see backend/.env for the full current allowlist
 METRICS_TOKEN                      # protect /metrics endpoint
 SENTRY_DSN                         # error tracking
 ENABLE_SCHEDULER=0                 # on API container
@@ -309,7 +317,7 @@ ENABLE_GENERATION_WORKER=1         # on worker container
 
 Frontend:
 ```
-NEXT_PUBLIC_API_BASE_URL=https://api.riviso.com
+NEXT_PUBLIC_API_BASE_URL=https://api.riviso.cloud
 NEXT_PUBLIC_SENTRY_DSN
 SENTRY_DSN
 NODE_ENV=production
@@ -358,7 +366,7 @@ groups:
 ### Uptime probe
 
 - **Tool:** UptimeRobot / Better Uptime / Pingdom
-- **URL:** `https://api.riviso.com/api/health`
+- **URL:** `https://api.riviso.cloud/api/health`
 - **Interval:** 60 s
 - **Condition:** HTTP 200 + body contains `"status":"ok"`
 - **Alert:** after 2 consecutive failures → PagerDuty / Slack
