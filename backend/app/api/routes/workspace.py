@@ -30,7 +30,13 @@ def _parse_ms(raw: str | None) -> float:
     if not raw:
         return 0.0
     try:
-        t = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).timestamp()
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        # Storage helpers like _now_iso_seconds() write naive "YYYY-MM-DD HH:MM:SS"
+        # strings that are actually UTC (datetime.utcnow()). Without attaching tzinfo,
+        # .timestamp() would interpret them as local server time instead.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        t = dt.timestamp()
         return t if t > 0 else 0.0
     except Exception:
         return 0.0

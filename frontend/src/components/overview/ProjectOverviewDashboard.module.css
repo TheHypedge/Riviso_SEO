@@ -885,6 +885,7 @@
 .feedMeta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 2px;
   font-size: 10px;
@@ -902,7 +903,18 @@
   text-overflow: ellipsis;
 }
 
-.feedWhen { color: rgba(160,157,150,0.45); }
+.feedStatus {
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.feedWhen {
+  color: rgba(160,157,150,0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .feedAction {
   color: rgba(160,157,150,0.35);

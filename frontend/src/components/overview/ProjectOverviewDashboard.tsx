@@ -19,6 +19,7 @@ import type {
   WorkspaceOverviewResponse,
 } from "@/lib/api";
 import { articleEditorPath } from "@/lib/articlePaths";
+import { formatDateTime, parseServerTimestamp } from "@/lib/dateFormat";
 
 import s from "./ProjectOverviewDashboard.module.css";
 
@@ -152,26 +153,20 @@ function computeDelta(current: number, previous: number): Delta {
 }
 
 // ── Relative time ─────────────────────────────────────────────────────────────
+// Used for the small "last activity" chip on project cards, where a relative
+// label ("2h ago") reads better than an absolute date. Recent Activity / Upcoming
+// Schedule use the shared formatDateTime() below for an always-consistent absolute
+// timestamp instead. Both parse through parseServerTimestamp() so they handle the
+// same set of raw formats the backend actually emits.
 function relativeTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  try {
-    const ms = Date.parse(iso.includes("T") ? iso : `${iso}T00:00:00Z`);
-    if (!ms) return "—";
-    const diff = (Date.now() - ms) / 1000;
-    if (diff < 60) return "Just now";
-    if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
-    if (diff < 86400 * 30) return `${Math.round(diff / 86400)}d ago`;
-    return new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  } catch { return "—"; }
-}
-
-function fmtSchedule(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  try {
-    const d = new Date(iso.includes("T") ? iso : `${iso}T00:00:00Z`);
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  } catch { return "—"; }
+  const d = parseServerTimestamp(iso);
+  if (!d) return "—";
+  const diff = (Date.now() - d.getTime()) / 1000;
+  if (diff < 60) return "Just now";
+  if (diff < 3600) return `${Math.round(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.round(diff / 3600)}h ago`;
+  if (diff < 86400 * 30) return `${Math.round(diff / 86400)}d ago`;
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 // ── Chart aggregation ─────────────────────────────────────────────────────────
@@ -576,16 +571,16 @@ const STATUS_LABELS: Record<string, string> = {
 
 function FeedItem({ item }: { item: WorkspaceFeedItem }) {
   const href = articleEditorPath(item.project_id, item.article_id);
-  const when = item.status_tag === "scheduled"
-    ? fmtSchedule(item.sort_at)
-    : relativeTime(item.sort_at);
+  const statusLabel = STATUS_LABELS[item.status_tag] ?? item.status_tag;
+  const hasDate = !!parseServerTimestamp(item.sort_at);
+  const when = hasDate ? formatDateTime(item.sort_at) : "No date recorded";
 
   return (
     <div className={s.feedItem}>
       <span
         className={s.feedDot}
         style={{ background: DONUT_COLORS[item.status_tag] ?? "rgba(255,255,255,0.3)" }}
-        aria-label={STATUS_LABELS[item.status_tag] ?? item.status_tag}
+        aria-hidden="true"
       />
       <div className={s.feedBody}>
         {href ? (
@@ -595,6 +590,9 @@ function FeedItem({ item }: { item: WorkspaceFeedItem }) {
         )}
         <div className={s.feedMeta}>
           <span className={s.feedProject}>{item.project_name}</span>
+          <span className={s.feedStatus} style={{ color: DONUT_COLORS[item.status_tag] ?? "rgba(160,157,150,0.6)" }}>
+            {statusLabel}
+          </span>
           <span className={s.feedWhen}>{when}</span>
         </div>
       </div>
