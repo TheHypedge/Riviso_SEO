@@ -141,23 +141,23 @@ Everything below is scoped to make *this* topology reliable, secure, and fast.
 
 # C. INFRASTRUCTURE FOR 50 USERS
 
-> **Status 2026-08-01:** Not started except I3.6-adjacent confirmation (Mongo `maxPoolSize=50` already set, sized fine for current load) and I3.7 (healthchecks already present in `docker-compose.yml`). I3.2 (managed Mongo), I3.3 (managed Redis), and I3.4 (backups) each need an account-level decision (provider, tier, destination) that only the human owner can make — see the pointer at the end of this file for where this is tracked as blocked-on-user, not silently skipped.
+> **Status 2026-08-04 (re-verified against live code/config, corrects the 2026-08-01 line above):** More was already done than the original 2026-08-01 note credited — most of it landed in the same earlier commit (`618c424`) that P4/P5 also came from, never individually checked against this table until now. **Genuinely done:** I3.1 (worker/scheduler are separate Compose services + Procfile process types), I3.5 (nginx `gzip on`; HSTS/X-Frame/Referrer-Policy/Permissions-Policy shipped at the Next.js layer in F0.5), I3.6 (`MONGODB_MAX_POOL_SIZE`, default 50/process, commented `# I3.6` in `database.py`), I3.7 (Compose healthchecks), I3.10 (`ratelimit.py` uses `REDIS_URL`/`RATELIMIT_REDIS_URL` as the SlowAPI storage backend when set, not in-memory), I3.11 (primary send path is stdlib `smtplib` via `email_smtp.py`; the Node subprocess in `email_dispatch.py` is kept only as a fallback when SMTP env vars are absent, not the primary path anymore). **Partially done (2026-08-04):** I3.9 — `backend/.env` and root `.env` were world-readable (644) on the VPS, tightened to `600`; still file-based, not a secret-manager service (bigger lift, no new account needed but changes deploy mechanics — not done without discussing the approach first). **Still genuinely open**, each needs an account-level decision or action only the human owner can make: **I3.2** (confirm/upgrade actual Atlas tier — current cluster is `autoarticle.vipueti.mongodb.net`, tier unconfirmed as M10), **I3.3** (managed Redis — currently self-hosted in the `redis` Compose container with AOF persistence to a volume, which survives container restarts but not VPS/host loss, and has no managed failover), **I3.4** (automated backups + a *tested* restore — `RIVISO_DR_DRILL.md` documents the procedure but it has never actually been run), **I3.8** (2-instance API + LB — deliberately deferred per this plan's own sequencing until concurrent load approaches ~30, not urgent at current scale).
 
 ### Phase P3 — Scale & reliability (right-sized)
 
-| ID | Item | Why (for 50 users) | Target |
-|----|------|--------------------|--------|
-| **I3.1** | Separate **worker** and **scheduler** from API processes | Blueprint §8 warns scheduler+worker+API contend; even at 50 users a long OpenAI job shouldn't block API | Procfile/compose: API (`ENABLE_SCHEDULER=0`, `ENABLE_GENERATION_WORKER=0`) + 1 worker + 1 scheduler |
-| **I3.2** | Managed **MongoDB Atlas M10** (not shared M0) | Predictable IOPS/connections; backups; M10 is plenty for 50 users | Atlas M10, TLS on, IP allowlist, `maxIdleTimeMS=30000` |
-| **I3.3** | Managed **Redis** (Upstash/ElastiCache small) | Queue + future cache; durable across restarts | Single managed instance, auth + TLS |
-| **I3.4** | **Automated daily backups** + tested restore | Data safety for paying users | Atlas continuous backup; quarterly restore drill |
-| **I3.5** | **TLS termination + HSTS + gzip** at Nginx/Cloudflare | HTTPS everywhere; offload | Already have `nginx/`; add HSTS, force redirect |
-| **I3.6** | **Connection pool sizing** for 1–2 API + worker + scheduler | Avoid Atlas connection exhaustion | Set PyMongo `maxPoolSize` per process; sum < Atlas limit |
-| **I3.7** | **Healthchecks + auto-restart** (liveness/readiness) | Self-healing | Container healthcheck → restart policy |
-| **I3.8** | **Resource limits & 2-instance API** behind LB | Headroom + zero-downtime deploy | 2 small API instances, rolling deploy |
-| **I3.9** | **Secrets via env/secret manager**, not files | Security + ops | Move `.env` to host secret store |
-| **I3.10** | **Rate-limit store in Redis** (not in-memory) | Correct limits across 2 instances | SlowAPI → Redis storage backend |
-| **I3.11** | **Email reliability** — queue or native SMTP lib | Subprocess email is fragile (Blueprint §8) | Replace Node subprocess or queue jobs |
+| ID | Item | Why (for 50 users) | Target | Status |
+|----|------|--------------------|--------|--------|
+| **I3.1** | Separate **worker** and **scheduler** from API processes | Blueprint §8 warns scheduler+worker+API contend; even at 50 users a long OpenAI job shouldn't block API | Procfile/compose: API (`ENABLE_SCHEDULER=0`, `ENABLE_GENERATION_WORKER=0`) + 1 worker + 1 scheduler | ✅ Done |
+| **I3.2** | Managed **MongoDB Atlas M10** (not shared M0) | Predictable IOPS/connections; backups; M10 is plenty for 50 users | Atlas M10, TLS on, IP allowlist, `maxIdleTimeMS=30000` | ⛔ Open — needs owner's Atlas console access |
+| **I3.3** | Managed **Redis** (Upstash/ElastiCache small) | Queue + future cache; durable across restarts | Single managed instance, auth + TLS | ⛔ Open — needs owner's provider signup |
+| **I3.4** | **Automated daily backups** + tested restore | Data safety for paying users | Atlas continuous backup; quarterly restore drill | ⛔ Open — drill procedure written (`RIVISO_DR_DRILL.md`), never executed; blocked on I3.2 |
+| **I3.5** | **TLS termination + HSTS + gzip** at Nginx/Cloudflare | HTTPS everywhere; offload | Already have `nginx/`; add HSTS, force redirect | ✅ Done |
+| **I3.6** | **Connection pool sizing** for 1–2 API + worker + scheduler | Avoid Atlas connection exhaustion | Set PyMongo `maxPoolSize` per process; sum < Atlas limit | ✅ Done |
+| **I3.7** | **Healthchecks + auto-restart** (liveness/readiness) | Self-healing | Container healthcheck → restart policy | ✅ Done |
+| **I3.8** | **Resource limits & 2-instance API** behind LB | Headroom + zero-downtime deploy | 2 small API instances, rolling deploy | ⏸ Deliberately deferred — not needed until load nears ~30 concurrent |
+| **I3.9** | **Secrets via env/secret manager**, not files | Security + ops | Move `.env` to host secret store | 🟡 Partial — file perms hardened to 600 (2026-08-04); still not a secret-manager service |
+| **I3.10** | **Rate-limit store in Redis** (not in-memory) | Correct limits across 2 instances | SlowAPI → Redis storage backend | ✅ Done |
+| **I3.11** | **Email reliability** — queue or native SMTP lib | Subprocess email is fragile (Blueprint §8) | Replace Node subprocess or queue jobs | ✅ Done — native `smtplib` primary, Node subprocess is fallback-only |
 
 > Explicitly **out of scope for 50 users** (documented so nobody gilds the lily): Kubernetes, DB sharding/read-replicas, multi-region, service mesh, autoscaling fleets. Revisit at ~1,000+ users.
 
@@ -177,13 +177,15 @@ Everything below is scoped to make *this* topology reliable, secure, and fast.
 
 ### Phase P6 — Launch readiness
 
-| ID | Item | Target |
-|----|------|--------|
-| **L6.1** | Load test @ 15 concurrent users / realistic generation mix | p95 latency within target, no errors |
-| **L6.2** | Security re-scan (verify all P0/P1 closed) | Clean High/Critical |
-| **L6.3** | Runbook + on-call + incident process | Documented |
-| **L6.4** | Disaster recovery drill (restore from backup) | RTO/RPO verified |
-| **L6.5** | Data retention & privacy review (GDPR-ish: deletion works end-to-end) | Account deletion purges data |
+> **Status 2026-08-04:** Prep artifacts exist for all five items, but "prepared" and "verified" are different bars — re-checked against what's actually been executed, not just written.
+
+| ID | Item | Target | Status |
+|----|------|--------|--------|
+| **L6.1** | Load test @ 15 concurrent users / realistic generation mix | p95 latency within target, no errors | ⛔ Open — `backend/docs/load_tests/k6_load_test.js` exists, never run; no staging env, so running it hits real production, needs explicit go-ahead |
+| **L6.2** | Security re-scan (verify all P0/P1 closed) | Clean High/Critical | ✅ Covered on an ongoing basis by CI (I5.4: pip-audit + npm audit + gitleaks on every push) |
+| **L6.3** | Runbook + on-call + incident process | Documented | 🟡 `RIVISO_RUNBOOK.md` written; reconciled with actual infra 2026-08-04 (was describing the target 2-instance/managed-Redis topology as current). Still no real on-call rotation/paging in place. |
+| **L6.4** | Disaster recovery drill (restore from backup) | RTO/RPO verified | ⛔ Open — `RIVISO_DR_DRILL.md` procedure written and reconciled 2026-08-04, but never actually executed; blocked on I3.2 (need a real Atlas backup to restore from) |
+| **L6.5** | Data retention & privacy review (GDPR-ish: deletion works end-to-end) | Account deletion purges data | ✅ `purge_user_data` full-purge flow shipped 2026-06-28 (see Claude memory `project_password_reset.md`) |
 
 ---
 
