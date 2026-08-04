@@ -156,7 +156,7 @@ def _build_activity_series(
     while cur <= end_day:
         key = cur.strftime("%Y-%m-%d")
         keys.append(key)
-        buckets[key] = {"date": key, "published": 0, "pending": 0, "scheduled": 0}
+        buckets[key] = {"date": key, "published": 0, "pending": 0, "scheduled": 0, "draft": 0}
         cur += timedelta(days=1)
 
     for a in raw_articles:
@@ -178,6 +178,11 @@ def _build_activity_series(
             key = _day_key_from_ms(ms)
             if key in buckets:
                 buckets[key]["scheduled"] = int(buckets[key]["scheduled"]) + 1
+        elif status == "draft":
+            ms = _parse_ms((a.get("updated_at") or a.get("created_at") or ""))
+            key = _day_key_from_ms(ms)
+            if key in buckets:
+                buckets[key]["draft"] = int(buckets[key]["draft"]) + 1
 
     for run_at in scheduled_run_ats:
         ms = _parse_ms(run_at)
@@ -191,6 +196,7 @@ def _build_activity_series(
             published=int(buckets[k]["published"]),
             pending=int(buckets[k]["pending"]),
             scheduled=int(buckets[k]["scheduled"]),
+            draft=int(buckets[k]["draft"]),
         )
         for k in keys
     ]

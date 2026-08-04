@@ -13,7 +13,6 @@ import {
 
 function article(partial: Partial<ArticlePublic> & { id: string }): ArticlePublic {
   return {
-    id: partial.id,
     project_id: partial.project_id || "p1",
     title: partial.title || "Article",
     status: partial.status || "draft",
@@ -29,9 +28,9 @@ function article(partial: Partial<ArticlePublic> & { id: string }): ArticlePubli
 describe("overviewReadiness", () => {
   it("counts active days in a series", () => {
     const n = countActiveDaysInSeries([
-      { date: "2026-05-01", published: 0, pending: 0, scheduled: 0 },
-      { date: "2026-05-02", published: 2, pending: 0, scheduled: 0 },
-      { date: "2026-05-03", published: 0, pending: 1, scheduled: 0 },
+      { date: "2026-05-01", published: 0, pending: 0, scheduled: 0, draft: 0 },
+      { date: "2026-05-02", published: 2, pending: 0, scheduled: 0, draft: 0 },
+      { date: "2026-05-03", published: 0, pending: 1, scheduled: 0, draft: 0 },
     ]);
     assert.equal(n, 2);
   });
@@ -80,6 +79,7 @@ describe("overviewReadiness", () => {
         published: 0,
         pending: 2,
         draft: 1,
+        scheduled: 0,
         upcoming_scheduled: 0,
         total_articles: 3,
       },
@@ -88,11 +88,13 @@ describe("overviewReadiness", () => {
         published: i === 0 ? 1 : 0,
         pending: 0,
         scheduled: 0,
+        draft: 0,
       })),
       upcoming_scheduled: [],
       recently_published: [],
       pending: [],
       drafts: [],
+      project_summaries: [],
     };
     const readiness = evaluateWorkspaceOverviewReadiness(data);
     assert.equal(readiness.isReady, false);
@@ -106,6 +108,7 @@ describe("overviewReadiness", () => {
         published: 12,
         pending: 4,
         draft: 2,
+        scheduled: 0,
         upcoming_scheduled: 3,
         total_articles: OVERVIEW_MIN_ARTICLES + 10,
       },
@@ -114,11 +117,13 @@ describe("overviewReadiness", () => {
         published: i % 2 === 0 ? 2 : 0,
         pending: i % 3 === 0 ? 1 : 0,
         scheduled: 0,
+        draft: 0,
       })),
       upcoming_scheduled: [],
       recently_published: [],
       pending: [],
       drafts: [],
+      project_summaries: [],
     };
     const readiness = evaluateWorkspaceOverviewReadiness(data);
     assert.equal(readiness.isReady, true);

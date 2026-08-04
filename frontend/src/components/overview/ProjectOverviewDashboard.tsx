@@ -183,6 +183,7 @@ function aggregateSeries(
       published: mask("published", d.published),
       pending: mask("pending", d.pending),
       scheduled: mask("scheduled", d.scheduled),
+      draft: mask("draft", d.draft),
     }));
   }
 
@@ -198,10 +199,11 @@ function aggregateSeries(
     } else {
       key = day.date.slice(0, 7) + "-01";
     }
-    const ex = buckets.get(key) ?? { date: key, published: 0, pending: 0, scheduled: 0 };
+    const ex = buckets.get(key) ?? { date: key, published: 0, pending: 0, scheduled: 0, draft: 0 };
     ex.published += mask("published", day.published);
     ex.pending += mask("pending", day.pending);
     ex.scheduled += mask("scheduled", day.scheduled);
+    ex.draft += mask("draft", day.draft);
     buckets.set(key, ex);
   }
   return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
@@ -794,7 +796,11 @@ const CHART_STYLES: Record<string, string> = {
   articlesOverviewChartTooltipSwatchPublished: s.chartSwatchPublished,
   articlesOverviewChartTooltipSwatchPending: s.chartSwatchPending,
   articlesOverviewChartTooltipSwatchScheduled: s.chartSwatchScheduled,
+  articlesOverviewChartTooltipSwatchDraft: s.chartSwatchDraft,
   articlesOverviewChartEmpty: s.chartEmpty,
+  articlesOverviewChartSeriesGroup: s.chartSeriesGroup,
+  articlesOverviewChartLine: s.chartLine,
+  articlesOverviewChartHoverLine: s.chartHoverLine,
 };
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -1100,6 +1106,7 @@ export function ProjectOverviewDashboard({ onGoProjects }: { onGoProjects?: () =
                   { key: "published", label: "Published", color: DONUT_COLORS.published },
                   { key: "pending",   label: "Pending",   color: "#e8e8ec" },
                   { key: "scheduled", label: "Scheduled", color: DONUT_COLORS.scheduled },
+                  { key: "draft",     label: "Draft",     color: DONUT_COLORS.draft },
                 ].map((s_) => (
                   <button
                     key={s_.key}

@@ -703,6 +703,7 @@ export type WorkspaceActivityDay = {
   published: number;
   pending: number;
   scheduled: number;
+  draft: number;
 };
 
 export type ProjectSummary = {

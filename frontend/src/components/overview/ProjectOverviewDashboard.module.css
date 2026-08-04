@@ -557,7 +557,27 @@
 .chartSwatchPublished { background: var(--aa-primary, #d97757); }
 .chartSwatchPending { background: #c8ccd4; }
 .chartSwatchScheduled { background: #d4a017; }
+.chartSwatchDraft { background: #7090c8; }
 .chartEmpty { padding: 32px; text-align: center; font-size: 13px; color: rgba(160,157,150,0.4); }
+
+.chartSeriesGroup {
+  animation: chartFadeIn 0.5s ease-out both;
+}
+.chartLine {
+  transition: opacity 0.15s ease;
+}
+.chartHoverLine {
+  transition: opacity 0.1s ease;
+}
+
+@keyframes chartFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chartSeriesGroup { animation: none; }
+}
 
 /* ── Donut chart ────────────────────────────────────────────────────────────── */
 .donutWrap { display: flex; flex-direction: column; align-items: center; gap: 16px; }

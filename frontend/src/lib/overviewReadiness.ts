@@ -166,6 +166,7 @@ export function evaluateWorkspaceOverviewReadiness(
     published: p.published,
     pending: p.pending,
     scheduled: p.scheduled,
+    draft: p.draft,
   }));
   const activeDays = countActiveDaysInSeries(series);
   const totalArticles = stats.total_articles;

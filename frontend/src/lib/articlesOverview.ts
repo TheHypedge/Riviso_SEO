@@ -169,9 +169,10 @@ export type ArticlesOverviewDayPoint = {
   published: number;
   pending: number;
   scheduled: number;
+  draft: number;
 };
 
-/** Per-day grouped bar data: published posts, pending updates, and scheduled runs. */
+/** Per-day series: published posts, pending updates, scheduled runs, and drafts. */
 export function buildArticleActivityBarSeries(
   articles: ArticlePublic[],
   scheduledJobs: ScheduledJobPublic[],
@@ -185,7 +186,7 @@ export function buildArticleActivityBarSeries(
     const d = new Date(start);
     d.setUTCDate(d.getUTCDate() + i);
     const key = d.toISOString().slice(0, 10);
-    buckets.set(key, { date: key, published: 0, pending: 0, scheduled: 0 });
+    buckets.set(key, { date: key, published: 0, pending: 0, scheduled: 0, draft: 0 });
   }
 
   const bump = (key: string, field: keyof Omit<ArticlesOverviewDayPoint, "date">) => {
@@ -210,6 +211,11 @@ export function buildArticleActivityBarSeries(
       if (!ms) continue;
       const key = new Date(ms).toISOString().slice(0, 10);
       if (buckets.has(key)) bump(key, "scheduled");
+    } else if (st === "draft") {
+      const ms = parseMs(a.updated_at || a.created_at);
+      if (!ms) continue;
+      const key = new Date(ms).toISOString().slice(0, 10);
+      if (buckets.has(key)) bump(key, "draft");
     }
   }
 

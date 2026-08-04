@@ -39,6 +39,7 @@ class WorkspaceActivityDay(BaseModel):
     published: int = 0
     pending: int = 0
     scheduled: int = 0
+    draft: int = 0
 
 
 class ProjectSummary(BaseModel):

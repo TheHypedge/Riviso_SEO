@@ -243,6 +243,7 @@ export function WorkspaceProjectOverview(props: {
     published: p.published,
     pending: p.pending,
     scheduled: p.scheduled,
+    draft: p.draft,
   }));
 
   if (readiness && !readiness.isReady) {
