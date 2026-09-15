@@ -759,6 +759,18 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
             "usage_monthly_custom_research_count",
             "max_custom_research_per_month",
         ),
+        "technical_audit": _monthly(
+            "technical_audit",
+            "usage_monthly_technical_audit_month",
+            "usage_monthly_technical_audit_count",
+            "max_technical_audits_per_month",
+        ),
+        "seo_audit": _monthly(
+            "seo_audit",
+            "usage_monthly_seo_audit_month",
+            "usage_monthly_seo_audit_count",
+            "max_seo_audits_per_month",
+        ),
         "scheduled_articles": {
             **_monthly(
                 "scheduled_articles",

@@ -5,7 +5,7 @@ Prefix: /api/notifications
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.deps import get_current_user
 from app.legacy.storage import get_legacy_storage_module
@@ -15,10 +15,14 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 
 @router.get("", response_model=list[NotificationPublic])
-async def list_notifications(user: dict = Depends(get_current_user)) -> list[NotificationPublic]:
+async def list_notifications(
+    user: dict = Depends(get_current_user),
+    limit: int = Query(default=50, ge=1, le=200),
+    before: str | None = Query(default=None, description="created_at cursor — returns items strictly older than this"),
+) -> list[NotificationPublic]:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
-    records = st.get_notifications_for_user(uid, limit=50)
+    records = st.get_notifications_for_user(uid, limit=limit, before=before)
     return [
         NotificationPublic(
             id=r["id"],

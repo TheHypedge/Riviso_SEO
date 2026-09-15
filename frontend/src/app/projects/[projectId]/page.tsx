@@ -7,9 +7,10 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
+import projectsLight from "../projectsLight.module.css";
 import { CategorySelect } from "@/components/CategorySelect";
 import { ArticlesOverview } from "@/components/ArticlesOverview";
-import { AnalyticsPanelSkeleton, ArticlesTableSkeleton, FormFieldsSkeleton, InlineListSkeleton, TextLinesSkeleton } from "@/components/skeleton";
+import { ArticlesTableSkeleton, FormFieldsSkeleton, InlineListSkeleton, TextLinesSkeleton } from "@/components/skeleton";
 import { BulkScheduleForm, type BulkScheduleFormValues } from "@/components/bulkSchedule/BulkScheduleForm";
 import { BulkScheduleModal } from "@/components/bulkSchedule/BulkScheduleModal";
 import {
@@ -19,6 +20,29 @@ import {
 import type { BulkScheduleSeedRow } from "@/components/bulkSchedule/useBulkScheduleForm";
 import { connectionErrorMessage, isAuthError } from "@/lib/networkErrors";
 import { useFocusTrap } from "@/lib/useFocusTrap";
+import { Tabs, TabsList, TabsTrigger, TabsContent, NavGroup, NavItem, SubNav } from "@/components/ui";
+import {
+  TechnicalAuditResults,
+  TechnicalAuditSummary,
+  TechnicalAuditTrendChart,
+  TechnicalAuditHistoryList,
+  SiteAuditRunChecklist,
+  SiteAuditInsightBanner,
+  formatSiteAuditTimestamp,
+} from "@/components/TechnicalAuditResults";
+import {
+  SeoAuditIssuesList,
+  SeoAuditUrlExplorer,
+  SeoAuditHistoryList,
+  SeoAuditRunProgress,
+  SeoAuditCompactCrawlStatus,
+  SeoAuditPreviewIssuesTable,
+  SeoAuditKpiStrip,
+  SeoAuditIndexabilityDonut,
+  SeoAuditIssuesTrendChart,
+  SeoAuditCrawlStats,
+  SeoAuditTopIssuesTable,
+} from "@/components/SeoAuditResults";
 import {
   api,
   ApiError,
@@ -63,17 +87,21 @@ type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 type TabKey =
   | "overview"
   | "articles"
-  | "products"
   | "research"
   | "scheduled_articles"
   | "prompts"
   | "context_links"
   | "tools"
-  | "performance"
   | "project_settings"
-  | "members";
+  | "members"
+  | "site_audit";
 
 type ResearchSubTabKey = "cluster" | "curations";
+type SiteAuditSubTabKey = "technical" | "seo";
+const SITE_AUDIT_SUBS: { key: SiteAuditSubTabKey; label: string }[] = [
+  { key: "technical", label: "Technical Audit" },
+  { key: "seo", label: "SEO Audit" },
+];
 
 // Whitelist of valid tab values from the URL — anything else falls back to the
 // default. Keeping the source of truth here (vs. re-deriving from ``tabLabel``
@@ -82,30 +110,37 @@ type ResearchSubTabKey = "cluster" | "curations";
 const TAB_KEYS: ReadonlySet<TabKey> = new Set<TabKey>([
   "overview",
   "articles",
-  "products",
   "research",
   "scheduled_articles",
   "prompts",
   "context_links",
   "tools",
-  "performance",
   "project_settings",
   "members",
+  "site_audit",
 ]);
 
 /** Sidebar section order — Overview appears directly above Articles. */
 const SIDEBAR_TAB_ORDER: TabKey[] = [
   "overview",
   "articles",
-  "products",
   "research",
   "scheduled_articles",
   "prompts",
   "context_links",
   "tools",
-  "performance",
   "members",
   "project_settings",
+  "site_audit",
+];
+
+/** IA grouping matching the Figma "Akhilesh" design handoff literally: Content /
+ * Workspace, same items Figma's sidebar mockup shows.
+ * "site_audit" has real dedicated Figma frames even though Figma's simplified
+ * sidebar mockup omitted it from the nav list, so it's kept here. */
+const NAV_GROUPS: { label: string; tabs: TabKey[] }[] = [
+  { label: "Content", tabs: ["overview", "articles", "research", "scheduled_articles", "prompts", "context_links"] },
+  { label: "Workspace", tabs: ["tools", "site_audit", "members", "project_settings"] },
 ];
 
 const RESEARCH_SUBTAB_KEYS: ReadonlySet<ResearchSubTabKey> = new Set<ResearchSubTabKey>([
@@ -130,6 +165,18 @@ function defaultInitialTab(): TabKey {
 
 function defaultInitialResearchSubTab(): ResearchSubTabKey {
   return "cluster";
+}
+
+// Google's public, keyless favicon service -- derived from the project's own real
+// website URL, not a fabricated preview image (see Site-Audit-Design.md §10, §49).
+function faviconUrlForSite(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const host = new URL(url).hostname;
+    return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=64`;
+  } catch {
+    return null;
+  }
 }
 
 function parseDateOnly(s: string): Date | null {
@@ -326,251 +373,6 @@ function parseGenerateMoreCount(raw: string): { value: number | null; error: str
 }
 
 /**
- * Dependency-free SVG line chart for the GSC ROI Dashboard.
- *
- * Renders two series (clicks + impressions) sharing the X axis, with vertical
- * dashed markers for each Riviso article published inside the window. The chart
- * is responsive — `viewBox` keeps the geometry fixed while CSS scales the SVG
- * to its container.
- *
- * Designed to keep a low surface area: no tooltip portal, no axis library, no
- * deps. If/when product asks for richer interactions we can swap to a chart lib
- * without changing the call sites in this page.
- */
-function AnalyticsLineChart(props: {
-  series: import("@/lib/api").GscAnalyticsSeriesPoint[];
-  markers: import("@/lib/api").GscAnalyticsMarker[];
-  height?: number;
-  visible?: { clicks: boolean; impressions: boolean; position: boolean };
-}) {
-  const { series, markers } = props;
-  const visible = props.visible ?? { clicks: true, impressions: true, position: false };
-  const W = 920;
-  const H = props.height ?? 420;
-  const padL = 52;
-  const padR = visible.position ? 46 : 12;
-  const padT = 16;
-  const padB = 44;
-  const innerW = W - padL - padR;
-  const innerH = H - padT - padB;
-
-  const gridStroke = "var(--aa-hairline)";
-  const plotOutline = "color-mix(in oklab, var(--aa-hairline), transparent 35%)";
-  const axisFill = "var(--aa-muted)";
-  const lineClicks = "var(--aa-primary)";
-  const lineImpr = "#5b9cf6";
-  const linePos = "#b97dff";
-  const markerLine = "color-mix(in oklab, var(--aa-warning), transparent 22%)";
-  const markerDot = "var(--aa-warning)";
-  const pointRing = "rgba(255, 255, 255, 0.92)";
-
-  if (!series || series.length === 0) {
-    return (
-      <div style={{ padding: "24px 12px", textAlign: "center" }} className="aa-muted">
-        No traffic data in this window yet.
-      </div>
-    );
-  }
-
-  const dates = series.map((p) => p.date);
-  const xIndex = (i: number) => padL + (innerW * i) / Math.max(1, series.length - 1);
-
-  const maxClicks = Math.max(1, ...series.map((p) => p.clicks || 0));
-  const maxImpr = Math.max(1, ...series.map((p) => p.impressions || 0));
-  const maxPos = Math.max(1, ...series.map((p) => p.position || 0));
-  const minPos = Math.min(...series.map((p) => p.position || 0).filter((v) => v > 0));
-
-  const yClicks = (v: number) => padT + innerH - (innerH * (v || 0)) / maxClicks;
-  const yImpr = (v: number) => padT + innerH - (innerH * (v || 0)) / maxImpr;
-  // For position, lower is better; invert so better = higher on chart
-  const posRange = Math.max(1, maxPos - Math.min(0, minPos - 1));
-  const yPos = (v: number) => padT + innerH - (innerH * (maxPos - (v || maxPos))) / posRange;
-
-  const clicksPath = series.map((p, i) => `${i === 0 ? "M" : "L"} ${xIndex(i).toFixed(1)} ${yClicks(p.clicks).toFixed(1)}`).join(" ");
-  const imprPath = series.map((p, i) => `${i === 0 ? "M" : "L"} ${xIndex(i).toFixed(1)} ${yImpr(p.impressions).toFixed(1)}`).join(" ");
-  const posPath = series.map((p, i) => `${i === 0 ? "M" : "L"} ${xIndex(i).toFixed(1)} ${yPos(p.position).toFixed(1)}`).join(" ");
-
-  const tickCount = 5;
-  const yTicks = Array.from({ length: tickCount + 1 }, (_, i) => Math.round((maxClicks * i) / tickCount));
-
-  const labelEvery = Math.max(1, Math.floor(series.length / 7));
-  const xLabels = series
-    .map((p, i) => ({ p, i }))
-    .filter(({ i }) => i % labelEvery === 0 || i === series.length - 1);
-
-  const dateToIndex = new Map<string, number>();
-  dates.forEach((d, i) => dateToIndex.set(d, i));
-
-  const markerDots = markers
-    .map((m) => ({ ...m, idx: dateToIndex.get(m.date) }))
-    .filter((m) => typeof m.idx === "number") as Array<import("@/lib/api").GscAnalyticsMarker & { idx: number }>;
-
-  // Position right-axis ticks
-  const posTicks = Array.from({ length: tickCount + 1 }, (_, i) => {
-    const v = minPos + ((maxPos - minPos) * i) / tickCount;
-    return Math.round(v * 10) / 10;
-  }).reverse();
-
-  return (
-    <svg
-      viewBox={`0 0 ${W} ${H}`}
-      width="100%"
-      preserveAspectRatio="xMidYMid meet"
-      role="img"
-      aria-label="Search Console traffic over time with article publication markers"
-      style={{ display: "block", width: "100%", height: "auto", maxWidth: "100%", minHeight: 240 }}
-    >
-      <rect x={padL} y={padT} width={innerW} height={innerH} fill="transparent" stroke={plotOutline} strokeWidth={1} />
-      {yTicks.map((v, i) => {
-        const y = padT + innerH - (innerH * i) / tickCount;
-        return (
-          <g key={`yt-${i}`}>
-            <line x1={padL} y1={y} x2={padL + innerW} y2={y} stroke={gridStroke} strokeDasharray="2 4" strokeOpacity={0.85} />
-            <text
-              x={padL - 8}
-              y={y + 4}
-              textAnchor="end"
-              fontSize={11}
-              fill={axisFill}
-              style={{ fontFamily: "var(--aa-font-ui)" }}
-            >
-              {v >= 1000 ? `${(v / 1000).toFixed(v >= 10000 ? 0 : 1)}k` : v.toLocaleString()}
-            </text>
-          </g>
-        );
-      })}
-      {visible.position && posTicks.map((v, i) => {
-        const y = padT + innerH - (innerH * (tickCount - i)) / tickCount;
-        return (
-          <text
-            key={`ryt-${i}`}
-            x={padL + innerW + 8}
-            y={y + 4}
-            textAnchor="start"
-            fontSize={10}
-            fill={linePos}
-            fillOpacity={0.8}
-            style={{ fontFamily: "var(--aa-font-ui)" }}
-          >
-            #{v.toFixed(0)}
-          </text>
-        );
-      })}
-      {xLabels.map(({ p, i }) => (
-        <text
-          key={`xl-${i}`}
-          x={xIndex(i)}
-          y={H - 12}
-          textAnchor="middle"
-          fontSize={11}
-          fill={axisFill}
-          style={{ fontFamily: "var(--aa-font-ui)" }}
-        >
-          {p.date.slice(5)}
-        </text>
-      ))}
-      {markerDots.map((m, i) => {
-        const x = xIndex(m.idx);
-        return (
-          <g key={`mk-${i}`}>
-            <line
-              x1={x}
-              y1={padT}
-              x2={x}
-              y2={padT + innerH}
-              stroke={markerLine}
-              strokeWidth={1.25}
-              strokeDasharray="5 4"
-            />
-            <circle cx={x} cy={padT + 8} r={5} fill={markerDot} stroke={pointRing} strokeWidth={1.25}>
-              <title>{`${m.title || "Article"} — published ${m.date}\n${m.url}`}</title>
-            </circle>
-          </g>
-        );
-      })}
-      {visible.impressions && (
-        <path d={imprPath} fill="none" stroke={lineImpr} strokeWidth={2} strokeOpacity={0.85} strokeLinecap="round" strokeLinejoin="round" />
-      )}
-      {visible.clicks && (
-        <path d={clicksPath} fill="none" stroke={lineClicks} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
-      )}
-      {visible.position && (
-        <path d={posPath} fill="none" stroke={linePos} strokeWidth={2} strokeOpacity={0.85} strokeLinecap="round" strokeLinejoin="round" />
-      )}
-      {visible.impressions && series.map((p, i) => (
-        <circle
-          key={`im-${i}`}
-          cx={xIndex(i)}
-          cy={yImpr(p.impressions)}
-          r={series.length > 60 ? 2.5 : 3.5}
-          fill={lineImpr}
-          stroke={pointRing}
-          strokeWidth={1}
-          fillOpacity={0.9}
-        >
-          <title>{`${p.date}\nImpressions: ${p.impressions}`}</title>
-        </circle>
-      ))}
-      {visible.clicks && series.map((p, i) => (
-        <circle key={`cl-${i}`} cx={xIndex(i)} cy={yClicks(p.clicks)} r={series.length > 60 ? 3 : 4.5} fill={lineClicks} stroke={pointRing} strokeWidth={1.25}>
-          <title>{`${p.date}\nClicks: ${p.clicks}\nImpressions: ${p.impressions}\nPosition: ${(p.position || 0).toFixed(1)}`}</title>
-        </circle>
-      ))}
-      {visible.position && series.map((p, i) => (
-        <circle key={`pos-${i}`} cx={xIndex(i)} cy={yPos(p.position)} r={series.length > 60 ? 2.5 : 3.5} fill={linePos} stroke={pointRing} strokeWidth={1} fillOpacity={0.9}>
-          <title>{`${p.date}\nAvg position: ${(p.position || 0).toFixed(1)}`}</title>
-        </circle>
-      ))}
-    </svg>
-  );
-}
-
-type InsightTrendRow = {
-  key: string;
-  primary: ReactNode;
-  secondary?: ReactNode;
-  clicks: number;
-  changePct: number | null;
-};
-
-/**
- * Ranked row list shared by the Insights "Your content" and "Queries leading
- * to your site" panels — one label, one trend chip, one value. Keeping this in
- * a single place means both panels read identically and a future tweak (e.g.
- * a new trend state) only has to land once.
- */
-function InsightTrendRows({ rows, emptyLabel }: { rows: InsightTrendRow[]; emptyLabel: string }) {
-  if (!rows.length) {
-    return <div className={styles.muted} style={{ fontSize: 13 }}>{emptyLabel}</div>;
-  }
-  return (
-    <div className={styles.analyticsRankList}>
-      {rows.map((row) => {
-        const chg = row.changePct;
-        const trend = chg === null ? "flat" : chg > 0 ? "up" : chg < 0 ? "down" : "flat";
-        return (
-          <div key={row.key} className={styles.analyticsRankRow}>
-            <div className={styles.analyticsRankLabel}>
-              {row.primary}
-              {row.secondary}
-            </div>
-            <div className={styles.analyticsRankStats}>
-              {chg !== null ? (
-                <span className={styles.analyticsTrendChip} data-trend={trend}>
-                  {trend === "up" ? "↑" : trend === "down" ? "↓" : ""}
-                  {Math.abs(chg).toFixed(0)}%
-                </span>
-              ) : null}
-              <span className={styles.analyticsRankValue}>{row.clicks.toLocaleString()}</span>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-/**
  * Small badge that surfaces the result of the Cluster Validation engine for a
  * single Pillar/Cluster topic. Renders in four states:
  *   - validating  — grey pill with a spinner (request in flight or queued).
@@ -656,9 +458,25 @@ export default function ProjectPage() {
   // hydration, so deep-linked tabs (?tab=project_settings, etc.) still
   // restore correctly without the visible flicker hurting hydration.
   const [tab, setTabState] = useState<TabKey>(defaultInitialTab);
+  // Same hydration-safety idiom as the window.location read above:
+  // `websiteConnected` depends on `settings`, fetched client-side after mount,
+  // so it's always false during SSR and the first client render. Gating the
+  // Sync Website button on `hydrated` (flips true in an effect that can only
+  // run after this component's own commit) guarantees that first render
+  // matches SSR exactly, instead of racing the settings fetch.
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
   const [researchSubTab, setResearchSubTabState] = useState<ResearchSubTabKey>(
     defaultInitialResearchSubTab,
   );
+  // Figma (39:2) shows Project Settings as a real tab switcher (Connection /
+  // Content & targeting / Integrations / Danger zone) -- the existing
+  // settings-group-* sections already match that grouping 1:1, they were
+  // just laid out as one long page with a scroll-spy jump nav. Toggling
+  // visibility per group (below) gets the tabbed look without touching any
+  // of the ~1200 lines of settings logic inside those groups.
+  type SettingsSubTab = "connection" | "content" | "integrations" | "danger";
+  const [settingsSubTab, setSettingsSubTab] = useState<SettingsSubTab>("connection");
   const [overviewArticles, setOverviewArticles] = useState<ArticlePublic[]>([]);
   const [overviewScheduledJobs, setOverviewScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(false);
@@ -883,51 +701,38 @@ export default function ProjectPage() {
   const [articleIndexResult, setArticleIndexResult] = useState<
     Record<string, import("@/lib/api").RequestIndexingResponse | null>
   >({});
-  // Sitemap submission state for the Tools tab. ``sitemaps`` mirrors the registered
-  // sitemaps Google reports back so the user can see lastSubmitted / status.
-  const [gscSitemaps, setGscSitemaps] = useState<import("@/lib/api").GscSitemap[]>([]);
-  const [gscSitemapSuggested, setGscSitemapSuggested] = useState<string>("");
-  const [sitemapInput, setSitemapInput] = useState<string>("");
-  const [sitemapBusy, setSitemapBusy] = useState<"submit" | "delete" | "load" | null>(null);
-  const [sitemapMsg, setSitemapMsg] = useState<string | null>(null);
-  const [sitemapDeletingPath, setSitemapDeletingPath] = useState<string | null>(null);
-
-  // Pagination + filtering for the "Existing articles — indexing status" table on the
-  // Tools tab. Defaults to 10 rows/page; status filter aligns with the coverage states
-  // surfaced by the backend (pending / inspected / requested).
-  const [indexingArticles, setIndexingArticles] = useState<ArticlePublic[]>([]);
-  const [indexingArticlesLoading, setIndexingArticlesLoading] = useState(false);
-  const [indexingPage, setIndexingPage] = useState<number>(1);
-  const [indexingPageSize, setIndexingPageSize] = useState<number>(10);
-  const [indexingStatusFilter, setIndexingStatusFilter] = useState<string>("");
-  const [indexingSearch, setIndexingSearch] = useState<string>("");
-
   // ---- Feature 1: GSC ROI Dashboard ----------------------------------------
-  // ``analyticsRangePreset`` is the active range chip on the Performance tab — one of
-  // 7 / 28 / 90 / 180 / 365 days, or the literal string ``"custom"`` which uses
-  // ``analyticsCustomStart`` / ``analyticsCustomEnd`` as the [start, end] window.
-  // We always keep the last ``analytics`` payload around so the Performance tab can
-  // be hidden until at least one fetch has succeeded.
+  // Kept for the Overview tab's ``gscTotals`` card — the Performance tab that
+  // used to be the primary consumer of ``analytics`` was removed (no Figma
+  // coverage; see quirky-nibbling-owl.md step 10). ``analyticsRangePreset`` /
+  // ``analyticsCustomStart`` / ``analyticsCustomEnd`` / ``analyticsBusy`` are
+  // now unreachable dead knobs inside ``reloadAnalytics`` (always the 28-day
+  // default since no UI can change them) — left as-is rather than touching
+  // that shared function for a cosmetic-only cleanup.
   const [analytics, setAnalytics] = useState<import("@/lib/api").GscAnalyticsResponse | null>(null);
   const [analyticsBusy, setAnalyticsBusy] = useState<boolean>(false);
   const [analyticsErr, setAnalyticsErr] = useState<string | null>(null);
   const [analyticsRangePreset, setAnalyticsRangePreset] = useState<number | "custom">(28);
   const [analyticsCustomStart, setAnalyticsCustomStart] = useState<string>("");
   const [analyticsCustomEnd, setAnalyticsCustomEnd] = useState<string>("");
-  // Sub-tab within Performance & Analysis: "overview" = chart/top pages, "insights" = GSC Insights panel
-  const [performanceSubTab, setPerformanceSubTab] = useState<"overview" | "insights">("overview");
-  const [insights, setInsights] = useState<import("@/lib/api").GscInsightsResponse | null>(null);
-  const [insightsBusy, setInsightsBusy] = useState<boolean>(false);
-  const [insightsErr, setInsightsErr] = useState<string | null>(null);
-  // Insights content sub-tabs (pages / queries)
-  const [insightsPagesTab, setInsightsPagesTab] = useState<"top" | "up" | "down">("top");
-  const [insightsQueriesTab, setInsightsQueriesTab] = useState<"top" | "up" | "down">("top");
-  // Chart series visibility toggles
-  const [chartSeries, setChartSeries] = useState<{ clicks: boolean; impressions: boolean; position: boolean }>({ clicks: true, impressions: true, position: false });
-  // Top pages table: search + sort
-  const [topPagesSearch, setTopPagesSearch] = useState<string>("");
-  const [topPagesSortKey, setTopPagesSortKey] = useState<"clicks" | "impressions" | "ctr" | "position">("clicks");
-  const [topPagesSortDir, setTopPagesSortDir] = useState<"asc" | "desc">("desc");
+  // Site Audit: "technical" = PageSpeed Insights, "seo" = Riviso crawler (Phase 2, not yet built)
+  const [siteAuditSubTab, setSiteAuditSubTab] = useState<SiteAuditSubTabKey>("technical");
+  const [technicalAudit, setTechnicalAudit] = useState<import("@/lib/api").TechnicalAuditLatestResponse | null>(null);
+  const [technicalAuditBusy, setTechnicalAuditBusy] = useState<boolean>(false);
+  const [technicalAuditRunning, setTechnicalAuditRunning] = useState<boolean>(false);
+  const [technicalAuditJustCompleted, setTechnicalAuditJustCompleted] = useState<boolean>(false);
+  const [technicalAuditErr, setTechnicalAuditErr] = useState<string | null>(null);
+  const [technicalAuditStrategy, setTechnicalAuditStrategy] = useState<"mobile" | "desktop">("mobile");
+  const [technicalAuditHistory, setTechnicalAuditHistory] = useState<import("@/lib/api").TechnicalAuditRun[]>([]);
+  const [selectedHistoricalRunId, setSelectedHistoricalRunId] = useState<string | null>(null);
+  const [seoAudit, setSeoAudit] = useState<import("@/lib/api").SeoAuditLatestResponse | null>(null);
+  const [seoAuditBusy, setSeoAuditBusy] = useState<boolean>(false);
+  const [seoAuditRunning, setSeoAuditRunning] = useState<boolean>(false);
+  const [seoAuditJustCompleted, setSeoAuditJustCompleted] = useState<boolean>(false);
+  const [seoAuditErr, setSeoAuditErr] = useState<string | null>(null);
+  const [seoAuditHistory, setSeoAuditHistory] = useState<import("@/lib/api").SeoAuditRun[]>([]);
+  const [selectedSeoHistoricalRunId, setSelectedSeoHistoricalRunId] = useState<string | null>(null);
+  const [seoAuditSecondaryTab, setSeoAuditSecondaryTab] = useState<"overview" | "issues" | "explorer" | "history">("overview");
 
   // ---- Feature 3: Site map (Internal Linking) -------------------------------
   const [siteMap, setSiteMap] = useState<import("@/lib/api").SiteMapListResponse | null>(null);
@@ -946,6 +751,18 @@ export default function ProjectPage() {
   // global flat set) lets the bulk-action toolbar in each card act
   // independently when the user has multiple clusters open.
   const [clusterSelected, setClusterSelected] = useState<Record<string, Set<string>>>({});
+  // Saved Clusters render collapsed by default (Figma 30:2) -- clicking a
+  // card's chevron reveals its pillar + cluster-topic tree. Empty set = all
+  // collapsed, matching the design's initial state.
+  const [expandedClusterIds, setExpandedClusterIds] = useState<Set<string>>(new Set());
+  function toggleClusterExpanded(clusterId: string) {
+    setExpandedClusterIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(clusterId)) next.delete(clusterId);
+      else next.add(clusterId);
+      return next;
+    });
+  }
   type BulkActionKind = "generate" | "import" | "schedule";
   const [clusterBulkBusy, setClusterBulkBusy] = useState<{ clusterId: string; kind: BulkActionKind } | null>(null);
   // Modal payloads. ``error`` shows a polished popup for quota / generation
@@ -1118,13 +935,24 @@ export default function ProjectPage() {
   const [retryAllFailedBusy, setRetryAllFailedBusy] = useState(false);
   const [scheduledSearch, setScheduledSearch] = useState("");
   const [scheduledOrder, setScheduledOrder] = useState<"desc" | "asc">("desc");
+  const [scheduledStatusFilter, setScheduledStatusFilter] = useState("");
+  // ``shopifyCatalog`` is shared with the "Map products" step in the Research
+  // curation modals (loaded on-demand via ``loadShopifyCatalogIfNeeded``) —
+  // the Products tab that used to be its other consumer was removed (no
+  // Figma coverage; see quirky-nibbling-owl.md step 10).
   const [shopifyCatalog, setShopifyCatalog] = useState<Awaited<ReturnType<typeof api.getShopifyCatalog>> | null>(null);
   const [shopifyCatalogLoading, setShopifyCatalogLoading] = useState(false);
-  const [shopifyCatalogSyncing, setShopifyCatalogSyncing] = useState(false);
-  const [shopifyCatalogErr, setShopifyCatalogErr] = useState<string | null>(null);
-  const [shopifyCatalogNotice, setShopifyCatalogNotice] = useState<string | null>(null);
-  const [shopifyProductStatus, setShopifyProductStatus] = useState<"" | "active" | "draft" | "archived">("");
   const [title, setTitle] = useState("");
+  const [addArticleFocusKeyphrase, setAddArticleFocusKeyphrase] = useState("");
+  const [addArticlePrimaryKeywords, setAddArticlePrimaryKeywords] = useState("");
+  const [addArticleSupportingKeywords, setAddArticleSupportingKeywords] = useState("");
+  const [addArticleTab, setAddArticleTab] = useState<"manual" | "ai_generate" | "source">("manual");
+  const [aiIdea, setAiIdea] = useState("");
+  const [aiSuggestBusy, setAiSuggestBusy] = useState(false);
+  const [aiSuggestError, setAiSuggestError] = useState<string | null>(null);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [sourceBusy, setSourceBusy] = useState(false);
+  const [sourceError, setSourceError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1340,6 +1168,20 @@ export default function ProjectPage() {
   const [editRescheduleBusy, setEditRescheduleBusy] = useState(false);
   const [confirmCancelJob, setConfirmCancelJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
   const [confirmPostNowJob, setConfirmPostNowJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
+  // I6.2 design-system pass: these 6 modals rendered role="dialog" with no
+  // focus trap, unlike every other modal in this file -- same modal system,
+  // applied unevenly. Wiring them up here, refs attached at each modalPanel.
+  const confirmDeleteArticleTrapRef = useFocusTrap(!!confirmDeleteId);
+  const scheduleArticleTrapRef = useFocusTrap(!!scheduleId);
+  const requestIndexingTrapRef = useFocusTrap(!!requestIndexingId);
+  const editJobTrapRef = useFocusTrap(!!editJob);
+  const confirmCancelJobTrapRef = useFocusTrap(!!confirmCancelJob);
+  const confirmPostNowJobTrapRef = useFocusTrap(!!confirmPostNowJob);
+  // I6.2: replaces a raw window.confirm() for bulk article delete with the
+  // app's own modal system, matching every other destructive confirmation
+  // in this file (and picking up a real focus trap in the process).
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const confirmBulkDeleteTrapRef = useFocusTrap(confirmBulkDelete);
   const [postNowWritingPromptId, setPostNowWritingPromptId] = useState("");
   const [postNowImagePromptId, setPostNowImagePromptId] = useState("");
   const [postNowGenerateImage, setPostNowGenerateImage] = useState(true);
@@ -1627,26 +1469,6 @@ export default function ProjectPage() {
     };
   }, [projectId, token, tab, overviewRefreshKey]);
 
-  useEffect(() => {
-    if (!token || !projectId || (tab !== "tools" && tab !== "performance")) return;
-    let cancelled = false;
-    (async () => {
-      setIndexingArticlesLoading(true);
-      try {
-        const items = await api.listArticlesAll(projectId, { status: "published" });
-        if (cancelled) return;
-        setIndexingArticles((items || []).filter((a) => (a.wp_link || "").trim()));
-      } catch {
-        if (!cancelled) setIndexingArticles([]);
-      } finally {
-        if (!cancelled) setIndexingArticlesLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, tab, token]);
-
   // Load the user's full project list so the sidebar switcher can render
   // every project they own. Runs once per mount — projects rarely change
   // mid-session and any rename inside *this* page already mutates the
@@ -1670,9 +1492,8 @@ export default function ProjectPage() {
   }, [token]);
 
   // Bootstrap GSC status (and analytics, if a property is linked) once per project mount,
-  // independent of the active tab. Without this the "Performance & Analysis" nav entry
-  // only appears after the user opens Tools, because ``performanceTabAvailable`` depends
-  // on both ``gscStatus.connected`` and a non-empty analytics payload.
+  // independent of the active tab — the Overview tab's ``gscTotals`` card depends on
+  // ``analytics`` being populated without requiring the user to open Tools first.
   useEffect(() => {
     if (!token || !projectId) return;
     let cancelled = false;
@@ -2540,57 +2361,6 @@ export default function ProjectPage() {
     }
   }
 
-  async function reloadProjectSitemaps(opts: { silent?: boolean } = {}) {
-    if (!projectId) return;
-    if (!opts.silent) setSitemapBusy("load");
-    setSitemapMsg(null);
-    try {
-      const res = await api.gscProjectListSitemaps(projectId);
-      setGscSitemaps(res?.sitemaps || []);
-      setGscSitemapSuggested(res?.suggested_sitemap_url || "");
-      setSitemapInput((prev) => prev || res?.suggested_sitemap_url || "");
-    } catch (e) {
-      setGscSitemaps([]);
-      setSitemapMsg(e instanceof Error ? e.message : "Failed to load sitemaps");
-    } finally {
-      if (!opts.silent) setSitemapBusy(null);
-    }
-  }
-
-  async function submitProjectSitemap() {
-    if (!projectId) return;
-    setSitemapBusy("submit");
-    setSitemapMsg(null);
-    try {
-      const res = await api.gscProjectSubmitSitemap(projectId, sitemapInput.trim() || null);
-      setSitemapMsg(
-        `Submitted ${res?.sitemap_url || "sitemap"}. Google will recrawl on its own schedule — typically within 24 hours.`,
-      );
-      await reloadProjectSitemaps({ silent: true });
-    } catch (e) {
-      setSitemapMsg(e instanceof Error ? e.message : "Sitemap submission failed");
-    } finally {
-      setSitemapBusy(null);
-    }
-  }
-
-  async function deleteProjectSitemap(sitemapUrl: string) {
-    if (!projectId || !sitemapUrl) return;
-    setSitemapBusy("delete");
-    setSitemapDeletingPath(sitemapUrl);
-    setSitemapMsg(null);
-    try {
-      await api.gscProjectDeleteSitemap(projectId, sitemapUrl);
-      setSitemapMsg(`Removed ${sitemapUrl} from Search Console.`);
-      await reloadProjectSitemaps({ silent: true });
-    } catch (e) {
-      setSitemapMsg(e instanceof Error ? e.message : "Failed to remove sitemap");
-    } finally {
-      setSitemapBusy(null);
-      setSitemapDeletingPath(null);
-    }
-  }
-
   // ---- Feature 1: GSC ROI Dashboard handlers -------------------------------
   async function reloadAnalytics(opts: { silent?: boolean } = {}) {
     if (!projectId) return;
@@ -2637,19 +2407,165 @@ export default function ProjectPage() {
     }
   }
 
-  async function reloadInsights(opts: { silent?: boolean } = {}) {
+  // ---- Site Audit: Technical Audit (PageSpeed Insights) handlers ----------
+  async function reloadTechnicalAudit(opts: { silent?: boolean } = {}) {
     if (!projectId) return;
-    if (!opts.silent) setInsightsBusy(true);
-    setInsightsErr(null);
+    if (!opts.silent) setTechnicalAuditBusy(true);
+    setTechnicalAuditErr(null);
     try {
-      const res = await api.gscProjectInsights(projectId, { days: 28 });
-      setInsights(res);
+      const [res, historyRes] = await Promise.all([
+        api.getTechnicalAuditLatest(projectId),
+        api.getTechnicalAuditHistory(projectId).catch(() => ({ runs: [] })),
+      ]);
+      setTechnicalAudit(res);
+      setTechnicalAuditHistory(historyRes.runs || []);
     } catch (e) {
-      setInsightsErr(e instanceof Error ? e.message : "Failed to load insights");
-      setInsights(null);
+      // Never clear a previously-loaded audit just because the reload failed.
+      setTechnicalAuditErr(e instanceof Error ? e.message : "Failed to load Technical Audit");
     } finally {
-      if (!opts.silent) setInsightsBusy(false);
+      if (!opts.silent) setTechnicalAuditBusy(false);
     }
+  }
+
+  // PSI's mobile+desktop calls routinely take 20-45s combined -- long enough that an
+  // intermediate proxy (e.g. Next.js's dev rewrite) can reset the connection before a
+  // single held-open request completes. /run now only *starts* the audit and returns
+  // immediately; we poll /latest (which reports `running`) until it lands instead.
+  async function runTechnicalAuditNow() {
+    if (!projectId || technicalAuditRunning) return;
+    setTechnicalAuditRunning(true);
+    setTechnicalAuditErr(null);
+    try {
+      await api.runTechnicalAudit(projectId);
+    } catch (e) {
+      // Preserve whatever audit was already showing (doc: a failed refresh must
+      // not destroy the previous successful audit) -- only surface the error.
+      setTechnicalAuditErr(e instanceof Error ? e.message : "Google PageSpeed Insights did not return a valid result.");
+      setTechnicalAuditRunning(false);
+      return;
+    }
+    void pollTechnicalAuditUntilDone();
+  }
+
+  async function pollTechnicalAuditUntilDone() {
+    if (!projectId) return;
+    const maxAttempts = 30; // ~30 * 3s = 90s safety ceiling
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      try {
+        const res = await api.getTechnicalAuditLatest(projectId);
+        setTechnicalAudit(res);
+        if (!res.running) {
+          if (res.error) {
+            setTechnicalAuditErr(res.error);
+          } else {
+            setTechnicalAuditJustCompleted(true);
+            setTimeout(() => setTechnicalAuditJustCompleted(false), 2500);
+          }
+          setTechnicalAuditRunning(false);
+          setSelectedHistoricalRunId(null); // a fresh run landed -- snap back to viewing latest
+          void api
+            .getTechnicalAuditHistory(projectId)
+            .then((h) => setTechnicalAuditHistory(h.runs || []))
+            .catch(() => {});
+          return;
+        }
+      } catch {
+        // Transient poll failure -- keep trying rather than aborting the whole run on one hiccup.
+      }
+    }
+    setTechnicalAuditRunning(false);
+    setTechnicalAuditErr("Technical Audit is taking longer than expected. Check back in a moment.");
+  }
+
+  // ---- Site Audit: SEO Audit (Riviso crawler) handlers --------------------
+  async function reloadSeoAudit(opts: { silent?: boolean } = {}) {
+    if (!projectId) return;
+    if (!opts.silent) setSeoAuditBusy(true);
+    setSeoAuditErr(null);
+    try {
+      const [res, historyRes] = await Promise.all([
+        api.getSeoAuditLatest(projectId),
+        api.getSeoAuditHistory(projectId).catch(() => ({ runs: [] })),
+      ]);
+      setSeoAudit(res);
+      setSeoAuditHistory(historyRes.runs || []);
+      setSeoAuditRunning(Boolean(res.running));
+      if (res.running) void pollSeoAuditUntilDone();
+    } catch (e) {
+      setSeoAuditErr(e instanceof Error ? e.message : "Failed to load SEO Audit");
+    } finally {
+      if (!opts.silent) setSeoAuditBusy(false);
+    }
+  }
+
+  async function runSeoAuditNow(full = false) {
+    if (!projectId || seoAuditRunning) return;
+    setSeoAuditRunning(true);
+    setSeoAuditErr(null);
+    try {
+      const res = await api.runSeoAudit(projectId, { full });
+      setSeoAudit(res);
+    } catch (e) {
+      setSeoAuditErr(e instanceof Error ? e.message : "Could not start the SEO Audit crawl.");
+      setSeoAuditRunning(false);
+      return;
+    }
+    void pollSeoAuditUntilDone();
+  }
+
+  // Continue an interrupted crawl from where it left off (same audit_id, frontier
+  // reconstructed from what's already durably stored) instead of burning quota and
+  // time re-crawling from scratch. Only offered when status is "partial".
+  async function resumeSeoAuditNow() {
+    const auditId = seoAudit?.audit?.id;
+    if (!projectId || !auditId || seoAuditRunning) return;
+    setSeoAuditRunning(true);
+    setSeoAuditErr(null);
+    try {
+      const res = await api.resumeSeoAudit(projectId, auditId);
+      setSeoAudit(res);
+    } catch (e) {
+      setSeoAuditErr(e instanceof Error ? e.message : "Could not continue the SEO Audit crawl.");
+      setSeoAuditRunning(false);
+      return;
+    }
+    void pollSeoAuditUntilDone();
+  }
+
+  async function pollSeoAuditUntilDone() {
+    if (!projectId) return;
+    // The backend's own crawl-time ceiling is 30min (seo_crawl_max_duration_seconds)
+    // plus post-crawl analysis on top for large sites -- 480 * 5s = 40min gives
+    // headroom above that so this doesn't report "stuck" while a large, healthy
+    // crawl (up to the 20k-URL plan cap) is still legitimately in progress.
+    const maxAttempts = 480;
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      try {
+        const res = await api.getSeoAuditLatest(projectId);
+        setSeoAudit(res);
+        if (!res.running) {
+          if (res.audit?.error) {
+            setSeoAuditErr(res.audit.error);
+          } else {
+            setSeoAuditJustCompleted(true);
+            setTimeout(() => setSeoAuditJustCompleted(false), 2500);
+          }
+          setSeoAuditRunning(false);
+          setSelectedSeoHistoricalRunId(null);
+          void api
+            .getSeoAuditHistory(projectId)
+            .then((h) => setSeoAuditHistory(h.runs || []))
+            .catch(() => {});
+          return;
+        }
+      } catch {
+        // Transient poll failure -- keep trying rather than aborting the whole run on one hiccup.
+      }
+    }
+    setSeoAuditRunning(false);
+    setSeoAuditErr("SEO Audit is taking longer than expected. Check back in a moment.");
   }
 
   // ---- Feature 3: Site Map handlers ----------------------------------------
@@ -2851,27 +2767,13 @@ export default function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, token]);
 
-  // Auto-load registered sitemaps once a property is linked. Re-runs whenever the
-  // user links / unlinks a property so the table reflects the current property.
+  // Feature 1: load analytics when the Tools tab is open AND a property is linked —
+  // feeds the Overview tab's ``gscTotals`` card too, since it's the same ``analytics``
+  // state. The Performance & Analysis tab that used to be its other trigger was removed
+  // (no Figma coverage; see quirky-nibbling-owl.md step 10).
   useEffect(() => {
     if (!token) return;
-    if (tab !== "tools" && tab !== "performance") return;
-    if (!gscStatus?.connected || !gscStatus?.property_url) {
-      setGscSitemaps([]);
-      setGscSitemapSuggested("");
-      return;
-    }
-    void reloadProjectSitemaps({ silent: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, tab, token, gscStatus?.connected, gscStatus?.property_url]);
-
-  // Feature 1: load analytics when either the Tools tab (mini view, optional) or the
-  // Performance & Analysis tab is open AND a property is linked. Re-fetches when the
-  // active preset changes; the custom-range chip only refetches when the user clicks
-  // "Apply" inside the Performance tab so partial date input doesn't fire requests.
-  useEffect(() => {
-    if (!token) return;
-    if (tab !== "tools" && tab !== "performance") return;
+    if (tab !== "tools") return;
     if (!gscStatus?.connected || !gscStatus?.property_url) {
       setAnalytics(null);
       setAnalyticsErr(null);
@@ -2886,17 +2788,21 @@ export default function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, token, gscStatus?.connected, gscStatus?.property_url, analyticsRangePreset]);
 
-  // Load Insights when the Insights sub-tab is first opened (or when the project/GSC status changes).
+  // Load Technical Audit when the Site Audit tab is first opened for this project.
+  // Refreshing the browser must not trigger a new PageSpeed run -- only /latest here.
   useEffect(() => {
-    if (!token || tab !== "performance" || performanceSubTab !== "insights") return;
-    if (!gscStatus?.connected || !gscStatus?.property_url) {
-      setInsights(null);
-      setInsightsErr(null);
-      return;
-    }
-    if (!insights) void reloadInsights();
+    if (!token || tab !== "site_audit" || siteAuditSubTab !== "technical") return;
+    if (!technicalAudit) void reloadTechnicalAudit();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, tab, performanceSubTab, token, gscStatus?.connected, gscStatus?.property_url]);
+  }, [projectId, tab, siteAuditSubTab, token]);
+
+  // Load SEO Audit when its sub-tab is first opened for this project. Refreshing the
+  // browser must not trigger a new crawl -- only /latest here, same as Technical Audit.
+  useEffect(() => {
+    if (!token || tab !== "site_audit" || siteAuditSubTab !== "seo") return;
+    if (!seoAudit) void reloadSeoAudit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, tab, siteAuditSubTab, token]);
 
   // Feature 3: load the stored site map whenever Tools opens. Sync is manual (button).
   useEffect(() => {
@@ -2912,25 +2818,6 @@ export default function ProjectPage() {
     void reloadTopicClusters();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, token]);
-
-  useEffect(() => {
-    if (!token) return;
-    if (tab !== "products") return;
-    if (!isShopifyProject) return;
-    (async () => {
-      setShopifyCatalogErr(null);
-      setShopifyCatalogLoading(true);
-      try {
-        const cat = await api.getShopifyCatalog(projectId);
-        setShopifyCatalog(cat);
-      } catch (e) {
-        setShopifyCatalog(null);
-        setShopifyCatalogErr(e instanceof Error ? e.message : "Failed to load Shopify products");
-      } finally {
-        setShopifyCatalogLoading(false);
-      }
-    })();
-  }, [projectId, tab, token, isShopifyProject]);
 
   useEffect(() => {
     if (!token) return;
@@ -3051,43 +2938,14 @@ export default function ProjectPage() {
     if (!projectId || !isShopifyProject) return;
     if (shopifyCatalogLoading) return;
     if ((shopifyCatalog?.products || []).length > 0) return;
-    setShopifyCatalogErr(null);
     setShopifyCatalogLoading(true);
     try {
       const cat = await api.getShopifyCatalog(projectId);
       setShopifyCatalog(cat);
-    } catch (e) {
+    } catch {
       setShopifyCatalog(null);
-      setShopifyCatalogErr(e instanceof Error ? e.message : "Failed to load Shopify products");
     } finally {
       setShopifyCatalogLoading(false);
-    }
-  }
-
-  async function runShopifyProductSync() {
-    if (!projectId || !isShopifyProject) return;
-    setShopifyCatalogErr(null);
-    setShopifyCatalogNotice(null);
-    setShopifyCatalogSyncing(true);
-    try {
-      const status = await api.syncShopifyCatalog(projectId);
-      const cat = await api.getShopifyCatalog(projectId);
-      setShopifyCatalog(cat);
-      const msg = (status.sync_message || cat.sync_message || "").trim();
-      if (msg) {
-        setShopifyCatalogNotice(msg);
-      }
-      const productCount = status.counts?.products ?? cat.counts?.products ?? 0;
-      if ((status.sync_status || "").toLowerCase() === "partial" && productCount === 0) {
-        setShopifyCatalogErr(
-          msg ||
-            "Products could not be synced. Enable read_products on your Shopify app version, release it, then reconnect in Project Settings.",
-        );
-      }
-    } catch (e) {
-      setShopifyCatalogErr(e instanceof Error ? e.message : "Shopify sync failed");
-    } finally {
-      setShopifyCatalogSyncing(false);
     }
   }
 
@@ -3149,17 +3007,52 @@ export default function ProjectPage() {
     });
   }, [q, status, dateFrom, dateTo, projectId]);
 
+  /** Same tokenizing convention as Research's addSeedKeywordsFromInput: split on
+   * comma/newline, trim, drop blanks. Used to turn the Primary/Supporting Keywords
+   * textareas into the flat `keywords` list the backend (and Research import) expects. */
+  function tokenizeKeywordsInput(raw: string): string[] {
+    return (raw || "")
+      .split(/[\n,]/g)
+      .map((t) => t.trim())
+      .filter(Boolean);
+  }
+
   async function createArticle() {
     setError(null);
     setAddArticleDupModal(null);
+
+    // No primary/supporting split exists in the article schema (same one Research
+    // import uses) -- both fields merge into the single `keywords` list, primary
+    // first, deduped case-insensitively, capped at 10 to match ArticleCreate's
+    // server-side limit instead of letting a 422 surprise the user after submit.
+    const seen = new Set<string>();
+    const keywords: string[] = [];
+    for (const k of [...tokenizeKeywordsInput(addArticlePrimaryKeywords), ...tokenizeKeywordsInput(addArticleSupportingKeywords)]) {
+      const lower = k.toLowerCase();
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      keywords.push(k);
+    }
+    if (keywords.length > 10) {
+      setError(`Too many keywords (${keywords.length}) — combine primary and supporting keywords to 10 or fewer.`);
+      return;
+    }
+
     setCreating(true);
     try {
-      const a = await api.createArticle(projectId, title);
+      const a = await api.createArticle(projectId, {
+        title,
+        focus_keyphrase: addArticleFocusKeyphrase.trim() || undefined,
+        keywords,
+      });
       setPage(1);
       await reloadArticleTitles();
       await refreshArticlesList();
       setArticleTitlesById((prev) => ({ ...prev, [a.id]: a.title || "" }));
       setTitle("");
+      setAddArticleFocusKeyphrase("");
+      setAddArticlePrimaryKeywords("");
+      setAddArticleSupportingKeywords("");
       setShowAddArticle(false);
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && e.detail && typeof e.detail === "object" && e.detail !== null) {
@@ -3590,7 +3483,7 @@ export default function ProjectPage() {
 
   async function bulkDelete() {
     if (selectedIds.length === 0) return;
-    if (!confirm(`Delete ${selectedIds.length} selected article(s)? This cannot be undone.`)) return;
+    setConfirmBulkDelete(false);
     setError(null);
     try {
       await api.bulkDeleteArticles(projectId, selectedIds);
@@ -4518,56 +4411,24 @@ export default function ProjectPage() {
         >
           <Icon.Edit />
         </Link>
-        <button
-          type="button"
-          className={iconBtnClass}
-          aria-label={`Schedule ${title}`}
-          data-tooltip="Schedule article"
-          onClick={() => {
-            void ensureScheduleMetaLoaded();
-            const min = new Date(Date.now() + 10 * 60 * 1000);
-            const minStr = toDatetimeLocalFromDateInProfileTz(min);
-            setScheduleMin(minStr);
-            setScheduleId(a.id);
-            setScheduleWhen(minStr);
-            setScheduleWpStatus(wpDefaults?.wp_status || "draft");
-            setSchedulePostType(wpDefaults?.post_type || "posts");
-            setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
-            setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
-          }}
-        >
-          <Icon.Calendar />
-        </button>
         <span
           className={styles.articlesTableTooltipWrap}
-          data-tooltip={!a.wp_link ? "Publish first to get a live URL" : "Request indexing in Search Console"}
+          data-tooltip={a.wp_link ? "View live article" : "Publish first to get a live URL"}
         >
-          <button
-            type="button"
+          <a
             className={iconBtnClass}
-            aria-label={`Request indexing for ${title}`}
-            disabled={!a.wp_link}
-            onClick={() => {
-              setRequestIndexingId(a.id);
-              setRequestIndexingMsg("");
+            aria-label={`View ${title}`}
+            href={a.wp_link || undefined}
+            target="_blank"
+            rel="noreferrer"
+            aria-disabled={!a.wp_link}
+            onClick={(e) => {
+              if (!a.wp_link) e.preventDefault();
             }}
           >
-            <Icon.Globe />
-          </button>
+            <Icon.Eye />
+          </a>
         </span>
-        {a.wp_link ? (
-          <button
-            type="button"
-            className={iconBtnClass}
-            aria-label={a.monitor_status === "fresh" ? `Mark ${title} stale` : `Mark ${title} fresh`}
-            data-tooltip={a.monitor_status === "fresh" ? "Mark stale for refresh" : "Mark fresh"}
-            onClick={() =>
-              markArticleMonitor(a.id, (a.monitor_status === "fresh" ? "stale" : "fresh") as "fresh" | "stale")
-            }
-          >
-            <Icon.Refresh />
-          </button>
-        ) : null}
         <button
           type="button"
           className={`${iconBtnClass} ${styles.articlesTableIconBtnDanger}`}
@@ -4610,25 +4471,33 @@ export default function ProjectPage() {
   const tabLabel: Record<TabKey, string> = {
     overview: "Overview",
     articles: "Articles",
-    products: "Products",
     research: "Research",
     scheduled_articles: "Scheduled Articles",
     prompts: "Prompts",
     context_links: "Context links",
     tools: "Tools",
-    // The Performance & Analysis tab is only useful once Search Console is connected
-    // *and* the analytics endpoint has returned data — we hide the nav entry until
-    // both conditions are true (see ``visibleTabs`` below). The label still lives
-    // in this map so deep-links and persistence keep working.
-    performance: "Performance & Analysis",
     members: "Members",
     project_settings: "Project Settings",
+    site_audit: "Site Audit",
   };
 
   function goTab(next: TabKey) {
     if (next === tab) return;
     if ((tab === "tools" || tab === "project_settings") && !confirmLoseChanges()) return;
     setTab(next);
+    setMobileNavOpen(false);
+  }
+
+  // Site Audit's sidebar entry is a parent with two children (Technical Audit /
+  // SEO Audit) rather than a single tab -- goTab's `next === tab` short-circuit
+  // would no-op when switching between the two children while already on
+  // site_audit, so this handles tab + sub-tab together.
+  function goSiteAuditSubTab(sub: SiteAuditSubTabKey) {
+    if (tab !== "site_audit") {
+      if ((tab === "tools" || tab === "project_settings") && !confirmLoseChanges()) return;
+      setTab("site_audit");
+    }
+    setSiteAuditSubTab(sub);
     setMobileNavOpen(false);
   }
 
@@ -4658,19 +4527,12 @@ export default function ProjectPage() {
     router.push(`/projects/${nextId}${qs ? `?${qs}` : ""}`);
   }
 
-  // Performance & Analysis is conditional on Search Console being connected and at least
-  // one analytics payload having been fetched. Tabs are otherwise listed in ``tabLabel`` order.
-  const performanceTabAvailable = Boolean(
-    gscStatus?.connected && gscStatus?.property_url && analytics && (analytics.series || []).length > 0,
-  );
   // Project Settings (and everything nested inside it — WordPress/Shopify
   // connection, project deletion) is owner-only. Fail closed: hide the tab
   // until projectMeta confirms the viewer is the owner, not just when it
   // confirms they aren't.
   const isProjectOwner = Boolean(projectMeta && !projectMeta.is_shared);
   const visibleTabs: TabKey[] = SIDEBAR_TAB_ORDER.filter((k) => {
-    if (k === "products") return isShopifyProject;
-    if (k === "performance") return performanceTabAvailable;
     if (k === "project_settings") return isProjectOwner;
     return true;
   });
@@ -4685,11 +4547,47 @@ export default function ProjectPage() {
     }
   }, [tab, projectMeta, setTab]);
 
-  function renderNavLabel(k: TabKey) {
+  /** Shared by the desktop aside and the mobile off-canvas panel -- both rendered
+   * the same NAV_GROUPS data through separate, drifting JSX before; this is the
+   * single render path for both now (ui/Sidebar's NavGroup/NavItem/SubNav). */
+  function renderProjectNav() {
     return (
       <>
-        <ProjectTabIcon tab={k as ProjectTabKey} className={styles.navItemIcon} />
-        <span className={styles.navItemLabel}>{tabLabel[k]}</span>
+        {NAV_GROUPS.map((group) => {
+          const tabsInGroup = group.tabs.filter((k) => visibleTabs.includes(k));
+          if (tabsInGroup.length === 0) return null;
+          return (
+            <NavGroup key={group.label} label={group.label}>
+              {tabsInGroup.map((k) =>
+                k === "site_audit" ? (
+                  <SubNav
+                    key={k}
+                    label={tabLabel[k]}
+                    icon={<ProjectTabIcon tab="site_audit" />}
+                    active={tab === "site_audit"}
+                    open={tab === "site_audit"}
+                    onSelect={() => goSiteAuditSubTab(siteAuditSubTab)}
+                  >
+                    {SITE_AUDIT_SUBS.map((s) => ({
+                      key: s.key,
+                      label: s.label,
+                      active: siteAuditSubTab === s.key,
+                      onClick: () => goSiteAuditSubTab(s.key),
+                    }))}
+                  </SubNav>
+                ) : (
+                  <NavItem
+                    key={k}
+                    label={tabLabel[k]}
+                    icon={<ProjectTabIcon tab={k as ProjectTabKey} />}
+                    active={tab === k}
+                    onClick={() => goTab(k)}
+                  />
+                ),
+              )}
+            </NavGroup>
+          );
+        })}
       </>
     );
   }
@@ -5043,6 +4941,13 @@ export default function ProjectPage() {
 
       const mapped =
         isShopifyProject && opts?.mappedProducts?.length ? opts.mappedProducts : undefined;
+      // Generate-all runs the pillar + every selected cluster topic as its own full
+      // article, one at a time (never in parallel — see generate_all() in
+      // topic_cluster_service.py). waitForTopicClusterReady's default maxWaitMs
+      // (240s) is sized for the single-call topicClusterPlan operation it's shared
+      // with, not this one — with 5+ topics that's nowhere near enough headroom, so
+      // the client gave up and reported "timed out" while generation was still
+      // legitimately progressing. Scale the wait budget with the actual topic count.
       const res = await api.topicClusterGenerateAll(
         projectId,
         clusterId,
@@ -5055,6 +4960,7 @@ export default function ProjectPage() {
         },
         {
           skipGlobalLoading: true,
+          maxWaitMs: Math.max(240_000, pendingCount * 240_000),
           onProgress: (progress) => {
             setTopicClusters((prev) => prev.map((c) => (c.id === progress.id ? progress : c)));
           },
@@ -5747,6 +5653,19 @@ export default function ProjectPage() {
         <path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18" fill="none" stroke="currentColor" strokeWidth="1.75" />
       </svg>
     ),
+    Eye: (props: { className?: string }) => (
+      <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
+        <path
+          d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.75" />
+      </svg>
+    ),
     Pen: (props: { className?: string }) => (
       <svg viewBox="0 0 24 24" aria-hidden="true" className={props.className}>
         <path
@@ -5808,6 +5727,9 @@ export default function ProjectPage() {
       return Number.isFinite(t) ? t : 0;
     };
     let rows = (scheduledJobs || []).slice();
+    if (scheduledStatusFilter) {
+      rows = rows.filter((j) => (j.state || "").toLowerCase() === scheduledStatusFilter);
+    }
     if (q) {
       rows = rows.filter((j) => {
         const t = titleFor(j.article_id).toLowerCase();
@@ -5821,7 +5743,7 @@ export default function ProjectPage() {
       return scheduledOrder === "asc" ? ta - tb : tb - ta;
     });
     return rows;
-  }, [articleTitlesById, selectedMeta, scheduledJobs, scheduledOrder, scheduledSearch]);
+  }, [articleTitlesById, selectedMeta, scheduledJobs, scheduledOrder, scheduledSearch, scheduledStatusFilter]);
 
   const clusterPlanLimitReached = Boolean(
     featureLimits?.cluster_plans &&
@@ -5955,7 +5877,7 @@ export default function ProjectPage() {
   }
 
   return (
-    <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
+    <div className={`${styles.page} ${styles.pageTop} ${projectsLight.projectsLightTheme}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
         <div className={styles.mobileTabsBar} role="navigation" aria-label="Project sections">
          
@@ -5992,18 +5914,7 @@ export default function ProjectPage() {
                   <Icon.X className={styles.icon20} />
                 </button>
               </div>
-              <div className={styles.offcanvasBody}>
-                {visibleTabs.map((k) => (
-                  <button
-                    key={k}
-                    type="button"
-                    className={`${styles.offcanvasItem} ${tab === k ? styles.offcanvasItemActive : ""}`}
-                    onClick={() => goTab(k)}
-                  >
-                    {renderNavLabel(k)}
-                  </button>
-                ))}
-              </div>
+              <div className={styles.offcanvasBody}>{renderProjectNav()}</div>
               <Link
                 href="/dashboard?section=profile"
                 className={`${styles.sidebarAccountCard} ${styles.sidebarAccountLink}`}
@@ -6103,18 +6014,8 @@ export default function ProjectPage() {
 
             <div className={styles.sidebarDivider} aria-hidden="true" />
 
-            <div className={styles.sidebarTitle}>SECTIONS</div>
-            <div className={styles.navGroup} role="navigation" aria-label="Project sections">
-              {visibleTabs.map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  className={`${styles.navItem} ${tab === k ? styles.navItemActive : ""}`}
-                  onClick={() => goTab(k)}
-                >
-                  {renderNavLabel(k)}
-                </button>
-              ))}
+            <div role="navigation" aria-label="Project sections" className="flex flex-col gap-6">
+              {renderProjectNav()}
             </div>
             </div>
             <div className={styles.sidebarFooter}>
@@ -6166,6 +6067,11 @@ export default function ProjectPage() {
                       onClick={() => {
                         setError(null);
                         setAddArticleDupModal(null);
+                        setAddArticleTab("manual");
+                        setAiIdea("");
+                        setAiSuggestError(null);
+                        setSourceUrl("");
+                        setSourceError(null);
                         setShowAddArticle(true);
                       }}
                     >
@@ -6184,6 +6090,11 @@ export default function ProjectPage() {
                       onClick={() => {
                         setError(null);
                         setAddArticleDupModal(null);
+                        setAddArticleTab("manual");
+                        setAiIdea("");
+                        setAiSuggestError(null);
+                        setSourceUrl("");
+                        setSourceError(null);
                         setShowAddArticle(true);
                       }}
                     >
@@ -6202,32 +6113,6 @@ export default function ProjectPage() {
 
                   <div className={styles.mobileActionChips}>
                     <button
-                      className={styles.chipButton}
-                      type="button"
-                      onClick={() => {
-                        setError(null);
-                        setBulkUploadErrors([]);
-                        setBulkUploadRows([]);
-                        setBulkParseDupTitles([]);
-                        setShowBulkUpload(true);
-                      }}
-                    >
-                      Bulk Upload
-                    </button>
-                    <button
-                      className={styles.chipButton}
-                      type="button"
-                      onClick={() => {
-                        setError(null);
-                        setExportFrom(dateFrom || "");
-                        setExportTo(dateTo || "");
-                        setExportStatus(status || "");
-                        setShowExportArticles(true);
-                      }}
-                    >
-                      Export
-                    </button>
-                    <button
                       className={`${styles.chipButton} ${styles.chipButtonPrimary}${status || dateFrom || dateTo ? ` ${styles.chipButtonFilterActive}` : ""}`}
                       type="button"
                       onClick={() => setShowMobileFilters(true)}
@@ -6235,70 +6120,106 @@ export default function ProjectPage() {
                     >
                       Filter{status || dateFrom || dateTo ? " · On" : ""}
                     </button>
-                    {selectedIds.length ? (
-                      <button
-                        className={`${styles.chipButton} ${styles.buttonHighlight}`}
-                        type="button"
-                        onClick={() => {
-                          setBulkMode("root");
-                          setShowBulkPopup(true);
-                        }}
-                      >
-                        Actions…
-                      </button>
-                    ) : null}
                   </div>
                 </>
-              ) : tab === "products" ? (
+              ) : tab === "scheduled_articles" ? (
                 <>
                   <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
-                    <h1 style={{ margin: 0 }}>Products</h1>
-                    <button
-                      className={styles.btnSecondary}
-                      type="button"
-                      onClick={() => void runShopifyProductSync()}
-                      disabled={!isShopifyProject || shopifyCatalogSyncing}
-                      title="Sync products from Shopify"
-                    >
-                      {shopifyCatalogSyncing ? "Syncing…" : "Sync from Shopify"}
-                    </button>
+                    <div>
+                      <h1 style={{ margin: 0 }}>Scheduled Articles</h1>
+                      <p className={styles.scheduledPageLead}>
+                        {scheduledJobs.length} article{scheduledJobs.length === 1 ? "" : "s"} scheduled or published across this project
+                      </p>
+                    </div>
+                    <div className={styles.headSearchWrap} aria-label="Live search">
+                      <input
+                        className={`${styles.input} ${styles.headSearchInput}`}
+                        placeholder="Search article title…"
+                        value={scheduledSearch}
+                        onChange={(e) => setScheduledSearch(e.target.value)}
+                      />
+                    </div>
                   </div>
                   <div className={`${styles.mobileHeadRow} ${styles.showOnMobile}`}>
                     <h1 className={styles.mobileTitle} style={{ margin: 0 }}>
-                      Products
+                      Scheduled Articles
                     </h1>
+                  </div>
+                  <div className={styles.showOnMobile} style={{ width: "100%" }}>
+                    <input
+                      className={`${styles.input} ${styles.headSearchInputMobile}`}
+                      placeholder="Search article title…"
+                      value={scheduledSearch}
+                      onChange={(e) => setScheduledSearch(e.target.value)}
+                    />
+                  </div>
+                </>
+              ) : tab === "context_links" ? (
+                <>
+                  <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
+                    <div>
+                      <h1 style={{ margin: 0 }}>Context Links</h1>
+                      <p className={styles.scheduledPageLead}>
+                        Add exact phrases with target URLs, auto-linked when articles publish.
+                      </p>
+                    </div>
+                    <div className={styles.row} style={{ justifyContent: "flex-end" }}>
+                      <button
+                        className={styles.btnSecondary}
+                        type="button"
+                        onClick={startAddLink}
+                        disabled={linksLoading || linksSaving || contextLinkLimitReached}
+                        title={contextLinkLimitReached ? "Context link limit reached for your plan." : undefined}
+                      >
+                        + Add link
+                      </button>
+                      <button className={styles.button} type="button" onClick={saveContextLinks} disabled={linksLoading || linksSaving}>
+                        {linksSaving ? "Saving…" : "Save changes"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className={`${styles.mobileHeadRow} ${styles.showOnMobile}`}>
+                    <h1 className={styles.mobileTitle} style={{ margin: 0 }}>
+                      Context Links
+                    </h1>
+                  </div>
+                  <div className={`${styles.mobileActionChips} ${styles.showOnMobile}`}>
                     <button
-                      className={styles.btnSecondary}
+                      className={styles.chipButton}
                       type="button"
-                      onClick={() => void runShopifyProductSync()}
-                      disabled={!isShopifyProject || shopifyCatalogSyncing}
-                      title="Sync products from Shopify"
+                      onClick={startAddLink}
+                      disabled={linksLoading || linksSaving || contextLinkLimitReached}
                     >
-                      {shopifyCatalogSyncing ? "Syncing…" : "Sync"}
+                      + Add link
+                    </button>
+                    <button className={`${styles.chipButton} ${styles.chipButtonPrimary}`} type="button" onClick={saveContextLinks} disabled={linksLoading || linksSaving}>
+                      {linksSaving ? "Saving…" : "Save changes"}
                     </button>
                   </div>
-                  <p className={styles.muted} style={{ margin: "8px 0 0", lineHeight: 1.55 }}>
-                    All products fetched from Shopify for this project. This table uses the latest synced snapshot.
-                  </p>
                 </>
               ) : (
                 <>
                   <h1 style={{ margin: 0 }}>{tabLabel[tab]}</h1>
                   {tab === "research" ? (
                     <p className={styles.researchPageLead}>
-                      Plan topical clusters or run keyword curations — then generate, import, or schedule articles in one flow.
+                      Discover and cluster keyword opportunities, then generate articles in one flow.
                     </p>
                   ) : null}
                   {tab === "project_settings" ? (
                     <p className={styles.settingsPageLead}>
                       {isShopifyProject
                         ? "Connect your Shopify store, define how the AI writes, and sync your catalog for product-aware articles."
-                        : "Connect WordPress, define how the AI writes, and set publishing defaults for this project."}
+                        : "Connect WordPress, define how the AI writes, and set publishing defaults."}
                     </p>
                   ) : null}
                   {tab === "prompts" ? (
                     <p className={styles.promptsPageLead}>
-                      Manage writing and image prompts for generation and scheduling. Set project defaults or override per article.
+                      Manage writing and image prompts for generation and scheduling.
+                    </p>
+                  ) : null}
+                  {tab === "site_audit" ? (
+                    <p className={styles.scheduledPageLead}>
+                      Google PageSpeed performance, Core Web Vitals, and accessibility for your site.
                     </p>
                   ) : null}
                 </>
@@ -6319,414 +6240,10 @@ export default function ProjectPage() {
             onRefresh={() => setOverviewRefreshKey((k) => k + 1)}
             onViewList={goToArticlesFromOverview}
           />
-        ) : tab === "products" ? (
-          <>
-            {shopifyCatalogErr ? <p className={styles.error}>{shopifyCatalogErr}</p> : null}
-            {shopifyCatalogNotice && !shopifyCatalogErr ? (
-              <p className={styles.muted} style={{ marginTop: 8, lineHeight: 1.5, color: "rgba(150,191,72,0.92)" }}>
-                {shopifyCatalogNotice}
-              </p>
-            ) : null}
-            {(shopifyCatalog?.granted_scopes?.length || shopifyCatalog?.recommended_scopes?.length) ? (
-              <div
-                style={{
-                  marginTop: 10,
-                  padding: "12px 14px",
-                  borderRadius: 10,
-                  border: "1px solid color-mix(in oklab, var(--border, #333), transparent 40%)",
-                  fontSize: 12,
-                  lineHeight: 1.5,
-                }}
-              >
-                <strong>Token scopes (from last connect/sync)</strong>
-                <p className={styles.muted} style={{ margin: "6px 0 0" }}>
-                  Riviso only receives scopes Shopify issues on the token — not every scope listed on your app page
-                  unless they are on the <strong>active released version</strong> and you reconnected after release.
-                </p>
-                <p style={{ margin: "8px 0 0" }}>
-                  <span className={styles.muted}>On token: </span>
-                  {(shopifyCatalog?.granted_scopes || []).length > 0 ? (
-                    (shopifyCatalog?.granted_scopes || []).map((s) => (
-                      <code key={s} style={{ marginRight: 6 }}>
-                        {s}
-                      </code>
-                    ))
-                  ) : (
-                    <span className={styles.muted}>unknown — reconnect in Project Settings</span>
-                  )}
-                </p>
-                <p style={{ margin: "8px 0 0" }}>
-                  <span className={styles.muted}>Required on token (Shopify Admin API): </span>
-                  {(shopifyCatalog?.required_scopes || ["read_products", "read_content"]).map((s) => {
-                    const has = (shopifyCatalog?.granted_scopes || []).includes(s);
-                    return (
-                      <code
-                        key={s}
-                        style={{
-                          marginRight: 6,
-                          color: has ? "rgba(150,191,72,0.95)" : "rgba(230,120,80,0.95)",
-                        }}
-                      >
-                        {s}
-                        {has ? " ✓" : " (missing on token)"}
-                      </code>
-                    );
-                  })}
-                </p>
-                {(shopifyCatalog?.recommended_scopes || []).length > 0 ? (
-                  <p className={styles.muted} style={{ margin: "8px 0 0", fontSize: 11 }}>
-                    Optional: {(shopifyCatalog?.recommended_scopes || [])
-                      .filter((s) => !(shopifyCatalog?.required_scopes || []).includes(s))
-                      .join(", ")}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-            {(shopifyCatalog?.warnings || []).length > 0 ? (
-              <div
-                style={{
-                  marginTop: 10,
-                  padding: "12px 14px",
-                  borderRadius: 10,
-                  border: "1px solid color-mix(in oklab, #e6b422, transparent 50%)",
-                  background: "color-mix(in oklab, #e6b422 12%, transparent)",
-                  fontSize: 13,
-                  lineHeight: 1.5,
-                }}
-              >
-                <strong>Sync notes</strong>
-                <ul style={{ margin: "8px 0 0", paddingLeft: "1.2rem" }}>
-                  {(shopifyCatalog?.warnings || []).map((w, i) => (
-                    <li key={`${w.resource}-${i}`}>{w.message}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {shopifyCatalogLoading ? <InlineListSkeleton rows={6} /> : null}
-            {!shopifyCatalogLoading ? (
-              <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-                <div className={styles.sectionHead}>
-                  <div>
-                    <h2 style={{ margin: 0, color: "#fff" }}>Shopify products</h2>
-                    <div className={styles.muted} style={{ marginTop: 6 }}>
-                      {shopifyCatalog?.synced_at
-                        ? `Last synced: ${shopifyCatalog.synced_at}`
-                        : "Not synced yet. Click “Sync from Shopify” above."}
-                      {shopifyCatalog?.sync_message && shopifyCatalog.sync_status === "partial" ? (
-                        <span style={{ display: "block", marginTop: 6, color: "rgba(230,180,60,0.95)" }}>
-                          {shopifyCatalog.sync_message}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div className={styles.row} style={{ justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
-                    <label className={styles.muted} style={{ fontSize: 12, fontWeight: 800 }}>
-                      Status{" "}
-                      <select
-                        className={styles.select}
-                        value={shopifyProductStatus}
-                        onChange={(e) => setShopifyProductStatus((e.target.value || "") as "" | "active" | "draft" | "archived")}
-                        style={{ marginLeft: 8, minWidth: 190 }}
-                      >
-                        <option value="">All products</option>
-                        <option value="active">Active</option>
-                        <option value="draft">Draft</option>
-                        <option value="archived">Unlisted / Archived</option>
-                      </select>
-                    </label>
-                    <div className={styles.muted} style={{ fontSize: 12, alignSelf: "center" }}>
-                      {(() => {
-                        const items = (shopifyCatalog?.products || []).filter((p) => {
-                          const st = String((p as { status?: string }).status || "").trim().toLowerCase();
-                          if (!shopifyProductStatus) return true;
-                          return st === shopifyProductStatus;
-                        });
-                        return `${items.length} items`;
-                      })()}
-                    </div>
-                  </div>
-                </div>
-
-                {(() => {
-                  const products = (shopifyCatalog?.products || []).filter((p) => {
-                    const st = String((p as { status?: string }).status || "").trim().toLowerCase();
-                    if (!shopifyProductStatus) return true;
-                    return st === shopifyProductStatus;
-                  });
-                  return products.length;
-                })() === 0 ? (
-                  <p className={styles.muted} style={{ marginTop: 8 }}>
-                    No products found in the catalog snapshot.
-                  </p>
-                ) : (
-                  <div style={{ width: "100%", overflowX: "auto" }}>
-                    <table className={styles.table} style={{ marginTop: 10 }}>
-                      <thead>
-                        <tr>
-                          <th className={styles.th} style={{ width: 64 }}>
-                            Image
-                          </th>
-                          <th className={styles.th}>Title</th>
-                          <th className={styles.th} style={{ width: 140 }}>
-                            Status
-                          </th>
-                          <th className={styles.th} style={{ width: 140, textAlign: "right" }}>
-                            Cost
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(shopifyCatalog?.products || [])
-                          .filter((p) => {
-                            const st = String((p as { status?: string }).status || "").trim().toLowerCase();
-                            if (!shopifyProductStatus) return true;
-                            return st === shopifyProductStatus;
-                          })
-                          .map((p) => {
-                          const price = (p as { price?: string }).price || "";
-                          const rawStatus = String((p as { status?: string }).status || "").trim().toLowerCase();
-                          const statusState =
-                            rawStatus === "active" ? ("active" as const) : rawStatus === "draft" ? ("draft" as const) : ("unlisted" as const);
-                          const statusLabel =
-                            statusState === "active" ? "Active" : statusState === "draft" ? "Draft" : "Unlisted";
-                          return (
-                            <tr key={String(p.id || p.handle)}>
-                              <td className={styles.td}>
-                                {p.image_url ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={p.image_url}
-                                    alt=""
-                                    width={44}
-                                    height={44}
-                                    style={{
-                                      width: 44,
-                                      height: 44,
-                                      borderRadius: 10,
-                                      objectFit: "cover",
-                                      border: "1px solid var(--button-secondary-border)",
-                                      background: "rgba(255,255,255,0.03)",
-                                      display: "block",
-                                    }}
-                                    loading="lazy"
-                                  />
-                                ) : (
-                                  <div
-                                    style={{
-                                      width: 44,
-                                      height: 44,
-                                      borderRadius: 10,
-                                      border: "1px solid var(--button-secondary-border)",
-                                      background: "rgba(255,255,255,0.03)",
-                                    }}
-                                  />
-                                )}
-                              </td>
-                              <td className={styles.td}>
-                                <div style={{ fontWeight: 800 }}>{p.title || "—"}</div>
-                                <div className={styles.muted} style={{ fontSize: 12, marginTop: 4 }}>
-                                  {p.handle ? <span>/{p.handle}</span> : null}
-                                </div>
-                              </td>
-                              <td className={styles.td}>
-                                <span className={styles.shopifyProductStatusPill} data-state={statusState}>
-                                  {statusLabel}
-                                </span>
-                              </td>
-                              <td className={styles.td} style={{ textAlign: "right", fontWeight: 850 }}>
-                                {price ? (
-                                  <>
-                                    {shopifyCatalog?.shop?.currency ? (
-                                      <span className={styles.muted} style={{ marginRight: 6 }}>
-                                        {shopifyCatalog.shop.currency}
-                                      </span>
-                                    ) : null}
-                                    {price}
-                                  </>
-                                ) : (
-                                  <span className={styles.muted}>—</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            ) : null}
-          </>
         ) : null}
 
         {tab === "articles" ? (
           <>
-            {showBulkPopup ? (
-              <>
-                <div className={styles.bulkBackdrop} onClick={() => setShowBulkPopup(false)} />
-                <div
-                  className={`${styles.bulkPopup} ${bulkMode === "schedule" ? styles.bulkPopupScheduleLayout : ""} ${bulkMode === "root" || bulkMode === "change_status" ? styles.bulkPopupCompact : ""}`}
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label="Bulk actions"
-                >
-                  <div className={styles.bulkPopupHead}>
-                    <div className={styles.bulkPopupTitle}>
-                      <strong>
-                        {bulkMode === "schedule"
-                          ? "Schedule articles"
-                          : bulkMode === "change_status"
-                            ? "Change status"
-                            : "Bulk actions"}
-                      </strong>
-                      {bulkMode === "schedule" ? (
-                        <div className={styles.bulkScheduleMetaChips}>
-                          <span className={styles.bulkScheduleMetaChip}>
-                            <Icon.Document className={styles.icon16} />
-                            {bulkScheduleSeedRows.length} article{bulkScheduleSeedRows.length === 1 ? "" : "s"}
-                          </span>
-                          {profileTz ? (
-                            <span className={styles.bulkScheduleMetaChip}>
-                              <Icon.Clock className={styles.icon16} />
-                              {profileTz}
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : bulkMode === "root" ? (
-                        <span className={styles.bulkPopupSubtitle}>
-                          {selectedIds.length} article{selectedIds.length === 1 ? "" : "s"} selected
-                        </span>
-                      ) : bulkMode === "change_status" ? (
-                        <span className={styles.bulkPopupSubtitle}>
-                          Apply to {selectedIds.length} article{selectedIds.length === 1 ? "" : "s"}
-                        </span>
-                      ) : null}
-                    </div>
-                    <button className={styles.iconButton} type="button" aria-label="Close bulk actions" onClick={() => setShowBulkPopup(false)}>
-                      <Icon.X className={styles.icon20} />
-                    </button>
-                  </div>
-                  {bulkMode === "root" ? (
-                    <div className={styles.bulkActionList} role="menu">
-                      <button
-                        className={styles.bulkActionItem}
-                        type="button"
-                        role="menuitem"
-                        onClick={bulkEdit}
-                        disabled={selectedIds.length !== 1}
-                        title={selectedIds.length !== 1 ? "Select exactly 1 article to edit" : "Edit selected article"}
-                      >
-                        <span className={styles.bulkActionIcon} aria-hidden="true">
-                          <Icon.Edit className={styles.icon20} />
-                        </span>
-                        <span className={styles.bulkActionText}>
-                          <span className={styles.bulkActionLabel}>Edit article</span>
-                          <span className={styles.bulkActionHint}>Opens the editor for one article</span>
-                        </span>
-                      </button>
-                      <button
-                        className={styles.bulkActionItem}
-                        type="button"
-                        role="menuitem"
-                        onClick={() => setBulkMode("change_status")}
-                      >
-                        <span className={styles.bulkActionIcon} aria-hidden="true">
-                          <Icon.Status className={styles.icon20} />
-                        </span>
-                        <span className={styles.bulkActionText}>
-                          <span className={styles.bulkActionLabel}>Change status</span>
-                          <span className={styles.bulkActionHint}>Pending, draft, or published</span>
-                        </span>
-                        <Icon.ChevronRight className={styles.bulkActionChevron} />
-                      </button>
-                      <button className={styles.bulkActionItem} type="button" role="menuitem" onClick={bulkSchedule}>
-                        <span className={styles.bulkActionIcon} aria-hidden="true">
-                          <Icon.Calendar className={styles.icon20} />
-                        </span>
-                        <span className={styles.bulkActionText}>
-                          <span className={styles.bulkActionLabel}>Schedule articles</span>
-                          <span className={styles.bulkActionHint}>Set WordPress publish times</span>
-                        </span>
-                        <Icon.ChevronRight className={styles.bulkActionChevron} />
-                      </button>
-                      <button
-                        className={`${styles.bulkActionItem} ${styles.bulkActionItemDanger}`}
-                        type="button"
-                        role="menuitem"
-                        onClick={bulkDelete}
-                      >
-                        <span className={`${styles.bulkActionIcon} ${styles.bulkActionIconDanger}`} aria-hidden="true">
-                          <Icon.Trash className={styles.icon20} />
-                        </span>
-                        <span className={styles.bulkActionText}>
-                          <span className={styles.bulkActionLabel}>Delete articles</span>
-                          <span className={styles.bulkActionHint}>Removes selected articles permanently</span>
-                        </span>
-                      </button>
-                    </div>
-                  ) : bulkMode === "change_status" ? (
-                    <>
-                      <button type="button" className={styles.bulkActionBack} onClick={() => setBulkMode("root")}>
-                        <Icon.Back className={styles.icon20} />
-                        Back to actions
-                      </button>
-                      <div className={styles.bulkActionList} role="menu">
-                        <button
-                          className={styles.bulkActionItem}
-                          type="button"
-                          role="menuitem"
-                          onClick={() => bulkChangeStatus("pending")}
-                        >
-                          <span className={`${styles.bulkActionStatusDot} ${styles.bulkActionStatusDotPending}`} aria-hidden="true" />
-                          <span className={styles.bulkActionText}>
-                            <span className={styles.bulkActionLabel}>Pending</span>
-                          </span>
-                        </button>
-                        <button
-                          className={styles.bulkActionItem}
-                          type="button"
-                          role="menuitem"
-                          onClick={() => bulkChangeStatus("draft")}
-                        >
-                          <span className={`${styles.bulkActionStatusDot} ${styles.bulkActionStatusDotDraft}`} aria-hidden="true" />
-                          <span className={styles.bulkActionText}>
-                            <span className={styles.bulkActionLabel}>Draft</span>
-                          </span>
-                        </button>
-                        <button
-                          className={styles.bulkActionItem}
-                          type="button"
-                          role="menuitem"
-                          onClick={() => bulkChangeStatus("published")}
-                        >
-                          <span className={`${styles.bulkActionStatusDot} ${styles.bulkActionStatusDotPublished}`} aria-hidden="true" />
-                          <span className={styles.bulkActionText}>
-                            <span className={styles.bulkActionLabel}>Published</span>
-                          </span>
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <BulkScheduleForm
-                      seedRows={bulkScheduleSeedRows}
-                      active={showBulkPopup && bulkMode === "schedule"}
-                      profileTz={profileTz}
-                      defaults={wpDefaults}
-                      wpTypesForSchedule={wpTypesForSchedule}
-                      scheduleWritingPrompts={scheduleWritingPrompts}
-                      scheduleImagePrompts={scheduleImagePrompts}
-                      submitting={bulkScheduling}
-                      error={error}
-                      onCancel={() => setBulkMode("root")}
-                      onValidationError={setError}
-                      onSubmit={bulkScheduleSubmit}
-                      cancelLabel="Back to actions"
-                    />
-                  )}
-                </div>
-              </>
-            ) : null}
-
               <div className={`${styles.card} ${styles.cardWide} ${styles.hideOnMobile} ${styles.articlesToolbar}`}>
                 {tab === "articles"
                   ? renderLimitStrip([
@@ -6807,22 +6324,7 @@ export default function ProjectPage() {
                   <div className={styles.articlesToolbarDivider} aria-hidden="true" />
 
                   <div className={styles.articlesToolbarActions}>
-                    {Object.keys(articleCategoryEdits).length > 0 ? (
-                      <div className={styles.articlesCategorySaveWrap}>
-                        <button
-                          className={styles.button}
-                          type="button"
-                          disabled={categorySaveBusy}
-                          onClick={saveArticleCategories}
-                        >
-                          {categorySaveBusy ? "Saving…" : `Save categories (${Object.keys(articleCategoryEdits).length})`}
-                        </button>
-                        {categorySaveError ? (
-                          <span className={styles.articlesCategorySaveError}>{categorySaveError}</span>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    {websiteConnected && !isShopifyProject ? (
+                    {hydrated && websiteConnected && !isShopifyProject ? (
                       <button
                         className={styles.syncWebsiteBtn}
                         type="button"
@@ -6833,67 +6335,15 @@ export default function ProjectPage() {
                         {syncRunning ? "Syncing…" : "Sync Website"}
                       </button>
                     ) : null}
-                    <button
-                      className={styles.articlesToolbarBtn}
-                      type="button"
-                      onClick={() => {
-                        setError(null);
-                        setBulkUploadErrors([]);
-                        setBulkUploadRows([]);
-                        setBulkParseDupTitles([]);
-                        setShowBulkUpload(true);
-                      }}
-                    >
-                      Bulk Upload
-                    </button>
-                    <button
-                      className={styles.articlesToolbarBtn}
-                      type="button"
-                      onClick={() => {
-                        setError(null);
-                        setExportFrom(dateFrom || "");
-                        setExportTo(dateTo || "");
-                        setExportStatus(status || "");
-                        setShowExportArticles(true);
-                      }}
-                    >
-                      Export
-                    </button>
-                  </div>
-
-                  <div className={styles.articlesToolbarSelection}>
-                    <span className={styles.articlesSelectedCount}>{selectedIds.length} selected</span>
-                    <button
-                      className={`${styles.articlesToolbarActionsBtn} ${selectedIds.length ? styles.articlesToolbarActionsBtnActive : ""}`}
-                      type="button"
-                      onClick={() => {
-                        if (!selectedIds.length) return;
-                        setBulkMode("root");
-                        setShowBulkPopup(true);
-                      }}
-                      disabled={selectedIds.length === 0}
-                    >
-                      Actions…
-                    </button>
                   </div>
                 </div>
               </div>
               <div className={`${styles.card} ${styles.cardWide} ${styles.articleListCard}`} style={{ padding: 0 }}>
                 <div className={`${styles.articlesTableScroll} ${styles.articlesDesktopOnly}`}>
                   <div className={styles.articlesTableHead} role="row">
-                    <span className={styles.articlesTableCheckboxCol}>
-                      <input
-                        type="checkbox"
-                        checked={allOnPageSelected}
-                        onChange={toggleAllOnPage}
-                        aria-label="Select all articles on this page"
-                      />
-                    </span>
                     <span>Title</span>
-                    <span>Focus Keyphrase</span>
-                    <span>Supporting Keywords</span>
+                    <span>Keyword</span>
                     <span>Category</span>
-                    <span>WP Sync</span>
                     <span>Status</span>
                     <span>Actions</span>
                   </div>
@@ -6909,7 +6359,6 @@ export default function ProjectPage() {
                     ? pageItems.map((a) => {
                         const title = a.title || "(Untitled)";
                         const focus = (a.focus_keyphrase || "").trim() || "—";
-                        const keywordsText = formatSupportingKeywords(a.keywords);
                         const gscRequested = (a.gsc_status || "").toLowerCase() === "inspected";
                         const _rawStatus = (a.status || "pending").toLowerCase();
                         const statusLabel =
@@ -6917,17 +6366,11 @@ export default function ProjectPage() {
                           _rawStatus === "generating" ? "Generating..." :
                           _rawStatus.toUpperCase();
                         const statusTitle = `${statusLabel} · ${gscRequested ? "Indexing requested" : "Indexing not requested"}`;
+                        const savedCatId = (a.wp_category_ids || "").split(",")[0]?.trim() || (sWpDefaultCategoryIds[0] ? String(sWpDefaultCategoryIds[0]) : "");
+                        const categoryName = wpCatsForSchedule.find((c) => String(c.id) === savedCatId)?.name || "—";
                         return (
                           <article key={a.id} className={styles.articleRow}>
                             <div className={styles.articlesTableRowMain}>
-                              <span className={styles.articlesTableCheckboxCol}>
-                                <input
-                                  type="checkbox"
-                                  checked={!!selected[a.id]}
-                                  onChange={() => toggleOne(a.id)}
-                                  aria-label={`Select ${title}`}
-                                />
-                              </span>
                               <div className={`${styles.articlesTableCell} ${styles.articlesTableCellTitle}`}>
                                 <Link
                                   href={`/projects/${projectId}/articles/${a.id}`}
@@ -6939,7 +6382,7 @@ export default function ProjectPage() {
                               </div>
                               <div
                                 className={`${styles.articlesTableCell} ${styles.articlesTableCellMuted}`}
-                                data-mobile-label="Focus keyphrase"
+                                data-mobile-label="Keyword"
                                 title={focus !== "—" ? focus : undefined}
                               >
                                 <span
@@ -6948,111 +6391,15 @@ export default function ProjectPage() {
                                   {focus}
                                 </span>
                               </div>
-                              <div
-                                className={`${styles.articlesTableCell} ${styles.articlesTableCellMuted}`}
-                                data-mobile-label="Supporting keywords"
-                                title={keywordsText !== "—" ? keywordsText : undefined}
-                              >
-                                <span
-                                  className={`${styles.articlesTableClamp} ${keywordsText === "—" ? styles.articlesTableCellEmpty : ""}`}
-                                >
-                                  {keywordsText}
-                                </span>
-                              </div>
-                              <div className={styles.articlesTableCategoryCol}>
-                                {wpCatsForSchedule.length > 0 ? (() => {
-                                  const savedCatId = (a.wp_category_ids || "").split(",")[0]?.trim() || (sWpDefaultCategoryIds[0] ? String(sWpDefaultCategoryIds[0]) : "");
-                                  const currentVal = articleCategoryEdits[a.id] !== undefined ? articleCategoryEdits[a.id] : savedCatId;
-                                  const isDirty = articleCategoryEdits[a.id] !== undefined;
-                                  return (
-                                    <CategorySelect
-                                      value={currentVal}
-                                      options={wpCatsForSchedule.map((c) => ({ value: String(c.id), label: c.name }))}
-                                      onChange={(newVal) => {
-                                        setArticleCategoryEdits((prev) => {
-                                          if (newVal === savedCatId) {
-                                            const { [a.id]: _removed, ...rest } = prev;
-                                            return rest;
-                                          }
-                                          return { ...prev, [a.id]: newVal };
-                                        });
-                                      }}
-                                      isDirty={isDirty}
-                                      ariaLabel={`Category for ${title}`}
-                                    />
-                                  );
-                                })() : wpCatsLoading ? (
+                              <div className={styles.articlesTableCategoryCol} data-mobile-label="Category">
+                                {wpCatsLoading ? (
                                   <span className={styles.articlesTableCellLoading}>Loading</span>
                                 ) : (
-                                  <span className={styles.articlesTableCellEmpty}>—</span>
+                                  <span className={`${styles.categoryPill} ${categoryName === "—" ? styles.articlesTableCellEmpty : ""}`}>
+                                    {categoryName}
+                                  </span>
                                 )}
                               </div>
-                              {websiteConnected && !isShopifyProject ? (
-                                <div
-                                  className={styles.articlesTableCell}
-                                  data-mobile-label="WP Sync"
-                                  title={`WP Sync: ${syncBadgeLabel(a.sync_status || "unknown")}. Click for details.`}
-                                >
-                                  <button
-                                    type="button"
-                                    className={syncBadgeClass(a.sync_status || "unknown")}
-                                    style={{ cursor: "pointer", border: "none" }}
-                                    onClick={async () => {
-                                      // First try syncReport (already scanned this session)
-                                      const cached = syncReport?.results.find((r) => r.article_id === a.id);
-                                      if (cached) {
-                                        setSyncDetailFor(cached);
-                                        return;
-                                      }
-                                      // Fallback: fetch live sync for this article
-                                      if ((a.status || "").toLowerCase() !== "published" && !(a.wp_link)) {
-                                        // Not published to WP — show stub
-                                        setSyncDetailFor({
-                                          article_id: a.id,
-                                          article_title: a.title || "(Untitled)",
-                                          wp_post_id: null,
-                                          wp_link: a.wp_link || null,
-                                          sync_status: a.sync_status || "unknown",
-                                          issues: [],
-                                          last_synced_at: null,
-                                          last_successful_sync: null,
-                                          last_fix_at: null,
-                                          repair_count: 0,
-                                          ignored_sync_issue: false,
-                                          sync_history: [],
-                                        });
-                                        return;
-                                      }
-                                      try {
-                                        const fresh = await api.syncArticle(projectId, a.id);
-                                        setSyncDetailFor(fresh);
-                                      } catch {
-                                        setSyncDetailFor({
-                                          article_id: a.id,
-                                          article_title: a.title || "(Untitled)",
-                                          wp_post_id: null,
-                                          wp_link: a.wp_link || null,
-                                          sync_status: a.sync_status || "unknown",
-                                          issues: [],
-                                          last_synced_at: null,
-                                          last_successful_sync: null,
-                                          last_fix_at: null,
-                                          repair_count: 0,
-                                          ignored_sync_issue: false,
-                                          sync_history: [],
-                                        });
-                                      }
-                                    }}
-                                    aria-label={`WP sync status: ${syncBadgeLabel(a.sync_status || "unknown")}. Click for details.`}
-                                  >
-                                    {syncBadgeLabel(a.sync_status || "unknown")}
-                                  </button>
-                                </div>
-                              ) : (
-                                <div className={styles.articlesTableCell}>
-                                  <span className={`${styles.syncBadge} ${styles.syncBadgeUnknown}`}>—</span>
-                                </div>
-                              )}
                               <div className={styles.articlesTableStatusCol} data-mobile-label="Status" title={statusTitle}>
                                 <span className={statusPillClass(a.status)}>{statusLabel}</span>
                               </div>
@@ -7067,21 +6414,6 @@ export default function ProjectPage() {
                 </div>
 
                 <div className={styles.articlesMobileOnly} aria-label="Articles list">
-                  <div className={styles.articlesMobileToolbar}>
-                    <label className={styles.articlesMobileSelectAll}>
-                      <input
-                        type="checkbox"
-                        checked={allOnPageSelected}
-                        onChange={toggleAllOnPage}
-                        aria-label="Select all articles on this page"
-                      />
-                      <span>Select all on page</span>
-                    </label>
-                    {selectedIds.length ? (
-                      <span className={styles.articlesMobileSelectedCount}>{selectedIds.length} selected</span>
-                    ) : null}
-                  </div>
-
                   {loading || articlesListLoading ? (
                     <ArticlesTableSkeleton variant="mobile" />
                   ) : null}
@@ -7093,7 +6425,6 @@ export default function ProjectPage() {
                     ? pageItems.map((a) => {
                         const title = a.title || "(Untitled)";
                         const focus = (a.focus_keyphrase || "").trim() || "—";
-                        const keywordsText = formatSupportingKeywords(a.keywords);
                         const gscRequested = (a.gsc_status || "").toLowerCase() === "inspected";
                         const _rawStatus = (a.status || "pending").toLowerCase();
                         const statusLabel =
@@ -7101,17 +6432,11 @@ export default function ProjectPage() {
                           _rawStatus === "generating" ? "Generating..." :
                           _rawStatus.toUpperCase();
                         const statusTitle = `${statusLabel} · ${gscRequested ? "Indexing requested" : "Indexing not requested"}`;
+                        const savedCatId = (a.wp_category_ids || "").split(",")[0]?.trim() || (sWpDefaultCategoryIds[0] ? String(sWpDefaultCategoryIds[0]) : "");
+                        const categoryName = wpCatsForSchedule.find((c) => String(c.id) === savedCatId)?.name || "—";
                         return (
                           <article key={`mobile-${a.id}`} className={styles.articlesMobileCard}>
                             <div className={styles.articlesMobileCardTop}>
-                              <label className={styles.articlesMobileCardCheck}>
-                                <input
-                                  type="checkbox"
-                                  checked={!!selected[a.id]}
-                                  onChange={() => toggleOne(a.id)}
-                                  aria-label={`Select ${title}`}
-                                />
-                              </label>
                               <span className={statusPillClass(a.status)} title={statusTitle}>
                                 {statusLabel}
                               </span>
@@ -7124,58 +6449,16 @@ export default function ProjectPage() {
                             </Link>
                             <dl className={styles.articlesMobileMeta}>
                               <div className={styles.articlesMobileMetaRow}>
-                                <dt>Focus keyphrase</dt>
+                                <dt>Keyword</dt>
                                 <dd className={focus === "—" ? styles.articlesMobileMetaEmpty : undefined}>{focus}</dd>
                               </div>
                               <div className={styles.articlesMobileMetaRow}>
-                                <dt>Supporting keywords</dt>
-                                <dd className={keywordsText === "—" ? styles.articlesMobileMetaEmpty : undefined}>
-                                  {keywordsText}
+                                <dt>Category</dt>
+                                <dd className={categoryName === "—" ? styles.articlesMobileMetaEmpty : undefined}>
+                                  {categoryName}
                                 </dd>
                               </div>
-                              {wpCatsForSchedule.length > 0 ? (() => {
-                                const savedCatId = (a.wp_category_ids || "").split(",")[0]?.trim() || (sWpDefaultCategoryIds[0] ? String(sWpDefaultCategoryIds[0]) : "");
-                                const currentVal = articleCategoryEdits[a.id] !== undefined ? articleCategoryEdits[a.id] : savedCatId;
-                                const isDirty = articleCategoryEdits[a.id] !== undefined;
-                                return (
-                                  <div className={styles.articlesMobileMetaRow}>
-                                    <dt>Category</dt>
-                                    <dd>
-                                      <CategorySelect
-                                        value={currentVal}
-                                        options={wpCatsForSchedule.map((c) => ({ value: String(c.id), label: c.name }))}
-                                        onChange={(newVal) => {
-                                          setArticleCategoryEdits((prev) => {
-                                            if (newVal === savedCatId) {
-                                              const { [a.id]: _removed, ...rest } = prev;
-                                              return rest;
-                                            }
-                                            return { ...prev, [a.id]: newVal };
-                                          });
-                                        }}
-                                        isDirty={isDirty}
-                                        ariaLabel={`Category for ${title}`}
-                                      />
-                                    </dd>
-                                  </div>
-                                );
-                              })() : wpCatsLoading ? (
-                                <div className={styles.articlesMobileMetaRow}>
-                                  <dt>Category</dt>
-                                  <dd className={styles.articlesTableCellLoading}>Loading</dd>
-                                </div>
-                              ) : null}
                             </dl>
-                            {websiteConnected && !isShopifyProject ? (
-                              <div className={styles.articlesMobileMetaRow}>
-                                <dt>WP Sync</dt>
-                                <dd>
-                                  <span className={syncBadgeClass(a.sync_status || "unknown")}>
-                                    {syncBadgeLabel(a.sync_status || "unknown")}
-                                  </span>
-                                </dd>
-                              </div>
-                            ) : null}
                             <div className={styles.articlesMobileActions}>
                               {renderArticleActions(a, title, styles.articlesMobileIconBtn)}
                             </div>
@@ -7228,7 +6511,7 @@ export default function ProjectPage() {
 
             {confirmDeleteId ? (
               <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Confirm delete">
-                <div className={styles.modalPanel}>
+                <div ref={confirmDeleteArticleTrapRef} className={styles.modalPanel}>
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Delete article?</h3>
                     <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setConfirmDeleteId(null)}>
@@ -7251,9 +6534,34 @@ export default function ProjectPage() {
               </div>
             ) : null}
 
+            {confirmBulkDelete ? (
+              <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Confirm bulk delete">
+                <div ref={confirmBulkDeleteTrapRef} className={styles.modalPanel}>
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Delete {selectedIds.length} article{selectedIds.length === 1 ? "" : "s"}?</h3>
+                    <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setConfirmBulkDelete(false)}>
+                      <Icon.X className={styles.icon20} />
+                    </button>
+                  </div>
+                  <div className={styles.modalBody}>
+                    This will permanently delete {selectedIds.length} selected article{selectedIds.length === 1 ? "" : "s"}. This cannot be undone.
+                    {error ? <p className={styles.error} style={{ marginTop: 10 }}>{error}</p> : null}
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button type="button" className={styles.btnSecondary} onClick={() => setConfirmBulkDelete(false)}>
+                      Cancel
+                    </button>
+                    <button type="button" className={styles.button} onClick={bulkDelete}>
+                      Yes, delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
             {scheduleId ? (
               <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Schedule article">
-                <div className={styles.modalPanel}>
+                <div ref={scheduleArticleTrapRef} className={styles.modalPanel}>
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Schedule article</h3>
                     <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setScheduleId(null)}>
@@ -7356,7 +6664,7 @@ export default function ProjectPage() {
 
             {requestIndexingId ? (
               <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Request indexing">
-                <div className={styles.modalPanel}>
+                <div ref={requestIndexingTrapRef} className={styles.modalPanel}>
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Request indexing</h3>
                     <button
@@ -7441,21 +6749,204 @@ export default function ProjectPage() {
                       <Icon.X className={styles.icon20} />
                     </button>
                   </div>
-                  <div className={styles.modalBody}>
-                    <label className={styles.label}>
-                      Title
-                      <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} />
-                    </label>
-                    {error ? <p className={styles.error}>{error}</p> : null}
-                  </div>
-                  <div className={styles.modalFooter}>
-                    <button type="button" className={styles.btnSecondary} onClick={() => setShowAddArticle(false)}>
-                      Cancel
+
+                  <div className={styles.researchSubTabs} role="tablist" aria-label="Add article method" style={{ margin: "0 20px 12px" }}>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={addArticleTab === "manual"}
+                      className={`${styles.researchSubTab} ${addArticleTab === "manual" ? styles.researchSubTabActive : ""}`}
+                      onClick={() => setAddArticleTab("manual")}
+                    >
+                      Manual
                     </button>
-                    <button className={styles.button} type="button" onClick={createArticle} disabled={creating || !title.trim()}>
-                      {creating ? "Adding…" : "Add"}
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={addArticleTab === "ai_generate"}
+                      className={`${styles.researchSubTab} ${addArticleTab === "ai_generate" ? styles.researchSubTabActive : ""}`}
+                      onClick={() => setAddArticleTab("ai_generate")}
+                    >
+                      AI Generate
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={addArticleTab === "source"}
+                      className={`${styles.researchSubTab} ${addArticleTab === "source" ? styles.researchSubTabActive : ""}`}
+                      onClick={() => setAddArticleTab("source")}
+                    >
+                      Through Source
                     </button>
                   </div>
+
+                  {addArticleTab === "manual" ? (
+                    <>
+                      <div className={styles.modalBody}>
+                        <label className={styles.label}>
+                          Title
+                          <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} />
+                        </label>
+                        <label className={styles.label} style={{ marginTop: 12 }}>
+                          Focus Keyphrase
+                          <input
+                            className={styles.input}
+                            value={addArticleFocusKeyphrase}
+                            onChange={(e) => setAddArticleFocusKeyphrase(e.target.value)}
+                            placeholder="The main phrase this article should rank for"
+                          />
+                        </label>
+                        <label className={styles.label} style={{ marginTop: 12 }}>
+                          Primary Keywords
+                          <input
+                            className={styles.input}
+                            value={addArticlePrimaryKeywords}
+                            onChange={(e) => setAddArticlePrimaryKeywords(e.target.value)}
+                            placeholder="Comma-separated, e.g. keyword one, keyword two"
+                          />
+                        </label>
+                        <label className={styles.label} style={{ marginTop: 12 }}>
+                          Supporting Keywords
+                          <input
+                            className={styles.input}
+                            value={addArticleSupportingKeywords}
+                            onChange={(e) => setAddArticleSupportingKeywords(e.target.value)}
+                            placeholder="Comma-separated, e.g. keyword three, keyword four"
+                          />
+                        </label>
+                        <p className={styles.muted} style={{ margin: "8px 0 0", fontSize: 12 }}>
+                          Primary and Supporting Keywords are combined into the article&apos;s keyword list (primary first, 10 max) — the same fields Research-imported articles use, so generation gets everything it needs.
+                        </p>
+                        {error ? <p className={styles.error}>{error}</p> : null}
+                      </div>
+                      <div className={styles.modalFooter}>
+                        <button type="button" className={styles.btnSecondary} onClick={() => setShowAddArticle(false)}>
+                          Cancel
+                        </button>
+                        <button className={styles.button} type="button" onClick={createArticle} disabled={creating || !title.trim()}>
+                          {creating ? "Adding…" : "Add"}
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
+
+                  {addArticleTab === "ai_generate" ? (
+                    <>
+                      <div className={styles.modalBody}>
+                        <label className={styles.label}>
+                          Keywords / Idea
+                          <input
+                            className={styles.input}
+                            value={aiIdea}
+                            onChange={(e) => setAiIdea(e.target.value)}
+                            placeholder="e.g. best running shoes for flat feet"
+                          />
+                        </label>
+                        <div style={{ marginTop: 10 }}>
+                          <button
+                            type="button"
+                            className={styles.btnSecondary}
+                            disabled={aiSuggestBusy || !aiIdea.trim()}
+                            onClick={async () => {
+                              setAiSuggestError(null);
+                              setAiSuggestBusy(true);
+                              try {
+                                const r = await api.suggestArticleMetadata(projectId, aiIdea.trim());
+                                setTitle(r.title);
+                                setAddArticleFocusKeyphrase(r.focus_keyphrase);
+                                setAddArticlePrimaryKeywords("");
+                                setAddArticleSupportingKeywords(r.keywords.join(", "));
+                              } catch (e) {
+                                setAiSuggestError(e instanceof Error ? e.message : "Couldn't generate suggestions");
+                              } finally {
+                                setAiSuggestBusy(false);
+                              }
+                            }}
+                          >
+                            {aiSuggestBusy ? "Generating…" : "Generate"}
+                          </button>
+                        </div>
+                        {aiSuggestError ? <p className={styles.error}>{aiSuggestError}</p> : null}
+
+                        <label className={styles.label} style={{ marginTop: 16 }}>
+                          Title
+                          <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} />
+                        </label>
+                        <label className={styles.label} style={{ marginTop: 12 }}>
+                          Focus Keyphrase
+                          <input
+                            className={styles.input}
+                            value={addArticleFocusKeyphrase}
+                            onChange={(e) => setAddArticleFocusKeyphrase(e.target.value)}
+                            placeholder="The main phrase this article should rank for"
+                          />
+                        </label>
+                        <label className={styles.label} style={{ marginTop: 12 }}>
+                          Supporting Keywords
+                          <input
+                            className={styles.input}
+                            value={addArticleSupportingKeywords}
+                            onChange={(e) => setAddArticleSupportingKeywords(e.target.value)}
+                            placeholder="Comma-separated, e.g. keyword three, keyword four"
+                          />
+                        </label>
+                        {error ? <p className={styles.error}>{error}</p> : null}
+                      </div>
+                      <div className={styles.modalFooter}>
+                        <button type="button" className={styles.btnSecondary} onClick={() => setShowAddArticle(false)}>
+                          Cancel
+                        </button>
+                        <button className={styles.button} type="button" onClick={createArticle} disabled={creating || !title.trim()}>
+                          {creating ? "Adding…" : "Add"}
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
+
+                  {addArticleTab === "source" ? (
+                    <>
+                      <div className={styles.modalBody}>
+                        <label className={styles.label}>
+                          Source URL
+                          <input
+                            className={styles.input}
+                            value={sourceUrl}
+                            onChange={(e) => setSourceUrl(e.target.value)}
+                            placeholder="https://example.com/article"
+                          />
+                        </label>
+                        <p className={styles.muted} style={{ margin: "8px 0 0", fontSize: 12 }}>
+                          We&apos;ll extract this page&apos;s content and draft a full original article from it — title, focus keyphrase, keywords, and body (no featured image). You&apos;ll land on the article editor to watch it finish.
+                        </p>
+                        {sourceError ? <p className={styles.error}>{sourceError}</p> : null}
+                      </div>
+                      <div className={styles.modalFooter}>
+                        <button type="button" className={styles.btnSecondary} onClick={() => setShowAddArticle(false)}>
+                          Cancel
+                        </button>
+                        <button
+                          className={styles.button}
+                          type="button"
+                          disabled={sourceBusy || !sourceUrl.trim()}
+                          onClick={async () => {
+                            setSourceError(null);
+                            setSourceBusy(true);
+                            try {
+                              const a = await api.createArticleFromSource(projectId, sourceUrl.trim());
+                              setShowAddArticle(false);
+                              router.push(`/projects/${projectId}/articles/${a.id}`);
+                            } catch (e) {
+                              setSourceError(e instanceof Error ? e.message : "Couldn't generate from that URL");
+                            } finally {
+                              setSourceBusy(false);
+                            }
+                          }}
+                        >
+                          {sourceBusy ? "Generating…" : "Generate"}
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
                 </div>
               </>
             ) : null}
@@ -8490,9 +7981,19 @@ export default function ProjectPage() {
                   (pillarActionable ? 1 : 0) + clusterActionable;
                 const clusterRowKey = cl.id || `cluster-${cl.seed_intent}`;
                 const isClusterBusy = TOPIC_CLUSTER_BUSY_STATUSES.has(statusKey);
+                const isExpanded = expandedClusterIds.has(clusterRowKey);
                 return (
-                  <div key={clusterRowKey} className={styles.clusterRow}>
+                  <div key={clusterRowKey} className={`${styles.clusterRow} ${isExpanded ? styles.clusterRowExpanded : ""}`}>
                     <div className={styles.clusterRowHead}>
+                      <button
+                        type="button"
+                        className={styles.clusterExpandToggle}
+                        onClick={() => toggleClusterExpanded(clusterRowKey)}
+                        aria-expanded={isExpanded}
+                        aria-label={isExpanded ? "Collapse cluster" : "Expand cluster"}
+                      >
+                        <Icon.ChevronRight className={`${styles.icon16} ${styles.clusterExpandChevron}`} />
+                      </button>
                       <div className={styles.clusterRowTitleBlock}>
                         <h3 className={styles.clusterRowSeed}>{cl.seed_intent}</h3>
                         <div className={styles.clusterRowMeta}>
@@ -8601,6 +8102,8 @@ export default function ProjectPage() {
                       </div>
                     </div>
 
+                    {isExpanded ? (
+                    <>
                     {(cl.generation_errors || []).length > 0 ? (
                       <div className={styles.clusterErrorsBox}>
                         {(cl.generation_errors || []).map((er) => (
@@ -8793,6 +8296,8 @@ export default function ProjectPage() {
                         })}
                       </ul>
                     </div>
+                    </>
+                    ) : null}
                   </div>
                 );
               })}
@@ -9380,7 +8885,6 @@ export default function ProjectPage() {
         {tab === "scheduled_articles" ? (
           <>
             <div className={`${styles.card} ${styles.cardWide} ${styles.articlesToolbar}`}>
-              {renderLimitStrip([monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles)])}
               {notice ? (
                 <p className={styles.muted} style={{ margin: "8px 0 0", color: "var(--aa-success, #16a34a)" }}>
                   {notice}
@@ -9401,14 +8905,23 @@ export default function ProjectPage() {
                       <option value="asc">Oldest → Latest</option>
                     </select>
                   </label>
-                  <label className={`${styles.articlesFilterField} ${styles.articlesFilterFieldWide}`}>
-                    <span className={styles.articlesFilterLabel}>Search</span>
-                    <input
+                  <label className={styles.articlesFilterField}>
+                    <span className={styles.articlesFilterLabel}>Status</span>
+                    <select
                       className={styles.articlesFilterControl}
-                      value={scheduledSearch}
-                      onChange={(e) => setScheduledSearch(e.target.value)}
-                      placeholder="Article title…"
-                    />
+                      value={scheduledStatusFilter}
+                      onChange={(e) => setScheduledStatusFilter(e.target.value)}
+                    >
+                      <option value="">All</option>
+                      <option value="scheduled">Scheduled</option>
+                      <option value="content_generating">Generating content</option>
+                      <option value="image_generating">Generating image</option>
+                      <option value="ready_to_post">Ready to post</option>
+                      <option value="posting">Posting</option>
+                      <option value="posted">Posted</option>
+                      <option value="failed">Failed</option>
+                      <option value="cancelled">Cancelled</option>
+                    </select>
                   </label>
                 </div>
 
@@ -9470,7 +8983,7 @@ export default function ProjectPage() {
                           <div className={styles.scheduledActions}>
                             {jobState === "posted" ? (
                               j.wp_link ? (
-                                <a className={styles.miniBtn} href={j.wp_link} target="_blank" rel="noreferrer">
+                                <a className={styles.scheduledViewLiveLink} href={j.wp_link} target="_blank" rel="noreferrer">
                                   View on Live
                                 </a>
                               ) : null
@@ -9560,7 +9073,7 @@ export default function ProjectPage() {
 
             {editJob ? (
               <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Re-schedule article">
-                <div className={styles.modalPanel}>
+                <div ref={editJobTrapRef} className={styles.modalPanel}>
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Re-schedule article</h3>
                     <button type="button" className={styles.btnSecondary} onClick={() => setEditJob(null)}>
@@ -9707,7 +9220,7 @@ export default function ProjectPage() {
 
             {confirmCancelJob ? (
               <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Cancel scheduled article">
-                <div className={styles.modalPanel}>
+                <div ref={confirmCancelJobTrapRef} className={styles.modalPanel}>
                   <div className={styles.modalHead}>
                     <h3 className={styles.modalTitle}>Cancel scheduled article</h3>
                     <button type="button" className={styles.btnSecondary} onClick={() => setConfirmCancelJob(null)}>
@@ -10358,38 +9871,16 @@ export default function ProjectPage() {
 
         {tab === "context_links" ? (
           <>
-            <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={styles.projectCardTop}>
-                <div>
-                  <h2 className={styles.clusterCardTitle}>Context links</h2>
-                  <p className={styles.clusterCardSubtitle}>
-                    Add exact phrases with target URLs. When an article publishes to WordPress,
-                    every match is linked on the live site (case-insensitive).
-                  </p>
-                </div>
-                <div className={styles.row} style={{ justifyContent: "flex-end" }}>
-                  <button
-                    className={styles.btnSecondary}
-                    type="button"
-                    onClick={startAddLink}
-                    disabled={linksLoading || linksSaving || contextLinkLimitReached}
-                    title={
-                      contextLinkLimitReached
-                        ? "Context link limit reached for your plan."
-                        : undefined
-                    }
-                  >
-                    + Add link
-                  </button>
-                  <button className={styles.button} type="button" onClick={saveContextLinks} disabled={linksLoading || linksSaving}>
-                    {linksSaving ? "Saving…" : "Save changes"}
-                  </button>
-                </div>
+            {linksLoading ? (
+              <div className={`${styles.card} ${styles.cardWide}`}>
+                <InlineListSkeleton rows={5} />
               </div>
-              {linksLoading ? <InlineListSkeleton rows={5} /> : null}
-              {renderLimitStrip([contextLinksLimitStatus()])}
-              {error ? <p className={styles.error}>{error}</p> : null}
-            </div>
+            ) : null}
+            {error ? (
+              <div className={`${styles.card} ${styles.cardWide}`}>
+                <p className={styles.error} style={{ margin: 0 }}>{error}</p>
+              </div>
+            ) : null}
 
             {(() => {
               const qn = linkSearch.trim().toLowerCase();
@@ -10914,859 +10405,362 @@ export default function ProjectPage() {
           </>
         ) : null}
 
-
-        {tab === "performance" ? (
+        {tab === "site_audit" ? (
           <div className={styles.analyticsStack}>
-            {/* ── Header bar: title + connection state + sub-tab + refresh ── */}
-            <div className={`${styles.card} ${styles.cardWide}`}>
-              <div className={styles.analyticsHeaderRow}>
-                <div className={styles.analyticsHeaderTitle}>
-                  <h2 className={styles.sectionTitle}>Performance & Analysis</h2>
-                  {analytics?.property_url || gscStatus?.property_url ? (
-                    <div className={styles.analyticsPropertyTag}>
-                      <span className={styles.analyticsPropertyDot} aria-hidden="true" />
-                      <span>
-                        Connected to{" "}
-                        <code className={styles.analyticsPropertyCode}>
-                          {(analytics?.property_url || gscStatus?.property_url || "").toString()}
-                        </code>
-                      </span>
-                    </div>
-                  ) : (
-                    <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
-                      No Search Console property linked yet.
-                    </p>
-                  )}
-                </div>
-                <div className={styles.analyticsHeaderActions}>
-                  <div className={styles.segmentGroup} aria-label="Performance view">
-                    {(["overview", "insights"] as const).map((st) => (
-                      <button key={st} type="button" className={styles.miniBtn}
-                        onClick={() => setPerformanceSubTab(st)} aria-pressed={performanceSubTab === st}>
-                        {st === "overview" ? "Overview" : "Insights"}
-                      </button>
-                    ))}
-                  </div>
-                  {performanceSubTab === "overview" ? (
-                    <button type="button" className={styles.miniBtn} onClick={() => reloadAnalytics()} disabled={analyticsBusy}>
-                      {analyticsBusy ? "Refreshing…" : "Refresh"}
-                    </button>
-                  ) : (
-                    <button type="button" className={styles.miniBtn} onClick={() => { setInsights(null); void reloadInsights(); }} disabled={insightsBusy}>
-                      {insightsBusy ? "Refreshing…" : "Refresh"}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* ── OVERVIEW ── */}
-              {performanceSubTab === "overview" ? (
-                <>
-                  {/* Date range segmented control */}
-                  <div className={styles.analyticsRangeBar}>
-                    <div className={styles.segmentGroup} aria-label="Date range">
-                      {([
-                        { d: 7, label: "7d" },
-                        { d: 28, label: "28d" },
-                        { d: 90, label: "90d" },
-                        { d: 180, label: "6m" },
-                        { d: 365, label: "12m" },
-                      ] as const).map(({ d, label }) => (
-                        <button key={d} type="button" className={styles.miniBtn}
-                          onClick={() => setAnalyticsRangePreset(d)}
-                          disabled={analyticsBusy} aria-pressed={analyticsRangePreset === d}>
-                          {label}
-                        </button>
-                      ))}
-                      <button type="button" className={styles.miniBtn}
-                        onClick={() => setAnalyticsRangePreset("custom")}
-                        disabled={analyticsBusy} aria-pressed={analyticsRangePreset === "custom"}>
-                        Custom…
-                      </button>
-                    </div>
-                    {analyticsRangePreset === "custom" ? (
-                      <div className={styles.analyticsCustomRange}>
-                        <span className={styles.muted} style={{ fontSize: 12 }}>From</span>
-                        <input type="date" className={styles.input} value={analyticsCustomStart}
-                          onChange={(e) => setAnalyticsCustomStart(e.target.value)}
-                          max={analyticsCustomEnd || undefined} style={{ height: 34, maxWidth: 160 }} />
-                        <span className={styles.muted} style={{ fontSize: 12 }}>to</span>
-                        <input type="date" className={styles.input} value={analyticsCustomEnd}
-                          onChange={(e) => setAnalyticsCustomEnd(e.target.value)}
-                          min={analyticsCustomStart || undefined}
-                          max={new Date().toISOString().slice(0, 10)} style={{ height: 34, maxWidth: 160 }} />
-                        <button type="button" className={styles.button} onClick={() => reloadAnalytics()}
-                          disabled={analyticsBusy || !analyticsCustomStart || !analyticsCustomEnd || analyticsCustomStart > analyticsCustomEnd}>
-                          Apply
-                        </button>
-                      </div>
-                    ) : null}
-                    {analytics?.range ? (
-                      <span className={styles.analyticsRangeMeta}>
-                        {analytics.range.start_date} → {analytics.range.end_date} · {analytics.range.days} days
-                      </span>
-                    ) : null}
-                  </div>
-
-                  {analyticsErr ? (
-                    <div className={styles.error} style={{ marginTop: 16 }}>{analyticsErr}</div>
-                  ) : analyticsBusy && !analytics ? (
-                    <div style={{ marginTop: 18 }}><AnalyticsPanelSkeleton variant="overview" /></div>
-                  ) : analytics ? (
-                    <>
-                      {/* KPI summary cards */}
-                      <div className={styles.kpiGrid}>
-                        {(() => {
-                          const s = analytics.series;
-                          const mid = Math.floor(s.length / 2);
-                          const pct = (a: number, b: number) => b === 0 ? null : Math.round(((a - b) / Math.abs(b)) * 100);
-                          const sumKey = (arr: typeof s, k: "clicks" | "impressions") => arr.reduce((acc, p) => acc + (p[k] || 0), 0);
-                          const avgKey = (arr: typeof s, k: "ctr" | "position") => arr.length === 0 ? 0 : arr.reduce((acc, p) => acc + (p[k] || 0), 0) / arr.length;
-                          const first = mid > 0 ? s.slice(0, mid) : [];
-                          const second = mid > 0 ? s.slice(mid) : [];
-                          const dClicks = mid > 0 ? pct(sumKey(second, "clicks"), sumKey(first, "clicks")) : null;
-                          const dImpr = mid > 0 ? pct(sumKey(second, "impressions"), sumKey(first, "impressions")) : null;
-                          const dCtr = mid > 0 ? pct(avgKey(second, "ctr"), avgKey(first, "ctr")) : null;
-                          const dPos = mid > 0 ? pct(avgKey(second, "position"), avgKey(first, "position")) : null;
-                          const tiles: Array<{ label: string; value: string; delta: number | null; accent: string; sub?: string; invertDelta?: boolean }> = [
-                            { label: "Total clicks", value: (analytics.totals.clicks || 0).toLocaleString(), delta: dClicks, accent: "clicks", sub: `${analytics.totals.days_with_data} days with data` },
-                            { label: "Total impressions", value: (analytics.totals.impressions || 0).toLocaleString(), delta: dImpr, accent: "impressions" },
-                            { label: "Avg CTR", value: `${((analytics.totals.ctr || 0) * 100).toFixed(2)}%`, delta: dCtr, accent: "ctr" },
-                            { label: "Avg position", value: (analytics.totals.position || 0).toFixed(1), delta: dPos, accent: "position", invertDelta: true },
-                          ];
-                          return tiles.map(({ label, value, delta, accent, sub, invertDelta }) => {
-                            const trend = delta === null ? "flat" : (invertDelta ? delta < 0 : delta > 0) ? "up" : (invertDelta ? delta > 0 : delta < 0) ? "down" : "flat";
-                            return (
-                              <div key={label} className={styles.kpiTile} data-accent={accent}>
-                                <div className={styles.kpiLabel}>{label}</div>
-                                <div className={styles.kpiValueRow}>
-                                  <div className={styles.kpiValue}>{value}</div>
-                                  {delta !== null ? (
-                                    <span className={styles.kpiDelta} data-trend={trend}>
-                                      {trend === "up" ? "↑" : trend === "down" ? "↓" : ""}
-                                      {Math.abs(delta)}%
-                                    </span>
-                                  ) : null}
-                                </div>
-                                {sub ? <div className={styles.kpiSub}>{sub}</div> : null}
-                              </div>
-                            );
-                          });
-                        })()}
-                      </div>
-
-                      {/* Chart with series toggles */}
-                      <div className={styles.analyticsChartBleed} style={{ marginTop: 20 }}>
-                        <div className={styles.chartSeriesBar}>
-                          {([
-                            { key: "clicks" as const, label: "Clicks", color: "var(--aa-primary)" },
-                            { key: "impressions" as const, label: "Impressions", color: "#5b9cf6" },
-                            { key: "position" as const, label: "Avg position", color: "#b97dff" },
-                          ]).map(({ key, label, color }) => (
-                            <button
-                              key={key}
-                              type="button"
-                              className={styles.chartSeriesBtn}
-                              aria-pressed={chartSeries[key]}
-                              onClick={() => setChartSeries((prev) => ({ ...prev, [key]: !prev[key] }))}
-                            >
-                              <span className={styles.chartSeriesDot} style={{ background: color, opacity: chartSeries[key] ? 1 : 0.3 }} />
-                              <span style={{ opacity: chartSeries[key] ? 1 : 0.45 }}>{label}</span>
-                            </button>
-                          ))}
-                          {analytics.markers.length > 0 ? (
-                            <span className={styles.analyticsLegendMeta}>
-                              <span className={styles.analyticsLegendSwatch} data-series="marker" style={{ display: "inline-block" }} />
-                              {" "}{analytics.markers.length} article{analytics.markers.length === 1 ? "" : "s"} published
-                            </span>
-                          ) : null}
-                        </div>
-                        <AnalyticsLineChart
-                          series={analytics.series}
-                          markers={analytics.markers}
-                          height={420}
-                          visible={chartSeries}
-                        />
-                      </div>
-                    </>
-                  ) : (
-                    <div className={styles.analyticsEmptyState}>
-                      {!gscStatus?.connected || !gscStatus?.property_url ? (
-                        <>
-                          <p className={styles.analyticsEmptyTitle}>Connect Search Console</p>
-                          <p className={styles.analyticsEmptyBody}>
-                            Link a Search Console property to see clicks, impressions, and ranking data for this site.
-                          </p>
-                          <button type="button" className={styles.button} onClick={() => goTab("tools")}>
-                            Open Tools to connect
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <p className={styles.analyticsEmptyTitle}>No traffic in this window</p>
-                          <p className={styles.analyticsEmptyBody}>
-                            Try a wider date range, or check back once Search Console has activity for this property.
-                          </p>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </>
-              ) : null}
-
-              {/* ── INSIGHTS headline KPIs ── */}
-              {performanceSubTab === "insights" ? (
-                <>
-                  {insightsErr ? (
-                    <div className={styles.error} style={{ marginTop: 16 }}>{insightsErr}</div>
-                  ) : insightsBusy && !insights ? (
-                    <div style={{ marginTop: 18 }}><AnalyticsPanelSkeleton variant="insights" /></div>
-                  ) : insights ? (
-                    <div className={styles.kpiGrid} style={{ marginTop: 18 }}>
-                      {([
-                        { key: "clicks" as const, label: "Total clicks", accent: "clicks" },
-                        { key: "impressions" as const, label: "Total impressions", accent: "impressions" },
-                      ] as const).map(({ key, label, accent }) => {
-                        const stat = insights.headline[key];
-                        const chg = stat.change_pct;
-                        const trend = chg === null ? "flat" : chg > 0 ? "up" : chg < 0 ? "down" : "flat";
-                        return (
-                          <div key={key} className={styles.kpiTile} data-accent={accent}>
-                            <div className={styles.kpiLabel}>{label}</div>
-                            <div className={styles.kpiValueRow}>
-                              <div className={styles.kpiValue}>
-                                {stat.value >= 1000 ? `${(stat.value / 1000).toFixed(1)}K` : stat.value.toLocaleString()}
-                              </div>
-                              {chg !== null ? (
-                                <span className={styles.kpiDelta} data-trend={trend}>
-                                  {trend === "up" ? "↑" : trend === "down" ? "↓" : ""}
-                                  {Math.abs(chg).toFixed(0)}%
-                                </span>
-                              ) : null}
-                            </div>
-                            <div className={styles.kpiSub}>vs previous {insights.period.days} days</div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className={styles.analyticsEmptyState}>
-                      {gscStatus?.connected && gscStatus?.property_url ? (
-                        <>
-                          <p className={styles.analyticsEmptyTitle}>Ready when you are</p>
-                          <p className={styles.analyticsEmptyBody}>
-                            Load Insights to see headline trends, top content, and the queries driving clicks to this site.
-                          </p>
-                          <button type="button" className={styles.button} onClick={() => void reloadInsights()}>
-                            Load Insights
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <p className={styles.analyticsEmptyTitle}>Connect Search Console</p>
-                          <p className={styles.analyticsEmptyBody}>
-                            Link a property to see which content and queries are driving clicks to this site.
-                          </p>
-                          <button type="button" className={styles.button} onClick={() => goTab("tools")}>
-                            Open Tools to connect
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </>
-              ) : null}
-            </div>{/* end header card */}
-
-            {/* ── OVERVIEW: Quick insight cards + sortable top pages table ── */}
-            {performanceSubTab === "overview" && analytics && analytics.top_pages.length > 0 ? (
+            {siteAuditSubTab === "technical" ? (
               <>
-                {/* Quick insight cards */}
-                {(() => {
-                  const pages = analytics.top_pages;
-                  const bestClicks = pages.reduce((a, b) => b.clicks > a.clicks ? b : a, pages[0]);
-                  const bestPos = pages.filter((p) => p.position > 0).reduce((a, b) => b.position < a.position ? b : a, pages.find((p) => p.position > 0) ?? pages[0]);
-                  const lowestCtr = [...pages].filter((p) => p.impressions > 50).sort((a, b) => a.ctr - b.ctr)[0];
-                  const bigOpp = [...pages].filter((p) => p.impressions > 0).sort((a, b) => (b.impressions * (1 - b.ctr)) - (a.impressions * (1 - a.ctr)))[0];
-                  const slug = (url: string) => { try { return new URL(url).pathname.replace(/^\/|\/$/g, "") || "/"; } catch { return url; } };
-                  const cards: Array<{ title: string; value: string; detail: string; url?: string } | null> = [
-                    bestClicks ? { title: "Best page", value: bestClicks.clicks.toLocaleString() + " clicks", detail: slug(bestClicks.url), url: bestClicks.url } : null,
-                    bestPos ? { title: "Best ranking", value: `#${bestPos.position.toFixed(1)}`, detail: slug(bestPos.url), url: bestPos.url } : null,
-                    lowestCtr ? { title: "Lowest CTR", value: `${(lowestCtr.ctr * 100).toFixed(2)}%`, detail: `${lowestCtr.impressions.toLocaleString()} impressions`, url: lowestCtr.url } : null,
-                    bigOpp ? { title: "Biggest opportunity", value: bigOpp.impressions.toLocaleString() + " impressions", detail: `${(bigOpp.ctr * 100).toFixed(2)}% CTR`, url: bigOpp.url } : null,
-                  ];
-                  return (
-                    <div className={styles.insightCardGrid}>
-                      {cards.filter(Boolean).map((c) => c && (
-                        <div key={c.title} className={styles.insightCard}>
-                          <div className={styles.insightCardTitle}>{c.title}</div>
-                          <div className={styles.insightCardValue}>{c.value}</div>
-                          <div className={styles.insightCardDetail} title={c.url}>
-                            {c.url ? (
-                              <a href={c.url} target="_blank" rel="noopener noreferrer" className={styles.tableLink}>{c.detail}</a>
-                            ) : c.detail}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-
-                {/* Top pages table with search + sort */}
-                <div className={`${styles.card} ${styles.cardWide}`}>
-                  <div className={styles.analyticsPanelHeadRow}>
-                    <h3 className={styles.sectionSecondaryTitle} style={{ margin: 0 }}>Top pages</h3>
-                    <input
-                      type="search"
-                      className={`${styles.input} ${styles.analyticsTableSearch}`}
-                      placeholder="Filter by URL…"
-                      value={topPagesSearch}
-                      onChange={(e) => setTopPagesSearch(e.target.value)}
-                    />
-                  </div>
-                  <div className={styles.analyticsTableWrap}>
-                    <table className={`${styles.table} ${styles.tableZebra} ${styles.analyticsTopPagesTable}`} style={{ border: 0 }}>
-                      <thead className={styles.analyticsTableSticky}>
-                        <tr>
-                          <th className={styles.th} style={{ width: "45%" }}>URL</th>
-                          {(["clicks", "impressions", "ctr", "position"] as const).map((col) => (
-                            <th
-                              key={col}
-                              className={`${styles.th} ${styles.thNum} ${styles.thSortable}`}
-                              onClick={() => {
-                                if (topPagesSortKey === col) {
-                                  setTopPagesSortDir((d) => d === "asc" ? "desc" : "asc");
-                                } else {
-                                  setTopPagesSortKey(col);
-                                  setTopPagesSortDir(col === "position" ? "asc" : "desc");
-                                }
-                              }}
-                              aria-sort={topPagesSortKey === col ? (topPagesSortDir === "asc" ? "ascending" : "descending") : "none"}
-                            >
-                              <span className={styles.thSortLabel}>
-                                {col === "ctr" ? "CTR" : col.charAt(0).toUpperCase() + col.slice(1)}
-                                <span className={styles.thSortIcon} aria-hidden="true">
-                                  {topPagesSortKey === col ? (topPagesSortDir === "asc" ? " ▲" : " ▼") : " ⇅"}
-                                </span>
-                              </span>
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(() => {
-                          const q = topPagesSearch.trim().toLowerCase();
-                          const filtered = analytics.top_pages.filter((r) => !q || r.url.toLowerCase().includes(q));
-                          const sorted = [...filtered].sort((a, b) => {
-                            const av = topPagesSortKey === "ctr" ? a.ctr : a[topPagesSortKey];
-                            const bv = topPagesSortKey === "ctr" ? b.ctr : b[topPagesSortKey];
-                            return topPagesSortDir === "asc" ? av - bv : bv - av;
-                          });
-                          if (sorted.length === 0) {
-                            return (
-                              <tr><td className={`${styles.td} ${styles.tdMuted}`} colSpan={5} style={{ textAlign: "center", padding: 20 }}>
-                                No pages match "{topPagesSearch}".
-                              </td></tr>
-                            );
-                          }
-                          return sorted.map((row) => {
-                            const slug = (() => { try { return new URL(row.url).pathname.replace(/^\/|\/$/g, "") || "/"; } catch { return row.url; } })();
-                            return (
-                              <tr key={row.url} className={styles.analyticsPageRow}>
-                                <td className={styles.td} style={{ maxWidth: 0 }}>
-                                  <a href={row.url} target="_blank" rel="noopener noreferrer"
-                                    className={styles.tableLink} title={row.url}
-                                    style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>
-                                    {slug}
-                                  </a>
-                                  <div className={styles.muted} style={{ fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 1 }}>
-                                    {row.url}
-                                  </div>
-                                </td>
-                                <td className={`${styles.td} ${styles.tdNum}`}>{row.clicks.toLocaleString()}</td>
-                                <td className={`${styles.td} ${styles.tdNum}`}>{row.impressions.toLocaleString()}</td>
-                                <td className={`${styles.td} ${styles.tdNum}`}>{(row.ctr * 100).toFixed(2)}%</td>
-                                <td className={`${styles.td} ${styles.tdNum}`}>{row.position.toFixed(1)}</td>
-                              </tr>
-                            );
-                          });
-                        })()}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 8 }}>
-                    {analytics.top_pages.length} URLs from the linked property · sorted by {topPagesSortKey}
-                  </div>
+                <div>
+                  <h2 className={styles.sectionTitle}>Technical Audit</h2>
+                  <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 13 }}>
+                    Google PageSpeed Insights performance, Core Web Vitals, and accessibility for your site.
+                  </p>
                 </div>
-              </>
-            ) : null}
-
-            {/* ── INSIGHTS: content + queries + countries ── */}
-            {performanceSubTab === "insights" && insights ? (
-              <>
-                {/* Your content */}
                 <div className={`${styles.card} ${styles.cardWide}`}>
-                  <div className={styles.analyticsPanelHeadRow}>
-                    <h3 className={styles.sectionSecondaryTitle}>Your content</h3>
-                    <div className={styles.segmentGroup}>
-                      {(["top", "up", "down"] as const).map((t) => (
-                        <button key={t} type="button" className={styles.miniBtn}
-                          onClick={() => setInsightsPagesTab(t)} aria-pressed={insightsPagesTab === t}>
-                          {t === "top" ? "Top" : t === "up" ? "Trending up" : "Trending down"}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {(() => {
-                    const sorted = [...insights.pages].filter((p) =>
-                      insightsPagesTab === "top" ? true :
-                      insightsPagesTab === "up" ? (p.change_pct ?? 0) > 0 :
-                      (p.change_pct ?? 0) < 0
-                    ).sort((a, b) =>
-                      insightsPagesTab === "top" ? b.clicks - a.clicks :
-                      insightsPagesTab === "up" ? (b.change_pct ?? 0) - (a.change_pct ?? 0) :
-                      (a.change_pct ?? 0) - (b.change_pct ?? 0)
-                    ).slice(0, 5);
-                    const rows: InsightTrendRow[] = sorted.map((row) => {
-                      const slug = (() => { try { return new URL(row.page).pathname.replace(/^\/|\/$/g, "") || "/"; } catch { return row.page; } })();
-                      return {
-                        key: row.page,
-                        primary: (
-                          <a href={row.page} target="_blank" rel="noopener noreferrer" className={styles.tableLink}
-                            style={{ fontSize: 13, fontWeight: 500, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {slug}
-                          </a>
-                        ),
-                        secondary: (
-                          <div className={styles.muted} style={{ fontSize: 11, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.page}</div>
-                        ),
-                        clicks: row.clicks,
-                        changePct: row.change_pct,
-                      };
-                    });
-                    return <InsightTrendRows rows={rows} emptyLabel="No data for this view." />;
-                  })()}
-                </div>
-
-                {/* Queries */}
-                <div className={`${styles.card} ${styles.cardWide}`}>
-                  <div className={styles.analyticsPanelHeadRow}>
-                    <h3 className={styles.sectionSecondaryTitle}>Queries leading to your site</h3>
-                    <div className={styles.segmentGroup}>
-                      {(["top", "up", "down"] as const).map((t) => (
-                        <button key={t} type="button" className={styles.miniBtn}
-                          onClick={() => setInsightsQueriesTab(t)} aria-pressed={insightsQueriesTab === t}>
-                          {t === "top" ? "Top" : t === "up" ? "Trending up" : "Trending down"}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {(() => {
-                    const sorted = [...insights.queries].filter((q) =>
-                      insightsQueriesTab === "top" ? true :
-                      insightsQueriesTab === "up" ? (q.change_pct ?? 0) > 0 :
-                      (q.change_pct ?? 0) < 0
-                    ).sort((a, b) =>
-                      insightsQueriesTab === "top" ? b.clicks - a.clicks :
-                      insightsQueriesTab === "up" ? (b.change_pct ?? 0) - (a.change_pct ?? 0) :
-                      (a.change_pct ?? 0) - (b.change_pct ?? 0)
-                    ).slice(0, 5);
-                    const rows: InsightTrendRow[] = sorted.map((row) => ({
-                      key: row.query,
-                      primary: <span style={{ fontSize: 13, fontWeight: 500 }}>{row.query}</span>,
-                      clicks: row.clicks,
-                      changePct: row.change_pct,
-                    }));
-                    return <InsightTrendRows rows={rows} emptyLabel="No data for this view." />;
-                  })()}
-                </div>
-
-                {/* Countries + traffic sources */}
-                <div className={styles.analyticsInsightsGrid}>
-                  <div className={`${styles.card} ${styles.cardWide}`}>
-                    <h3 style={{ marginTop: 0, marginBottom: 14 }} className={styles.sectionSecondaryTitle}>Top countries</h3>
-                    {insights.countries.length === 0 ? (
-                      <div className={styles.muted} style={{ fontSize: 13 }}>No country data available.</div>
-                    ) : (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                        {insights.countries.slice(0, 5).map((c) => (
-                          <div key={c.country_code} className={styles.analyticsCountryRow}>
-                            <span className={styles.analyticsCountryFlag}>{c.flag || "🌐"}</span>
-                            <span className={styles.analyticsCountryName}>{c.country_name}</span>
-                            <div className={styles.analyticsCountryTrack}>
-                              <div className={styles.analyticsCountryFill} style={{ width: `${c.share_pct}%` }} />
-                            </div>
-                            <span className={styles.analyticsCountryShare}>{c.share_pct.toFixed(0)}%</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  {insights.traffic_sources.length > 0 ? (
-                    <div className={styles.card} style={{ minWidth: 200 }}>
-                      <h3 style={{ marginTop: 0, marginBottom: 14 }} className={styles.sectionSecondaryTitle}>Additional traffic sources</h3>
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                        {insights.traffic_sources.map((s) => (
-                          <div key={s.source} className={styles.analyticsSourceRow}>
-                            <span style={{ fontSize: 13 }}>{s.source}</span>
-                            <span style={{ fontSize: 14, fontWeight: 700 }}>{s.clicks.toLocaleString()}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </>
-            ) : null}
-
-            {/* ── GSC TOOLS: Sitemap submission + Indexing status ── */}
-            {gscStatus?.connected && (gscStatus?.property_url || "").trim() ? (
-              <>
-                {/* Sitemap submission */}
-                <div className={`${styles.card} ${styles.cardWide}`}>
-                  <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Sitemap submission</h3>
-                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
-                    Register your sitemap once and Google will recrawl it on its own schedule — every
-                    future article gets discovered without per-post action. Sitemap submission is the
-                    officially supported public API for telling Search Console about new URLs.
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "stretch" }}>
-                    <input
-                      type="url"
-                      className={styles.input}
-                      placeholder={gscSitemapSuggested || "https://example.com/sitemap.xml"}
-                      value={sitemapInput}
-                      onChange={(e) => setSitemapInput(e.target.value)}
-                      disabled={sitemapBusy === "submit" || sitemapBusy === "delete"}
-                    />
-                    <button
-                      type="button"
-                      className={styles.button}
-                      onClick={submitProjectSitemap}
-                      disabled={sitemapBusy === "submit" || sitemapBusy === "delete"}
-                    >
-                      {sitemapBusy === "submit" ? "Submitting…" : "Submit sitemap"}
-                    </button>
-                  </div>
-                  <div className={styles.muted} style={{ fontSize: 11, marginTop: 6, lineHeight: 1.45 }}>
-                    Default suggestion is <code>{gscSitemapSuggested || "—"}</code> (the WordPress core
-                    sitemap). If you use Yoast or RankMath the index sitemap usually lives at{" "}
-                    <code>/sitemap_index.xml</code> — paste that URL and submit it instead.
-                  </div>
-
-                  {sitemapMsg ? (
-                    <div className={styles.muted} style={{ fontSize: 13, marginTop: 10, lineHeight: 1.5 }}>
-                      {sitemapMsg}
-                    </div>
-                  ) : null}
-
-                  <div style={{ marginTop: 16 }}>
-                    <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                      <div style={{ fontWeight: 700 }}>Registered sitemaps</div>
-                      <button
-                        type="button"
-                        className={styles.miniBtn}
-                        onClick={() => reloadProjectSitemaps()}
-                        disabled={sitemapBusy === "load"}
-                      >
-                        {sitemapBusy === "load" ? "Refreshing…" : "Refresh"}
-                      </button>
-                    </div>
-                    {gscSitemaps.length === 0 ? (
-                      <div className={styles.muted} style={{ fontSize: 13 }}>
-                        No sitemaps registered yet. Submit one above to enable automatic discovery.
-                      </div>
-                    ) : (
-                      <div style={{ overflowX: "auto" }}>
-                        <table className={`${styles.table} ${styles.tableZebra}`}>
-                          <thead>
-                            <tr>
-                              <th className={styles.th}>Sitemap URL</th>
-                              <th className={styles.th}>Last submitted</th>
-                              <th className={`${styles.th} ${styles.thNum}`}>Submitted</th>
-                              <th className={`${styles.th} ${styles.thNum}`}>Indexed</th>
-                              <th className={styles.th}>Status</th>
-                              <th className={styles.th} style={{ textAlign: "right" }}>Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {gscSitemaps.map((s) => {
-                              const isDeleting = sitemapBusy === "delete" && sitemapDeletingPath === s.path;
-                              const errs = s.errors || 0;
-                              const warns = s.warnings || 0;
-                              const pillClass = errs > 0
-                                ? `${styles.statusPill} ${styles.pillDanger}`
-                                : warns > 0
-                                ? `${styles.statusPill} ${styles.pillWarn}`
-                                : `${styles.statusPill} ${styles.pillSuccess}`;
-                              const pillLabel = errs > 0
-                                ? `${errs} error${errs === 1 ? "" : "s"}`
-                                : warns > 0
-                                ? `${warns} warning${warns === 1 ? "" : "s"}`
-                                : "OK";
-                              return (
-                                <tr key={s.path}>
-                                  <td className={styles.td} style={{ maxWidth: 360, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                    <a href={s.path} target="_blank" rel="noopener noreferrer" className={styles.tableLink}>
-                                      {s.path}
-                                    </a>
-                                  </td>
-                                  <td className={`${styles.td} ${styles.tdMuted}`} style={{ fontSize: 12 }}>
-                                    {s.last_submitted ? new Date(s.last_submitted).toLocaleString() : "—"}
-                                  </td>
-                                  <td className={`${styles.td} ${styles.tdNum}`}>{s.submitted_urls || "—"}</td>
-                                  <td className={`${styles.td} ${styles.tdNum}`}>{s.indexed_urls || "—"}</td>
-                                  <td className={styles.td}>
-                                    <span className={pillClass}>{pillLabel}</span>
-                                  </td>
-                                  <td className={styles.td} style={{ textAlign: "right" }}>
-                                    <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                                      <button
-                                        type="button"
-                                        className={styles.miniBtn}
-                                        onClick={() => {
-                                          setSitemapInput(s.path);
-                                          void submitProjectSitemap();
-                                        }}
-                                        disabled={Boolean(sitemapBusy)}
-                                      >
-                                        Resubmit
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className={`${styles.miniBtn} ${styles.miniDanger}`}
-                                        onClick={() => deleteProjectSitemap(s.path)}
-                                        disabled={Boolean(sitemapBusy)}
-                                      >
-                                        {isDeleting ? "Removing…" : "Remove"}
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Existing articles — indexing status */}
-                <div className={`${styles.card} ${styles.cardWide}`}>
-                  <h3 style={{ marginTop: 0 }} className={`${styles.sectionSecondaryTitle}`}>Existing articles — indexing status</h3>
-                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
-                    <strong>Check</strong> reads the URL&apos;s current coverage from Search Console (read-only).{" "}
-                    <strong>Index now</strong> pings Google&apos;s Indexing API (officially supported only for
-                    JobPosting / BroadcastEvent — for general articles it&apos;s a discovery hint and is{" "}
-                    <em>not</em> reflected in URL Inspection&apos;s history) and pings your sitemap, then opens
-                    Search Console&apos;s URL Inspection panel pre-filled with the URL. Pressing{" "}
-                    <strong>REQUEST INDEXING</strong> there is the only action that produces the visible
-                    &ldquo;Indexing requested&rdquo; entry in Search Console.
-                  </div>
-                  {(() => {
-                    if (indexingArticlesLoading) {
-                      return <TextLinesSkeleton lines={3} />;
-                    }
-                    const allPublished = indexingArticles;
-                    if (!allPublished.length) {
-                      return (
-                        <div className={styles.muted} style={{ fontSize: 13 }}>
-                          No published articles yet. Once an article goes live, it will appear here.
-                        </div>
-                      );
-                    }
-
-                    const q = indexingSearch.trim().toLowerCase();
-                    const filtered = allPublished.filter((a) => {
-                      const status = articleIndexStatus[a.id];
-                      const coverage = (status?.coverage_state || a.gsc_status || "").toString().toLowerCase();
-                      if (indexingStatusFilter && coverage !== indexingStatusFilter) return false;
-                      if (!q) return true;
-                      const hay = `${a.title || ""} ${a.wp_link || ""}`.toLowerCase();
-                      return hay.includes(q);
-                    });
-
-                    const total = filtered.length;
-                    const totalPages = Math.max(1, Math.ceil(total / indexingPageSize));
-                    const safePage = Math.min(Math.max(1, indexingPage), totalPages);
-                    const pageStart = (safePage - 1) * indexingPageSize;
-                    const pageRows = filtered.slice(pageStart, pageStart + indexingPageSize);
-
-                    const pillFor = (coverage: string) => {
-                      const s = (coverage || "").toLowerCase();
-                      if (s === "indexed" || s === "valid")
-                        return { cls: `${styles.statusPill} ${styles.pillSuccess}`, label: "Indexed" };
-                      if (s === "requested" || s === "manual_required" || s === "sitemap_pinged" || s === "index_api_pinged")
-                        return { cls: `${styles.statusPill} ${styles.pillInfo}`, label: "Requested" };
-                      if (s === "inspected")
-                        return { cls: `${styles.statusPill} ${styles.pillInfo}`, label: "Inspected" };
-                      if (s === "error" || s === "failed")
-                        return { cls: `${styles.statusPill} ${styles.pillDanger}`, label: "Error" };
-                      if (s === "pending" || !s)
-                        return { cls: `${styles.statusPill} ${styles.pillNeutral}`, label: "Pending" };
-                      return { cls: `${styles.statusPill} ${styles.pillNeutral}`, label: coverage };
-                    };
-
-                    return (
-                      <>
-                        <div className={styles.row} style={{ gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
-                          <input
-                            className={styles.input}
-                            type="search"
-                            placeholder="Search title or URL…"
-                            value={indexingSearch}
-                            onChange={(e) => {
-                              setIndexingSearch(e.target.value);
-                              setIndexingPage(1);
-                            }}
-                            style={{ maxWidth: 260, height: 36 }}
-                          />
-                          <select
-                            className={styles.input}
-                            value={indexingStatusFilter}
-                            onChange={(e) => {
-                              setIndexingStatusFilter(e.target.value);
-                              setIndexingPage(1);
-                            }}
-                            style={{ maxWidth: 200, height: 36 }}
-                          >
-                            <option value="">All statuses</option>
-                            <option value="pending">Pending</option>
-                            <option value="inspected">Inspected</option>
-                            <option value="requested">Requested</option>
-                            <option value="indexed">Indexed</option>
-                            <option value="manual_required">Manual required</option>
-                          </select>
-                          <select
-                            className={styles.input}
-                            value={String(indexingPageSize)}
-                            onChange={(e) => {
-                              setIndexingPageSize(parseInt(e.target.value, 10) || 10);
-                              setIndexingPage(1);
-                            }}
-                            style={{ maxWidth: 130, height: 36 }}
-                            title="Rows per page"
-                          >
-                            <option value="10">10 / page</option>
-                            <option value="25">25 / page</option>
-                            <option value="50">50 / page</option>
-                            <option value="100">100 / page</option>
-                          </select>
-                          <span className={styles.muted} style={{ fontSize: 12, marginLeft: "auto" }}>
-                            Showing {pageRows.length} of {total} ({allPublished.length} published)
+                  <div className={styles.analyticsHeaderRow}>
+                    <div className={styles.analyticsHeaderTitle}>
+                      {technicalAudit?.website?.url ? (
+                        <div className={styles.analyticsPropertyTag}>
+                          {faviconUrlForSite(technicalAudit.website.url) ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={faviconUrlForSite(technicalAudit.website.url) as string}
+                              alt=""
+                              className={styles.siteAuditWebsiteFavicon}
+                              width={20}
+                              height={20}
+                            />
+                          ) : (
+                            <span className={styles.analyticsPropertyDot} aria-hidden="true" />
+                          )}
+                          <span>
+                            <a href={technicalAudit.website.url} target="_blank" rel="noreferrer">
+                              <code className={styles.analyticsPropertyCode}>{technicalAudit.website.url}</code>
+                            </a>
                           </span>
                         </div>
+                      ) : (
+                        <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
+                          {technicalAudit ? "Website not connected." : "Loading…"}
+                        </p>
+                      )}
+                      {technicalAudit?.audit ? (
+                        <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 12 }}>
+                          Last audited: {formatSiteAuditTimestamp(technicalAudit.audit.created_at)}
+                        </p>
+                      ) : null}
+                      <span className={`${styles.statusPill} ${styles.statusNeutral}`} style={{ marginTop: 8, display: "inline-block" }}>
+                        Powered by Google PageSpeed Insights
+                      </span>
+                    </div>
+                    <div className={styles.analyticsHeaderActions}>
+                      {!technicalAudit && technicalAuditBusy ? (
+                        <button type="button" className={styles.btnSecondary} disabled>
+                          Loading…
+                        </button>
+                      ) : technicalAudit?.website?.connected ? (
+                        <button
+                          type="button"
+                          className={styles.button}
+                          onClick={() => void runTechnicalAuditNow()}
+                          disabled={technicalAuditRunning || !technicalAudit?.pagespeed_configured}
+                          title={!technicalAudit?.pagespeed_configured ? "Google PageSpeed Insights is not configured on the backend" : undefined}
+                        >
+                          {technicalAuditRunning ? (
+                            <>
+                              <span className={styles.siteAuditBtnSpinner} aria-hidden="true" />
+                              Running Audit…
+                            </>
+                          ) : technicalAuditJustCompleted ? (
+                            "Audit Complete"
+                          ) : technicalAuditErr ? (
+                            "Retry Audit"
+                          ) : technicalAudit?.audit ? (
+                            "Re-run Audit"
+                          ) : (
+                            "Run Technical Audit"
+                          )}
+                        </button>
+                      ) : technicalAudit ? (
+                        <button type="button" className={styles.btnSecondary} onClick={() => goTab("project_settings")}>
+                          Go to Project Settings
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
 
-                        <div style={{ overflowX: "auto", border: "1px solid var(--aa-hairline)", borderRadius: 12 }}>
-                          <table className={`${styles.table} ${styles.tableZebra}`} style={{ border: "0" }}>
-                            <thead>
-                              <tr>
-                                <th className={styles.th} style={{ width: "30%" }}>Title</th>
-                                <th className={styles.th} style={{ width: "40%" }}>Live URL</th>
-                                <th className={styles.th} style={{ width: 110 }}>Status</th>
-                                <th className={styles.th} style={{ textAlign: "right" }}>Actions</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {pageRows.map((a) => {
-                                const busy = articleIndexBusy[a.id];
-                                const msg = articleIndexMsg[a.id];
-                                const status = articleIndexStatus[a.id];
-                                const result = articleIndexResult[a.id];
-                                const inspectUrl = result?.inspect_panel_url || "";
-                                const coverage = (status?.coverage_state || a.gsc_status || "").toString();
-                                const pill = pillFor(coverage);
-                                return (
-                                  <tr key={a.id}>
-                                    <td className={styles.td} style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={a.title}>
-                                      {a.title || "(untitled)"}
-                                    </td>
-                                    <td className={styles.td} style={{ maxWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                                      <a href={a.wp_link || "#"} target="_blank" rel="noopener noreferrer" className={styles.tableLink} title={a.wp_link || ""}>
-                                        {a.wp_link}
-                                      </a>
-                                    </td>
-                                    <td className={styles.td}>
-                                      <span className={pill.cls}>{pill.label}</span>
-                                      {msg ? (
-                                        <div className={styles.muted} style={{ fontSize: 11, marginTop: 4, lineHeight: 1.45 }}>
-                                          {msg}
-                                        </div>
-                                      ) : null}
-                                    </td>
-                                    <td className={styles.td} style={{ textAlign: "right" }}>
-                                      <div className={styles.row} style={{ gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
-                                        <button
-                                          type="button"
-                                          className={styles.miniBtn}
-                                          onClick={() => checkArticleIndexing(a.id)}
-                                          disabled={Boolean(busy)}
-                                        >
-                                          {busy === "check" ? "Checking…" : "Check"}
-                                        </button>
-                                        <button
-                                          type="button"
-                                          className={`${styles.miniBtn} ${styles.miniPrimary}`}
-                                          onClick={() => requestArticleIndexing(a.id)}
-                                          disabled={Boolean(busy)}
-                                        >
-                                          {busy === "request" ? "Submitting…" : "Index now"}
-                                        </button>
-                                        {inspectUrl ? (
-                                          <a
-                                            href={inspectUrl}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className={styles.miniBtn}
-                                            title="Opens Google Search Console URL Inspection pre-filled with this URL — press REQUEST INDEXING there to actually queue a crawl that shows up in URL Inspection history."
-                                          >
-                                            GSC ↗
-                                          </a>
-                                        ) : null}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                              {pageRows.length === 0 ? (
-                                <tr>
-                                  <td className={`${styles.td} ${styles.tdMuted}`} colSpan={4} style={{ textAlign: "center", padding: 18 }}>
-                                    No articles match the current filters.
-                                  </td>
-                                </tr>
-                              ) : null}
-                            </tbody>
-                          </table>
-                          <div className={styles.pagerBar}>
-                            <span>Page {safePage} / {totalPages}</span>
-                            <div className={styles.row} style={{ gap: 6 }}>
-                              <button
-                                type="button"
-                                className={styles.miniBtn}
-                                onClick={() => setIndexingPage((p) => Math.max(1, p - 1))}
-                                disabled={safePage <= 1}
-                              >
-                                ← Prev
-                              </button>
-                              <button
-                                type="button"
-                                className={styles.miniBtn}
-                                onClick={() => setIndexingPage((p) => Math.min(totalPages, p + 1))}
-                                disabled={safePage >= totalPages}
-                              >
-                                Next →
+                {technicalAudit && !technicalAudit.pagespeed_configured ? (
+                  <div className={`${styles.card} ${styles.cardWide}`}>
+                    <p className={styles.muted} style={{ margin: 0 }}>
+                      Google PageSpeed Insights is not configured on the backend yet. Technical Audit will be available once it is.
+                    </p>
+                  </div>
+                ) : null}
+
+                {technicalAuditErr ? (
+                  <div className={`${styles.card} ${styles.cardWide}`} style={{ borderColor: "var(--aa-error)" }}>
+                    <p style={{ margin: 0, color: "var(--aa-error)", fontSize: 13 }}>{technicalAuditErr}</p>
+                  </div>
+                ) : null}
+
+                {technicalAuditRunning ? (
+                  <div className={`${styles.card} ${styles.cardWide}`}>
+                    <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Running Site Audit</p>
+                    <SiteAuditRunChecklist styles={styles} />
+                    <p className={styles.muted} style={{ margin: 0, fontSize: 12 }}>
+                      Fetching mobile and desktop performance data. This can take up to a minute.
+                    </p>
+                  </div>
+                ) : null}
+
+                {!technicalAuditBusy && technicalAudit && !technicalAudit.audit && !technicalAuditRunning ? (
+                  <div className={`${styles.card} ${styles.cardWide}`} style={{ alignItems: "center", textAlign: "center", padding: "40px 24px" }}>
+                    <p style={{ margin: 0, fontWeight: 600 }}>No audit has been performed yet.</p>
+                    <p className={styles.muted} style={{ margin: 0, maxWidth: 420 }}>
+                      Run a Technical Audit to analyze your website&rsquo;s performance, Core Web Vitals, accessibility, and best practices.
+                    </p>
+                  </div>
+                ) : null}
+
+                {technicalAudit?.audit
+                  ? (() => {
+                      const latest = technicalAudit.audit!;
+                      const previousAudit = technicalAuditHistory.length > 1 ? technicalAuditHistory[1] : null;
+                      const selected = selectedHistoricalRunId
+                        ? technicalAuditHistory.find((r) => r.id === selectedHistoricalRunId) || null
+                        : null;
+                      const displayedRun = selected || latest;
+                      return (
+                        <>
+                          <TechnicalAuditSummary audit={latest} previousAudit={previousAudit} strategy={technicalAuditStrategy} styles={styles} />
+                          <TechnicalAuditTrendChart history={technicalAuditHistory} styles={styles} />
+                          <TechnicalAuditHistoryList
+                            history={technicalAuditHistory}
+                            selectedRunId={selectedHistoricalRunId}
+                            onSelectRun={setSelectedHistoricalRunId}
+                            styles={styles}
+                          />
+                          {selected ? (
+                            <div className={`${styles.card} ${styles.cardWide}`} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                              <p style={{ margin: 0, fontSize: 13 }}>
+                                Viewing audit from <strong>{formatSiteAuditTimestamp(selected.created_at)}</strong>
+                              </p>
+                              <button type="button" className={styles.btnSecondary} onClick={() => setSelectedHistoricalRunId(null)}>
+                                Back to latest
                               </button>
                             </div>
-                          </div>
-                        </div>
-                      </>
-                    );
-                  })()}
-                </div>
+                          ) : null}
+                          <TechnicalAuditResults
+                            audit={displayedRun}
+                            strategy={technicalAuditStrategy}
+                            onStrategyChange={setTechnicalAuditStrategy}
+                            styles={styles}
+                          />
+                          <SiteAuditInsightBanner styles={styles} seed={displayedRun.id} />
+                        </>
+                      );
+                    })()
+                  : null}
               </>
-            ) : null}
+            ) : (
+              <>
+                <div className={styles.analyticsHeaderRow}>
+                  <div>
+                    <h2 className={styles.sectionTitle}>SEO Audit</h2>
+                    <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 13 }}>
+                      Crawl your site to find indexability, on-page SEO, and internal linking issues.
+                    </p>
+                  </div>
+                  <div className={styles.analyticsHeaderActions}>
+                    {!seoAudit && seoAuditBusy ? (
+                      <button type="button" className={styles.btnSecondary} disabled>
+                        Loading…
+                      </button>
+                    ) : seoAudit?.website?.connected && !seoAuditRunning && seoAudit?.audit?.status === "partial" ? (
+                      <>
+                        <button type="button" className={styles.btnSecondary} onClick={() => void runSeoAuditNow(true)}>
+                          Start Fresh Audit
+                        </button>
+                        <button type="button" className={styles.button} onClick={() => void resumeSeoAuditNow()}>
+                          Continue Crawling
+                        </button>
+                      </>
+                    ) : seoAudit?.website?.connected && !seoAuditRunning && (seoAudit?.audit?.counts?.fetched ?? 0) > 0 ? (
+                      <>
+                        <button
+                          type="button"
+                          className={styles.btnSecondary}
+                          onClick={() => void runSeoAuditNow(true)}
+                          title="Re-crawl every page from scratch instead of only the homepage and new links"
+                        >
+                          Start Fresh Audit
+                        </button>
+                        <button
+                          type="button"
+                          className={styles.button}
+                          onClick={() => void runSeoAuditNow(false)}
+                          title="Re-fetch the homepage and any new links; pages already crawled are carried forward, not re-verified"
+                        >
+                          {seoAuditJustCompleted ? "Audit Complete" : "Update Audit"}
+                        </button>
+                      </>
+                    ) : seoAudit?.website?.connected ? (
+                      <button type="button" className={styles.button} onClick={() => void runSeoAuditNow()} disabled={seoAuditRunning}>
+                        {seoAuditRunning ? (
+                          <>
+                            <span className={styles.siteAuditBtnSpinner} aria-hidden="true" />
+                            Crawling…
+                          </>
+                        ) : seoAuditJustCompleted ? (
+                          "Audit Complete"
+                        ) : seoAuditErr ? (
+                          "Retry Audit"
+                        ) : (
+                          "Run SEO Audit"
+                        )}
+                      </button>
+                    ) : seoAudit ? (
+                      <button type="button" className={styles.btnSecondary} onClick={() => goTab("project_settings")}>
+                        Go to Project Settings
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+                {seoAuditErr ? (
+                  <div className={`${styles.card} ${styles.cardWide}`} style={{ borderColor: "var(--aa-error)" }}>
+                    <p style={{ margin: 0, color: "var(--aa-error)", fontSize: 13 }}>{seoAuditErr}</p>
+                  </div>
+                ) : null}
+
+                {seoAuditRunning ? (
+                  <div className={`${styles.card} ${styles.cardWide}`}>
+                    <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Crawling your site</p>
+                    <SeoAuditRunProgress counts={seoAudit?.audit?.counts} analysisProgress={seoAudit?.audit?.analysis_progress} styles={styles} />
+                    {seoAudit?.audit?.counts && (seoAudit.audit.counts.blocked || seoAudit.audit.counts.failed) ? (
+                      <p className={styles.muted} style={{ margin: 0, fontSize: 12 }}>
+                        {seoAudit.audit.counts.blocked ? `${seoAudit.audit.counts.blocked} blocked by robots.txt` : ""}
+                        {seoAudit.audit.counts.blocked && seoAudit.audit.counts.failed ? " · " : ""}
+                        {seoAudit.audit.counts.failed ? `${seoAudit.audit.counts.failed} failed` : ""}
+                      </p>
+                    ) : !seoAudit?.audit?.counts?.discovered ? (
+                      <p className={styles.muted} style={{ margin: 0, fontSize: 12 }}>
+                        This can take a few minutes depending on site size.
+                      </p>
+                    ) : null}
+                    {seoAudit?.audit?.id ? <SeoAuditCompactCrawlStatus projectId={projectId} auditId={seoAudit.audit.id} styles={styles} /> : null}
+                  </div>
+                ) : null}
+
+                {/* Overview numbers update in place from the same 5s poll while the crawl is
+                    still running -- Crawled/Internal/External/Broken/Redirects are all live-
+                    counted per page as it's fetched (see crawler.py's CrawlCounts); Issues stays
+                    "--" until analysis genuinely has a result, it isn't derivable mid-crawl. */}
+                {seoAuditRunning && seoAudit?.audit && seoAudit.audit.counts.fetched > 0 ? (
+                  <>
+                    <div className={`${styles.card} ${styles.cardWide}`}>
+                      <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Overview (live)</p>
+                      <SeoAuditKpiStrip audit={seoAudit.audit} projectId={projectId} history={seoAuditHistory} styles={styles} />
+                    </div>
+                    <div className={styles.seoAuditOverviewGrid}>
+                      <SeoAuditPreviewIssuesTable projectId={projectId} auditId={seoAudit.audit.id} styles={styles} />
+                      <SeoAuditIndexabilityDonut breakdown={seoAudit.audit.counts.indexability_breakdown} styles={styles} />
+                    </div>
+                  </>
+                ) : null}
+
+                {!seoAuditBusy && seoAudit && !seoAudit.audit && !seoAuditRunning ? (
+                  <div className={`${styles.card} ${styles.cardWide}`} style={{ alignItems: "center", textAlign: "center", padding: "40px 24px" }}>
+                    <p style={{ margin: 0, fontWeight: 600 }}>No SEO Audit has been run yet.</p>
+                    <p className={styles.muted} style={{ margin: 0, maxWidth: 420 }}>
+                      Run an SEO Audit to crawl your site and analyze indexability, on-page SEO, and internal linking.
+                    </p>
+                  </div>
+                ) : null}
+
+                {seoAudit?.audit && (seoAudit.audit.status === "completed" || seoAudit.audit.status === "partial" || seoAudit.audit.status === "cancelled")
+                  ? (() => {
+                      const latest = seoAudit.audit!;
+                      const selected = selectedSeoHistoricalRunId ? seoAuditHistory.find((r) => r.id === selectedSeoHistoricalRunId) || null : null;
+                      const displayedRun = selected || latest;
+                      const SEO_SECONDARY_TABS = [
+                        { key: "overview" as const, label: "Overview", disabled: false },
+                        { key: "issues" as const, label: "Issues", disabled: false },
+                        { key: "explorer" as const, label: "Page Explorer", disabled: false },
+                        { key: "history" as const, label: "Crawl History", disabled: false },
+                        { key: "structure" as const, label: "Site Structure", disabled: true },
+                        { key: "segments" as const, label: "Segments", disabled: true },
+                        { key: "reports" as const, label: "Reports", disabled: true },
+                        { key: "settings" as const, label: "Settings", disabled: true },
+                      ];
+                      return (
+                        <>
+                          {selected ? (
+                            <div className={`${styles.card} ${styles.cardWide}`} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                              <p style={{ margin: 0, fontSize: 13 }}>
+                                Viewing audit from <strong>{formatSiteAuditTimestamp(selected.completed_at || selected.started_at)}</strong>
+                              </p>
+                              <button type="button" className={styles.btnSecondary} onClick={() => setSelectedSeoHistoricalRunId(null)}>
+                                Back to latest
+                              </button>
+                            </div>
+                          ) : null}
+
+                          <Tabs
+                            value={seoAuditSecondaryTab}
+                            onValueChange={(v) => setSeoAuditSecondaryTab(v as "overview" | "issues" | "explorer" | "history")}
+                          >
+                            <TabsList className="flex-wrap" aria-label="SEO Audit sections">
+                              {SEO_SECONDARY_TABS.map((t) =>
+                                t.disabled ? (
+                                  <span
+                                    key={t.key}
+                                    className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-[7px] px-[14px] py-[7px] text-sm font-semibold text-ink-tertiary opacity-60"
+                                    title="Coming soon"
+                                  >
+                                    {t.label}
+                                    <span className="rounded-full bg-surface-sunken px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink-tertiary">
+                                      Soon
+                                    </span>
+                                  </span>
+                                ) : (
+                                  <TabsTrigger key={t.key} value={t.key}>
+                                    {t.label}
+                                  </TabsTrigger>
+                                ),
+                              )}
+                            </TabsList>
+
+                            <TabsContent value="overview">
+                              <div className={styles.analyticsStack}>
+                                <SeoAuditKpiStrip audit={displayedRun} projectId={projectId} history={seoAuditHistory} styles={styles} />
+                                <SeoAuditIssuesTrendChart history={seoAuditHistory} styles={styles} />
+                                <SeoAuditTopIssuesTable
+                                  projectId={projectId}
+                                  auditId={displayedRun.id}
+                                  totalCrawled={displayedRun.counts.fetched}
+                                  onViewAll={() => setSeoAuditSecondaryTab("issues")}
+                                  styles={styles}
+                                />
+                                <SeoAuditCrawlStats audit={displayedRun} projectId={projectId} styles={styles} />
+                              </div>
+                            </TabsContent>
+
+                            <TabsContent value="issues">
+                              <SeoAuditIssuesList projectId={projectId} auditId={displayedRun.id} totalCrawled={displayedRun.counts.fetched} styles={styles} />
+                            </TabsContent>
+                            <TabsContent value="explorer">
+                              <SeoAuditUrlExplorer projectId={projectId} auditId={displayedRun.id} styles={styles} />
+                            </TabsContent>
+                            <TabsContent value="history">
+                              <SeoAuditHistoryList history={seoAuditHistory} selectedRunId={selectedSeoHistoricalRunId} onSelectRun={setSelectedSeoHistoricalRunId} styles={styles} />
+                            </TabsContent>
+                          </Tabs>
+                        </>
+                      );
+                    })()
+                  : null}
+              </>
+            )}
           </div>
         ) : null}
 
@@ -11942,20 +10936,20 @@ export default function ProjectPage() {
 
         {tab === "project_settings" && isProjectOwner ? (
           <div className={styles.settingsPage}>
-            <nav className={styles.settingsSubNav} aria-label="Project settings sections">
-              {[
-                { id: "settings-group-connection", label: "Connection" },
-                { id: "settings-group-content", label: "Content & targeting" },
-                { id: "settings-group-integrations", label: "Integrations" },
-                { id: "settings-group-danger", label: "Danger zone" },
-              ].map((s) => (
+            <nav className={styles.settingsSubNav} aria-label="Project settings sections" role="tablist">
+              {([
+                { id: "connection", label: "Connection" },
+                { id: "content", label: "Content & Targeting" },
+                { id: "integrations", label: "Integrations" },
+                { id: "danger", label: "Danger Zone" },
+              ] as const).map((s) => (
                 <button
                   key={s.id}
                   type="button"
-                  className={styles.settingsSubNavItem}
-                  onClick={() =>
-                    document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth", block: "start" })
-                  }
+                  role="tab"
+                  aria-selected={settingsSubTab === s.id}
+                  className={`${styles.settingsSubNavItem} ${settingsSubTab === s.id ? styles.settingsSubNavItemActive : ""}`}
+                  onClick={() => setSettingsSubTab(s.id)}
                 >
                   {s.label}
                 </button>
@@ -11991,7 +10985,7 @@ export default function ProjectPage() {
 
             {!settingsLoading && settings ? (
               <>
-              <div id="settings-group-connection" className={styles.settingsGroup}>
+              <div id="settings-group-connection" className={styles.settingsGroup} style={settingsSubTab === "connection" ? undefined : { display: "none" }}>
               <h2 className={styles.settingsGroupHeading}>Connection</h2>
               {isShopifyProject ? (
                 <ShopifyProjectSettings
@@ -12300,7 +11294,7 @@ export default function ProjectPage() {
               ) : null}
               </div>
 
-              <div id="settings-group-content" className={styles.settingsGroup}>
+              <div id="settings-group-content" className={styles.settingsGroup} style={settingsSubTab === "content" ? undefined : { display: "none" }}>
               <h2 className={styles.settingsGroupHeading}>Content &amp; targeting</h2>
                 {(() => {
                   if (!settings) return null;
@@ -12821,7 +11815,7 @@ export default function ProjectPage() {
                 })()}
               </div>
 
-              <div id="settings-group-integrations" className={styles.settingsGroup}>
+              <div id="settings-group-integrations" className={styles.settingsGroup} style={settingsSubTab === "integrations" ? undefined : { display: "none" }}>
               <h2 className={styles.settingsGroupHeading}>Integrations</h2>
                 <div className={styles.settingsInfoCard}>
                   <h3 className={styles.settingsInfoCardTitle}>Google Search Console</h3>
@@ -12835,8 +11829,12 @@ export default function ProjectPage() {
                 </div>
               </div>
 
-              <details id="settings-group-danger" className={styles.settingsDangerDisclosure}>
-                <summary className={styles.settingsDangerSummary}>Danger zone</summary>
+              <div
+                id="settings-group-danger"
+                className={styles.settingsGroup}
+                style={settingsSubTab === "danger" ? undefined : { display: "none" }}
+              >
+                <h2 className={styles.settingsGroupHeading}>Danger Zone</h2>
                 <div className={styles.settingsDangerCard}>
                   <p className={styles.settingsDangerCardDesc}>
                     Deleting a project removes it permanently, including all settings, website connections, prompts, scheduled jobs, and articles.
@@ -12847,7 +11845,7 @@ export default function ProjectPage() {
                     </button>
                   </div>
                 </div>
-              </details>
+              </div>
               </>
             ) : null}
           </div>
@@ -12930,7 +11928,7 @@ export default function ProjectPage() {
 
         {confirmPostNowJob ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Post now">
-            <div className={styles.modalPanel}>
+            <div ref={confirmPostNowJobTrapRef} className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>Post now</h3>
                 <button

@@ -589,13 +589,13 @@
 }
 
 .authFooter a {
-  color: var(--aa-muted);
+  color: rgba(255, 255, 255, 0.62);
   font-size: 12px;
   text-decoration: none;
 }
 
 .authFooter a:hover {
-  color: var(--aa-ink);
+  color: rgba(255, 255, 255, 0.92);
   text-decoration: underline;
 }
 
@@ -692,16 +692,22 @@
   min-height: 0;
 }
 
+/* Radius aligned to var(--aa-r-lg) (12px) -- was the one "top-level card"
+ * implementation using var(--aa-r-xl) (16px) while invitations.module.css,
+ * UserProfileModule.module.css, and projectsDark.module.css's equivalent
+ * cards all already used the smaller radius for the identical role. */
 .card {
   border: 1px solid var(--aa-hairline);
   background: var(--aa-surface-card);
-  border-radius: var(--aa-r-xl);
+  border-radius: var(--aa-r-lg);
   padding: var(--aa-s-md);
+  box-shadow: var(--aa-shadow-xs, none);
   display: flex;
   flex-direction: column;
   gap: 12px;
   width: 100%;
   max-width: 440px;
+  color: var(--aa-ink);
 }
 
 
@@ -845,38 +851,9 @@
   overflow: auto;
 }
 
-.offcanvasItem {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  text-align: left;
-  border: 1px solid var(--aa-hairline);
-  background: var(--aa-surface-soft);
-  color: var(--aa-ink);
-  border-radius: var(--aa-r-lg);
-  padding: 12px 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.offcanvasItem .navItemIcon {
-  width: 20px;
-  height: 20px;
-}
-
-.offcanvasItemActive .navItemIcon {
-  color: var(--aa-ink);
-}
-
-.offcanvasItemActive {
-  background: var(--aa-primary);
-  color: var(--aa-ink);
-  border-color: transparent;
-}
-
 .iconButton {
-  border: 1px solid var(--aa-hairline);
-  background: var(--aa-canvas);
+  border: none;
+  background: transparent;
   color: var(--aa-ink);
   border-radius: var(--aa-r-md);
   width: 40px;
@@ -885,6 +862,22 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.iconButton:hover:not(:disabled) {
+  color: var(--aa-primary);
+  background: var(--aa-surface-soft);
+}
+
+.iconButton:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+}
+
+.iconButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .icon20 {
@@ -964,7 +957,7 @@
   font-size: 17px;
   font-weight: 800;
   letter-spacing: -0.02em;
-  color: #ffffff;
+  color: var(--aa-body-strong);
 }
 
 .bulkPopupScheduleLayout .bulkPopupTitle strong {
@@ -1060,7 +1053,7 @@
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: color-mix(in oklab, #ffffff, transparent 92%);
+  background: var(--aa-surface-soft);
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 32%);
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 15%);
 }
@@ -1099,7 +1092,7 @@
   height: 28px;
   margin-top: 0;
   border-radius: 8px;
-  background: color-mix(in oklab, #ffffff, transparent 94%);
+  background: var(--aa-surface-soft);
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 35%);
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 22%);
 }
@@ -1125,7 +1118,7 @@
   padding: 6px 10px;
   border-radius: 8px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 22%);
-  background: color-mix(in oklab, #ffffff, transparent 96%);
+  background: var(--aa-surface-soft);
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 8%);
   font-size: 13px;
   font-weight: 500;
@@ -1224,7 +1217,7 @@
 
 .bulkScheduleModeTab:hover:not(:disabled) {
   color: var(--aa-body-strong);
-  background: color-mix(in oklab, #ffffff, transparent 94%);
+  background: var(--aa-surface-soft);
 }
 
 .bulkScheduleModeTabActive {
@@ -1311,7 +1304,7 @@
   padding: 8px 12px;
   border-radius: 999px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 25%);
-  background: color-mix(in oklab, #ffffff, transparent 96%);
+  background: var(--aa-surface-soft);
   font-size: 12px;
   font-weight: 600;
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 18%);
@@ -1350,7 +1343,7 @@
   font-size: 12px;
   font-weight: 500;
   line-height: 1.45;
-  color: color-mix(in oklab, var(--aa-primary), #fff 22%);
+  color: var(--aa-primary);
   background: color-mix(in oklab, var(--aa-primary), transparent 92%);
   border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 65%);
 }
@@ -1382,7 +1375,7 @@
   align-items: center;
   padding: 9px 11px;
   border-radius: 10px;
-  background: color-mix(in oklab, #ffffff, transparent 96%);
+  background: var(--aa-surface-soft);
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 38%);
 }
 
@@ -1409,7 +1402,7 @@
   font-size: 11px;
   font-weight: 800;
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 25%);
-  background: color-mix(in oklab, #ffffff, transparent 88%);
+  background: var(--aa-surface-soft);
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 40%);
 }
 
@@ -1454,7 +1447,7 @@
   gap: 4px;
   padding: 7px 9px;
   border-radius: 8px;
-  background: color-mix(in oklab, #ffffff, transparent 92%);
+  background: var(--aa-surface-soft);
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 35%);
 }
 
@@ -1491,7 +1484,7 @@
   font-weight: 650;
   line-height: 1.35;
   letter-spacing: -0.01em;
-  color: #ffffff;
+  color: var(--aa-body-strong);
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1847,7 +1840,7 @@
   min-height: 20px;
   padding: 2px 7px;
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 18%);
-  background: color-mix(in oklab, #ffffff, transparent 94%);
+  background: var(--aa-surface-soft);
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
 }
 
@@ -1910,12 +1903,11 @@
   padding: 6px 10px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 8%);
   border-radius: 9px;
-  background: color-mix(in oklab, #ffffff, transparent 94%);
+  background: var(--aa-surface-soft);
   color: var(--aa-ink);
   font-size: 13px;
   font-weight: 600;
   outline: none;
-  color-scheme: dark;
 }
 
 .articlesFilterControl:focus {
@@ -1930,7 +1922,7 @@
   border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 35%);
   border-radius: 9px;
   background: color-mix(in oklab, var(--aa-primary), transparent 88%);
-  color: color-mix(in oklab, var(--aa-primary), #fff 22%);
+  color: var(--aa-primary);
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
@@ -1940,7 +1932,7 @@
 .articlesToolbarClear:hover {
   background: color-mix(in oklab, var(--aa-primary), transparent 82%);
   border-color: color-mix(in oklab, var(--aa-primary), transparent 18%);
-  color: #fff;
+  color: var(--aa-primary);
 }
 
 .articlesToolbarDivider {
@@ -1964,7 +1956,7 @@
   padding: 0 14px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 5%);
   border-radius: 9px;
-  background: color-mix(in oklab, #ffffff, transparent 92%);
+  background: var(--aa-surface-soft);
   color: var(--aa-ink);
   font-size: 12px;
   font-weight: 700;
@@ -1973,20 +1965,20 @@
 }
 
 .articlesToolbarBtn:hover {
-  background: #ffffff;
-  border-color: color-mix(in oklab, #ffffff, var(--aa-hairline) 40%);
+  background: var(--aa-surface-card);
+  border-color: color-mix(in oklab, var(--aa-surface-card), var(--aa-hairline) 40%);
 }
 
 .articlesToolbarBtnWarn {
-  border-color: color-mix(in oklab, #faad14, transparent 32%);
-  background: color-mix(in oklab, #faad14, transparent 86%);
-  color: color-mix(in oklab, #ffe7ba, #fff 35%);
+  border-color: color-mix(in oklab, var(--aa-warning), transparent 32%);
+  background: color-mix(in oklab, var(--aa-warning), transparent 86%);
+  color: var(--aa-warning);
 }
 
 .articlesToolbarBtnWarn:hover:not(:disabled) {
-  background: color-mix(in oklab, #faad14, transparent 76%);
-  border-color: color-mix(in oklab, #faad14, transparent 18%);
-  color: #fff;
+  background: color-mix(in oklab, var(--aa-warning), transparent 76%);
+  border-color: color-mix(in oklab, var(--aa-warning), transparent 18%);
+  color: var(--aa-warning);
 }
 
 .articlesToolbarIconBtn {
@@ -1999,14 +1991,14 @@
   flex-shrink: 0;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 5%);
   border-radius: 9px;
-  background: color-mix(in oklab, #ffffff, transparent 92%);
+  background: var(--aa-surface-soft);
   color: var(--aa-ink);
   cursor: pointer;
 }
 
 .articlesToolbarIconBtn:hover:not(:disabled) {
-  background: #ffffff;
-  border-color: color-mix(in oklab, #ffffff, var(--aa-hairline) 40%);
+  background: var(--aa-surface-card);
+  border-color: color-mix(in oklab, var(--aa-surface-card), var(--aa-hairline) 40%);
 }
 
 .articlesToolbarIconBtn:disabled {
@@ -2041,7 +2033,7 @@
   padding: 0 14px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 5%);
   border-radius: 9px;
-  background: color-mix(in oklab, #ffffff, transparent 94%);
+  background: var(--aa-surface-soft);
   color: color-mix(in oklab, var(--aa-muted), var(--aa-ink) 35%);
   font-size: 12px;
   font-weight: 700;
@@ -2149,14 +2141,11 @@
   max-width: 100%;
   min-width: 0;
   grid-template-columns:
-    36px
-    minmax(0, 1.45fr)
-    minmax(0, 0.85fr)
-    minmax(0, 0.95fr)
-    minmax(0, 130px)
-    minmax(0, 110px)
-    minmax(64px, 88px)
-    minmax(0, 148px);
+    minmax(0, 1.8fr)
+    minmax(0, 1fr)
+    minmax(0, 160px)
+    minmax(0, 120px)
+    minmax(64px, 140px);
   gap: 10px 12px;
   align-items: center;
   padding: 12px 14px;
@@ -2171,7 +2160,7 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--aa-muted);
-  background: color-mix(in oklab, #0a0a0e, var(--aa-surface-soft) 35%);
+  background: var(--aa-surface-soft);
   border-bottom: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%);
   padding-top: 10px;
   padding-bottom: 10px;
@@ -2296,6 +2285,22 @@
   min-width: 0;
   display: flex;
   align-items: center;
+}
+
+/* Static category pill (Figma "Articles" screen, 27:2) -- category is
+   read-only in the table now; editing moved out with the bulk toolbar. */
+.categoryPill {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--aa-surface-soft);
+  color: var(--aa-ink);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .articlesTableCategorySelect {
@@ -2428,7 +2433,7 @@
   padding: 0;
   border-radius: 8px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 18%);
-  background: color-mix(in oklab, #ffffff, transparent 96%);
+  background: var(--aa-surface-soft);
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 18%);
   cursor: pointer;
   text-decoration: none;
@@ -2442,7 +2447,7 @@
 .articlesTableIconBtn:hover:not(:disabled) {
   border-color: color-mix(in oklab, var(--aa-primary), transparent 40%);
   background: color-mix(in oklab, var(--aa-primary), transparent 90%);
-  color: color-mix(in oklab, var(--aa-primary), #fff 12%);
+  color: var(--aa-primary);
 }
 
 .articlesTableIconBtn:disabled {
@@ -2453,7 +2458,7 @@
 .articlesTableIconBtnDanger:hover:not(:disabled) {
   border-color: color-mix(in oklab, var(--aa-error), transparent 35%);
   background: color-mix(in oklab, var(--aa-error), transparent 88%);
-  color: color-mix(in oklab, var(--aa-error), #fff 10%);
+  color: var(--aa-error);
 }
 
 .articlesTableIconBtn svg {
@@ -2635,7 +2640,7 @@
 }
 
 .bulkActionItem:hover:not(:disabled) {
-  background: color-mix(in oklab, #ffffff, transparent 94%);
+  background: var(--aa-surface-soft);
   border-color: color-mix(in oklab, var(--aa-hairline), transparent 20%);
 }
 
@@ -2657,7 +2662,7 @@
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: color-mix(in oklab, #ffffff, transparent 92%);
+  background: var(--aa-surface-soft);
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 30%);
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 18%);
 }
@@ -2752,40 +2757,46 @@
   letter-spacing: 0.04em;
 }
 
+/* Article status pills, tokenized -- previously raw Ant-Design-palette hex,
+ * one of 5+ different "success green" (etc.) values scattered across the
+ * app's various status/badge families. --aa-info and --aa-primary already
+ * happened to numerically equal the old queued/generating hex values, so
+ * those two render identically; pending/draft/published now correctly
+ * track the real semantic tokens instead of a hardcoded copy of them. */
 .statusPending {
-  background: rgba(255, 77, 79, 0.16);
-  border: 1px solid rgba(255, 77, 79, 0.45);
-  color: #ff4d4f;
+  background: color-mix(in oklab, var(--aa-error), transparent 84%);
+  border: 1px solid color-mix(in oklab, var(--aa-error), transparent 55%);
+  color: var(--aa-error);
 }
 
 .statusDraft {
-  background: rgba(250, 173, 20, 0.18);
-  border: 1px solid rgba(250, 173, 20, 0.55);
-  color: #d89614;
+  background: color-mix(in oklab, var(--aa-warning), transparent 82%);
+  border: 1px solid color-mix(in oklab, var(--aa-warning), transparent 45%);
+  color: var(--aa-warning);
 }
 
 .statusPublished {
-  background: rgba(82, 196, 26, 0.16);
-  border: 1px solid rgba(82, 196, 26, 0.45);
-  color: #389e0d;
+  background: color-mix(in oklab, var(--aa-success), transparent 84%);
+  border: 1px solid color-mix(in oklab, var(--aa-success), transparent 55%);
+  color: var(--aa-success);
 }
 
 .statusNeutral {
   background: rgba(0, 0, 0, 0.06);
   border: 1px solid rgba(0, 0, 0, 0.16);
-  color: var(--text-secondary);
+  color: var(--aa-muted);
 }
 
 .statusQueued {
-  background: rgba(112, 144, 200, 0.14);
-  border: 1px solid rgba(112, 144, 200, 0.42);
-  color: #7090c8;
+  background: color-mix(in oklab, var(--aa-info), transparent 86%);
+  border: 1px solid color-mix(in oklab, var(--aa-info), transparent 58%);
+  color: var(--aa-info);
 }
 
 .statusGenerating {
-  background: rgba(217, 119, 87, 0.14);
-  border: 1px solid rgba(217, 119, 87, 0.42);
-  color: #d97757;
+  background: color-mix(in oklab, var(--aa-primary), transparent 86%);
+  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 58%);
+  color: var(--aa-primary);
 }
 
 @media (max-width: 720px) {
@@ -2891,8 +2902,8 @@
 
 .articleRichFormatSelect {
   min-width: 120px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
   color: var(--aa-ink);
   border-radius: 6px;
   padding: 5px 28px 5px 8px;
@@ -2924,12 +2935,12 @@
 
 .articleRichToolBtn:hover {
   color: var(--aa-ink);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--aa-surface-soft);
 }
 
 .articleRichToolBtn[aria-pressed="true"] {
-  color: var(--aa-ink);
-  background: rgba(255, 255, 255, 0.08);
+  color: var(--aa-primary);
+  background: color-mix(in oklab, var(--aa-primary), transparent 88%);
 }
 
 .srOnly {
@@ -2959,7 +2970,7 @@
   font-family: var(--font-ui-sans), var(--font-geist-sans), system-ui, sans-serif;
   font-size: 16px;
   line-height: 1.85;
-  color: rgba(250, 249, 245, 0.88);
+  color: var(--aa-body);
   word-break: break-word;
   max-width: 100%;
   margin: 0;
@@ -2979,6 +2990,12 @@
 
 .articleProseMirror p:last-child {
   margin-bottom: 0;
+}
+
+.articleProseMirror img {
+  max-width: 100%;
+  height: auto;
+  display: block;
 }
 
 .articleProseMirror h1 {
@@ -3051,7 +3068,8 @@
   margin: 0.75em 0;
   padding: 10px 12px;
   border-radius: 10px;
-  background: color-mix(in oklab, #000000, var(--aa-surface-card) 18%);
+  background: var(--aa-surface-soft);
+  color: var(--aa-body);
   font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-size: 12px;
   overflow-x: auto;
@@ -3062,11 +3080,12 @@
   font-size: 0.9em;
   padding: 2px 6px;
   border-radius: 6px;
-  background: color-mix(in oklab, #000000, var(--aa-surface-card) 22%);
+  background: var(--aa-surface-soft);
+  color: var(--aa-body);
 }
 
 .articleProseMirror a.article-editor-link {
-  color: color-mix(in oklab, var(--aa-primary), #fff 14%);
+  color: var(--aa-primary);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -3129,7 +3148,7 @@
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.45;
-  color: rgba(255, 255, 255, 0.82);
+  color: var(--aa-body);
   background: rgba(217, 119, 87, 0.12);
   border: 1px solid rgba(217, 119, 87, 0.28);
 }
@@ -3144,7 +3163,7 @@
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--aa-muted);
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -3185,7 +3204,7 @@
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--aa-muted-soft);
 }
 
 .humanizeCompareScroll {
@@ -3270,7 +3289,7 @@
   color: var(--aa-body);
   word-break: break-word;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.10) transparent;
+  scrollbar-color: var(--aa-hairline) transparent;
 }
 
 .articleReadonlyArticleHtml > div > *:first-child {
@@ -3334,7 +3353,8 @@
   margin: 0.75em 0;
   padding: 10px 12px;
   border-radius: 10px;
-  background: color-mix(in oklab, #000000, var(--aa-surface-card) 18%);
+  background: var(--aa-surface-soft);
+  color: var(--aa-body);
   font-family: var(--font-geist-mono), ui-monospace, monospace;
   font-size: 12px;
   overflow-x: auto;
@@ -3365,7 +3385,7 @@
 }
 
 .articleReadonlyArticleHtml a {
-  color: color-mix(in oklab, var(--aa-primary), #fff 14%);
+  color: var(--aa-primary);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -3402,13 +3422,13 @@
 .seoMeterFillOk {
   height: 100%;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--aa-success), #ffffff 20%);
+  background: var(--aa-success);
 }
 
 .seoMeterFillWarn {
   height: 100%;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--aa-warning), #ffffff 18%);
+  background: var(--aa-warning);
 }
 
 .seoOk {
@@ -3426,15 +3446,21 @@
   min-height: 320px;
   max-height: 520px;
   resize: vertical;
-  border: 1px solid var(--button-secondary-border);
-  border-radius: 12px;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md);
   background: transparent;
-  color: var(--text-primary);
+  color: var(--aa-ink);
   padding: 10px 12px;
   outline: none;
   font-family: var(--font-geist-mono);
   font-size: 13px;
   line-height: 1.5;
+  transition: border-color 0.14s ease;
+}
+
+.textarea:focus {
+  border-color: var(--aa-primary);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--aa-primary), transparent 85%);
 }
 
 .row {
@@ -3512,7 +3538,7 @@
 .shell {
   width: 100%;
   display: grid;
-  grid-template-columns: 288px 1fr;
+  grid-template-columns: 256px 1fr;
   gap: 0;
   align-items: stretch;
 }
@@ -3542,10 +3568,11 @@
   top: 0;
   align-self: stretch;
   box-sizing: border-box;
-  border-right: 1px solid var(--aa-hairline);
+  border-right: 1px solid var(--aa-hairline-soft);
+  box-shadow: 1px 0 0 var(--aa-hairline-soft), var(--aa-shadow-xs, none);
   border-radius: 0;
   padding: 16px 14px;
-  background: #0a0a0e;
+  background: var(--aa-surface-card);
   width: 100%;
   /* min-height: 100dvh removed — it was declared after the desktop @media
      rule that sets min-height: 0, so CSS cascade made this win on all
@@ -3636,8 +3663,11 @@
 }
 
 .sidebarTitle {
+  font-family: var(--aa-font-heading);
   font-weight: 700;
   font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--aa-muted);
   margin-bottom: 10px;
   padding: 0 6px;
@@ -3653,7 +3683,7 @@
   text-decoration: none;
   color: var(--aa-body-strong);
   padding: 4px 6px;
-  margin: 0 0 16px;
+  margin: 0 0 20px;
   border-radius: var(--aa-r-md);
   flex-shrink: 0;
   transition: background-color 120ms ease;
@@ -3674,7 +3704,8 @@
 }
 
 .sidebarBrandText {
-  font-weight: 900;
+  font-family: var(--aa-font-heading);
+  font-weight: 800;
   font-size: 19px;
   letter-spacing: -0.02em;
   line-height: 1;
@@ -3685,24 +3716,23 @@
   align-items: center;
   gap: 8px;
   align-self: flex-start;
-  margin: 0 0 12px;
+  margin: 0 0 24px;
   padding: 2px 4px;
   border: none;
   background: transparent;
   border-radius: 0;
   text-decoration: none;
-  color: var(--aa-primary);
+  color: var(--aa-muted);
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.35;
   cursor: pointer;
   transition: color 0.15s ease;
 }
 
 .sidebarBackLink:hover {
-  color: var(--aa-primary-active);
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  color: var(--aa-primary);
+  text-decoration: none;
 }
 
 .sidebarBackLink:focus-visible {
@@ -3716,65 +3746,6 @@
   height: 16px;
   flex-shrink: 0;
   color: currentColor;
-}
-
-.navGroup {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.navGroup a.navItem {
-  text-decoration: none;
-  color: inherit;
-}
-
-.navItem {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
-  background: var(--aa-surface-card);
-  color: var(--aa-body-strong);
-  border-radius: var(--aa-r-lg);
-  padding: 9px 12px;
-  text-align: left;
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 14px;
-  line-height: 1.25;
-  transition:
-    background 140ms ease,
-    border-color 140ms ease,
-    color 140ms ease;
-}
-
-.navItem:hover {
-  border-color: color-mix(in oklab, var(--aa-hairline), transparent 4%);
-  background: color-mix(in oklab, var(--aa-surface-card), var(--aa-primary) 6%);
-}
-
-.navItemIcon {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  color: color-mix(in oklab, var(--aa-body-strong), transparent 38%);
-  transition: color 140ms ease;
-}
-
-.navItemLabel {
-  min-width: 0;
-  flex: 1;
-}
-
-.navItemActive {
-  background: color-mix(in oklab, var(--aa-primary), transparent 86%);
-  border-color: transparent;
-}
-
-.navItemActive .navItemIcon {
-  color: var(--aa-body-strong);
 }
 
 .sidebarNavMain {
@@ -3791,58 +3762,40 @@
   margin-top: auto;
   padding-top: 12px;
   border-top: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 20%);
-  background: #0a0a0e;
+  background: var(--aa-surface-card);
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
+/* Lightweight account row, not a floating card -- .sidebarFooter already carries
+   the section's only divider (border-top). No border/gradient/shadow of its own;
+   a plain background-tint on hover is enough to read as interactive. */
 .sidebarAccountCard {
   margin-top: 0;
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 10px;
-  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%);
-  border-radius: var(--aa-r-lg);
-  background:
-    linear-gradient(135deg, color-mix(in oklab, var(--aa-primary), transparent 90%), transparent 72%),
-    color-mix(in oklab, var(--aa-surface-card), transparent 8%);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.18);
+  padding: 8px;
+  border-radius: var(--aa-r-md);
+  background: transparent;
 }
 
 .sidebarAccountLink {
   color: inherit;
   text-decoration: none;
   cursor: pointer;
-  transition:
-    border-color 160ms ease,
-    background 160ms ease,
-    transform 160ms ease;
+  transition: background-color 150ms ease;
 }
 
 .sidebarAccountLink:hover {
-  border-color: color-mix(in oklab, var(--aa-primary), transparent 35%);
-  background:
-    linear-gradient(135deg, color-mix(in oklab, var(--aa-primary), transparent 84%), transparent 72%),
-    color-mix(in oklab, var(--aa-surface-card), transparent 4%);
-  transform: translateY(-1px);
+  background: var(--aa-surface-soft, color-mix(in oklab, var(--aa-hairline), transparent 40%));
 }
 
 .sidebarAccountLink:focus-visible {
-  outline: 2px solid color-mix(in oklab, var(--aa-primary), white 18%);
-  outline-offset: 3px;
-}
-
-.sidebarFooter .sidebarAccountCard:not(.sidebarAccountLink) {
-  cursor: default;
-  pointer-events: none;
-}
-
-.sidebarFooter .sidebarAccountCard:not(.sidebarAccountLink):hover {
-  transform: none;
-  border-color: color-mix(in oklab, var(--aa-hairline), transparent 12%);
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
 }
 
 .offcanvasPanel > .sidebarAccountCard {
@@ -3850,20 +3803,17 @@
 }
 
 .sidebarAvatar {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 36px;
-  border: 1px solid color-mix(in oklab, var(--aa-primary), #fff 16%);
-  background:
-    radial-gradient(circle at 30% 24%, rgba(255, 255, 255, 0.34), transparent 30%),
-    linear-gradient(135deg, var(--aa-primary), color-mix(in oklab, var(--aa-primary), #000 24%));
+  flex: 0 0 32px;
+  background: var(--aa-primary);
   color: #fff;
-  font-size: 14px;
-  font-weight: 900;
+  font-size: 13px;
+  font-weight: 700;
   letter-spacing: 0.02em;
 }
 
@@ -4051,7 +4001,7 @@
   min-width: 0;
   font-size: 16px;
   font-weight: 800;
-  color: #fff;
+  color: var(--aa-body-strong);
   line-height: 1.25;
   word-break: break-word;
   text-decoration: none;
@@ -4075,14 +4025,6 @@
   justify-content: space-between;
   gap: 10px;
   align-items: flex-start;
-}
-
-.projectTitle {
-  font-size: 16px;
-  font-weight: 800;
-  color: #fff;
-  line-height: 1.25;
-  word-break: break-word;
 }
 
 .projectMenuWrap {
@@ -4112,7 +4054,7 @@
 .projectMenuButton:focus-visible {
   border-color: color-mix(in oklab, var(--aa-primary), transparent 38%);
   background: color-mix(in oklab, var(--aa-primary), transparent 86%);
-  color: #fff;
+  color: var(--aa-primary);
   outline: none;
 }
 
@@ -4145,7 +4087,7 @@
 .projectMenuItem:hover,
 .projectMenuItem:focus-visible {
   background: color-mix(in oklab, var(--aa-primary), transparent 84%);
-  color: #fff;
+  color: var(--aa-primary);
   outline: none;
 }
 
@@ -4208,7 +4150,7 @@
 }
 
 .articleRow:nth-child(even) {
-  background: color-mix(in oklab, #ffffff, transparent 98.5%);
+  background: var(--aa-surface-soft);
 }
 
 .articleRow:hover {
@@ -4223,7 +4165,7 @@
 
 .articleTitleLink {
   font-weight: 650;
-  color: color-mix(in oklab, var(--aa-primary), #fff 16%);
+  color: var(--aa-primary);
   text-decoration: none;
   width: 100%;
   max-width: 100%;
@@ -4240,13 +4182,11 @@
   .articlesTableHead,
   .articlesTableRowMain {
     grid-template-columns:
-      32px
-      minmax(0, 1.35fr)
-      minmax(0, 0.75fr)
-      minmax(0, 0.85fr)
-      minmax(0, 110px)
-      minmax(64px, 76px)
-      minmax(0, 136px);
+      minmax(0, 1.6fr)
+      minmax(0, 1fr)
+      minmax(0, 130px)
+      minmax(64px, 100px)
+      minmax(0, 120px);
     gap: 8px 8px;
     padding: 10px 10px;
   }
@@ -4343,7 +4283,7 @@
   font-size: 15px;
   font-weight: 650;
   line-height: 1.4;
-  color: color-mix(in oklab, var(--aa-primary), #fff 16%);
+  color: var(--aa-primary);
   text-decoration: none;
   word-break: break-word;
 }
@@ -4408,7 +4348,7 @@
   padding: 0;
   border-radius: 10px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 18%);
-  background: color-mix(in oklab, #ffffff, transparent 96%);
+  background: var(--aa-surface-soft);
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 18%);
   cursor: pointer;
   text-decoration: none;
@@ -4417,7 +4357,7 @@
 .articlesMobileIconBtn:hover:not(:disabled) {
   border-color: color-mix(in oklab, var(--aa-primary), transparent 40%);
   background: color-mix(in oklab, var(--aa-primary), transparent 90%);
-  color: color-mix(in oklab, var(--aa-primary), #fff 12%);
+  color: var(--aa-primary);
 }
 
 .articlesMobileIconBtn:disabled {
@@ -4507,13 +4447,16 @@
 }
 
 .scheduledListHeader,
+/* Divider tokenized to var(--aa-hairline) -- was the legacy --button-
+ * secondary-border alias, a different token family than the .table/.td
+ * divider used one tab over for the same "row separator" concept. */
 .scheduledRow {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(168px, 220px) minmax(108px, 140px);
   gap: 16px;
   align-items: start;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--button-secondary-border);
+  border-bottom: 1px solid var(--aa-hairline);
 }
 
 .scheduledListHeader {
@@ -4521,8 +4464,8 @@
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-secondary);
-  background: color-mix(in oklab, var(--text-primary), transparent 96%);
+  color: var(--aa-muted);
+  background: color-mix(in oklab, var(--aa-ink), transparent 96%);
 }
 
 .scheduledListHeader span:nth-child(2),
@@ -4539,6 +4482,23 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Figma 33:2 renders "View on Live" as a violet text link (the Research-
+   accent violet reused here for any "jump to the live result" affordance),
+   not an outlined button like the other row actions. */
+.scheduledViewLiveLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #5b4cf5;
+  text-decoration: none;
+}
+
+.scheduledViewLiveLink:hover {
+  text-decoration: underline;
 }
 
 .scheduledError {
@@ -4620,31 +4580,31 @@
 }
 
 .scheduledStateReady {
-  color: #86efac;
-  background: rgba(34, 197, 94, 0.14);
-  border-color: rgba(34, 197, 94, 0.35);
+  color: var(--aa-success);
+  background: color-mix(in oklab, var(--aa-success), transparent 84%);
+  border-color: color-mix(in oklab, var(--aa-success), transparent 60%);
 }
 
 .scheduledStatePosted {
-  color: #93c5fd;
-  background: rgba(59, 130, 246, 0.14);
-  border-color: rgba(59, 130, 246, 0.35);
+  color: var(--aa-info);
+  background: color-mix(in oklab, var(--aa-info), transparent 86%);
+  border-color: color-mix(in oklab, var(--aa-info), transparent 58%);
 }
 
 .scheduledStateFailed {
-  color: #fca5a5;
-  background: rgba(239, 68, 68, 0.14);
-  border-color: rgba(239, 68, 68, 0.35);
+  color: var(--aa-error);
+  background: color-mix(in oklab, var(--aa-error), transparent 86%);
+  border-color: color-mix(in oklab, var(--aa-error), transparent 58%);
 }
 
 .scheduledStateActive {
-  color: #fde68a;
-  background: rgba(234, 179, 8, 0.14);
-  border-color: rgba(234, 179, 8, 0.35);
+  color: var(--aa-warning);
+  background: color-mix(in oklab, var(--aa-warning), transparent 86%);
+  border-color: color-mix(in oklab, var(--aa-warning), transparent 58%);
 }
 
 .scheduledStateScheduled {
-  color: color-mix(in oklab, var(--aa-primary), #fff 20%);
+  color: var(--aa-primary);
   background: color-mix(in oklab, var(--aa-primary), transparent 82%);
   border-color: color-mix(in oklab, var(--aa-primary), transparent 55%);
 }
@@ -4692,6 +4652,23 @@
   height: 40px;
   font-weight: 700;
   cursor: pointer;
+  box-shadow: var(--aa-shadow-xs, none);
+  transition: background 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.btnSecondary:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
+  background: var(--aa-surface-soft);
+}
+
+.btnSecondary:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+}
+
+.btnSecondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .table {
@@ -4705,16 +4682,18 @@
 
 .th {
   text-align: left;
-  font-size: 12px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--text-secondary);
-  font-weight: 800;
-  padding: 10px 12px;
+  font-weight: 700;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--aa-hairline);
   background: var(--aa-surface-soft);
 }
 
 .td {
-  padding: 10px 12px;
+  padding: 13px 20px;
   border-bottom: 1px solid var(--aa-hairline);
   font-size: 13px;
   color: var(--text-primary);
@@ -4881,13 +4860,13 @@
  * Ember-tinted to stay on the system's single accent rather than introducing
  * a second hue for URLs. */
 .tableLink {
-  color: color-mix(in oklab, var(--aa-primary), #ffffff 22%);
+  color: var(--aa-primary);
   text-decoration: none;
   border-bottom: 1px solid color-mix(in oklab, var(--aa-primary), transparent 50%);
   word-break: break-all;
 }
 .tableLink:hover {
-  color: color-mix(in oklab, var(--aa-primary), #ffffff 36%);
+  color: var(--aa-primary);
   border-bottom-color: color-mix(in oklab, var(--aa-primary), transparent 28%);
 }
 
@@ -5072,6 +5051,992 @@
   background: var(--aa-surface-card);
   border-color: transparent;
   color: var(--aa-ink);
+}
+
+/* ── Site Audit: Technical Audit ─────────────────────────────────────────── */
+.siteAuditScoreGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.siteAuditCwvGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.siteAuditThresholdBar {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.siteAuditThresholdBarTrack {
+  position: relative;
+  height: 5px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--aa-success) 0%,
+    var(--aa-success) 33.33%,
+    var(--aa-warning) 33.33%,
+    var(--aa-warning) 66.67%,
+    var(--aa-error) 66.67%,
+    var(--aa-error) 100%
+  );
+  opacity: 0.9;
+}
+
+.siteAuditThresholdBarMarker {
+  position: absolute;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--aa-on-dark, #faf9f5);
+  border: 1.5px solid rgba(11, 11, 13, 0.85);
+  transform: translate(-50%, -50%);
+}
+
+.siteAuditThresholdBarLabels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 9px;
+  color: var(--aa-on-dark-soft, #a09d96);
+  gap: 4px;
+}
+.siteAuditThresholdBarLabels span:nth-child(2) {
+  text-align: center;
+}
+.siteAuditThresholdBarLabels span:last-child {
+  text-align: right;
+}
+
+.siteAuditScoreTile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 14px;
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md, 8px);
+}
+
+.siteAuditScoreLabel {
+  font-size: 12px;
+  color: var(--aa-muted);
+}
+
+.siteAuditScoreValue {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.siteAuditSupportingRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding-top: 4px;
+  border-top: 1px solid var(--aa-hairline);
+}
+
+.siteAuditSupportingItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 110px;
+}
+
+.siteAuditFindingList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.siteAuditFindingRow {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-sm, 6px);
+  cursor: pointer;
+  color: var(--aa-ink);
+}
+
+.siteAuditFindingRowStatic {
+  padding: 10px 12px;
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-sm, 6px);
+  color: var(--aa-ink);
+}
+
+.siteAuditFindingHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.siteAuditFindingBody {
+  border-top: 1px solid var(--aa-hairline);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.siteAuditBtnSpinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 7px;
+  vertical-align: -1.5px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: siteAuditSpinKf 0.7s linear infinite;
+}
+@keyframes siteAuditSpinKf {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .siteAuditBtnSpinner {
+    animation: none;
+  }
+}
+
+.siteAuditRunChecklist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.seoAuditProgressBar {
+  position: relative;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--aa-hairline);
+  overflow: hidden;
+  margin: 2px 0 4px;
+}
+.seoAuditProgressBarFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--aa-primary);
+  transition: width 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .seoAuditProgressBarFill {
+    transition: none;
+  }
+}
+
+.siteAuditRunChecklistItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+.siteAuditRunChecklistItem[data-state="done"] {
+  color: var(--aa-on-dark, #faf9f5);
+}
+.siteAuditRunChecklistItem[data-state="active"] {
+  color: var(--aa-on-dark, #faf9f5);
+  font-weight: 600;
+}
+
+.siteAuditRunChecklistMark {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 10px;
+  border: 1.5px solid var(--aa-hairline);
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+.siteAuditRunChecklistItem[data-state="done"] .siteAuditRunChecklistMark {
+  border-color: var(--aa-success);
+  background: color-mix(in oklab, var(--aa-success), transparent 78%);
+  color: var(--aa-success);
+}
+.siteAuditRunChecklistItem[data-state="active"] .siteAuditRunChecklistMark {
+  border-color: var(--aa-primary);
+}
+
+.siteAuditWebsiteFavicon {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  background: var(--aa-surface-soft);
+}
+
+.seoAuditCompactStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--aa-r-md, 8px);
+  background: var(--aa-surface-soft);
+  font-size: 12px;
+  animation: seoAuditCompactStatusFade 0.35s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .seoAuditCompactStatus {
+    animation: none;
+  }
+}
+@keyframes seoAuditCompactStatusFade {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.seoAuditCompactStatusDot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--aa-error);
+}
+.seoAuditCompactStatusDot[data-ok="true"] {
+  background: var(--aa-success);
+}
+
+.seoAuditCompactStatusUrl {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--aa-font-mono, ui-monospace, monospace);
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+
+.seoAuditCompactStatusMeta {
+  flex-shrink: 0;
+  font-family: var(--aa-font-mono, ui-monospace, monospace);
+  color: var(--aa-on-dark-soft, #a09d96);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.siteAuditLiveFeed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md, 8px);
+  background: var(--aa-surface-soft);
+  padding: 6px;
+  font-family: var(--aa-font-mono, ui-monospace, monospace);
+}
+
+.siteAuditLiveFeedRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: var(--aa-r-sm, 6px);
+  font-size: 12px;
+  color: var(--aa-on-dark, #faf9f5);
+}
+.siteAuditLiveFeedRow:first-child {
+  background: color-mix(in oklab, var(--aa-primary, #d97757), transparent 92%);
+}
+
+.siteAuditLiveFeedStatus {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+  color: var(--aa-error);
+}
+.siteAuditLiveFeedStatus[data-ok="true"] {
+  color: var(--aa-success);
+}
+
+.siteAuditLiveFeedUrl {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+
+.siteAuditLiveFeedMeta {
+  flex-shrink: 0;
+  color: var(--aa-on-dark-soft, #a09d96);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* ── SEO Audit: KPI strip, donut, depth chart, secondary nav ────────────── */
+
+.seoAuditKpiStrip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+
+.seoAuditKpiTile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  background: var(--aa-surface-card);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-lg);
+}
+
+.seoAuditKpiIcon {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.seoAuditKpiIcon svg {
+  width: 16px;
+  height: 16px;
+}
+.seoAuditKpiIcon[data-tone="info"] {
+  background: color-mix(in oklab, var(--aa-info, #7090c8), transparent 84%);
+  color: var(--aa-info, #7090c8);
+}
+.seoAuditKpiIcon[data-tone="success"] {
+  background: color-mix(in oklab, var(--aa-success), transparent 84%);
+  color: var(--aa-success);
+}
+.seoAuditKpiIcon[data-tone="danger"] {
+  background: color-mix(in oklab, var(--aa-error), transparent 84%);
+  color: var(--aa-error);
+}
+.seoAuditKpiIcon[data-tone="warning"] {
+  background: color-mix(in oklab, var(--aa-warning), transparent 84%);
+  color: var(--aa-warning);
+}
+.seoAuditKpiIcon[data-tone="opportunity"] {
+  background: color-mix(in oklab, var(--aa-primary), transparent 84%);
+  color: var(--aa-primary);
+}
+.seoAuditKpiIcon[data-tone="neutral"] {
+  background: var(--aa-surface-soft);
+  color: var(--aa-muted);
+}
+
+.seoAuditKpiValue {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--aa-on-dark, #faf9f5);
+  font-variant-numeric: tabular-nums;
+  padding-right: 30px;
+}
+.seoAuditKpiValue[data-tone="poor"] {
+  color: var(--aa-error);
+}
+.seoAuditKpiValue[data-tone="needs_improvement"] {
+  color: var(--aa-warning);
+}
+
+.seoAuditKpiLabel {
+  font-size: 12px;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+
+.seoAuditKpiDelta {
+  font-size: 11px;
+  font-weight: 700;
+  margin-top: 2px;
+}
+.seoAuditKpiDelta[data-positive="true"] {
+  color: var(--aa-success);
+}
+.seoAuditKpiDelta[data-positive="false"] {
+  color: var(--aa-muted);
+}
+
+.seoAuditKpiBreakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+.seoAuditKpiBreakdown span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.seoAuditKpiBreakdown span::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.seoAuditKpiBreakdown span[data-severity="high"]::before {
+  background: var(--aa-error);
+}
+.seoAuditKpiBreakdown span[data-severity="medium"]::before {
+  background: var(--aa-warning);
+}
+.seoAuditKpiBreakdown span[data-severity="low"]::before {
+  background: var(--aa-muted);
+}
+
+.seoAuditKpiPeriodRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.seoAuditKpiFoot {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.seoAuditKpiDeltaText {
+  font-size: 11px;
+  color: var(--aa-on-dark-soft, #a09d96);
+  margin-top: 2px;
+}
+
+.seoAuditKpiDeltaEmpty {
+  font-size: 11px;
+  color: var(--aa-on-dark-soft, #a09d96);
+  margin-top: 2px;
+  font-style: italic;
+}
+
+.seoAuditOverviewGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+  width: 100%;
+}
+@media (max-width: 900px) {
+  .seoAuditOverviewGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.seoAuditDonutCard {
+  width: 100%;
+  max-width: none;
+}
+
+.seoAuditDonutWrap {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.seoAuditDonutLegend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-width: 140px;
+}
+.seoAuditDonutLegend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--aa-on-dark, #faf9f5);
+}
+
+.seoAuditDonutDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.seoAuditDonutLegendLabel {
+  flex: 1;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+
+.seoAuditDonutLegendValue {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.seoAuditDepthChart {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  height: 140px;
+  padding-top: 10px;
+}
+
+.seoAuditDepthBar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  height: 100%;
+}
+
+.seoAuditDepthBarTrack {
+  flex: 1;
+  width: 100%;
+  max-width: 32px;
+  display: flex;
+  align-items: flex-end;
+}
+
+.seoAuditDepthBarFill {
+  width: 100%;
+  background: var(--aa-primary, #d97757);
+  border-radius: 4px 4px 0 0;
+  min-height: 4px;
+}
+
+.seoAuditDepthBarValue {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--aa-on-dark, #faf9f5);
+  font-variant-numeric: tabular-nums;
+}
+
+.seoAuditDepthBarLabel {
+  font-size: 10px;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+
+.seoAuditStatsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.seoAuditStatTile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.seoAuditStatValue {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--aa-on-dark, #faf9f5);
+  font-variant-numeric: tabular-nums;
+}
+
+.seoAuditStatLabel {
+  font-size: 11px;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+
+
+.seoAuditDetailFieldList {
+  display: flex;
+  flex-direction: column;
+}
+
+.siteAuditActionCenter {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  align-items: start;
+  width: 100%;
+}
+.siteAuditActionCenter > .card {
+  max-width: none;
+}
+@media (max-width: 900px) {
+  .siteAuditActionCenter {
+    grid-template-columns: 1fr;
+  }
+}
+
+.siteAuditViewAllBtn {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--aa-primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.siteAuditViewAllBtn:hover {
+  text-decoration: underline;
+}
+
+.siteAuditSummaryChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.siteAuditSummaryChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-on-dark, #faf9f5);
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline);
+}
+
+/* ── Site Audit: summary gauge, category cards, trend chart, history ────── */
+.siteAuditSummaryCard {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 20px 32px;
+  align-items: start;
+}
+
+.siteAuditSummaryGauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding-right: 32px;
+  border-right: 1px solid var(--aa-hairline);
+}
+
+.siteAuditGaugeCaption {
+  font-size: 11px;
+  color: var(--aa-on-dark-soft, #a09d96);
+  text-align: center;
+  max-width: 140px;
+}
+
+.siteAuditDeltaUp {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-success);
+}
+
+.siteAuditDeltaDown {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-error);
+}
+
+.siteAuditBreakdownDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--aa-on-dark-soft, #a09d96);
+}
+.siteAuditBreakdownDot[data-status="good"] { background: var(--aa-success); }
+.siteAuditBreakdownDot[data-status="needs_improvement"] { background: var(--aa-warning); }
+.siteAuditBreakdownDot[data-status="poor"] { background: var(--aa-error); }
+
+.siteAuditCategoryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  align-content: start;
+  min-width: 0;
+}
+
+.siteAuditCategoryCard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 14px;
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md, 8px);
+}
+
+.siteAuditCategoryIcon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--aa-muted);
+  background: var(--aa-surface-soft);
+}
+.siteAuditCategoryIcon svg { width: 16px; height: 16px; }
+.siteAuditCategoryIcon[data-status="good"] { color: var(--aa-success); background: color-mix(in oklab, var(--aa-success), transparent 84%); }
+.siteAuditCategoryIcon[data-status="needs_improvement"] { color: var(--aa-warning); background: color-mix(in oklab, var(--aa-warning), transparent 84%); }
+.siteAuditCategoryIcon[data-status="poor"] { color: var(--aa-error); background: color-mix(in oklab, var(--aa-error), transparent 84%); }
+
+.siteAuditCategoryLabel {
+  font-size: 12px;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+
+.siteAuditCategoryValue {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--aa-on-dark, #faf9f5);
+}
+
+.siteAuditCategoryValueUnit {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--aa-on-dark-soft, #a09d96);
+  margin-left: 2px;
+}
+
+.siteAuditHealthMessage {
+  grid-column: 1 / -1;
+  padding-top: 16px;
+  border-top: 1px solid var(--aa-hairline);
+  color: var(--aa-on-dark, #faf9f5);
+}
+
+.siteAuditChartLegend {
+  display: flex;
+  gap: 16px;
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+.siteAuditChartLegend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.siteAuditChartLegendSwatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.siteAuditChartTooltip {
+  background: var(--aa-void-elevated, #121214);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md, 8px);
+  padding: 8px 12px;
+  font-size: 12px;
+  min-width: 150px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.siteAuditChartTooltipDate {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--aa-on-dark, #faf9f5);
+}
+
+.siteAuditChartTooltipRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+.siteAuditChartTooltipRow strong {
+  margin-left: auto;
+  color: var(--aa-on-dark, #faf9f5);
+}
+
+.siteAuditChartTooltipSwatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.siteAuditHistoryList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.siteAuditHistoryRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 4px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--aa-hairline);
+  cursor: pointer;
+  text-align: left;
+}
+.siteAuditHistoryList li:last-child .siteAuditHistoryRow {
+  border-bottom: none;
+}
+.siteAuditHistoryRow:hover {
+  background: var(--aa-surface-soft);
+}
+.siteAuditHistoryRow[aria-current="true"] {
+  background: color-mix(in oklab, var(--aa-primary, #d97757), transparent 92%);
+}
+
+.siteAuditHistoryDate {
+  font-size: 13px;
+  color: var(--aa-on-dark, #faf9f5);
+  flex: 1;
+  min-width: 0;
+}
+
+.siteAuditHistoryScores {
+  font-size: 12px;
+  color: var(--aa-on-dark, #faf9f5);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.siteAuditHistoryChevron {
+  color: var(--aa-on-dark-soft, #a09d96);
+  font-size: 14px;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .siteAuditFindingRow {
+    transition: none;
+  }
+}
+
+.siteAuditGaugeArc {
+  transition: stroke-dasharray 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .siteAuditGaugeArc {
+    transition: none;
+  }
+}
+
+.siteAuditInsightBanner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border-radius: var(--aa-r-lg, 12px);
+  border: 1px solid rgba(126, 95, 236, 0.28);
+  background: linear-gradient(135deg, rgba(126, 95, 236, 0.14), rgba(126, 95, 236, 0.05));
+  color: var(--aa-on-dark, #faf9f5);
+  width: 100%;
+}
+
+.siteAuditInsightIcon {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(126, 95, 236, 0.18);
+  font-size: 15px;
+}
+
+.siteAuditInsightBody {
+  flex: 1;
+  min-width: 0;
+  color: var(--aa-on-dark, #faf9f5);
+}
+.siteAuditInsightBody p {
+  color: var(--aa-on-dark-soft, #a09d96);
+}
+
+.siteAuditInsightLink {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border-radius: var(--aa-r-sm, 6px);
+  background: rgba(126, 95, 236, 0.85);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.siteAuditInsightLink:hover {
+  background: rgba(126, 95, 236, 1);
+}
+
+@media (max-width: 900px) {
+  .siteAuditSummaryCard {
+    grid-template-columns: 1fr;
+  }
+  .siteAuditSummaryGauge {
+    border-right: none;
+    border-bottom: 1px solid var(--aa-hairline);
+    padding-right: 0;
+    padding-bottom: 20px;
+  }
+  .siteAuditHistoryScores {
+    display: block;
+  }
+  .siteAuditInsightBanner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .siteAuditInsightLink {
+    width: 100%;
+    text-align: center;
+  }
+}
+
+@media (max-width: 560px) {
+  .siteAuditHistoryRow {
+    flex-wrap: wrap;
+  }
+  .siteAuditHistoryScores {
+    order: 3;
+    width: 100%;
+    padding-left: 18px;
+  }
 }
 
 .analyticsRangeBar {
@@ -5463,12 +6428,19 @@
 /* One saved-cluster row */
 .clusterRow {
   border: 1px solid var(--aa-hairline);
-  background: color-mix(in oklab, var(--aa-surface-card), transparent 22%);
-  border-radius: 14px;
+  background: var(--aa-surface-card);
+  box-shadow: var(--aa-shadow-xs, none);
+  border-radius: 12px;
   padding: 16px;
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* Figma 30:2 highlights the one expanded cluster card with a violet border
+   (the Research-specific secondary accent, same as the section kickers). */
+.clusterRowExpanded {
+  border: 1.5px solid #5b4cf5;
 }
 
 .clusterRowHead {
@@ -5477,6 +6449,33 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
+}
+
+.clusterExpandToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--aa-muted);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.clusterExpandToggle:hover {
+  color: var(--aa-body-strong);
+  background: var(--aa-surface-soft);
+}
+
+.clusterExpandChevron {
+  transition: transform 0.15s ease;
+}
+
+.clusterRowExpanded .clusterExpandChevron {
+  transform: rotate(90deg);
 }
 
 .clusterRowTitleBlock {
@@ -5517,22 +6516,22 @@
 }
 .clusterMetaChip[data-variant="status-draft"] {
   border-color: color-mix(in oklab, var(--aa-warning), transparent 55%);
-  color: color-mix(in oklab, var(--aa-warning), #ffffff 24%);
+  color: var(--aa-warning);
   background: color-mix(in oklab, var(--aa-warning), transparent 86%);
 }
 .clusterMetaChip[data-variant="status-generating"] {
-  border-color: color-mix(in oklab, #38bdf8, transparent 55%);
-  color: #bae6fd;
-  background: rgba(56, 189, 248, 0.12);
+  border-color: color-mix(in oklab, var(--aa-info), transparent 55%);
+  color: var(--aa-info);
+  background: color-mix(in oklab, var(--aa-info), transparent 86%);
 }
 .clusterMetaChip[data-variant="status-ready"] {
   border-color: color-mix(in oklab, var(--aa-success), transparent 55%);
-  color: color-mix(in oklab, var(--aa-success), #ffffff 24%);
+  color: var(--aa-success);
   background: color-mix(in oklab, var(--aa-success), transparent 86%);
 }
 .clusterMetaChip[data-variant="status-partial_error"] {
   border-color: color-mix(in oklab, var(--aa-error), transparent 55%);
-  color: color-mix(in oklab, var(--aa-error), #ffffff 30%);
+  color: var(--aa-error);
   background: color-mix(in oklab, var(--aa-error), transparent 86%);
 }
 
@@ -5559,13 +6558,15 @@
   color: color-mix(in oklab, var(--aa-ink), transparent 12%);
 }
 
+/* DESIGN.md bans a colored border-left as a card/callout accent. This
+ * already had a full border + background tint underneath the stripe --
+ * dropping the stripe leaves a compliant card, not a redesign. */
 .clusterPillarBox {
   position: relative;
-  padding: 12px 14px 12px 16px;
-  border-radius: 12px;
+  padding: 12px 14px;
+  border-radius: var(--aa-r-lg);
   background: color-mix(in oklab, var(--aa-surface-soft), transparent 35%);
-  border: 1px solid var(--aa-hairline);
-  border-left: 3px solid var(--aa-primary);
+  border: 1px solid color-mix(in oklab, var(--aa-primary), var(--aa-hairline) 40%);
 }
 
 .clusterTopicTitle {
@@ -5601,11 +6602,10 @@
 
 .clusterTopicItem {
   position: relative;
-  padding: 10px 12px 10px 16px;
-  border-radius: 10px;
+  padding: 10px 12px;
+  border-radius: var(--aa-r-md);
   background: color-mix(in oklab, var(--aa-surface-soft), transparent 50%);
   border: 1px solid var(--aa-hairline);
-  border-left: 2px solid color-mix(in oklab, var(--aa-primary), transparent 40%);
 }
 
 /* Per-topic status pills */
@@ -5624,12 +6624,12 @@
   border: 1px solid transparent;
 }
 .clusterTopicPill[data-state="pending"] {
-  color: color-mix(in oklab, var(--aa-warning), #ffffff 22%);
+  color: var(--aa-warning);
   background: color-mix(in oklab, var(--aa-warning), transparent 84%);
   border-color: color-mix(in oklab, var(--aa-warning), transparent 60%);
 }
 .clusterTopicPill[data-state="imported"] {
-  color: color-mix(in oklab, var(--aa-success), #ffffff 24%);
+  color: var(--aa-success);
   background: color-mix(in oklab, var(--aa-success), transparent 84%);
   border-color: color-mix(in oklab, var(--aa-success), transparent 60%);
 }
@@ -5637,19 +6637,19 @@
 .clusterOpenLink {
   font-size: 12.5px;
   font-weight: 700;
-  color: color-mix(in oklab, var(--aa-primary), #ffffff 28%);
+  color: var(--aa-primary);
   text-decoration: none;
   border-bottom: 1px solid color-mix(in oklab, var(--aa-primary), transparent 55%);
 }
 .clusterOpenLink:hover {
-  color: color-mix(in oklab, var(--aa-primary), #ffffff 44%);
+  color: var(--aa-primary);
   border-bottom-color: color-mix(in oklab, var(--aa-primary), transparent 30%);
 }
 
 .clusterErrorsBox {
   border: 1px solid color-mix(in oklab, var(--aa-error), transparent 55%);
   background: color-mix(in oklab, var(--aa-error), transparent 88%);
-  color: color-mix(in oklab, var(--aa-error), #ffffff 26%);
+  color: var(--aa-error);
   border-radius: 10px;
   padding: 10px 12px;
   font-size: 12px;
@@ -5665,14 +6665,16 @@
   margin-right: 4px;
 }
 
+/* Was a left-stripe "flag" (asymmetric radius hanging off the border) --
+ * DESIGN.md bans the stripe; given a full border + full radius instead. */
 .clusterPlanFeedback {
   font-size: 13px;
   line-height: 1.5;
   color: var(--aa-body);
-  border-left: 3px solid color-mix(in oklab, var(--aa-primary), transparent 35%);
+  border: 1px solid color-mix(in oklab, var(--aa-primary), var(--aa-hairline) 40%);
   padding: 8px 12px;
   background: color-mix(in oklab, var(--aa-surface-soft), transparent 35%);
-  border-radius: 0 8px 8px 0;
+  border-radius: var(--aa-r-md);
 }
 
 /* ---------------------------------------------------------------------------
@@ -5732,7 +6734,7 @@
   padding: 1px 7px;
   border-radius: 999px;
   background: color-mix(in oklab, var(--aa-primary), transparent 78%);
-  color: color-mix(in oklab, var(--aa-primary), #ffffff 30%);
+  color: var(--aa-primary);
   border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 60%);
 }
 
@@ -5777,9 +6779,9 @@
   to { transform: rotate(360deg); }
 }
 .validationBadge[data-state="new"] {
-  background: color-mix(in oklab, #16a34a, transparent 80%);
-  color: color-mix(in oklab, #16a34a, #ffffff 35%);
-  border-color: color-mix(in oklab, #16a34a, transparent 55%);
+  background: color-mix(in oklab, var(--aa-success), transparent 80%);
+  color: var(--aa-success);
+  border-color: color-mix(in oklab, var(--aa-success), transparent 55%);
 }
 .validationBadge[data-state="similar"] {
   background: color-mix(in oklab, #f59e0b, transparent 78%);
@@ -5970,9 +6972,9 @@
   flex-shrink: 0;
 }
 .wpStatusPill[data-state="verified"] {
-  color: #d6ffe6;
-  background: color-mix(in oklab, #18a957, transparent 75%);
-  border-color: color-mix(in oklab, #18a957, transparent 55%);
+  color: color-mix(in oklab, var(--aa-success), white 55%);
+  background: color-mix(in oklab, var(--aa-success), transparent 75%);
+  border-color: color-mix(in oklab, var(--aa-success), transparent 55%);
 }
 .wpStatusPill[data-state="warning"] {
   color: #ffe6c2;
@@ -6008,9 +7010,9 @@
   white-space: nowrap;
 }
 .shopifyProductStatusPill[data-state="active"] {
-  color: #d6ffe6;
-  background: color-mix(in oklab, #18a957, transparent 78%);
-  border-color: color-mix(in oklab, #18a957, transparent 55%);
+  color: color-mix(in oklab, var(--aa-success), white 55%);
+  background: color-mix(in oklab, var(--aa-success), transparent 78%);
+  border-color: color-mix(in oklab, var(--aa-success), transparent 55%);
 }
 .shopifyProductStatusPill[data-state="draft"] {
   color: #ffe6c2;
@@ -6047,8 +7049,8 @@
   margin-top: 10px;
   padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid color-mix(in oklab, #18a957, transparent 55%);
-  background: color-mix(in oklab, #18a957, transparent 82%);
+  border: 1px solid color-mix(in oklab, var(--aa-success), transparent 55%);
+  background: color-mix(in oklab, var(--aa-success), transparent 82%);
   color: var(--aa-body-strong, var(--aa-ink));
   font-size: 13px;
   line-height: 1.55;
@@ -6202,7 +7204,7 @@
   border-radius: 8px;
   border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 60%);
   background: color-mix(in oklab, var(--aa-primary), transparent 65%);
-  color: #fff;
+  color: var(--aa-primary);
   font-size: 12.5px;
   font-weight: 700;
   cursor: pointer;
@@ -6258,15 +7260,18 @@
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 28%);
 }
 
+/* Figma's Prompts "Save Banner" (35:222) uses the pink/error tint family,
+   not the orange brand tint -- match that literally rather than the more
+   common "primary-tinted notice" pattern. */
 .settingsActionBar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
-  border-radius: var(--aa-r-lg);
-  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 42%);
-  background: color-mix(in oklab, var(--aa-primary), transparent 92%);
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in oklab, var(--aa-error), transparent 45%);
+  background: color-mix(in oklab, var(--aa-error), transparent 92%);
 }
 
 .settingsActionBarHint {
@@ -6300,9 +7305,9 @@
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
 }
 .toast[data-tone="success"] {
-  border-color: color-mix(in oklab, #18a957, transparent 55%);
-  background: color-mix(in oklab, #18a957, transparent 90%);
-  color: #d6ffe6;
+  border-color: color-mix(in oklab, var(--aa-success), transparent 55%);
+  background: color-mix(in oklab, var(--aa-success), transparent 90%);
+  color: color-mix(in oklab, var(--aa-success), white 55%);
 }
 .toast[data-tone="error"] {
   border-color: color-mix(in oklab, #b53d29, transparent 45%);
@@ -6329,7 +7334,7 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--aa-primary), #fff 20%);
+  color: var(--aa-primary);
 }
 
 .settingsSectionTitle {
@@ -6349,7 +7354,7 @@
 }
 
 .settingsSectionDesc a {
-  color: color-mix(in oklab, var(--aa-primary), #fff 18%);
+  color: var(--aa-primary);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -6459,7 +7464,7 @@
   padding: 16px 20px;
   border-radius: var(--aa-r-lg);
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%);
-  background: color-mix(in oklab, #ffffff, transparent 97%);
+  background: var(--aa-surface-soft);
 }
 
 .settingsInfoCardTitle {
@@ -6480,7 +7485,7 @@
   padding: 0;
   border: none;
   background: none;
-  color: color-mix(in oklab, var(--aa-primary), #fff 18%);
+  color: var(--aa-primary);
   font: inherit;
   font-weight: 650;
   text-decoration: underline;
@@ -6499,7 +7504,7 @@
   margin: 0 0 8px;
   font-size: 14px;
   font-weight: 750;
-  color: color-mix(in oklab, var(--aa-error), #fff 12%);
+  color: var(--aa-error);
 }
 
 .settingsDangerCardDesc {
@@ -6534,7 +7539,7 @@
   padding: 14px 20px;
   font-size: 13px;
   font-weight: 750;
-  color: color-mix(in oklab, var(--aa-error), #fff 12%);
+  color: var(--aa-error);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -6554,35 +7559,41 @@
   transform: rotate(90deg);
 }
 
+/* Figma (39:2) "tab-switcher": compact gray segmented control, white pill
+   for the active tab -- now a real tab switcher (was a sticky scroll-spy
+   jump nav pinned to the top of a single long page). */
 .settingsSubNav {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
+  display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 6px;
-  border-radius: var(--aa-r-lg);
-  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 8%);
-  background: color-mix(in oklab, var(--aa-canvas), #000 4%);
+  padding: 4px;
+  border-radius: 10px;
+  border: none;
+  background: var(--aa-surface-soft);
 }
 
 .settingsSubNavItem {
-  padding: 8px 12px;
-  border-radius: var(--aa-r-sm);
+  padding: 9px 16px;
+  border-radius: 8px;
   border: none;
   background: transparent;
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 25%);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   font-family: inherit;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 
 .settingsSubNavItem:hover {
-  background: color-mix(in oklab, var(--aa-canvas), #000 8%);
   color: var(--aa-body-strong);
+}
+
+.settingsSubNavItemActive {
+  background: var(--aa-surface-card);
+  color: var(--aa-body-strong);
+  font-weight: 600;
+  box-shadow: var(--aa-shadow-xs, none);
 }
 
 .settingsGroup {
@@ -6646,13 +7657,13 @@
 }
 
 .settingsPage .chipPickerBox {
-  background: color-mix(in oklab, #ffffff, transparent 96%);
+  background: var(--aa-surface-soft);
   border-color: color-mix(in oklab, var(--aa-hairline), transparent 10%);
 }
 
 .settingsPage .chipOption {
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 15%);
-  background: color-mix(in oklab, #ffffff, transparent 90%);
+  background: var(--aa-surface-card);
   border-color: color-mix(in oklab, var(--aa-hairline), transparent 15%);
 }
 
@@ -6661,7 +7672,7 @@
 }
 
 .settingsPage .chipFreeInput {
-  background: color-mix(in oklab, #ffffff, transparent 96%);
+  background: var(--aa-surface-soft);
   color: var(--aa-body-strong);
   border-color: color-mix(in oklab, var(--aa-hairline), transparent 12%);
 }
@@ -6694,6 +7705,13 @@
   width: 100%;
 }
 
+.scheduledPageLead {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
 .researchPageLead {
   margin: 8px 0 0;
   max-width: none;
@@ -6703,30 +7721,32 @@
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 28%);
 }
 
+/* Figma Research tab-switcher (30:442/30:447): gray segmented control,
+   white pill for the active tab -- not an outlined-border style. */
 .researchSubTabs {
-  display: flex;
+  display: inline-flex;
   align-items: stretch;
-  gap: 6px;
-  width: 100%;
+  gap: 4px;
+  width: auto;
   max-width: 100%;
   min-width: 0;
-  padding: 5px;
-  border-radius: var(--aa-r-lg);
-  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 8%);
-  background: color-mix(in oklab, var(--aa-surface-soft), transparent 0%);
+  padding: 4px;
+  border-radius: 10px;
+  border: none;
+  background: var(--aa-surface-soft);
 }
 
 .researchSubTab {
   appearance: none;
-  flex: 1 1 0;
+  flex: 0 0 auto;
   min-width: 0;
-  border: 1px solid transparent;
+  border: none;
   background: transparent;
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 28%);
-  border-radius: calc(var(--aa-r-lg) - 4px);
-  padding: 10px 14px;
+  border-radius: 8px;
+  padding: 9px 18px;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 500;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -6734,13 +7754,11 @@
   gap: 8px;
   transition:
     background 0.12s ease,
-    color 0.12s ease,
-    border-color 0.12s ease;
+    color 0.12s ease;
 }
 
 .researchSubTab:hover {
   color: var(--aa-body-strong);
-  background: color-mix(in oklab, var(--aa-surface-card), transparent 20%);
 }
 
 .researchSubTab:focus-visible {
@@ -6750,9 +7768,9 @@
 
 .researchSubTabActive {
   color: var(--aa-body-strong);
-  background: color-mix(in oklab, var(--aa-surface-card), transparent 0%);
-  border-color: color-mix(in oklab, var(--aa-primary), transparent 55%);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--aa-primary), transparent 70%);
+  font-weight: 600;
+  background: var(--aa-surface-card);
+  box-shadow: var(--aa-shadow-xs, none);
 }
 
 .researchSubTabBadge {
@@ -6763,7 +7781,7 @@
   padding: 2px 7px;
   border-radius: 999px;
   background: color-mix(in oklab, var(--aa-primary), transparent 82%);
-  color: color-mix(in oklab, var(--aa-primary), #fff 22%);
+  color: var(--aa-primary);
   border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 58%);
 }
 
@@ -6803,13 +7821,16 @@
   flex: 1 1 280px;
 }
 
+/* Figma's Research screens use a distinct violet (#5b4cf5) for this kicker,
+   the section's active-nav icon, and its primary CTA -- a deliberate
+   secondary accent for Research specifically, not the orange brand color. */
 .researchSectionKicker {
   margin: 0 0 4px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--aa-primary), #fff 20%);
+  color: #5b4cf5;
 }
 
 .researchSectionTitle {
@@ -6976,7 +7997,7 @@
 }
 
 .researchResultImportedPill {
-  color: color-mix(in oklab, var(--aa-success), #ffffff 24%);
+  color: var(--aa-success);
   background: color-mix(in oklab, var(--aa-success), transparent 84%);
   border-color: color-mix(in oklab, var(--aa-success), transparent 60%);
   font-weight: 800;
@@ -6999,7 +8020,7 @@
 
 .researchResultsScroll .th {
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 32%);
-  background: color-mix(in oklab, #0a0a0e, var(--aa-surface-soft) 35%);
+  background: var(--aa-surface-soft);
 }
 
 .researchResultsScroll .td {
@@ -7144,10 +8165,11 @@
   flex-direction: column;
   gap: 14px;
   min-width: 0;
-  padding: 18px 20px;
+  padding: 20px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 8%);
-  border-radius: var(--aa-r-lg);
-  background: color-mix(in oklab, var(--aa-surface-card), var(--aa-surface-soft) 40%);
+  border-radius: 12px;
+  background: var(--aa-surface-card);
+  box-shadow: var(--aa-shadow-xs, none);
 }
 
 .promptsPanelHead {
@@ -7170,7 +8192,7 @@
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--aa-primary), #fff 20%);
+  color: var(--aa-primary);
 }
 
 .promptsPanelTitle {
@@ -7222,22 +8244,22 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 16px;
-  border-radius: var(--aa-r-md);
+  padding: 16px;
+  border-radius: 10px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%);
-  background: color-mix(in oklab, var(--aa-surface-soft), transparent 0%);
+  background: var(--aa-surface-card);
   transition: border-color 0.12s ease, background 0.12s ease;
 }
 
 .promptsPromptCard:hover {
   border-color: color-mix(in oklab, var(--aa-primary), transparent 35%);
-  background: color-mix(in oklab, var(--aa-primary), transparent 96%);
 }
 
+/* Figma (35:2) highlights the default prompt with a full 1.5px border +
+   warm tint, not a left-edge accent bar. */
 .promptsPromptCard[data-default="true"] {
-  border-color: color-mix(in oklab, var(--aa-primary), transparent 28%);
-  background: color-mix(in oklab, var(--aa-primary), transparent 94%);
-  box-shadow: inset 3px 0 0 var(--aa-primary);
+  border: 1.5px solid var(--aa-primary);
+  background: color-mix(in oklab, var(--aa-primary), var(--aa-surface-card) 94%);
 }
 
 .promptsPromptCardTop {
@@ -7277,13 +8299,21 @@
   accent-color: var(--aa-primary);
 }
 
+/* Figma bolds + colors "Set as default" orange only on the card that already
+   is the default -- otherwise it's plain muted label text. */
+.promptsPromptCard[data-default="true"] .promptsDefaultRow {
+  color: var(--aa-primary);
+  font-weight: 700;
+}
+
 .promptsPromptCard .miniDanger {
-  color: color-mix(in oklab, #ff8a8a, var(--aa-body-strong) 10%);
+  border-color: color-mix(in oklab, var(--aa-error), transparent 45%);
+  color: var(--aa-error);
 }
 
 .promptsPromptCard .miniDanger:hover:not(:disabled) {
-  color: #ffb4b4;
-  background: color-mix(in oklab, #ff6b6b, transparent 88%);
+  color: var(--aa-error);
+  background: color-mix(in oklab, var(--aa-error), transparent 88%);
 }
 
 .promptsPromptPreview {
@@ -7356,7 +8386,7 @@
   font-weight: 750;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-  color: color-mix(in oklab, var(--aa-primary), #fff 20%);
+  color: var(--aa-primary);
   padding-bottom: 8px;
   border-bottom: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 10%);
 }
@@ -7554,9 +8584,16 @@
   text-align: right;
 }
 
-/* Status pills used in the indexing-status table. Solid-tinted so they are
- * visible on dark surfaces; consistent vocabulary across coverage states. */
-.statusPill {
+/* Status pills used in the indexing-status table.
+ * RENAMED from .statusPill -> .indexPill (and .pillXxx -> .indexPillXxx):
+ * this class name collided with the unrelated Articles-table .statusPill
+ * at line ~2747 -- CSS Modules compiles both to the same generated class,
+ * so this later-in-source definition was silently winning the cascade for
+ * BOTH tables, rendering Articles-table status pills at this smaller,
+ * uppercase size instead of their own intended styling. Recolored to the
+ * real --aa-success/warning/error/info tokens instead of raw hex while
+ * fixing the collision, since they were one edit away either way. */
+.indexPill {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 999px;
@@ -7568,30 +8605,30 @@
   line-height: 1.4;
   white-space: nowrap;
 }
-.pillNeutral {
+.indexPillNeutral {
   color: color-mix(in oklab, var(--text-primary), transparent 25%);
   background: color-mix(in oklab, var(--text-primary), transparent 90%);
   border-color: color-mix(in oklab, var(--text-primary), transparent 80%);
 }
-.pillInfo {
-  color: #bae6fd;
-  background: rgba(56, 189, 248, 0.15);
-  border-color: rgba(56, 189, 248, 0.35);
+.indexPillInfo {
+  color: color-mix(in oklab, var(--aa-info, #7090c8), white 25%);
+  background: color-mix(in oklab, var(--aa-info, #7090c8), transparent 85%);
+  border-color: color-mix(in oklab, var(--aa-info, #7090c8), transparent 65%);
 }
-.pillSuccess {
-  color: #86efac;
-  background: rgba(34, 197, 94, 0.15);
-  border-color: rgba(34, 197, 94, 0.35);
+.indexPillSuccess {
+  color: color-mix(in oklab, var(--aa-success), white 25%);
+  background: color-mix(in oklab, var(--aa-success), transparent 85%);
+  border-color: color-mix(in oklab, var(--aa-success), transparent 65%);
 }
-.pillWarn {
-  color: #fde68a;
-  background: rgba(234, 179, 8, 0.15);
-  border-color: rgba(234, 179, 8, 0.35);
+.indexPillWarn {
+  color: color-mix(in oklab, var(--aa-warning), white 25%);
+  background: color-mix(in oklab, var(--aa-warning), transparent 85%);
+  border-color: color-mix(in oklab, var(--aa-warning), transparent 65%);
 }
-.pillDanger {
-  color: #fca5a5;
-  background: rgba(239, 68, 68, 0.15);
-  border-color: rgba(239, 68, 68, 0.4);
+.indexPillDanger {
+  color: color-mix(in oklab, var(--aa-error), white 25%);
+  background: color-mix(in oklab, var(--aa-error), transparent 85%);
+  border-color: color-mix(in oklab, var(--aa-error), transparent 60%);
 }
 
 /* Pager bar shared by the indexing-status table and any other paged view. */
@@ -7650,22 +8687,50 @@
   border-color: transparent;
 }
 
+/* .select / .inputSmall: the compact sibling of .input (34px, matching the
+ * de facto toolbar-control height already used across the app) -- not
+ * merged into .input itself since a fixed 40px would be wrong for a dense
+ * toolbar row. Previously ran on the legacy --button-secondary-border /
+ * --text-primary alias layer instead of --aa-* directly; fixed here along
+ * with the missing focus/hover states .input already had. */
 .select {
-  border: 1px solid var(--button-secondary-border);
-  border-radius: 10px;
-  padding: 6px 10px;
+  height: 34px;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-sm);
+  padding: 0 10px;
   background: transparent;
-  color: var(--text-primary);
+  color: var(--aa-ink);
   font-size: 13px;
+  transition: border-color 0.14s ease;
 }
 
 .inputSmall {
-  border: 1px solid var(--button-secondary-border);
-  border-radius: 10px;
-  padding: 8px 10px;
+  height: 34px;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-sm);
+  padding: 0 10px;
   background: transparent;
-  color: var(--text-primary);
+  color: var(--aa-ink);
   font-size: 13px;
+  transition: border-color 0.14s ease;
+}
+
+.select:hover:not(:disabled),
+.inputSmall:hover:not(:disabled) {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
+}
+
+.select:focus,
+.inputSmall:focus {
+  outline: none;
+  border-color: var(--aa-primary);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--aa-primary), transparent 85%);
+}
+
+.select:disabled,
+.inputSmall:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .sectionHead {
@@ -7745,15 +8810,21 @@
   z-index: 60;
 }
 
+/* Shell for ~20 modals in the project workspace -- was the one modal in the
+ * app still keyed to the base --background/--button-secondary-border alias
+ * layer instead of --aa-* directly, and the only one using a raw 18px
+ * radius instead of var(--aa-r-lg) (12px, used by every other modal shell
+ * in the app: dashboard's .shareModal, UserProfileModule's .modal,
+ * invitations' .modal). Fixed to match. */
 .modalPanel {
   position: fixed;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
   width: min(640px, calc(100% - 24px));
-  background: var(--background);
-  border: 1px solid var(--button-secondary-border);
-  border-radius: 18px;
+  background: var(--aa-surface-dark-elevated, var(--aa-surface-card));
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-lg);
   padding: 16px;
   z-index: 61;
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
@@ -7794,17 +8865,27 @@
   flex-direction: column;
   gap: 6px;
   font-size: 14px;
-  color: #fff;
+  color: var(--aa-body-strong);
 }
 
 .input {
   border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-md);
   background: var(--aa-surface-card);
-  color: #fff;
+  color: var(--aa-ink);
   padding: 10px 14px;
   height: 40px;
   outline: none;
+}
+
+/* Full-width form-field variant of .input, for vertical settings/profile
+ * layouts. Same visual recipe, different layout need -- was independently
+ * hand-built (and drifted: different height, background opacity, focus
+ * color) in UserProfileModule.module.css and AdminPlansModule.module.css. */
+.fieldInput {
+  composes: input;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .input:focus {
@@ -7812,6 +8893,53 @@
   box-shadow: 0 0 0 4px color-mix(in oklab, var(--aa-primary), transparent 85%);
 }
 
+/* Member-invite email + role controls, shared by the dashboard "Share"
+ * modal and the project workspace's Members tab -- previously two
+ * byte-identical, independently hand-typed copies (dashboard.module.css
+ * .shareEmailInput/.shareRoleSelect, projectsDark.module.css
+ * .membersEmailInput/.membersRoleSelect). */
+.memberEmailInput {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-sm);
+  color: var(--aa-ink);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+
+.memberEmailInput:focus {
+  border-color: var(--aa-primary);
+}
+
+.memberRoleSelect {
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-sm);
+  color: var(--aa-ink);
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.12s ease;
+}
+
+.memberRoleSelect:focus {
+  border-color: var(--aa-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memberEmailInput, .memberRoleSelect { transition: none; }
+}
+
+/* Canonical buttons (I6.1 design-system pass). Every other .btnPrimary /
+ * .btnSecondary / .iconButton / .btnDanger in the app composes from one of
+ * these four instead of redeclaring height/radius/hover/focus -- see the
+ * per-file composes at each call site for the full list. Do not restyle a
+ * button locally; add a role here if a genuinely new one is needed. */
 .button {
   border: 0;
   border-radius: var(--aa-r-md);
@@ -7821,10 +8949,22 @@
   background: var(--aa-primary);
   color: var(--aa-on-primary);
   cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
 }
 
-.button:hover {
+.button:hover:not(:disabled) {
+  background: var(--aa-primary-hover);
+  transform: translateY(-1px);
+}
+
+.button:active:not(:disabled) {
   background: var(--aa-primary-active);
+  transform: translateY(0);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
 }
 
 .button:disabled {
@@ -7832,6 +8972,12 @@
   color: var(--aa-muted);
   opacity: 1;
   cursor: not-allowed;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button { transition: none; }
+  .button:hover:not(:disabled) { transform: none; }
 }
 
 .platformPickerGrid {
@@ -7868,15 +9014,52 @@
   height: 40px;
   font-weight: 700;
   background: var(--aa-error);
-  color: #fff;
+  color: var(--aa-on-primary);
   cursor: pointer;
+  transition: background 0.14s ease;
 }
 
-.btnDanger:hover {
+.btnDanger:hover:not(:disabled) {
   background: color-mix(in oklab, var(--aa-error), #000 12%);
 }
 
+.btnDanger:focus-visible {
+  outline: 2px solid var(--aa-error);
+  outline-offset: 2px;
+}
+
 .btnDanger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Softer destructive affordance for panels where a fully-filled danger
+ * button would read as too alarming next to a primary/secondary pair
+ * (settings panels, account deletion). Row-scale danger actions (member
+ * remove, etc.) are a separate, smaller size class -- not migrated here. */
+.btnDangerGhost {
+  border: 1px solid color-mix(in oklab, var(--aa-error), transparent 50%);
+  border-radius: var(--aa-r-md);
+  padding: 12px 20px;
+  height: 40px;
+  font-weight: 700;
+  background: color-mix(in oklab, var(--aa-error), transparent 92%);
+  color: var(--aa-error);
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.btnDangerGhost:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--aa-error), transparent 84%);
+  border-color: color-mix(in oklab, var(--aa-error), transparent 30%);
+}
+
+.btnDangerGhost:focus-visible {
+  outline: 2px solid var(--aa-error);
+  outline-offset: 2px;
+}
+
+.btnDangerGhost:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -7934,22 +9117,24 @@
   margin-bottom: 28px;
 }
 
+/* App-shell page headers (dashboard/project tabs) use the compact Manrope
+   app-header style from the Figma handoff, not the marketing-page serif
+   display headline -- this class is scoped to dashboard/page.tsx and
+   projects/[projectId]/page.tsx only (verified via grep), so it's safe to
+   diverge from any public/marketing usage of a similarly-named class. */
 .intro h1 {
-  max-width: 320px;
-  font-family: var(--aa-font-display);
-  font-size: 40px;
-  font-weight: 400;
-  line-height: 1.1;
-  letter-spacing: -1px;
-  text-wrap: balance;
+  font-family: var(--aa-font-heading);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
 }
 
 .intro p {
-  max-width: 440px;
-  font-size: 18px;
-  line-height: 32px;
-  text-wrap: balance;
+  max-width: 520px;
+  font-size: 13px;
+  line-height: 1.4;
   color: var(--text-secondary);
 }
 
@@ -8094,7 +9279,7 @@ a.secondary {
 .articlesOverview {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 32px;
   width: 100%;
 }
 
@@ -8104,6 +9289,27 @@ a.secondary {
   color: var(--aa-muted);
   font-size: 14px;
 }
+
+/* ─── Section scaffold ────────────────────────────────────────────────────
+ * Every KPI / summary / operations block shares this shell so the page
+ * reads as one connected system instead of stacked, unrelated cards.
+ * ────────────────────────────────────────────────────────────────────── */
+
+.articlesOverviewSection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.articlesOverviewSectionLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--aa-muted);
+}
+
+/* ─── KPI summary ─────────────────────────────────────────────────────── */
 
 .articlesOverviewStatGrid {
   display: grid;
@@ -8117,69 +9323,242 @@ a.secondary {
   }
 }
 
-/* Mobile carousel: see OverviewStatCarousel.module.css (2 cards visible, swipe) */
+@media (max-width: 640px) {
+  .articlesOverviewStatGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 400px) {
+  .articlesOverviewStatGrid {
+    grid-template-columns: 1fr;
+  }
+}
 
 .articlesOverviewStatCard {
   appearance: none;
   text-align: left;
   border: 1px solid var(--aa-hairline);
   background: var(--aa-surface-card);
-  border-radius: 14px;
-  padding: 20px 16px 16px;
+  border-radius: var(--aa-r-lg, 12px);
+  padding: 18px 16px 16px;
   cursor: pointer;
-  transition:
-    border-color 0.15s ease,
-    transform 0.12s ease,
-    box-shadow 0.15s ease;
+  min-height: 44px;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.12s ease;
   color: inherit;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  animation: overviewStatIn 0.32s ease-out forwards;
+  animation-delay: calc(var(--stat-i, 0) * 45ms);
+}
+
+@keyframes overviewStatIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .articlesOverviewStatCard {
+    opacity: 1;
+    animation: none;
+  }
 }
 
 .articlesOverviewStatCard:hover {
-  border-color: color-mix(in oklab, var(--aa-primary), transparent 35%);
-  transform: translateY(-1px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 45%);
+  background: color-mix(in oklab, var(--aa-surface-card), white 3%);
+}
+
+.articlesOverviewStatCard:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+}
+
+.articlesOverviewStatCardPublished {
+  border-top: 2px solid var(--aa-primary);
 }
 
 .articlesOverviewStatValue {
   display: block;
-  font-size: clamp(28px, 4vw, 38px);
-  font-weight: 800;
+  font-size: clamp(26px, 3.2vw, 34px);
+  font-weight: 700;
   line-height: 1.05;
   color: var(--aa-ink);
-  letter-spacing: -0.03em;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
 }
 
 .articlesOverviewStatLabel {
   display: block;
   margin-top: 10px;
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 12px;
+  line-height: 1.4;
   color: var(--aa-muted);
   font-weight: 600;
 }
 
-.articlesOverviewMainGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.75fr);
-  gap: 14px;
-  align-items: stretch;
+.articlesOverviewStatSub {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--aa-muted-soft, rgba(255,255,255,0.32));
+  font-weight: 500;
 }
 
-@media (max-width: 1024px) {
-  .articlesOverviewMainGrid {
-    grid-template-columns: 1fr;
+.articlesOverviewStatDelta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  line-height: 1.2;
+}
+
+.articlesOverviewStatDelta[data-trend="up"] {
+  color: var(--aa-success, #5db872);
+  background: color-mix(in oklab, var(--aa-success, #5db872), transparent 84%);
+}
+
+.articlesOverviewStatDelta[data-trend="down"] {
+  color: var(--aa-error, var(--aa-error));
+  background: color-mix(in oklab, var(--aa-error, var(--aa-error)), transparent 84%);
+}
+
+.articlesOverviewStatDelta[data-trend="flat"] {
+  color: var(--aa-muted);
+  background: rgba(255,255,255,0.06);
+}
+
+/* ─── Project / integration summary ──────────────────────────────────────
+ * One cohesive panel with internal stat columns, not a second row of
+ * identical cards -- keeps it visually distinct from the KPI grid above
+ * and matches "Project / Integration Summary" as one concept.
+ * ────────────────────────────────────────────────────────────────────── */
+
+.articlesOverviewSummaryPanel {
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card);
+  border-radius: var(--aa-r-lg, 12px);
+  overflow: hidden;
+}
+
+.articlesOverviewSummaryStats {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+@media (max-width: 1200px) {
+  .articlesOverviewSummaryStats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
+
+@media (max-width: 640px) {
+  .articlesOverviewSummaryStats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.articlesOverviewSummaryStat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 18px;
+  border-right: 1px solid var(--aa-hairline-soft);
+  border-bottom: 1px solid var(--aa-hairline-soft);
+  min-width: 0;
+}
+
+.articlesOverviewSummaryStat:last-child {
+  border-right: none;
+}
+
+.articlesOverviewSummaryValue {
+  display: block;
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--aa-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.articlesOverviewSummaryLabel {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--aa-muted);
+  line-height: 1.3;
+}
+
+.articlesOverviewGscPrompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+  background: color-mix(in oklab, var(--aa-warning, #d4a017), transparent 94%);
+  border-top: 1px solid color-mix(in oklab, var(--aa-warning, #d4a017), transparent 75%);
+}
+
+.articlesOverviewGscPromptText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.articlesOverviewGscPromptTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--aa-ink);
+}
+
+.articlesOverviewGscPromptBody {
+  margin: 0;
+  font-size: 12px;
+  color: var(--aa-muted);
+  line-height: 1.5;
+  max-width: 52ch;
+}
+
+.articlesOverviewGscPromptLink {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: var(--aa-r-sm, 6px);
+  background: var(--aa-primary);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.articlesOverviewGscPromptLink:hover {
+  background: var(--aa-primary-active);
+  transform: translateY(-1px);
+}
+
+.articlesOverviewGscPromptLink:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+}
+
+/* ─── Publishing activity ─────────────────────────────────────────────── */
 
 .articlesOverviewChartCard,
 .articlesOverviewPanel {
   border: 1px solid var(--aa-hairline);
   background: var(--aa-surface-card);
-  border-radius: 16px;
-  padding: 18px 18px 14px;
+  border-radius: var(--aa-r-lg, 12px);
+  padding: 20px 20px 16px;
   min-width: 0;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.32);
 }
 
 .articlesOverviewChartHead {
@@ -8188,13 +9567,13 @@ a.secondary {
   align-items: flex-start;
   gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 16px;
 }
 
 .articlesOverviewChartTitle {
   margin: 0;
   font-size: 15px;
-  font-weight: 800;
+  font-weight: 700;
   color: var(--aa-ink);
 }
 
@@ -8204,14 +9583,79 @@ a.secondary {
   color: var(--aa-muted);
 }
 
-.articlesOverviewRangeTabs {
-  display: inline-flex;
-  gap: 6px;
+/* Contextual insight line under the chart -- one real-data-derived sentence,
+ * not decoration. Neutral by default; a touch of ember when the news is a
+ * scheduled/published fact worth a CTA (status is set), plain when there's
+ * simply nothing to report. */
+
+.articlesOverviewChartInsight {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: var(--aa-r-md, 8px);
+  border: 1px solid var(--aa-hairline-soft);
+  background: var(--aa-surface-soft);
+}
+
+.articlesOverviewChartInsight[data-status="scheduled"],
+.articlesOverviewChartInsight[data-status="published"] {
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 65%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 94%);
+}
+
+.articlesOverviewChartInsightIcon {
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.articlesOverviewChartInsightText {
+  margin: 0;
+  flex: 1;
+  min-width: 200px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--aa-ink);
+}
+
+.articlesOverviewChartInsightLink {
+  flex-shrink: 0;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--aa-primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px;
+  margin: -4px;
+  white-space: nowrap;
+  transition: color 0.12s ease;
+}
+
+.articlesOverviewChartInsightLink:hover {
+  color: var(--aa-primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.articlesOverviewChartInsightLink:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.articlesOverviewRangeBar {
+  display: inline-flex;
+  gap: 0;
   padding: 3px;
   border-radius: 10px;
-  background: var(--aa-surface-soft);
-  border: 1px solid var(--aa-hairline-soft);
+  background: var(--aa-surface-soft, rgba(255,255,255,0.04));
+  border: 1px solid var(--aa-hairline-soft, rgba(255,255,255,0.07));
+  align-self: flex-start;
 }
 
 .articlesOverviewRangeBtn {
@@ -8219,10 +9663,11 @@ a.secondary {
   border: 1px solid transparent;
   background: transparent;
   color: var(--aa-muted);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 8px 12px;
+  min-height: 32px;
   border-radius: 7px;
   cursor: pointer;
   transition: background 0.12s ease, color 0.12s ease;
@@ -8232,65 +9677,156 @@ a.secondary {
   color: var(--aa-ink);
 }
 
+.articlesOverviewRangeBtn:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+}
+
 .articlesOverviewRangeBtnActive {
   background: var(--aa-primary);
-  border-color: color-mix(in oklab, var(--aa-primary), #000 12%);
   color: #fff;
 }
 
-.articlesOverviewChartWrap {
+/* Project activity chart (ProjectActivityChart.tsx) -- scoped to this page
+ * only; the admin dashboard's ArticlesOverviewChart keeps its own styles
+ * in ProjectOverviewDashboard.module.css, untouched by this redesign. */
+
+.projectActivityRoot {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.projectActivityWrap {
   position: relative;
   width: 100%;
 }
 
-.articlesOverviewChartLegend {
+/* Stat chips: range-scoped totals, display only (no interaction). */
+
+.projectActivityChips {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .projectActivityChips {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.projectActivityChip {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--aa-hairline-soft);
+  border-radius: var(--aa-r-md, 8px);
+  background: var(--aa-surface-soft);
+  min-width: 0;
+}
+
+.projectActivityChipDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.projectActivityChipValue {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--aa-ink);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+.projectActivityChipLabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--aa-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Interactive checkbox legend: toggles a series on/off in the chart. */
+
+.projectActivityToggleRow {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px 20px;
-  margin: 0 0 12px;
-  padding: 0;
-  list-style: none;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--aa-muted);
-  letter-spacing: 0.02em;
+  gap: 16px;
 }
 
-.articlesOverviewChartLegend li {
+.projectActivityToggle {
+  appearance: none;
+  border: none;
+  background: transparent;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+  padding: 4px 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-muted);
+  cursor: pointer;
+  transition: color 0.12s ease;
 }
 
-.articlesOverviewChartLegendSwatch {
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
+.projectActivityToggle:hover {
+  color: var(--aa-ink);
+}
+
+.projectActivityToggle:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.projectActivityToggleBox {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1.5px solid var(--aa-hairline);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  color: #fff;
   flex-shrink: 0;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  transition: background 0.12s ease, border-color 0.12s ease, transform 0.1s ease;
 }
 
-.articlesOverviewChartSvg {
+.projectActivityToggleBoxOn {
+  transform: scale(1.04);
+}
+
+.projectActivitySvg {
   display: block;
   width: 100%;
-  min-height: 240px;
+  min-height: 220px;
 }
 
-.articlesOverviewChartBar {
-  transition: opacity 0.12s ease;
-}
-
-.articlesOverviewChartHit {
+.projectActivityHit {
   cursor: crosshair;
   outline: none;
 }
 
-.articlesOverviewChartHit:focus-visible {
+.projectActivityHit:focus-visible {
   outline: 2px solid color-mix(in oklab, var(--aa-primary), transparent 40%);
   outline-offset: -2px;
 }
 
-.articlesOverviewChartTooltip {
+.projectActivityEmpty {
+  padding: 56px 16px;
+  text-align: center;
+  color: var(--aa-muted);
+  font-size: 13px;
+}
+
+.projectActivityTooltip {
   --tip-bg: #1a1a20;
   --tip-ink: #ffffff;
   --tip-label: #d8d8e0;
@@ -8298,47 +9834,34 @@ a.secondary {
   --tip-border: rgba(255, 255, 255, 0.22);
   position: fixed;
   z-index: 10000;
-  width: 252px;
+  width: 220px;
   pointer-events: none;
   color: var(--tip-ink);
   filter: drop-shadow(0 14px 36px rgba(0, 0, 0, 0.62));
 }
 
-.articlesOverviewChartTooltipPanel {
-  border-radius: 14px;
+.projectActivityTooltipPanel {
+  border-radius: 12px;
   border: 1px solid var(--tip-border);
   background: var(--tip-bg);
   overflow: hidden;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-.articlesOverviewChartTooltipHead {
-  padding: 12px 14px 11px;
+.projectActivityTooltipHead {
+  padding: 11px 13px 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, transparent 100%);
 }
 
-.articlesOverviewChartTooltipKicker {
-  display: block;
-  margin: 0 0 4px;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--tip-muted);
-}
-
-.articlesOverviewChartTooltipDate {
+.projectActivityTooltipDate {
   display: block;
   margin: 0;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 1.35;
   color: var(--tip-ink);
-  letter-spacing: 0.01em;
 }
 
-.articlesOverviewChartTooltipCaption {
+.projectActivityTooltipCaption {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -8350,14 +9873,14 @@ a.secondary {
   border: 0;
 }
 
-.articlesOverviewChartTooltipTable {
+.projectActivityTooltipTable {
   width: 100%;
   border-collapse: collapse;
   margin: 0;
 }
 
-.articlesOverviewChartTooltipMetric {
-  padding: 9px 0 9px 14px;
+.projectActivityTooltipMetric {
+  padding: 8px 0 8px 13px;
   font-size: 12px;
   font-weight: 500;
   line-height: 1.35;
@@ -8366,14 +9889,10 @@ a.secondary {
   vertical-align: middle;
 }
 
-.articlesOverviewChartTooltipMetric span:last-child {
-  color: var(--tip-label);
-}
-
-.articlesOverviewChartTooltipValue {
-  padding: 9px 14px 9px 12px;
-  font-size: 14px;
-  font-weight: 800;
+.projectActivityTooltipValue {
+  padding: 8px 13px 8px 10px;
+  font-size: 13px;
+  font-weight: 700;
   line-height: 1.2;
   color: var(--tip-ink);
   text-align: right;
@@ -8382,78 +9901,203 @@ a.secondary {
   white-space: nowrap;
 }
 
-.articlesOverviewChartTooltipTable tbody tr + tr .articlesOverviewChartTooltipMetric,
-.articlesOverviewChartTooltipTable tbody tr + tr .articlesOverviewChartTooltipValue {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.articlesOverviewChartTooltipSwatch {
+.projectActivityTooltipSwatch {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  margin-right: 9px;
-  border-radius: 3px;
+  width: 9px;
+  height: 9px;
+  margin-right: 8px;
+  border-radius: 2.5px;
   vertical-align: -1px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
-.articlesOverviewChartTooltipSwatchPublished {
-  box-shadow: 0 0 0 1px color-mix(in oklab, var(--aa-primary), #000 28%);
-}
-
-.articlesOverviewChartTooltipSwatchPending {
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
-}
-
-.articlesOverviewChartTooltipSwatchScheduled {
-  box-shadow: 0 0 0 1px color-mix(in oklab, #f5c842, #000 35%);
-}
-
-.articlesOverviewChartTooltipFooter {
+.projectActivityTooltipFooter {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin: 0;
-  padding: 10px 14px 12px;
+  padding: 9px 13px 11px;
   background: rgba(255, 255, 255, 0.06);
   border-top: 1px solid rgba(255, 255, 255, 0.12);
 }
 
-.articlesOverviewChartTooltipFooterLabel {
-  font-size: 11px;
+.projectActivityTooltipFooterLabel {
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--tip-muted);
 }
 
-.articlesOverviewChartTooltipFooterValue {
-  font-size: 16px;
+.projectActivityTooltipFooterValue {
+  font-size: 15px;
   font-weight: 800;
   color: var(--tip-ink);
   font-variant-numeric: tabular-nums;
 }
 
-.articlesOverviewChartTooltipCaret {
+.projectActivityTooltipCaret {
   display: block;
-  width: 12px;
-  height: 12px;
-  margin: -7px auto 0;
+  width: 11px;
+  height: 11px;
+  margin: -6px auto 0;
   background: var(--tip-bg);
   border-right: 1px solid var(--tip-border);
   border-bottom: 1px solid var(--tip-border);
   transform: rotate(45deg);
 }
 
-.articlesOverviewChartEmpty {
-  padding: 56px 16px;
-  text-align: center;
-  color: var(--aa-muted);
-  font-size: 13px;
+/* ─── Insights row, incl. content opportunity ────────────────────────────
+ * Content opportunity renders as a distinct, wider card (not a third
+ * equal-weight tile) since it's the one insight that implies an action.
+ * ────────────────────────────────────────────────────────────────────── */
+
+.articlesOverviewInsightsRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
 }
 
-/* ─── Overview: header + refresh ─────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .articlesOverviewInsightsRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .articlesOverviewInsightsRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+.articlesOverviewOpportunityCard {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 55%);
+  background: color-mix(in oklab, var(--aa-primary), transparent 92%);
+  border-radius: var(--aa-r-lg, 12px);
+  padding: 16px 18px;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .articlesOverviewOpportunityCard {
+    flex-wrap: wrap;
+  }
+}
+
+.articlesOverviewOpportunityIcon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--aa-primary), transparent 78%);
+  color: var(--aa-primary);
+  font-size: 16px;
+}
+
+.articlesOverviewOpportunityText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.articlesOverviewOpportunityValue {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--aa-ink);
+  line-height: 1.15;
+}
+
+.articlesOverviewOpportunityLabel {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--aa-muted);
+  line-height: 1.4;
+}
+
+.articlesOverviewOpportunityAction {
+  flex-shrink: 0;
+  appearance: none;
+  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 40%);
+  background: transparent;
+  color: var(--aa-primary);
+  font-size: 12px;
+  font-weight: 700;
+  padding: 8px 14px;
+  border-radius: var(--aa-r-sm, 6px);
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.articlesOverviewOpportunityAction:hover {
+  background: color-mix(in oklab, var(--aa-primary), transparent 85%);
+}
+
+.articlesOverviewOpportunityAction:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+}
+
+.articlesOverviewInsightCard {
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card);
+  border-radius: var(--aa-r-lg, 12px);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.articlesOverviewInsightCard[data-trend="up"] {
+  border-color: color-mix(in oklab, var(--aa-success, #5db872), transparent 70%);
+}
+
+.articlesOverviewInsightCard[data-trend="down"] {
+  border-color: color-mix(in oklab, var(--aa-error, var(--aa-error)), transparent 70%);
+}
+
+.articlesOverviewInsightIcon {
+  font-size: 15px;
+  line-height: 1;
+  margin-bottom: 4px;
+  color: var(--aa-muted);
+}
+
+.articlesOverviewInsightValue {
+  display: block;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--aa-ink);
+  line-height: 1.15;
+}
+
+.articlesOverviewInsightLabel {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-ink);
+  line-height: 1.35;
+}
+
+.articlesOverviewInsightSub {
+  display: block;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--aa-muted);
+  line-height: 1.4;
+  margin-top: 2px;
+}
+
+/* ─── Header + refresh ────────────────────────────────────────────────── */
 
 .articlesOverviewHeader {
   display: flex;
@@ -8472,7 +10116,7 @@ a.secondary {
 
 .articlesOverviewTitle {
   margin: 0;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
   color: var(--aa-ink);
   letter-spacing: -0.01em;
@@ -8495,7 +10139,8 @@ a.secondary {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 14px;
+  padding: 8px 14px;
+  min-height: 36px;
   border-radius: var(--aa-r-sm, 6px);
   border: 1px solid var(--aa-hairline);
   background: transparent;
@@ -8510,6 +10155,11 @@ a.secondary {
   color: var(--aa-ink);
   border-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
   background: rgba(255, 255, 255, 0.04);
+}
+
+.articlesOverviewRefreshBtn:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
 }
 
 .articlesOverviewRefreshBtn:disabled {
@@ -8540,206 +10190,10 @@ a.secondary {
   }
 }
 
-/* ─── Overview: range selector ────────────────────────────────────────────── */
-
-.articlesOverviewRangeBar {
-  display: inline-flex;
-  gap: 0;
-  padding: 3px;
-  border-radius: 10px;
-  background: var(--aa-surface-soft, rgba(255,255,255,0.04));
-  border: 1px solid var(--aa-hairline-soft, rgba(255,255,255,0.07));
-  align-self: flex-start;
-}
-
-/* ─── Overview: section label ─────────────────────────────────────────────── */
-
-.articlesOverviewSectionLabel {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--aa-muted);
-  margin-bottom: -8px;
-}
-
-/* ─── Overview: stat card additions ──────────────────────────────────────── */
-
-.articlesOverviewStatCardPublished {
-  border-top: 2px solid color-mix(in oklab, var(--aa-primary), transparent 40%);
-}
-
-.articlesOverviewStatDelta {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  margin-top: 8px;
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 999px;
-  line-height: 1.2;
-}
-
-.articlesOverviewStatDelta[data-trend="up"] {
-  color: var(--aa-success, #5db872);
-  background: color-mix(in oklab, var(--aa-success, #5db872), transparent 84%);
-}
-
-.articlesOverviewStatDelta[data-trend="down"] {
-  color: var(--aa-error, #c64545);
-  background: color-mix(in oklab, var(--aa-error, #c64545), transparent 84%);
-}
-
-.articlesOverviewStatDelta[data-trend="flat"] {
-  color: var(--aa-muted);
-  background: rgba(255,255,255,0.06);
-}
-
-.articlesOverviewStatSub {
-  display: block;
-  margin-top: 6px;
-  font-size: 11px;
-  color: var(--aa-muted-soft, rgba(255,255,255,0.32));
-  font-weight: 500;
-}
-
-/* ─── Overview: all-time row ──────────────────────────────────────────────── */
-
-.articlesOverviewAllTimeRow {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
-}
-
-@media (max-width: 1200px) {
-  .articlesOverviewAllTimeRow {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 640px) {
-  .articlesOverviewAllTimeRow {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-.articlesOverviewAllTimeCard {
-  border: 1px solid var(--aa-hairline);
-  background: transparent;
-  border-radius: 10px;
-  padding: 14px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.articlesOverviewAllTimeValue {
-  display: block;
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.1;
-  letter-spacing: -0.02em;
-  color: var(--aa-ink);
-  font-variant-numeric: tabular-nums;
-}
-
-.articlesOverviewAllTimeLabel {
-  display: block;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--aa-muted);
-  line-height: 1.3;
-}
-
-/* ─── Overview: insight cards ─────────────────────────────────────────────── */
-
-.articlesOverviewInsightsRow {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-@media (max-width: 900px) {
-  .articlesOverviewInsightsRow {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 520px) {
-  .articlesOverviewInsightsRow {
-    grid-template-columns: 1fr;
-  }
-}
-
-.articlesOverviewInsightCard {
-  border: 1px solid var(--aa-hairline);
-  background: var(--aa-surface-card);
-  border-radius: 12px;
-  padding: 18px 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.articlesOverviewInsightCard[data-trend="up"] {
-  border-color: color-mix(in oklab, var(--aa-success, #5db872), transparent 70%);
-}
-
-.articlesOverviewInsightCard[data-trend="down"] {
-  border-color: color-mix(in oklab, var(--aa-error, #c64545), transparent 70%);
-}
-
-.articlesOverviewInsightIcon {
-  font-size: 16px;
-  line-height: 1;
-  margin-bottom: 4px;
-  color: var(--aa-muted);
-}
-
-.articlesOverviewInsightValue {
-  display: block;
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--aa-ink);
-  line-height: 1.15;
-}
-
-.articlesOverviewInsightLabel {
-  display: block;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--aa-ink);
-  line-height: 1.35;
-}
-
-.articlesOverviewInsightSub {
-  display: block;
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--aa-muted);
-  line-height: 1.4;
-  margin-top: 2px;
-}
-
-/* ─── Responsive KPI grid ─────────────────────────────────────────────────── */
-
-@media (max-width: 640px) {
-  .articlesOverviewStatGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 400px) {
-  .articlesOverviewStatGrid {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* ─── Readiness gate ──────────────────────────────────────────────────────── */
+/* ─── Readiness gate (empty state) ────────────────────────────────────────
+ * Flat by default, per DESIGN.md: this sits inline in page flow, not above
+ * it, so it earns a border and surface color, not a shadow + gradient.
+ * ────────────────────────────────────────────────────────────────────── */
 
 .overviewReadinessShell {
   padding: 8px 0 24px;
@@ -8749,10 +10203,9 @@ a.secondary {
   max-width: 720px;
   margin: 0 auto;
   padding: 28px 28px 26px;
-  border-radius: 18px;
+  border-radius: var(--aa-r-lg, 12px);
   border: 1px solid var(--aa-hairline);
-  background: linear-gradient(165deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+  background: var(--aa-surface-card);
 }
 
 .overviewReadinessProgress {
@@ -8769,7 +10222,7 @@ a.secondary {
   width: 100%;
   transform-origin: left;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--aa-primary), color-mix(in oklab, var(--aa-primary), #fff 24%));
+  background: var(--aa-primary);
   transition: transform 0.35s ease;
 }
 
@@ -8817,7 +10270,7 @@ a.secondary {
   align-items: flex-start;
   gap: 12px;
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: var(--aa-r-md, 8px);
   border: 1px solid var(--aa-hairline-soft);
   background: rgba(0, 0, 0, 0.12);
 }
@@ -8872,11 +10325,13 @@ a.secondary {
 
 .overviewReadinessPrimary,
 .overviewReadinessSecondary {
-  border-radius: 10px;
+  border-radius: var(--aa-r-sm, 6px);
   padding: 10px 16px;
+  min-height: 40px;
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+  transition: background 0.14s ease;
 }
 
 .overviewReadinessPrimary {
@@ -8889,6 +10344,12 @@ a.secondary {
   background: var(--aa-primary-active);
 }
 
+.overviewReadinessPrimary:focus-visible,
+.overviewReadinessSecondary:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+}
+
 .overviewReadinessSecondary {
   border: 1px solid var(--aa-hairline);
   color: var(--aa-ink);
@@ -8898,6 +10359,9 @@ a.secondary {
 .overviewReadinessSecondary:hover {
   background: rgba(255, 255, 255, 0.05);
 }
+
+/* ─── Content operations: list panels ────────────────────────────────────
+ * ────────────────────────────────────────────────────────────────────── */
 
 .articlesOverviewListTitleMuted {
   display: block;
@@ -8932,12 +10396,6 @@ a.secondary {
   gap: 8px;
 }
 
-.articlesOverviewPanelIcon {
-  font-size: 13px;
-  line-height: 1;
-  opacity: 0.9;
-}
-
 .articlesOverviewPanelLink {
   appearance: none;
   border: none;
@@ -8948,10 +10406,17 @@ a.secondary {
   cursor: pointer;
   text-decoration: none;
   transition: color 0.12s ease;
+  padding: 4px;
+  margin: -4px;
 }
 
 .articlesOverviewPanelLink:hover {
   color: var(--aa-primary);
+}
+
+.articlesOverviewPanelLink:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
 }
 
 .articlesOverviewList {
@@ -8976,7 +10441,7 @@ a.secondary {
   align-items: center;
   gap: 12px;
   padding: 10px 4px;
-  border-radius: 10px;
+  border-radius: var(--aa-r-md, 8px);
   transition: background 0.12s ease;
 }
 
@@ -8989,7 +10454,7 @@ a.secondary {
 }
 
 .articlesOverviewList > li {
-  border-radius: 10px;
+  border-radius: var(--aa-r-md, 8px);
 }
 
 .articlesOverviewList > li:hover {
@@ -9004,7 +10469,7 @@ a.secondary {
   display: block;
   width: 56px;
   height: 40px;
-  border-radius: 8px;
+  border-radius: var(--aa-r-sm, 6px);
   overflow: hidden;
   flex-shrink: 0;
   border: 1px solid var(--aa-hairline);
@@ -9021,24 +10486,20 @@ a.secondary {
 .articlesOverviewFeaturedFallback {
   width: 56px;
   height: 40px;
-  border-radius: 8px;
+  border-radius: var(--aa-r-sm, 6px);
   display: grid;
   place-items: center;
   font-size: 14px;
-  font-weight: 800;
+  font-weight: 700;
   color: #fff;
-  background: linear-gradient(
-    135deg,
-    color-mix(in oklab, var(--aa-primary), #000 22%),
-    color-mix(in oklab, var(--aa-primary), #fff 8%)
-  );
+  background: color-mix(in oklab, var(--aa-primary), #000 18%);
   border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 50%);
 }
 
 .articlesOverviewListTitle {
   font-size: 13px;
   font-weight: 600;
-  color: color-mix(in oklab, var(--aa-primary), #fff 12%);
+  color: var(--aa-primary);
   text-decoration: none;
   line-height: 1.4;
   overflow: hidden;
@@ -9048,9 +10509,15 @@ a.secondary {
 }
 
 .articlesOverviewListTitle:hover {
-  color: color-mix(in oklab, var(--aa-primary), #fff 28%);
+  color: var(--aa-primary);
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.articlesOverviewListTitle:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 
 .articlesOverviewListDate {
@@ -9117,20 +10584,20 @@ a.secondary {
 }
 
 .syncBadgeSynced {
-  background: rgba(93, 184, 114, 0.12);
-  color: #5db872;
-  border: 1px solid rgba(93, 184, 114, 0.28);
+  background: color-mix(in oklab, var(--aa-success), transparent 88%);
+  color: var(--aa-success);
+  border: 1px solid color-mix(in oklab, var(--aa-success), transparent 72%);
 }
 
 .syncBadgeMissing {
   background: rgba(198, 69, 69, 0.12);
-  color: #c64545;
+  color: var(--aa-error);
   border: 1px solid rgba(198, 69, 69, 0.28);
 }
 
 .syncBadgeTrashed {
   background: rgba(198, 69, 69, 0.12);
-  color: #c64545;
+  color: var(--aa-error);
   border: 1px solid rgba(198, 69, 69, 0.28);
 }
 
@@ -9172,7 +10639,7 @@ a.secondary {
 
 .syncBadgeNeedsAttention {
   background: rgba(198, 69, 69, 0.12);
-  color: #c64545;
+  color: var(--aa-error);
   border: 1px solid rgba(198, 69, 69, 0.28);
 }
 
@@ -9306,7 +10773,7 @@ a.secondary {
 }
 
 .syncStatValueGood { color: #5db872; }
-.syncStatValueBad { color: #c64545; }
+.syncStatValueBad { color: var(--aa-error); }
 
 .syncStatLabel {
   font-size: 11px;
@@ -9574,7 +11041,7 @@ a.secondary {
 }
 
 .bulkRepairStatValueGood { color: #5db872; }
-.bulkRepairStatValueBad { color: #c64545; }
+.bulkRepairStatValueBad { color: var(--aa-error); }
 
 .bulkRepairStatLabel {
   font-size: 11px;

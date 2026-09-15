@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 
 import styles from "../../../../page.module.css";
 import editorStyles from "./articleEditor.module.css";
-import projectsDark from "../../../projectsDark.module.css";
+import projectsLight from "../../../projectsLight.module.css";
 import {
   api,
   ApiError,
@@ -21,6 +21,9 @@ import {
 import { activeBlockFormat, BLOCK_FORMAT_OPTIONS } from "@/components/ArticleRichEditor";
 import { ArticleEditorSkeleton } from "@/components/ArticleEditorSkeleton";
 import { ArticleReadonlyBody } from "@/components/ArticleReadonlyBody";
+import { SelectionAiRegenerate } from "@/components/SelectionAiRegenerate";
+import { InsertMediaModal } from "@/components/InsertMediaModal";
+import { CategoryPillPicker } from "@/components/CategoryPillPicker";
 import { LazyArticleImage } from "@/components/LazyArticleImage";
 import { readArticleEditorCache, writeArticleEditorCache } from "@/lib/articleEditorCache";
 import { articleEditorPath, formatArticleLoadError } from "@/lib/articlePaths";
@@ -97,13 +100,17 @@ function statusDotClass(status: string): string {
   return editorStyles.statusDotNeutral;
 }
 
-type ContextTab = "seo" | "media" | "publish" | "ai" | "settings";
+// Tab set + order matches the Figma "Akhilesh" article editor handoff
+// (SEO Score / Meta / Keywords / Publish) literally. "AI" has no Figma
+// equivalent -- kept as a 5th tab anyway since it's the only place that
+// triggers article generation, not a decorative extra (see quirky-nibbling-owl.md).
+type ContextTab = "seo_score" | "meta" | "keywords" | "publish" | "ai";
 const CONTEXT_TABS: { key: ContextTab; label: string; icon: string }[] = [
-  { key: "seo", label: "SEO", icon: "⬡" },
-  { key: "media", label: "Media", icon: "▣" },
+  { key: "seo_score", label: "SEO Score", icon: "⬡" },
+  { key: "meta", label: "Meta", icon: "▤" },
+  { key: "keywords", label: "Keywords", icon: "⌗" },
   { key: "publish", label: "Publish", icon: "⬆" },
   { key: "ai", label: "AI", icon: "✦" },
-  { key: "settings", label: "Settings", icon: "⚙" },
 ];
 
 function computeSeoScore(metrics: {
@@ -123,6 +130,154 @@ function computeSeoScore(metrics: {
   const keywords = !kw ? 0 : kwCount >= 3 ? 100 : kwCount >= 1 ? 60 : 20;
   const total = Math.round(meta * 0.25 + structure * 0.25 + readability * 0.25 + keywords * 0.25);
   return { total, readability, structure, keywords, meta };
+}
+
+type ChecklistItem = { label: string; passed: boolean };
+
+const TRANSITION_WORDS = [
+  "however", "therefore", "moreover", "additionally", "furthermore", "meanwhile",
+  "consequently", "in contrast", "for example", "for instance", "as a result",
+  "in addition", "on the other hand", "similarly", "in summary", "ultimately",
+];
+
+/** Strip markdown syntax (headings, emphasis, links, inline HTML) down to plain
+ * reading text — shared by the checklist helpers below. `body` is markdown, not
+ * HTML (confirmed by editorMetrics' own `^#{1,6}\s` heading match), except for
+ * inline `<img>` tags, which the article editor deliberately keeps as raw HTML. */
+function markdownToPlainText(md: string): string {
+  return md
+    .replace(/<img\s+[^>]*>/gi, " ")
+    // Terminate the heading as its own sentence (a trailing period, added only if
+    // the heading text doesn't already end in punctuation) instead of just
+    // dropping the `#` markers — otherwise the heading text runs straight into
+    // the next sentence and skews sentence-length/Flesch stats.
+    .replace(/^#{1,6}\s+(.*)$/gm, (_m, text) => (/[.!?]$/.test(text.trim()) ? text : `${text}.`))
+    .replace(/\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/[*_`>#-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Split markdown into paragraph-like blocks: blank-line-separated blocks that
+ * aren't a heading, list item, or blockquote line. */
+function markdownParagraphs(md: string): string[] {
+  return md
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter((block) => block && !/^(#{1,6}\s|[-*+]\s|\d+\.\s|>\s|<img\s)/.test(block))
+    .map((block) => markdownToPlainText(block));
+}
+
+function markdownSentences(md: string): string[] {
+  return markdownToPlainText(md)
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Standard vowel-group syllable heuristic (same approach most client-side
+ * readability tools use — not dictionary-accurate, good enough for a live score). */
+function countSyllables(word: string): number {
+  const w = word.toLowerCase().replace(/[^a-z]/g, "");
+  if (!w) return 0;
+  if (w.length <= 3) return 1;
+  const trimmed = w.replace(/(?:[^aeiouy]es|ed|[^aeiouy]e)$/, "").replace(/^y/, "");
+  const matches = trimmed.match(/[aeiouy]{1,2}/g);
+  return Math.max(1, matches ? matches.length : 1);
+}
+
+/** Flesch Reading Ease (0-100, higher = easier). Standard formula. */
+function fleschReadingEase(md: string): number | null {
+  const text = markdownToPlainText(md);
+  const words = text.split(/\s+/).filter(Boolean);
+  const sentences = markdownSentences(md);
+  if (words.length < 30 || sentences.length === 0) return null;
+  const syllables = words.reduce((sum, w) => sum + countSyllables(w), 0);
+  const score = 206.835 - 1.015 * (words.length / sentences.length) - 84.6 * (syllables / words.length);
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+/** Figma "Article Editor — SEO Score" (45:2) On-Page Checks card, computed from
+ * real editor state -- regex-level heuristics against the markdown body, not a
+ * full NLP pass (ponytail: good enough, not a Yoast rebuild). Extended with a
+ * few more Yoast/RankMath-style checks: keyphrase in meta description, keyphrase
+ * in a subheading, keyphrase density range, minimum content length. */
+function computeOnPageChecks(metrics: {
+  title: string; focusKeyphrase: string; body: string;
+  metaDesc: string; websiteUrl?: string | null;
+}): ChecklistItem[] {
+  const title = metrics.title.trim();
+  const kw = metrics.focusKeyphrase.trim().toLowerCase();
+  const bodyText = markdownToPlainText(metrics.body);
+  const paragraphs = markdownParagraphs(metrics.body);
+  const firstPara = (paragraphs[0] || bodyText.slice(0, 300)).toLowerCase();
+  const links = Array.from(metrics.body.matchAll(/\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)).map((m) => m[1]);
+  const host = (() => {
+    try { return metrics.websiteUrl ? new URL(metrics.websiteUrl).hostname.replace(/^www\./, "") : ""; } catch { return ""; }
+  })();
+  const hasInternalLink = links.some((href) => href.startsWith("/") || (host && href.includes(host)));
+  const hasExternalLink = links.some((href) => /^https?:\/\//i.test(href) && !(host && href.includes(host)));
+  const imgTags = Array.from(metrics.body.matchAll(/<img\s+[^>]*>/gi)).map((m) => m[0]);
+  const allImagesHaveAlt = imgTags.length > 0 && imgTags.every((tag) => /\salt=["'][^"']+["']/i.test(tag));
+
+  const subheadings = Array.from(metrics.body.matchAll(/^#{2,6}\s+(.*)$/gm)).map((m) => m[1].toLowerCase());
+  const kwInSubheading = !!kw && subheadings.some((h) => h.includes(kw));
+
+  const bodyWords = bodyText.split(/\s+/).filter(Boolean);
+  const kwWordCount = kw ? kw.split(/\s+/).filter(Boolean).length : 0;
+  const kwOccurrences = kw ? bodyText.toLowerCase().split(kw).length - 1 : 0;
+  const kwDensityPct = kw && bodyWords.length ? (kwOccurrences * kwWordCount * 100) / bodyWords.length : 0;
+  const kwDensityHealthy = !!kw && kwOccurrences > 0 && kwDensityPct >= 0.5 && kwDensityPct <= 2.5;
+
+  return [
+    { label: "Focus keyphrase in title", passed: !!kw && title.toLowerCase().includes(kw) },
+    { label: "Focus keyphrase in first paragraph", passed: !!kw && firstPara.includes(kw) },
+    { label: "Focus keyphrase in meta description", passed: !!kw && metrics.metaDesc.toLowerCase().includes(kw) },
+    { label: "Focus keyphrase in a subheading", passed: kwInSubheading },
+    { label: "Keyphrase density is healthy (0.5%-2.5%)", passed: kwDensityHealthy },
+    { label: "Meta description length (120-160 chars)", passed: metrics.metaDesc.length >= 120 && metrics.metaDesc.length <= 160 },
+    { label: "Title length (50-60 chars)", passed: title.length >= 50 && title.length <= 60 },
+    { label: "Content length (600+ words)", passed: bodyWords.length >= 600 },
+    { label: "At least one internal link", passed: hasInternalLink },
+    { label: "At least one external link", passed: hasExternalLink },
+    { label: "Image alt text on all images", passed: imgTags.length === 0 ? false : allImagesHaveAlt },
+  ];
+}
+
+/** Figma "Article Editor — SEO Score" (45:2) Readability card. Extended with
+ * Flesch Reading Ease and two more Yoast/RankMath-style sentence checks. */
+function computeReadabilityChecks(body: string): ChecklistItem[] {
+  const paragraphs = markdownParagraphs(body);
+  const paragraphsUnder150 = paragraphs.length > 0 && paragraphs.every((p) => p.split(/\s+/).filter(Boolean).length <= 150);
+  const usesSubheadings = /^#{2,6}\s+/m.test(body);
+
+  const sentenceTexts = markdownSentences(body);
+  const sentenceLengths = sentenceTexts.map((s) => s.split(/\s+/).filter(Boolean).length);
+  const longSentenceRatio = sentenceLengths.length ? sentenceLengths.filter((n) => n > 20).length / sentenceLengths.length : 1;
+  const sentenceLengthReasonable = sentenceLengths.length >= 3 && longSentenceRatio <= 0.25;
+
+  const lowerBody = markdownToPlainText(body).toLowerCase();
+  const usesTransitionWords = TRANSITION_WORDS.some((w) => lowerBody.includes(w));
+
+  const firstWords = sentenceTexts.map((s) => (s.split(/\s+/)[0] || "").toLowerCase());
+  let maxConsecutiveRepeat = 1;
+  let run = 1;
+  for (let i = 1; i < firstWords.length; i++) {
+    run = firstWords[i] && firstWords[i] === firstWords[i - 1] ? run + 1 : 1;
+    maxConsecutiveRepeat = Math.max(maxConsecutiveRepeat, run);
+  }
+  const noRepeatedSentenceStarts = firstWords.length < 3 || maxConsecutiveRepeat < 3;
+
+  const flesch = fleschReadingEase(body);
+
+  return [
+    { label: "Paragraphs under 150 words", passed: paragraphsUnder150 },
+    { label: "Uses subheadings (H2-H6)", passed: usesSubheadings },
+    { label: "Sentences are a reasonable length (≤25% over 20 words)", passed: sentenceLengthReasonable },
+    { label: "Transition words used", passed: usesTransitionWords },
+    { label: "No 3+ consecutive sentences with the same opener", passed: noRepeatedSentenceStarts },
+    { label: "Easy to read (Flesch score ≥ 60)", passed: flesch !== null && flesch >= 60 },
+  ];
 }
 
 function slugFromTitle(t: string): string {
@@ -210,7 +365,12 @@ export default function ArticleEditPage() {
   const [error, setError] = useState<string | null>(null);
   const [errorCanRetry, setErrorCanRetry] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [notice, setNotice] = useState<string | null>(null);
+  type NoticeTone = "success" | "warning" | "danger";
+  const [noticeState, setNoticeState] = useState<{ text: string; tone: NoticeTone } | null>(null);
+  const notice = noticeState?.text ?? null;
+  const setNotice = useCallback((text: string | null, tone: NoticeTone = "success") => {
+    setNoticeState(text ? { text, tone } : null);
+  }, []);
 
   // Sidebar state
   const [sidebarProfile, setSidebarProfile] = useState<ProfilePublic | null>(null);
@@ -310,6 +470,7 @@ export default function ArticleEditPage() {
   const [showRegenConfirm, setShowRegenConfirm] = useState(false);
   const [regenImageChoice, setRegenImageChoice] = useState(true);
   const [showImageRegenModal, setShowImageRegenModal] = useState(false);
+  const [showInsertMedia, setShowInsertMedia] = useState(false);
   const [regenPromptSource, setRegenPromptSource] = useState<"saved" | "custom">("saved");
   const [regenPromptId, setRegenPromptId] = useState("");
   const [regenCustomPrompt, setRegenCustomPrompt] = useState("");
@@ -337,7 +498,7 @@ export default function ArticleEditPage() {
     : (projectSettings?.wp_verified_status || "").trim().toLowerCase() === "connected";
 
   const [editorRevision, setEditorRevision] = useState(0);
-  const [contextTab, setContextTab] = useState<ContextTab>("seo");
+  const [contextTab, setContextTab] = useState<ContextTab>("seo_score");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [commandBarVisible, setCommandBarVisible] = useState(false);
   const titleHeroRef = useRef<HTMLDivElement>(null);
@@ -476,7 +637,7 @@ export default function ArticleEditPage() {
     return () => {
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
-  }, [notice]);
+  }, [notice, setNotice]);
 
   function showWebsiteConnectionErrorIfNeeded(e: unknown) {
     if (e instanceof ApiError && e.detail && typeof e.detail === "object" && !Array.isArray(e.detail)) {
@@ -781,7 +942,7 @@ export default function ArticleEditPage() {
           setError(msg);
           setErrorCanRetry(canRetry);
         } else {
-          setNotice("Showing cached copy — live data could not be refreshed.");
+          setNotice("Showing cached copy — live data could not be refreshed.", "warning");
           setErrorCanRetry(canRetry);
         }
       } finally {
@@ -806,6 +967,7 @@ export default function ArticleEditPage() {
     router,
     token,
     loadAttempt,
+    setNotice,
   ]);
 
   // Keep publish status aligned with WordPress when editing a linked post.
@@ -1395,6 +1557,9 @@ export default function ArticleEditPage() {
           const syncedImageUrl = refreshed.image_url || generatedImageUrl;
           setGeneratedImageUrl(syncedImageUrl);
           setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
+          // The picked file has now been pushed to WordPress — clear it so
+          // hasUnsavedChanges doesn't stay stuck true for the rest of the session.
+          setUploadedImageFile(null);
           // Do NOT reset wpPostType from article.wp_rest_base — keep the project default
           // so the Post Type selector reflects the project setting, not the historical value.
           setNotice(`${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`);
@@ -1441,6 +1606,9 @@ export default function ArticleEditPage() {
       const syncedImageUrl = refreshed.image_url || generatedImageUrl;
       setGeneratedImageUrl(syncedImageUrl);
       setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
+      // The picked file has now been pushed to WordPress — clear it so
+      // hasUnsavedChanges doesn't stay stuck true for the rest of the session.
+      setUploadedImageFile(null);
       // Do NOT reset wpPostType from article.wp_rest_base — keep the project default.
       let noticeText = `${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`;
       if (res.featured_image_uploaded === false && hasFeaturedImage) {
@@ -1480,7 +1648,7 @@ export default function ArticleEditPage() {
           : message;
       setNotice(summary);
     },
-    [hydrateEditorFromArticle, params.articleId, params.projectId],
+    [hydrateEditorFromArticle, params.articleId, params.projectId, setNotice],
   );
 
   async function syncFromWordPress(opts?: { silent?: boolean; force?: boolean }) {
@@ -1545,7 +1713,7 @@ export default function ArticleEditPage() {
       await navigator.clipboard.writeText(md);
       setNotice("Copied article markdown to clipboard.");
     } catch {
-      setNotice("Could not copy to clipboard (browser permission).");
+      setNotice("Could not copy to clipboard (browser permission).", "danger");
     }
   }
 
@@ -1558,7 +1726,7 @@ export default function ArticleEditPage() {
       await navigator.clipboard.writeText(payload);
       setNotice("Copied title + article markdown to clipboard.");
     } catch {
-      setNotice("Could not copy to clipboard (browser permission).");
+      setNotice("Could not copy to clipboard (browser permission).", "danger");
     }
   }
 
@@ -1647,7 +1815,7 @@ export default function ArticleEditPage() {
 
   if (!editorPath) {
     return (
-      <div className={`${styles.page} ${styles.pageTop} ${projectsDark.projectsDark}`}>
+      <div className={`${styles.page} ${styles.pageTop} ${projectsLight.projectsLightTheme}`}>
         <main className={`${styles.main} ${styles.mainWide}`}>
           <section className={styles.contentCol}>
             <div className={`${styles.card} ${styles.cardWide}`}>
@@ -1679,7 +1847,7 @@ export default function ArticleEditPage() {
   ];
 
   return (
-    <div className={`${styles.page} ${projectsDark.projectsDark} ${editorStyles.editorPage}`}>
+    <div className={`${styles.page} ${projectsLight.projectsLightTheme} ${editorStyles.editorPage}`}>
       <div className={editorStyles.editorShell}>
         <ProjectSidebar
           projectId={params.projectId}
@@ -2045,21 +2213,22 @@ export default function ArticleEditPage() {
                     ))}
                   </select>
                 </label>
-                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().toggleBold().run()} aria-pressed={tiptapEditor.isActive("bold")} title="Bold"><strong>B</strong></button>
-                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().toggleItalic().run()} aria-pressed={tiptapEditor.isActive("italic")} title="Italic"><em>I</em></button>
-                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().toggleBulletList().run()} aria-pressed={tiptapEditor.isActive("bulletList")} title="Bullet list">• List</button>
-                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().toggleOrderedList().run()} aria-pressed={tiptapEditor.isActive("orderedList")} title="Numbered list">1. List</button>
-                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().toggleBlockquote().run()} aria-pressed={tiptapEditor.isActive("blockquote")} title="Quote">&ldquo;&rdquo;</button>
-                <button type="button" className={styles.articleRichToolBtn} onClick={() => {
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().toggleBold().run()} aria-pressed={tiptapEditor.isActive("bold")} data-tooltip="Bold"><strong>B</strong></button>
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().toggleItalic().run()} aria-pressed={tiptapEditor.isActive("italic")} data-tooltip="Italic"><em>I</em></button>
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().toggleBulletList().run()} aria-pressed={tiptapEditor.isActive("bulletList")} data-tooltip="Bullet list">• List</button>
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().toggleOrderedList().run()} aria-pressed={tiptapEditor.isActive("orderedList")} data-tooltip="Numbered list">1. List</button>
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().toggleBlockquote().run()} aria-pressed={tiptapEditor.isActive("blockquote")} data-tooltip="Quote">&ldquo;&rdquo;</button>
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => {
                   const prev = tiptapEditor.getAttributes("link").href as string | undefined;
                   const url = window.prompt("Link URL", prev || "https://");
                   if (url === null) return;
                   const trimmed = url.trim();
                   if (trimmed === "") { tiptapEditor.chain().focus().extendMarkRange("link").unsetLink().run(); return; }
                   tiptapEditor.chain().focus().extendMarkRange("link").setLink({ href: trimmed }).run();
-                }} aria-pressed={tiptapEditor.isActive("link")} title="Link">Link</button>
-                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().undo().run()} title="Undo">Undo</button>
-                <button type="button" className={styles.articleRichToolBtn} onClick={() => tiptapEditor.chain().focus().redo().run()} title="Redo">Redo</button>
+                }} aria-pressed={tiptapEditor.isActive("link")} data-tooltip="Link">Link</button>
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => setShowInsertMedia(true)} data-tooltip="Insert image">Image</button>
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().undo().run()} data-tooltip="Undo">Undo</button>
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().redo().run()} data-tooltip="Redo">Redo</button>
               </div>
             ) : null}
 
@@ -2089,7 +2258,25 @@ export default function ArticleEditPage() {
                   ) : (
                     <ArticleRichEditor key={editorRevision} contentRevision={editorRevision} value={body} onChange={setBody} onEditorReady={onEditorReady} />
                   )}
+                  {!editorLocked && !bodyLoading && tiptapEditor ? (
+                    <SelectionAiRegenerate
+                      editor={tiptapEditor}
+                      projectId={params.projectId}
+                      articleId={params.articleId}
+                      focusKeyphrase={focus}
+                      keywords={kwFromString(keywords)}
+                      disabled={editorLocked}
+                      onError={setNotice}
+                    />
+                  ) : null}
                 </div>
+                <InsertMediaModal
+                  editor={tiptapEditor}
+                  projectId={params.projectId}
+                  articleId={params.articleId}
+                  open={showInsertMedia}
+                  onClose={() => setShowInsertMedia(false)}
+                />
                 {showUpdateWordPress && hasPendingWpChanges ? (
                   <div className={editorStyles.contentHint}>
                     <span className={editorStyles.contentHintDot} />
@@ -2132,7 +2319,7 @@ export default function ArticleEditPage() {
             <div className={editorStyles.contextTabContent} role="tabpanel" id={`panel-${contextTab}`} aria-labelledby={`tab-${contextTab}`}>
 
               {/* ── SEO tab ── */}
-              {contextTab === "seo" ? (
+              {contextTab === "seo_score" ? (
                 contentLoading ? <ArticleEditorSkeleton /> : (
                   <>
                     {/* SEO Score ring */}
@@ -2162,16 +2349,40 @@ export default function ArticleEditPage() {
                       </div>
                     </div>
 
+                    <div className={editorStyles.checkCard}>
+                      <div className={editorStyles.checkCardTitle}>On-Page Checks</div>
+                      {computeOnPageChecks({ title, focusKeyphrase: focus, body, metaDesc, websiteUrl: projectSettings?.website_url || projectSettings?.wp_site_url }).map((c) => (
+                        <div key={c.label} className={editorStyles.checkRow}>
+                          <span className={`${editorStyles.checkIcon} ${c.passed ? editorStyles.checkIconPass : editorStyles.checkIconFail}`} aria-hidden="true">
+                            {c.passed ? "✓" : "✕"}
+                          </span>
+                          <span>{c.label}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className={editorStyles.checkCard}>
+                      <div className={editorStyles.checkCardTitle}>Readability</div>
+                      {computeReadabilityChecks(body).map((c) => (
+                        <div key={c.label} className={editorStyles.checkRow}>
+                          <span className={`${editorStyles.checkIcon} ${c.passed ? editorStyles.checkIconPass : editorStyles.checkIconFail}`} aria-hidden="true">
+                            {c.passed ? "✓" : "✕"}
+                          </span>
+                          <span>{c.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )
+              ) : null}
+
+              {/* ── Meta tab ── */}
+              {contextTab === "meta" ? (
+                contentLoading ? <ArticleEditorSkeleton /> : (
+                  <>
                     <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>Title and focus</h3>
-                      <label className={editorStyles.seoFieldLabel}>
-                        Article title
-                        <input className={editorStyles.seoInput} value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
-                      </label>
-                      <label className={editorStyles.seoFieldLabel} style={{ marginTop: 10 }}>
-                        Focus keyphrase
-                        <input className={editorStyles.seoInput} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. FM contract handover" disabled={editorLocked} />
-                      </label>
+                      <h3 className={editorStyles.panelSectionTitle}>Article title</h3>
+                      <input className={editorStyles.seoInput} value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
                     </div>
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Meta title</h3>
@@ -2192,6 +2403,18 @@ export default function ArticleEditPage() {
                           {seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? "✓" : "⚠"} {seoMeter(metaDesc.length, META_DESC_MAX).label}
                         </span>
                       </div>
+                    </div>
+                  </>
+                )
+              ) : null}
+
+              {/* ── Keywords tab ── */}
+              {contextTab === "keywords" ? (
+                contentLoading ? <ArticleEditorSkeleton /> : (
+                  <>
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Focus keyphrase</h3>
+                      <input className={editorStyles.seoInput} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. FM contract handover" disabled={editorLocked} />
                     </div>
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Targeting keywords</h3>
@@ -2262,8 +2485,8 @@ export default function ArticleEditPage() {
                 )
               ) : null}
 
-              {/* ── Media tab ── */}
-              {contextTab === "media" ? (
+              {/* ── Media tab (folded into Publish, kept behind the same condition removed below) ── */}
+              {contextTab === "publish" ? (
                 <>
                   <div className={editorStyles.panelSection}>
                     <h3 className={editorStyles.panelSectionTitle}>Featured image</h3>
@@ -2429,9 +2652,12 @@ export default function ArticleEditPage() {
                           </div>
                           <label className={styles.label} style={{ marginTop: 8 }}>
                             Categories
-                            <select className={styles.input} multiple value={wpCategoryIds.map(String)} onChange={(e) => { const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n)); setWpCategoryIds(ids); }} style={{ minHeight: 72 }} disabled={editorLocked}>
-                              {wpCategories.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}
-                            </select>
+                            <CategoryPillPicker
+                              categories={wpCategories}
+                              selectedIds={wpCategoryIds}
+                              onChange={setWpCategoryIds}
+                              disabled={editorLocked}
+                            />
                           </label>
                         </>
                       ) : (
@@ -2500,60 +2726,12 @@ export default function ArticleEditPage() {
                   </>
                 )
               ) : null}
-
-              {/* ── Settings tab ── */}
-              {contextTab === "settings" ? (
-                <>
-                  <div className={editorStyles.panelSection}>
-                    <h3 className={editorStyles.panelSectionTitle}>URL and identity</h3>
-                    <div className={editorStyles.settingsField}>
-                      <span className={editorStyles.settingsFieldLabel}>Slug</span>
-                      <input className={editorStyles.settingsInput} value={articleSlug} disabled readOnly />
-                    </div>
-                    <div className={editorStyles.settingsField}>
-                      <span className={editorStyles.settingsFieldLabel}>Canonical URL</span>
-                      <input className={editorStyles.settingsInput} value={canonicalUrl} disabled readOnly />
-                    </div>
-                  </div>
-                  <div className={editorStyles.panelSection}>
-                    <h3 className={editorStyles.panelSectionTitle}>Schema and indexing</h3>
-                    <div className={editorStyles.settingsField}>
-                      <span className={editorStyles.settingsFieldLabel}>Schema type</span>
-                      <select className={editorStyles.settingsInput} disabled defaultValue="Article">
-                        <option>Article</option>
-                        <option>BlogPosting</option>
-                        <option>HowTo</option>
-                        <option>FAQPage</option>
-                      </select>
-                    </div>
-                    <div className={editorStyles.settingsToggle}>
-                      <span className={editorStyles.settingsFieldLabel}>Open Graph tags</span>
-                      <div className={`${editorStyles.settingsToggleTrack} ${editorStyles.settingsToggleTrackOn}`}>
-                        <div className={editorStyles.settingsToggleThumb} />
-                      </div>
-                    </div>
-                    <div className={editorStyles.settingsToggle}>
-                      <span className={editorStyles.settingsFieldLabel}>Index / Follow</span>
-                      <div className={`${editorStyles.settingsToggleTrack} ${editorStyles.settingsToggleTrackOn}`}>
-                        <div className={editorStyles.settingsToggleThumb} />
-                      </div>
-                    </div>
-                    <div className={editorStyles.settingsToggle}>
-                      <span className={editorStyles.settingsFieldLabel}>Twitter card</span>
-                      <div className={`${editorStyles.settingsToggleTrack} ${editorStyles.settingsToggleTrackOn}`}>
-                        <div className={editorStyles.settingsToggleThumb} />
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : null}
-
             </div>
           </div>
         </div>
 
         {notice ? (
-          <div className={editorStyles.toast} role="status" aria-live="polite">
+          <div className={editorStyles.toast} data-tone={noticeState?.tone} role="status" aria-live="polite">
             <div className={editorStyles.toastInner}>
               <span className={editorStyles.toastText}>{noticeWithoutUrl(notice)}</span>
               <button type="button" className={editorStyles.toastClose} aria-label="Dismiss" onClick={() => setNotice(null)}>×</button>

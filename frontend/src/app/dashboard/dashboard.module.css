@@ -1,32 +1,5 @@
 .dashboardDark {
-  /* Local token overrides: matte black dashboard theme */
-  --aa-canvas: #0b0b0d;
-  --aa-surface-soft: rgba(255, 255, 255, 0.04);
-  --aa-surface-card: rgba(18, 18, 20, 0.72);
-  --aa-surface-dark: #0b0b0d;
-  --aa-surface-dark-elevated: rgba(18, 18, 20, 0.88);
-  --aa-surface-dark-soft: rgba(255, 255, 255, 0.05);
-
-  --aa-ink: rgba(255, 255, 255, 0.94);
-  --aa-body: rgba(255, 255, 255, 0.86);
-  --aa-body-strong: rgba(255, 255, 255, 0.92);
-  --aa-muted: rgba(255, 255, 255, 0.62);
-  --aa-muted-soft: rgba(255, 255, 255, 0.46);
-  --aa-hairline: rgba(255, 255, 255, 0.10);
-  --aa-hairline-soft: rgba(255, 255, 255, 0.07);
-
-  /* Keep accents consistent */
-  --aa-primary: #d97757;
-  --aa-primary-active: color-mix(in oklab, #d97757, #000 14%);
-
-  /* Make any legacy-mapped vars resolve to dark */
-  --background: var(--aa-canvas);
-  --foreground: var(--aa-surface-card);
-  --text-primary: var(--aa-ink);
-  --text-secondary: var(--aa-muted);
-  --button-secondary-border: var(--aa-hairline);
-
-  background: var(--aa-canvas);
+  composes: darkTheme from "../darkTheme.module.css";
 }
 
 .dashboardDark :global(body) {
@@ -34,23 +7,23 @@
 }
 
 .dashboardDark :global(a) {
-  color: color-mix(in oklab, var(--aa-primary), #fff 18%);
+  color: var(--aa-primary);
 }
 
 .dashboardDark :global(a:hover) {
-  color: color-mix(in oklab, var(--aa-primary), #fff 30%);
+  color: var(--aa-primary);
 }
 
 /* The dashboard sidebar has far fewer nav items than the project workspace
-   sidebar, so letting it stretch to fill the column (the global default)
-   strands the account card at the very bottom with a dead gap above it.
-   Size the nav to its content and give the footer a deliberate break instead. */
+   sidebar. Size the nav to its content instead of the base .sidebarNavMain's
+   flex:1 stretch (which was spreading nav items out with dead gaps between
+   them). The base .sidebarFooter already has margin-top:auto -- that's the
+   correct mechanism to pin Account to the bottom of the sidebar, same as the
+   project sidebar. Do not override it with a fixed margin-top here; that was
+   the actual bug (it replaced the auto spacer with a fixed 32px gap, so the
+   dead space moved below the account card instead of being pinned away). */
 .sidebarNavCompact {
   flex: none;
-}
-
-.sidebarFooterCompact {
-  margin-top: 32px;
 }
 
 .connectedBadge {
@@ -216,14 +189,14 @@
   padding: 0;
   margin: 0;
   font: inherit;
-  color: color-mix(in oklab, var(--aa-primary), #fff 12%);
+  color: var(--aa-primary);
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 
 .linkishButton:hover {
-  color: color-mix(in oklab, var(--aa-primary), #fff 24%);
+  color: var(--aa-primary);
 }
 
 .workspaceModal {
@@ -279,9 +252,9 @@
   border-radius: 8px;
   background: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.04) 0%,
-    rgba(255, 255, 255, 0.1) 45%,
-    rgba(255, 255, 255, 0.04) 90%
+    var(--aa-hairline-soft) 0%,
+    var(--aa-hairline) 45%,
+    var(--aa-hairline-soft) 90%
   );
   background-size: 200% 100%;
   animation: wsOverviewSkeletonShimmer 1.35s ease-in-out infinite;
@@ -312,7 +285,7 @@
 
 .wsOverviewSkeletonStatCard {
   border: 1px solid var(--aa-hairline);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--aa-surface-card);
   border-radius: 14px;
   padding: 14px 16px 12px;
   min-height: 88px;
@@ -397,9 +370,9 @@
   flex-shrink: 0;
   background: linear-gradient(
     90deg,
-    rgba(255, 255, 255, 0.04) 0%,
-    rgba(255, 255, 255, 0.1) 45%,
-    rgba(255, 255, 255, 0.04) 90%
+    var(--aa-hairline-soft) 0%,
+    var(--aa-hairline) 45%,
+    var(--aa-hairline-soft) 90%
   );
   background-size: 200% 100%;
   animation: wsOverviewSkeletonShimmer 1.35s ease-in-out infinite;
@@ -417,7 +390,7 @@
   .wsOverviewSkeletonBone,
   .wsOverviewSkeletonThumb {
     animation: none;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--aa-hairline);
   }
 }
 
@@ -435,12 +408,15 @@
 
 /* Mobile carousel: see OverviewStatCarousel.module.css (2 cards visible, swipe) */
 
+/* Flat-by-default (DESIGN.md): none of these three cards float above page
+ * flow, so none earn a shadow -- both were carrying one at rest. Radius
+ * aligned to var(--aa-r-lg), matching the top-level card standard used
+ * elsewhere instead of a locally hand-picked 14/16px. */
 .wsOverviewStatCard {
   border: 1px solid var(--aa-hairline);
-  background: linear-gradient(165deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
-  border-radius: 14px;
+  background: var(--aa-surface-card);
+  border-radius: var(--aa-r-lg);
   padding: 14px 16px 12px;
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.32);
 }
 
 .wsOverviewStatValue {
@@ -488,10 +464,9 @@
 .wsOverviewPipelineCard {
   border: 1px solid var(--aa-hairline);
   background: var(--aa-surface-card);
-  border-radius: 16px;
+  border-radius: var(--aa-r-lg);
   padding: 0 0 14px;
   min-width: 0;
-  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.32);
 }
 
 .wsOverviewChartCard {
@@ -509,7 +484,7 @@
 .wsOverviewChartCardHead {
   padding: 16px 18px 8px;
   border-bottom: 1px solid var(--aa-hairline-soft);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, transparent 100%);
+  background: var(--aa-surface-soft);
 }
 
 .wsOverviewChartCardTitle {
@@ -568,7 +543,7 @@
 .wsPipelineTrack {
   height: 8px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--aa-surface-soft);
   overflow: hidden;
 }
 
@@ -611,7 +586,7 @@
 }
 
 .wsOverviewPanel_pending {
-  border-top: 3px solid rgba(255, 255, 255, 0.45);
+  border-top: 3px solid var(--aa-muted);
 }
 
 .wsOverviewPanel_draft {
@@ -625,7 +600,7 @@
   gap: 12px;
   padding: 16px 18px 12px;
   border-bottom: 1px solid var(--aa-hairline-soft);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--aa-surface-soft);
 }
 
 .wsOverviewPanelHeadText {
@@ -654,7 +629,7 @@
   color: var(--aa-ink);
   padding: 6px 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--aa-surface-soft);
   border: 1px solid var(--aa-hairline-soft);
   font-variant-numeric: tabular-nums;
 }
@@ -677,7 +652,7 @@
   text-transform: uppercase;
   color: var(--aa-muted);
   text-align: left;
-  background: rgba(0, 0, 0, 0.18);
+  background: var(--aa-surface-soft);
   border-bottom: 1px solid var(--aa-hairline-soft);
 }
 
@@ -704,7 +679,7 @@
 }
 
 .wsOverviewTableRow:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--aa-surface-soft);
 }
 
 .wsOverviewTableRow td {
@@ -763,8 +738,8 @@
   font-weight: 700;
   line-height: 1.3;
   letter-spacing: 0.02em;
-  color: color-mix(in oklab, var(--aa-primary), #fff 28%);
-  background: rgba(255, 255, 255, 0.05);
+  color: var(--aa-primary);
+  background: var(--aa-surface-soft);
   border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 72%);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -785,7 +760,7 @@
 }
 
 .wsOverviewListTitle:hover {
-  color: color-mix(in oklab, var(--aa-primary), #fff 28%);
+  color: var(--aa-primary);
 }
 
 .wsOverviewListEmpty {
@@ -814,7 +789,7 @@
   height: 40px;
   border-radius: 9px;
   overflow: hidden;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--aa-surface-soft);
   border: 1px solid var(--aa-hairline-soft);
 }
 
@@ -1033,14 +1008,14 @@
   padding: 28px 28px 26px;
   border-radius: 18px;
   border: 1px solid var(--aa-hairline);
-  background: linear-gradient(165deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+  background: var(--aa-surface-card);
+  box-shadow: var(--aa-shadow-md, 0 4px 16px rgba(20, 18, 14, 0.07));
 }
 
 .overviewReadinessProgress {
   height: 6px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--aa-surface-soft);
   overflow: hidden;
   margin-bottom: 18px;
 }
@@ -1101,7 +1076,7 @@
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid var(--aa-hairline-soft);
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--aa-surface-soft);
 }
 
 .overviewReadinessCheckItemDone {
@@ -1120,7 +1095,7 @@
   font-size: 12px;
   font-weight: 800;
   color: var(--aa-muted);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--aa-surface-soft);
 }
 
 .overviewReadinessCheckItemDone .overviewReadinessCheckIcon {
@@ -1178,7 +1153,7 @@
 }
 
 .overviewReadinessSecondary:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--aa-surface-soft);
 }
 
 .wsOverviewModuleFallback {
@@ -1187,7 +1162,7 @@
   padding: 22px 24px;
   border-radius: 14px;
   border: 1px solid var(--aa-hairline);
-  background: rgba(0, 0, 0, 0.22);
+  background: var(--aa-surface-soft);
 }
 
 .wsOverviewModuleFallbackTitle {
@@ -1282,6 +1257,88 @@
   }
 }
 
+.usersStatsRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .usersStatsRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.usersFilterBar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--aa-hairline);
+}
+
+.usersFilterSearch {
+  flex: 1 1 220px;
+  min-width: 160px;
+}
+
+.usersFilterSelect {
+  flex: 0 0 auto;
+  min-width: 130px;
+}
+
+.usersAvatarCell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.usersAvatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--aa-primary);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  flex-shrink: 0;
+}
+
+.usersAvatarInfo {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.usersAvatarName {
+  font-weight: 700;
+  color: var(--aa-ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usersAvatarEmail {
+  font-size: 12px;
+  color: var(--aa-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usersActionsCell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 
 /* ── Collaboration: Filter tabs ──────────────────────────────────────────── */
 .projectFilterRow {
@@ -1293,7 +1350,7 @@
 .projectFilterBtn {
   padding: 6px 14px;
   border-radius: 9999px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--aa-hairline);
   background: transparent;
   color: var(--aa-on-dark-soft, #a09d96);
   font-size: 13px;
@@ -1301,14 +1358,14 @@
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 .projectFilterBtn:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--aa-surface-soft);
   color: var(--aa-on-dark, #faf9f5);
 }
 
 .projectFilterBtnActive {
-  background: rgba(217, 119, 87, 0.12);
-  border-color: rgba(217, 119, 87, 0.3);
-  color: var(--aa-primary, #d97757);
+  background: color-mix(in oklab, var(--aa-primary), transparent 88%);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 70%);
+  color: var(--aa-primary);
 }
 
 /* ── Collaboration: Project card extras ─────────────────────────────────── */
@@ -1363,15 +1420,15 @@
 
 .projectOwnerLabel {
   font-size: 12px;
-  color: rgba(160, 157, 150, 0.65);
+  color: var(--aa-muted);
 }
 
 .memberCountChip {
   font-size: 11px;
   padding: 1px 8px;
   border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(160, 157, 150, 0.7);
+  background: var(--aa-surface-soft);
+  color: var(--aa-muted);
 }
 
 /* ── Collaboration: Share modal ─────────────────────────────────────────── */
@@ -1388,14 +1445,14 @@
 
 .shareModal {
   background: var(--aa-void-elevated, #121214);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: var(--aa-r-lg, 12px);
   width: 100%;
   max-width: 520px;
   max-height: calc(100dvh - 40px);
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.1) transparent;
+  scrollbar-color: rgba(0, 0, 0, 0.1) transparent;
   z-index: var(--z-modal, 400);
   box-shadow: 0 24px 64px rgba(0,0,0,0.55);
 }
@@ -1405,7 +1462,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 20px 24px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.07);
   position: sticky;
   top: 0;
   background: var(--aa-void-elevated, #121214);
@@ -1439,13 +1496,13 @@
   transition: background 0.12s ease;
 }
 .shareModalClose:hover {
-  background: rgba(255,255,255,0.07);
+  background: rgba(0, 0, 0, 0.07);
   color: var(--aa-on-dark, #faf9f5);
 }
 
 .shareInviteForm {
   padding: 20px 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.07);
 }
 
 .shareInviteRow {
@@ -1455,36 +1512,14 @@
 }
 
 .shareEmailInput {
-  flex: 1;
-  min-width: 0;
-  padding: 9px 12px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: var(--aa-r-sm, 6px);
-  color: var(--aa-on-dark, #faf9f5);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.12s ease;
-}
-.shareEmailInput:focus {
-  border-color: var(--aa-primary, #d97757);
+  composes: memberEmailInput from "../page.module.css";
 }
 .shareEmailInput::placeholder {
   color: rgba(160, 157, 150, 0.55);
 }
 
 .shareRoleSelect {
-  padding: 9px 10px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: var(--aa-r-sm, 6px);
-  color: var(--aa-on-dark, #faf9f5);
-  font-size: 13px;
-  cursor: pointer;
-  outline: none;
-}
-.shareRoleSelect:focus {
-  border-color: var(--aa-primary, #d97757);
+  composes: memberRoleSelect from "../page.module.css";
 }
 
 .shareInviteBtn {
@@ -1552,7 +1587,7 @@
   transition: background 0.1s ease;
 }
 .shareMemberRow:hover {
-  background: rgba(255,255,255,0.03);
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .shareMemberAvatar {
@@ -1571,7 +1606,7 @@
 }
 
 .shareMemberAvatarPending {
-  background: rgba(255,255,255,0.06);
+  background: rgba(0, 0, 0, 0.06);
   color: rgba(160,157,150,0.5);
 }
 
@@ -1602,8 +1637,8 @@
 
 .shareMemberRoleSelect {
   padding: 5px 8px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: var(--aa-r-sm, 6px);
   color: var(--aa-on-dark, #faf9f5);
   font-size: 12px;
@@ -1638,7 +1673,7 @@
 .shareResendBtn {
   padding: 5px 10px;
   background: transparent;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: var(--aa-r-sm, 6px);
   color: var(--aa-on-dark-soft, #a09d96);
   font-size: 12px;
@@ -1647,7 +1682,7 @@
   transition: background 0.1s ease;
 }
 .shareResendBtn:hover:not(:disabled) {
-  background: rgba(255,255,255,0.05);
+  background: rgba(0, 0, 0, 0.05);
   color: var(--aa-on-dark, #faf9f5);
 }
 .shareResendBtn:disabled {
@@ -1700,7 +1735,7 @@
   right: 10px;
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255,255,255,0.12);
+  border: 2px solid rgba(0, 0, 0, 0.12);
   border-top-color: var(--aa-primary, #d97757);
   border-radius: 50%;
   animation: shareSpinKf 0.7s linear infinite;

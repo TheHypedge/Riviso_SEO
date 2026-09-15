@@ -7,7 +7,7 @@
   align-self: start;
   box-sizing: border-box;
   border-right: 1px solid var(--aa-hairline);
-  background: #0a0a0e;
+  background: var(--aa-surface-card);
   padding: 16px 14px;
   width: 100%;
   min-height: 0;
@@ -17,7 +17,7 @@
   display: flex;
   flex-direction: column;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.06) transparent;
+  scrollbar-color: var(--aa-hairline) transparent;
   flex-shrink: 0;
 }
 
@@ -55,7 +55,7 @@
   width: 36px;
   height: 36px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--aa-hairline);
   border-radius: 8px;
   background: transparent;
   color: var(--aa-muted);
@@ -66,7 +66,7 @@
 
 .mobileToggle:hover {
   color: var(--aa-ink);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--aa-surface-soft);
 }
 
 .mobileToggleIcon {
@@ -93,7 +93,7 @@
 
 .mobileClose:hover {
   color: var(--aa-ink);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--aa-surface-soft);
 }
 
 .mobileCloseIcon {
@@ -125,7 +125,7 @@
     z-index: var(--z-modal, 400);
     transform: translateX(-105%);
     transition: transform 200ms ease;
-    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    border-right: 1px solid var(--aa-hairline);
     box-shadow: 6px 0 24px rgba(0, 0, 0, 0.35);
   }
 

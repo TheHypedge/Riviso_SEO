@@ -12,7 +12,7 @@ from typing import Any
 
 from app.legacy.storage import get_legacy_storage_module
 from app.services.research_ideas import generate_research_ideas
-from app.services.research_scraper import extract_serp, fetch_google_serp_html
+from app.services.serp_index import get_or_fetch_serp
 from app.services.to_thread import run_sync
 
 log = logging.getLogger(__name__)
@@ -142,8 +142,11 @@ async def execute_research_ideas(payload: dict[str, Any]) -> dict[str, Any]:
         try:
             async with sem:
                 await asyncio.sleep(random.uniform(0.15, 0.55))
-            html = await fetch_google_serp_html(query=q, gl=gl, hl=hl, timeout_s=12.0)
-            ext = extract_serp(query=q, gl=gl, hl=hl, html=html)
+            # P: shared cross-project SERP index -- serves instantly if any project has
+            # already fetched this exact (query, gl, hl) recently; live-scrapes and writes
+            # back into the shared index on a miss. The per-project history save below still
+            # always happens, regardless of whether this came from cache or a fresh fetch.
+            ext = await get_or_fetch_serp(query=q, gl=gl, hl=hl, source="live", timeout_s=12.0)
             snap = {
                 "project_id": project_id,
                 "user_id": user_id,

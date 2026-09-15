@@ -5,6 +5,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
+from app.core.apm import background_task
 from app.legacy.storage import get_legacy_storage_module
 from app.services.wordpress_client import WordpressClient, resolve_featured_media_id
 from app.services.context_links import apply_context_links_html
@@ -650,6 +651,7 @@ async def _load_article_row(*, st, project_id: str, article_id: str) -> dict | N
     )
 
 
+@background_task(name="scheduler.execute_scheduled_job_post_now", group="Scheduler")
 async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_claimed: bool = False) -> dict:
     """
     Post a scheduled job immediately: generate content/image when missing, then publish to WordPress.

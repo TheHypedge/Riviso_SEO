@@ -12,6 +12,8 @@ frontend/.turbo/
 __pycache__/
 *.pyc
 .env
+.env.local
+frontend/.env.local
 data/google_oauth.json
 .autoenv/
 .flask_session/
@@ -22,6 +24,8 @@ data/
 *.db
 venv/
 REVIEW.md
+.DS_Store
+.claude/scheduled_tasks.lock
 # gitleaks binary (downloaded by security workflow — not part of the codebase)
 gitleaks
 LICENSE

@@ -7,7 +7,7 @@ from urllib.parse import urlparse, urlunparse
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.config import settings
-from app.core.project_lookup import require_project_access
+from app.core.project_lookup import async_require_project_access
 from app.core.deps import get_current_user
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.shopify import (
@@ -39,6 +39,7 @@ from app.services.shopify_api_errors import (
 from app.services import shopify_oauth
 from app.services.shopify_client import ShopifyClient
 from app.services.to_thread import run_sync
+from app.services.storage_db import call_storage
 from app.services.shopify_credentials import (
     AUTH_FAILED_MESSAGE,
     ShopifyCredentialsError,
@@ -72,11 +73,20 @@ def _public_api_url(path: str) -> str:
     return f"{base}{p}"
 
 
-def _require_project(*, st, user: dict, project_id: str, allow_collaborators: bool = False) -> dict:
+async def _require_project(*, user: dict, project_id: str, allow_collaborators: bool = False) -> dict:
     # allow_collaborators=True is for read/sync content endpoints (status, catalog,
     # sync). Connect/reauthorize/verify/disconnect (credential setup) keep the
     # default (owner or global-admin only).
-    return require_project_access(st=st, user=user, project_id=project_id, full=False, allow_collaborators=allow_collaborators)
+    #
+    # I7.1: was the sync require_project_access, called unwrapped from every
+    # route in this module -- every Shopify status/connect/catalog/sync call
+    # blocked the event loop on its own access check. async_require_project_access
+    # (already used correctly elsewhere, e.g. deps.py/project_lookup's own async
+    # path) resolves storage internally via Motor/run_sync, so `st` is no longer
+    # needed here.
+    return await async_require_project_access(
+        user=user, project_id=project_id, full=False, allow_collaborators=allow_collaborators
+    )
 
 
 def _platform(proj: dict) -> str:
@@ -173,7 +183,7 @@ async def connect_shopify(
     and attach the store to this project.
     """
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = await _require_project(user=user, project_id=project_id)
     pid = (proj.get("id") or "").strip()
     if not hasattr(st, "update_project_fields"):
         raise HTTPException(status_code=500, detail="Storage missing update_project_fields")
@@ -282,7 +292,7 @@ async def reauthorize_url(
     Required after releasing new scopes — client-credentials refresh alone cannot add them.
     """
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = await _require_project(user=user, project_id=project_id)
     raw = (
         (payload.shop if payload and payload.shop else None)
         or proj.get("shopify_shop")
@@ -334,12 +344,21 @@ async def reauthorize_url(
 @router.get("/status", response_model=ShopifyStatus)
 async def status(project_id: str, user: dict = Depends(get_current_user)) -> ShopifyStatus:
     st = get_legacy_storage_module()
-    require_project_access(st=st, user=user, project_id=project_id, full=False, allow_collaborators=True)
+    await async_require_project_access(user=user, project_id=project_id, full=False, allow_collaborators=True)
     proj = (
         await run_sync(st.get_project_shopify_status_doc, project_id)
         if hasattr(st, "get_project_shopify_status_doc")
-        else _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
+        else await _require_project(user=user, project_id=project_id, allow_collaborators=True)
     )
+    return _build_shopify_status(proj)
+
+
+def _build_shopify_status(proj: dict) -> ShopifyStatus:
+    """Build the ShopifyStatus response from an already-fetched, already-
+    access-checked project doc. Extracted (I7.2) so sync_catalog can reuse
+    it after its own fresh post-sync read instead of re-running the whole
+    status() handler -- which redid the access check AND the project fetch
+    a second time on every sync call."""
     if not isinstance(proj, dict):
         raise HTTPException(status_code=404, detail="Project not found")
     token = (proj.get("shopify_access_token") or "").strip()
@@ -408,7 +427,7 @@ async def verify_connection(
 ) -> ShopifyVerifyResponse:
     """Verify Shopify credentials (same flow as WordPress verify + settings save)."""
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = await _require_project(user=user, project_id=project_id)
     pid = (proj.get("id") or "").strip()
     raw = (
         (payload.shop if payload and payload.shop else None)
@@ -575,7 +594,7 @@ async def resolve_shop(
     payload: ShopifyResolveShopRequest,
     user: dict = Depends(get_current_user),
 ) -> ShopifyResolveShopResponse:
-    _require_project(st=get_legacy_storage_module(), user=user, project_id=project_id)
+    await _require_project(user=user, project_id=project_id)
     myshopify, public_url, err = await shopify_oauth.resolve_shop_domain(payload.shop)
     if err or not myshopify:
         return ShopifyResolveShopResponse(ok=False, public_url=public_url or None, message=err)
@@ -595,7 +614,7 @@ async def connect_url(
     user: dict = Depends(get_current_user),
 ) -> dict:
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = await _require_project(user=user, project_id=project_id)
     misconfig = shopify_oauth.oauth_misconfiguration_reason()
     if misconfig:
         raise HTTPException(status_code=503, detail=misconfig)
@@ -654,7 +673,7 @@ async def manual_connect(
     This is useful when the Partners OAuth app is not public-distributed.
     """
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = await _require_project(user=user, project_id=project_id)
     pid = (proj.get("id") or "").strip()
     if not hasattr(st, "update_project_fields"):
         raise HTTPException(status_code=500, detail="Storage missing update_project_fields")
@@ -708,7 +727,7 @@ async def manual_connect(
 @router.post("/disconnect")
 async def disconnect(project_id: str, user: dict = Depends(get_current_user)) -> dict:
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id)
+    proj = await _require_project(user=user, project_id=project_id)
     if not hasattr(st, "update_project_fields"):
         raise HTTPException(status_code=500, detail="Storage missing update_project_fields")
     await run_sync(
@@ -738,7 +757,7 @@ async def disconnect(project_id: str, user: dict = Depends(get_current_user)) ->
 @router.post("/sync")
 async def sync_catalog(project_id: str, user: dict = Depends(get_current_user)) -> ShopifyStatus:
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
+    proj = await _require_project(user=user, project_id=project_id, allow_collaborators=True)
     try:
         proj, client = await _shopify_client_for_project(st=st, proj=proj, force_token_refresh=True)
     except ValueError:
@@ -777,20 +796,28 @@ async def sync_catalog(project_id: str, user: dict = Depends(get_current_user)) 
             },
         ) from exc
 
-    return await status(project_id=project_id, user=user)
+    # I7.2: access was already verified above; a fresh read (not another
+    # access-checked round-trip through the whole status() handler) is all
+    # that's needed to reflect the sync we just persisted.
+    fresh = (
+        await run_sync(st.get_project_shopify_status_doc, project_id)
+        if hasattr(st, "get_project_shopify_status_doc")
+        else await run_sync(call_storage, st.get_project_by_id, pid)
+    )
+    return _build_shopify_status(fresh)
 
 
 @router.get("/catalog", response_model=ShopifyCatalog)
 async def get_catalog(project_id: str, user: dict = Depends(get_current_user)) -> ShopifyCatalog:
     st = get_legacy_storage_module()
-    _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
+    await _require_project(user=user, project_id=project_id, allow_collaborators=True)
     raw_doc = (
         await run_sync(st.get_project_shopify_catalog_doc, project_id)
         if hasattr(st, "get_project_shopify_catalog_doc")
         else None
     )
     if not isinstance(raw_doc, dict):
-        raw_doc = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
+        raw_doc = await _require_project(user=user, project_id=project_id, allow_collaborators=True)
     raw = raw_doc.get("shopify_catalog") if isinstance(raw_doc.get("shopify_catalog"), dict) else {}
     products: list[dict] = []
     if hasattr(st, "list_shopify_products"):

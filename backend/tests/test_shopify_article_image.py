@@ -30,7 +30,7 @@ def test_build_shopify_article_image_payload_from_data_url():
     payload = asyncio.run(build_shopify_article_image_payload(article))
     assert payload is not None
     assert payload["attachment"] == b64
-    assert payload["filename"] == "featured.jpg"
+    assert payload["filename"] == "floral-suits.jpg"
     assert payload["alt"] == "Floral Suits"
 
 

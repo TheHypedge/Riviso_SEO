@@ -145,13 +145,32 @@ def strip_banned_phrases_from_text(text: str | None, phrases: tuple[str, ...] | 
     return out.strip()
 
 
+def strip_em_dashes(text: str | None) -> str:
+    """Hard guarantee against em dashes (—) in any AI-generated text.
+
+    The system prompt for every generation path already instructs the model to
+    never use them, but LLMs sometimes ignore that instruction — this is the
+    last-resort backstop. A leading/trailing em dash is dropped outright (a
+    replacement hyphen there would just read as a stray bullet fragment);
+    a mid-string one becomes " - ", matching the prompt's own suggested substitute.
+    """
+    if not text:
+        return text or ""
+    s = str(text)
+    s = re.sub(r"^\s*—\s*", "", s)
+    s = re.sub(r"\s*—\s*$", "", s)
+    s = re.sub(r"\s*—\s*", " - ", s)
+    s = re.sub(r"\s{2,}", " ", s)
+    return s.strip()
+
+
 def sanitize_line_banned_phrases(line: str) -> str:
     """Strip banned phrases from a single markdown line (preserves leading heading markers)."""
     if not line.strip():
         return line
     m = re.match(r"^(\s*(?:#{1,6}\s+)?)(.*)$", line)
     if not m:
-        return strip_banned_phrases_from_text(line)
+        return strip_em_dashes(strip_banned_phrases_from_text(line))
     prefix, body = m.group(1), m.group(2)
-    cleaned = strip_banned_phrases_from_text(body)
+    cleaned = strip_em_dashes(strip_banned_phrases_from_text(body))
     return f"{prefix}{cleaned}".rstrip()

@@ -58,7 +58,7 @@ export function ShopifyProductMapPicker({
   return (
     <div style={{ marginTop: compact ? 8 : 14, display: "grid", gap: 10 }}>
       <div>
-        <div style={{ fontWeight: 800, fontSize: 13, color: "rgba(255,255,255,0.92)" }}>Map active products</div>
+        <div style={{ fontWeight: 800, fontSize: 13, color: "var(--aa-ink)" }}>Map active products</div>
         <p className={styles.muted} style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.5 }}>
           Showing <strong>active</strong> products only. Select up to {maxItems} — Riviso adds{" "}
           <code>/products/&#123;handle&#125;</code> links in the article and uses the first product&apos;s featured
@@ -115,7 +115,7 @@ export function ShopifyProductMapPicker({
                   padding: "8px 10px",
                   borderRadius: 8,
                   cursor: "pointer",
-                  background: checked ? "rgba(217,119,87,0.12)" : "rgba(255,255,255,0.03)",
+                  background: checked ? "rgba(217,119,87,0.12)" : "var(--aa-surface-soft)",
                   border: checked
                     ? "1px solid rgba(217,119,87,0.45)"
                     : "1px solid transparent",
@@ -141,7 +141,7 @@ export function ShopifyProductMapPicker({
                       width: 36,
                       height: 36,
                       borderRadius: 8,
-                      background: "rgba(255,255,255,0.06)",
+                      background: "var(--aa-surface-soft)",
                     }}
                   />
                 )}

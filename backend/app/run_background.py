@@ -1,18 +1,22 @@
 """
 Standalone background process runner (I3.1).
 
-Runs the generation worker and/or the scheduler (and the daily subscription
-reset) **outside** the API process, so a long OpenAI generation or a slow
-publish never contends with request handling. Toggle each loop with env flags:
+Runs the generation worker, the scheduler (and the daily subscription reset), and/or the
+shared SERP index refresh loop **outside** the API process, so a long OpenAI generation or
+a slow publish never contends with request handling. Toggle each loop with env flags:
 
     ENABLE_GENERATION_WORKER=1   # run the generation worker loop
     ENABLE_SCHEDULER=1           # run the scheduler loop (+ subscription daily reset)
+    ENABLE_SERP_REFRESH_WORKER=1 # run the shared SERP index background refresh loop
+    ENABLE_SEO_CRAWL_WORKER=1    # run the SEO Audit crawl loop
 
 Recommended topology for ~50 users (see RIVISO_PRODUCTION_HARDENING_PLAN I3.1):
 
-    api        : ENABLE_SCHEDULER=0  ENABLE_GENERATION_WORKER=0  -> uvicorn app.main:app
-    worker     : ENABLE_GENERATION_WORKER=1 ENABLE_SCHEDULER=0   -> python -m app.run_background
-    scheduler  : ENABLE_SCHEDULER=1 ENABLE_GENERATION_WORKER=0   -> python -m app.run_background
+    api          : ENABLE_SCHEDULER=0  ENABLE_GENERATION_WORKER=0  ENABLE_SERP_REFRESH_WORKER=0  ENABLE_SEO_CRAWL_WORKER=0  -> uvicorn app.main:app
+    worker       : ENABLE_GENERATION_WORKER=1 ENABLE_SCHEDULER=0   ENABLE_SERP_REFRESH_WORKER=0  ENABLE_SEO_CRAWL_WORKER=0  -> python -m app.run_background
+    scheduler    : ENABLE_SCHEDULER=1 ENABLE_GENERATION_WORKER=0   ENABLE_SERP_REFRESH_WORKER=0  ENABLE_SEO_CRAWL_WORKER=0  -> python -m app.run_background
+    serp-refresh : ENABLE_SERP_REFRESH_WORKER=1 ENABLE_SCHEDULER=0 ENABLE_GENERATION_WORKER=0    ENABLE_SEO_CRAWL_WORKER=0  -> python -m app.run_background
+    seo-crawl    : ENABLE_SEO_CRAWL_WORKER=1 ENABLE_SCHEDULER=0    ENABLE_GENERATION_WORKER=0     ENABLE_SERP_REFRESH_WORKER=0  -> python -m app.run_background
 
 Run with:  python -m app.run_background
 """
@@ -33,6 +37,8 @@ from app.legacy.storage import get_legacy_storage_module
 from app.services.generation_worker import generation_worker_loop
 from app.services.scheduler import scheduler_loop
 from app.services.subscription_daily_reset import subscription_daily_reset_loop
+from app.services.serp_refresh_worker import serp_refresh_loop
+from app.services.seo_crawl_worker import seo_crawl_loop
 
 _log = logging.getLogger("riviso.background")
 
@@ -40,6 +46,8 @@ _log = logging.getLogger("riviso.background")
 # is still making progress. Touched every heartbeat interval by _heartbeat_loop.
 _WORKER_HEARTBEAT = "/tmp/riviso_worker.heartbeat"
 _SCHEDULER_HEARTBEAT = "/tmp/riviso_scheduler.heartbeat"
+_SERP_REFRESH_HEARTBEAT = "/tmp/riviso_serp_refresh.heartbeat"
+_SEO_CRAWL_HEARTBEAT = "/tmp/riviso_seo_crawl.heartbeat"
 _HEARTBEAT_INTERVAL = 30  # seconds
 
 
@@ -84,10 +92,13 @@ async def _run() -> None:
 
     run_worker = _flag_enabled("ENABLE_GENERATION_WORKER")
     run_scheduler = _flag_enabled("ENABLE_SCHEDULER")
+    run_serp_refresh = _flag_enabled("ENABLE_SERP_REFRESH_WORKER")
+    run_seo_crawl = _flag_enabled("ENABLE_SEO_CRAWL_WORKER")
 
-    if not run_worker and not run_scheduler:
+    if not run_worker and not run_scheduler and not run_serp_refresh and not run_seo_crawl:
         _log.error(
-            "Nothing to run: set ENABLE_GENERATION_WORKER=1 and/or ENABLE_SCHEDULER=1. Exiting."
+            "Nothing to run: set ENABLE_GENERATION_WORKER=1, ENABLE_SCHEDULER=1, "
+            "ENABLE_SERP_REFRESH_WORKER=1, and/or ENABLE_SEO_CRAWL_WORKER=1. Exiting."
         )
         return
 
@@ -101,6 +112,14 @@ async def _run() -> None:
         tasks.append(asyncio.create_task(scheduler_loop(poll_seconds=10.0), name="scheduler"))
         tasks.append(asyncio.create_task(subscription_daily_reset_loop(), name="subscription_reset"))
         tasks.append(asyncio.create_task(_heartbeat_loop(_SCHEDULER_HEARTBEAT), name="scheduler_heartbeat"))
+    if run_serp_refresh:
+        _log.info("Starting SERP index refresh loop")
+        tasks.append(asyncio.create_task(serp_refresh_loop(), name="serp_refresh"))
+        tasks.append(asyncio.create_task(_heartbeat_loop(_SERP_REFRESH_HEARTBEAT), name="serp_refresh_heartbeat"))
+    if run_seo_crawl:
+        _log.info("Starting SEO Audit crawl loop")
+        tasks.append(asyncio.create_task(seo_crawl_loop(), name="seo_crawl"))
+        tasks.append(asyncio.create_task(_heartbeat_loop(_SEO_CRAWL_HEARTBEAT), name="seo_crawl_heartbeat"))
 
     stop = asyncio.Event()
 

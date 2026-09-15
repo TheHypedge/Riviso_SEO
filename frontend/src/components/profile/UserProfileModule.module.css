@@ -226,18 +226,8 @@
 }
 
 .fieldInput {
-  height: 38px;
-  padding: 0 12px;
-  border-radius: var(--aa-r-md, 8px);
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.1);
-  color: var(--aa-on-dark, #faf9f5);
-  font-size: 14px;
-  width: 100%;
-  box-sizing: border-box;
-  transition: border-color 0.15s;
+  composes: fieldInput from "../../app/page.module.css";
 }
-.fieldInput:focus { outline: none; border-color: rgba(217,119,87,0.5); }
 .fieldInput::placeholder { color: rgba(160,157,150,0.5); }
 
 .fieldInputReadOnly {
@@ -284,7 +274,7 @@
   background-position: right 12px center;
   padding-right: 32px;
 }
-.selectInput:focus { outline: none; border-color: rgba(217,119,87,0.5); }
+.selectInput:focus { outline: none; border-color: color-mix(in oklab, var(--aa-primary), transparent 50%); }
 
 /* timezone helpers */
 .tzRow {
@@ -324,34 +314,15 @@
   padding-top: 4px;
 }
 
+/* Composes the canonical button (page.module.css) instead of a local
+ * height/radius/hover recipe -- see that file's .button/.btnSecondary. */
 .btnPrimary {
-  height: 38px;
-  padding: 0 18px;
-  border-radius: var(--aa-r-md, 8px);
-  background: var(--aa-primary, #d97757);
-  border: none;
-  color: #fff;
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: opacity 0.15s;
+  composes: button from "../../app/page.module.css";
 }
-.btnPrimary:hover:not(:disabled) { opacity: 0.85; }
-.btnPrimary:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .btnSecondary {
-  height: 38px;
-  padding: 0 14px;
-  border-radius: var(--aa-r-md, 8px);
-  background: transparent;
-  border: 1px solid rgba(255,255,255,0.12);
-  color: var(--aa-on-dark-soft, #a09d96);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
+  composes: btnSecondary from "../../app/page.module.css";
 }
-.btnSecondary:hover { border-color: rgba(255,255,255,0.25); color: var(--aa-on-dark, #faf9f5); }
 
 .successMsg {
   font-size: 13px;
@@ -556,20 +527,8 @@
 }
 
 .dangerBtn {
+  composes: btnDangerGhost from "../../app/page.module.css";
   flex-shrink: 0;
-  padding: 8px 18px;
-  border-radius: var(--aa-r-md, 8px);
-  border: 1px solid rgba(198, 69, 69, 0.5);
-  background: rgba(198, 69, 69, 0.08);
-  color: #c64545;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-.dangerBtn:hover {
-  background: rgba(198, 69, 69, 0.16);
-  border-color: rgba(198, 69, 69, 0.7);
 }
 
 /* ── Delete confirmation modal ───────────────────────────────────────────────── */
@@ -720,32 +679,12 @@
 }
 
 .modalCancelBtn {
-  padding: 8px 18px;
-  border-radius: var(--aa-r-md, 8px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: transparent;
-  color: var(--aa-on-dark-soft, #a09d96);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s;
+  composes: btnSecondary from "../../app/page.module.css";
 }
-.modalCancelBtn:hover { background: rgba(255, 255, 255, 0.05); }
-.modalCancelBtn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .modalDeleteBtn {
-  padding: 8px 18px;
-  border-radius: var(--aa-r-md, 8px);
-  border: 1px solid rgba(198, 69, 69, 0.5);
-  background: #c64545;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
+  composes: btnDanger from "../../app/page.module.css";
 }
-.modalDeleteBtn:hover:not(:disabled) { background: #b03b3b; }
-.modalDeleteBtn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── Skeleton loader ────────────────────────────────────────────────────────── */
 .skeletonLine {

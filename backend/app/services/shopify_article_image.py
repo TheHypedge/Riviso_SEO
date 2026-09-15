@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 
+from app.services.image_naming import slugify_for_filename
 from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
 
 log = logging.getLogger(__name__)
@@ -95,12 +96,14 @@ async def build_shopify_article_image_payload(
     parsed = await resolve_featured_image_bytes(article)
     if not parsed:
         return None
-    data, _content_type, filename = parsed
+    data, _content_type, generic_filename = parsed
     attachment = base64.b64encode(data).decode("ascii")
     payload: dict[str, Any] = {"attachment": attachment}
+    alt_text = (alt or article.get("title") or "").strip()[:512]
+    ext = generic_filename.rsplit(".", 1)[-1] if "." in generic_filename else "png"
+    filename = f"{slugify_for_filename(alt_text)}.{ext}" if alt_text else generic_filename
     if filename:
         payload["filename"] = filename
-    alt_text = (alt or article.get("title") or "").strip()[:512]
     if alt_text:
         payload["alt"] = alt_text
     return payload

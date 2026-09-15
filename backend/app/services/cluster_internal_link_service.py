@@ -108,6 +108,31 @@ def _load_article(st: Any, *, project_id: str, article_id: str) -> dict[str, Any
         return None
 
 
+def _load_articles_batch(st: Any, *, project_id: str, article_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """
+    Batch-load several sibling/pillar articles in one round-trip instead of one per id.
+
+    Falls back to a per-id loop only if the storage module doesn't expose the batch
+    reader (e.g. an older legacy module during a partial migration).
+    """
+    ids = [aid for aid in {(x or "").strip() for x in (article_ids or [])} if aid]
+    if not ids:
+        return {}
+    if hasattr(st, "load_articles_for_cluster_links"):
+        try:
+            out = st.load_articles_for_cluster_links(project_id, ids)
+            if isinstance(out, dict):
+                return out
+        except Exception:
+            log.debug("load_articles_for_cluster_links failed, falling back to per-id loads", exc_info=True)
+    out: dict[str, dict[str, Any]] = {}
+    for aid in ids:
+        article = _load_article(st, project_id=project_id, article_id=aid)
+        if article:
+            out[aid] = article
+    return out
+
+
 def _featured_image_for_url(st: Any, *, project_id: str, post_url: str) -> str:
     if not hasattr(st, "load_site_map_for_project"):
         return ""
@@ -181,31 +206,37 @@ def _cluster_sibling_rows(
     cluster: dict[str, Any],
     current_article_id: str,
 ) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
     pillar = cluster.get("pillar") or {}
+    slots = ([pillar] if isinstance(pillar, dict) else []) + [
+        s for s in (cluster.get("clusters") or []) if isinstance(s, dict)
+    ]
+    ids = [str(s.get("imported_article_id") or "").strip() for s in slots]
+    articles_by_id = _load_articles_batch(st, project_id=project_id, article_ids=[i for i in ids if i])
+
+    out: list[dict[str, Any]] = []
     if isinstance(pillar, dict):
-        out.append(_sibling_row(st, project_id=project_id, slot=pillar, role="pillar"))
+        out.append(_sibling_row(project_id=project_id, slot=pillar, role="pillar", articles_by_id=articles_by_id))
     for slot in cluster.get("clusters") or []:
         if not isinstance(slot, dict):
             continue
-        out.append(_sibling_row(st, project_id=project_id, slot=slot, role="cluster"))
+        out.append(_sibling_row(project_id=project_id, slot=slot, role="cluster", articles_by_id=articles_by_id))
     _ = current_article_id
     return out
 
 
 def _sibling_row(
-    st: Any,
     *,
     project_id: str,
     slot: dict[str, Any],
     role: str,
+    articles_by_id: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     aid = (slot.get("imported_article_id") or "").strip()
     title = (slot.get("title") or "").strip()
     post_url = ""
     is_live = False
     if aid:
-        article = _load_article(st, project_id=project_id, article_id=aid)
+        article = articles_by_id.get(aid)
         if article:
             title = (article.get("title") or title).strip()
             post_url = (article.get("wp_link") or "").strip()
@@ -253,6 +284,9 @@ def resolve_cluster_mapped_pages(
             if (slot.get("imported_article_id") or "").strip() != aid:
                 targets.append(slot)
 
+    target_ids = [str(s.get("imported_article_id") or "").strip() for s in targets]
+    articles_by_id = _load_articles_batch(st, project_id=project_id, article_ids=[i for i in target_ids if i])
+
     pages: list[WordPressMappedPage] = []
     for slot in targets:
         if len(pages) >= max(0, int(max_pages)):
@@ -260,7 +294,7 @@ def resolve_cluster_mapped_pages(
         sibling_id = (slot.get("imported_article_id") or "").strip()
         if not sibling_id:
             continue
-        article = _load_article(st, project_id=project_id, article_id=sibling_id)
+        article = articles_by_id.get(sibling_id)
         if not article or not is_article_live_on_wordpress(article):
             continue
         mapped = article_to_mapped_page(st, project_id=project_id, article=article)

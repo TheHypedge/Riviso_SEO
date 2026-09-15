@@ -19,7 +19,6 @@ For bulk upload, the API applies two phases:
    ``skip_project_duplicate_conflicts`` is true (client confirms importing only non-conflicting rows).
 """
 
-import time
 import uuid
 import base64
 import unicodedata
@@ -39,6 +38,9 @@ import markdown as md
 from pydantic import BaseModel, Field, ValidationError
 from pymongo.errors import PyMongoError
 
+import httpx
+
+from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.ratelimit import limiter
 from app.core.project_lookup import async_require_project_access, require_project_access
@@ -52,16 +54,25 @@ from app.services.content_sanitizer import (
     sanitize_meta_title,
 )
 from app.services.context_links import apply_context_links_html
-from app.services.wordpress_client import WordpressClient, resolve_featured_media_id
+from app.services.wordpress_client import WordpressClient, resolve_featured_media_id, rewrite_inline_media_for_wordpress
 from app.services.shopify_client import ShopifyClient
 from app.services.gsc_actions import inspect_url_status, maybe_request_url_inspection, request_url_inspection_now
 from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
 from app.services.scheduler import start_scheduled_job_preparation_task
-from app.services.generation_queue import generation_slot
+from app.services.generation_queue import generation_slot, user_generation_slot
 from app.services.to_thread import run_sync
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.schedule_timing import SCHEDULE_TOO_SOON_MESSAGE, is_schedule_time_allowed
 from app.services.prompt_validation import assert_writing_prompt_allowed
+from app.services.article_metadata_suggestion import (
+    suggest_metadata_from_idea,
+    suggest_metadata_from_source_content,
+)
+from app.services.article_selection_rewrite import rewrite_selected_text
+from app.services.article_media_storage import save_article_media
+from app.services.openai_client import OpenAIClient
+from app.services.url_content_extractor import fetch_and_extract_url
+from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
 from app.services.article_pipeline import (
     execute_article_generation,
     execute_featured_image_regeneration,
@@ -109,30 +120,19 @@ from app.schemas.articles import (
     ShopifyPublishRequest,
     RegenerateImageRequest,
     ScheduleRequest,
+    SuggestArticleMetadataRequest,
+    SuggestArticleMetadataResponse,
+    ArticleFromSourceRequest,
+    RegenerateSelectionRequest,
+    RegenerateSelectionResponse,
+    ArticleMediaFromUrlRequest,
+    ArticleMediaGenerateRequest,
+    ArticleMediaResponse,
 )
 
 router = APIRouter(prefix="/projects/{project_id}/articles", tags=["articles"])
 
 _log = logging.getLogger(__name__)
-
-_plans_cache_at: float = 0.0
-_plans_cache_data: dict | None = None
-_PLANS_CACHE_TTL_SEC = 120.0
-
-
-def _load_plans_cached(st) -> dict:
-    global _plans_cache_at, _plans_cache_data
-    now = time.monotonic()
-    if _plans_cache_data is not None and (now - _plans_cache_at) < _PLANS_CACHE_TTL_SEC:
-        return _plans_cache_data
-    try:
-        raw = st.load_plans() or {}
-        _plans_cache_data = raw if isinstance(raw, dict) else {}
-    except Exception:
-        _plans_cache_data = {}
-    _plans_cache_at = now
-    return _plans_cache_data
-
 
 def _detail_image_for_response(article: dict, *, st=None) -> tuple[str | None, bool]:
     """Omit inline data URLs from the editor JSON; load them via GET .../featured-image."""
@@ -406,6 +406,7 @@ def _to_public(a: dict) -> ArticlePublic:
         shopify_article_id=a.get("shopify_article_id"),
         shopify_link=(a.get("shopify_link") or "").strip() or None,
         wp_category_ids=(a.get("wp_category_ids") or ""),
+        source_url=(a.get("source_url") or "").strip() or None,
     )
 
 
@@ -416,6 +417,7 @@ def _to_list_item(a: dict) -> ArticleListItem:
         project_id=(a.get("project_id") or "").strip(),
         title=(a.get("title") or "").strip(),
         status=_derive_listing_status(a),
+        created_at=(a.get("created_at") or "").strip() or None,
         keywords=_coerce_keywords(a.get("keywords")),
         focus_keyphrase=(a.get("focus_keyphrase") or "").strip() or None,
         gsc_status=(a.get("gsc_status") or "").strip() or None,
@@ -469,7 +471,7 @@ def _require_verified_website(proj: dict) -> None:
 
 def _article_image_regeneration_usage(*, st, user: dict, article: dict) -> dict:
     plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
-    plans = _load_plans_cached(st)
+    plans = st.load_plans() or {}
     plan = plans.get(plan_key) if isinstance(plans, dict) else {}
     if not isinstance(plan, dict):
         plan = {}
@@ -1061,6 +1063,350 @@ async def create_article(
     )
 
 
+@router.post("/suggest-metadata", response_model=SuggestArticleMetadataResponse)
+@limiter.limit("20/minute")
+async def suggest_article_metadata(
+    request: Request,
+    project_id: str,
+    payload: SuggestArticleMetadataRequest,
+    user: dict = Depends(get_current_user),
+) -> SuggestArticleMetadataResponse:
+    """
+    Add Article modal — "AI Generate" tab. One direct AI call: expand a rough
+    keyword/idea/sentence into {title, focus_keyphrase, keywords} to prefill the
+    form. No article is created here, no plan quota consumed — just rate-limited.
+    """
+    st = get_legacy_storage_module()
+    await _require_project_access(st=st, user=user, project_id=project_id)
+
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
+
+    result = await suggest_metadata_from_idea(idea=payload.idea.strip())
+    if not result.get("title") or not result.get("focus_keyphrase"):
+        raise HTTPException(status_code=502, detail="Couldn't generate suggestions for that idea. Try rephrasing it.")
+    return SuggestArticleMetadataResponse(**result)
+
+
+@router.post("/from-source", response_model=ArticlePublic, status_code=201)
+@limiter.limit("10/minute")
+async def create_article_from_source(
+    request: Request,
+    project_id: str,
+    payload: ArticleFromSourceRequest,
+    user: dict = Depends(require_plan_action_for_project(PlanAction.GENERATE_CONTENT, consume=False)),
+) -> ArticlePublic:
+    """
+    Add Article modal — "Through Source" tab. Fetches and extracts a user-supplied
+    URL's content, derives title/focus_keyphrase/keywords from it, creates the
+    article, then queues full-body generation (always async, no featured image) —
+    same downstream pipeline as ``POST .../generate``, just triggered here instead
+    of by the user picking "Generate" in the editor afterwards.
+
+    Gated the same way as ``POST .../generate`` (``GENERATE_CONTENT``, ``consume=False``
+    — this checks trial expiry / feature-flag eligibility and resolves plan limits
+    against the project owner for collaborators; the actual quota *consumption* still
+    happens once inside ``execute_article_generation`` when the queued job runs).
+    """
+    st = get_legacy_storage_module()
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    _require_verified_website(proj)
+
+    source_url = payload.source_url.strip()
+    try:
+        extracted = await fetch_and_extract_url(source_url)
+    except SsrfError as e:
+        raise HTTPException(status_code=400, detail=f"That URL can't be fetched: {e}")
+    except ValueError as e:
+        message = {
+            "not_html": "That URL doesn't return an HTML page.",
+            "content_too_short": "Couldn't find enough article content at that URL.",
+            "body_too_large": "That page is too large to use as a source.",
+        }.get(str(e), "Couldn't read that URL.")
+        raise HTTPException(status_code=400, detail=message)
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=400, detail=f"That URL returned an error ({e.response.status_code}).")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=400, detail="Couldn't reach that URL. Check it and try again.")
+
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
+
+    meta = await suggest_metadata_from_source_content(
+        extracted_title=extracted.title or "",
+        extracted_text=extracted.text,
+    )
+    title_clean = (meta.get("title") or "").strip()[:500]
+    focus = (meta.get("focus_keyphrase") or "").strip()[:500]
+    keywords = [str(k).strip()[:80] for k in (meta.get("keywords") or [])][:10]
+    if not title_clean:
+        raise HTTPException(status_code=502, detail="Couldn't draft an article from that URL. Try a different page.")
+
+    tkey = _normalize_article_title_key(title_clean)
+    if tkey:
+        idx = await run_sync(_sync_project_title_index, st, project_id)
+        hit = idx.get(tkey)
+        if hit:
+            etitle, eid = hit
+            raise HTTPException(
+                status_code=409,
+                detail=_duplicate_title_http_detail(
+                    submitted=title_clean,
+                    existing_title=etitle,
+                    existing_id=eid,
+                ),
+            )
+
+    aid = str(uuid.uuid4())
+    try:
+        await run_sync(
+            st.insert_article,
+            {
+                "id": aid,
+                "project_id": project_id,
+                "title": title_clean,
+                "keywords": keywords,
+                "status": "pending",
+                "article": "",
+                "focus_keyphrase": focus,
+                "source_url": extracted.final_url or source_url,
+                "meta_title": "",
+                "meta_description": "",
+                "generated_at": "",
+                "posted_at": "",
+                "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "gsc_status": "pending",
+            },
+        )
+    except PyMongoError as e:
+        raise_storage_http(e)
+
+    gen_payload = {
+        "writing_prompt_id": None,
+        "image_prompt_id": None,
+        "generate_image": False,
+        "focus_keyphrase": focus,
+        "mapped_products": None,
+        "mapped_pages": None,
+        "reference_source_content": extracted.text,
+    }
+    enqueue_article_generation_job(
+        project_id=project_id,
+        article_id=aid,
+        user_id=(user.get("id") or "").strip(),
+        payload=gen_payload,
+    )
+    try:
+        await run_sync(st.patch_article_fields, aid, {"status": "queued"})
+    except Exception:
+        pass
+    await publish_pipeline_status(aid, "📋 Generation job queued — waiting for background worker...", "queued")
+
+    return ArticlePublic(
+        id=aid,
+        project_id=project_id,
+        title=title_clean,
+        status="queued",
+        created_at=datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+        keywords=keywords,
+        focus_keyphrase=focus or None,
+        source_url=extracted.final_url or source_url,
+    )
+
+
+@router.post("/{article_id}/regenerate-selection", response_model=RegenerateSelectionResponse)
+@limiter.limit("20/minute")
+async def regenerate_article_selection(
+    request: Request,
+    project_id: str,
+    article_id: str,
+    payload: RegenerateSelectionRequest,
+    user: dict = Depends(get_current_user),
+) -> RegenerateSelectionResponse:
+    """
+    Article editor — inline "AI regenerate selection" tool. Rewords the given
+    selected text in place, preserving its facts/meaning (only wording changes).
+    Synchronous, free (rate-limited only, no plan quota) — the same class of
+    lightweight work as ``POST .../suggest-metadata``.
+    """
+    st = get_legacy_storage_module()
+    await _require_project_access(st=st, user=user, project_id=project_id)
+    await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
+
+    rewritten = await rewrite_selected_text(
+        selected_text=payload.selected_text.strip(),
+        context_before=payload.context_before.strip(),
+        context_after=payload.context_after.strip(),
+        focus_keyphrase=(payload.focus_keyphrase or "").strip(),
+        keywords=payload.keywords,
+    )
+    rewritten = sanitize_article_body(rewritten).strip()
+    if not rewritten:
+        raise HTTPException(status_code=502, detail="Couldn't regenerate that selection. Try again.")
+    return RegenerateSelectionResponse(rewritten=rewritten)
+
+
+MAX_ARTICLE_MEDIA_BYTES = 8 * 1024 * 1024
+
+
+def _article_media_public_url(image_id: str) -> str:
+    # Deliberately relative (unlike the OAuth-callback uses of settings.public_base_url
+    # elsewhere): this is a same-origin <img src> the browser loads from whatever host
+    # is currently serving the app, proxied to the backend by next.config.ts's rewrite
+    # in both dev and prod. An absolute prod URL here would 404 in local dev, since the
+    # image only ever exists on whichever backend instance generated it.
+    return f"{settings.api_prefix}/public/article-media/{image_id}"
+
+
+@router.post("/{article_id}/media/from-url", response_model=ArticleMediaResponse)
+@limiter.limit("20/minute")
+async def insert_article_media_from_url(
+    request: Request,
+    project_id: str,
+    article_id: str,
+    payload: ArticleMediaFromUrlRequest,
+    user: dict = Depends(get_current_user),
+) -> ArticleMediaResponse:
+    """
+    Article editor "Insert Media" tool — URL tab. Downloads the given image
+    server-side (SSRF-guarded) and re-hosts it on this app's own storage, so
+    inline images behave consistently regardless of source (URL/upload/AI) and
+    don't depend on a foreign URL staying alive forever.
+    """
+    st = get_legacy_storage_module()
+    await _require_project_access(st=st, user=user, project_id=project_id)
+    await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+
+    url = payload.url.strip()
+    try:
+        assert_public_http_url(url)
+    except SsrfError as e:
+        raise HTTPException(status_code=400, detail=f"That URL can't be fetched: {e}")
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(20.0, connect=10.0),
+            follow_redirects=True,
+            max_redirects=8,
+            event_hooks=ssrf_guarded_event_hooks(),
+        ) as client:
+            resp = await client.get(url)
+        resp.raise_for_status()
+    except SsrfError as e:
+        raise HTTPException(status_code=400, detail=f"That URL can't be fetched: {e}")
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=400, detail=f"That URL returned an error ({e.response.status_code}).")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=400, detail="Couldn't reach that URL. Check it and try again.")
+
+    content_type = (resp.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="That URL doesn't point at an image.")
+    if len(resp.content) > MAX_ARTICLE_MEDIA_BYTES:
+        raise HTTPException(status_code=400, detail="That image is too large (max 8MB).")
+
+    image_id = await run_sync(
+        save_article_media,
+        data=resp.content,
+        content_type=content_type,
+        project_id=project_id,
+        article_id=article_id,
+    )
+    return ArticleMediaResponse(id=image_id, url=_article_media_public_url(image_id))
+
+
+@router.post("/{article_id}/media/upload", response_model=ArticleMediaResponse)
+@limiter.limit("20/minute")
+async def insert_article_media_upload(
+    request: Request,
+    project_id: str,
+    article_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+) -> ArticleMediaResponse:
+    """Article editor "Insert Media" tool — Upload tab."""
+    st = get_legacy_storage_module()
+    await _require_project_access(st=st, user=user, project_id=project_id)
+    await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+
+    content_type = (file.content_type or "").strip().lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file.")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="That file is empty.")
+    if len(data) > MAX_ARTICLE_MEDIA_BYTES:
+        raise HTTPException(status_code=400, detail="That image is too large (max 8MB).")
+
+    image_id = await run_sync(
+        save_article_media,
+        data=data,
+        content_type=content_type,
+        project_id=project_id,
+        article_id=article_id,
+    )
+    return ArticleMediaResponse(id=image_id, url=_article_media_public_url(image_id))
+
+
+@router.post("/{article_id}/media/generate", response_model=ArticleMediaResponse)
+@limiter.limit("6/minute")
+async def insert_article_media_generate(
+    request: Request,
+    project_id: str,
+    article_id: str,
+    payload: ArticleMediaGenerateRequest,
+    user: dict = Depends(get_current_user),
+) -> ArticleMediaResponse:
+    """
+    Article editor "Insert Media" tool — AI Generate tab. A single, simple
+    OpenAI image call from the user's own short prompt (<=200 chars) — no plan
+    quota (per confirmed product decision), just a tighter rate limit than the
+    other two tabs since image generation is a genuinely slower/costlier call.
+    """
+    st = get_legacy_storage_module()
+    await _require_project_access(st=st, user=user, project_id=project_id)
+    await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
+
+    client = OpenAIClient()
+    result = await client.generate_image_url(model=settings.openai_image_model, prompt=payload.prompt.strip())
+    if not result:
+        raise HTTPException(status_code=502, detail="Couldn't generate an image for that prompt. Try again.")
+
+    if result.startswith("data:"):
+        m = re.match(r"^data:([^;]+);base64,(.+)$", result, flags=re.DOTALL)
+        if not m:
+            raise HTTPException(status_code=502, detail="Couldn't generate an image for that prompt. Try again.")
+        content_type = m.group(1) or "image/png"
+        try:
+            data = base64.b64decode(m.group(2), validate=True)
+        except Exception:
+            raise HTTPException(status_code=502, detail="Couldn't generate an image for that prompt. Try again.")
+    else:
+        data = await client._download_image_bytes(result)
+        if not data:
+            raise HTTPException(status_code=502, detail="Couldn't download the generated image. Try again.")
+        content_type = "image/png"
+
+    if len(data) > MAX_ARTICLE_MEDIA_BYTES:
+        raise HTTPException(status_code=400, detail="Generated image is too large (max 8MB).")
+
+    image_id = await run_sync(
+        save_article_media,
+        data=data,
+        content_type=content_type,
+        project_id=project_id,
+        article_id=article_id,
+    )
+    return ArticleMediaResponse(id=image_id, url=_article_media_public_url(image_id))
+
+
 @router.post("/bulk", status_code=200)
 async def bulk_action(
     project_id: str,
@@ -1564,7 +1910,11 @@ async def update_article(
         updates["meta_description"] = sanitize_meta_description(payload.meta_description, max_len=600)
 
     if updates:
-        saved = await run_sync(call_storage, st.update_article_fields, article_id, updates)
+        # $set instead of a full read-modify-replace -- none of this route's fields
+        # (title/keywords/focus_keyphrase/article/meta_title/meta_description) touch
+        # image_url, so patch_article_fields is a behavior-preserving drop-in here.
+        patch_article = getattr(st, "patch_article_fields", None) or st.update_article_fields
+        saved = await run_sync(call_storage, patch_article, article_id, updates)
         if not saved:
             raise HTTPException(
                 status_code=409,
@@ -1802,21 +2152,22 @@ async def generate_article_and_image(
             },
         )
 
-    async with generation_slot():
-        return await execute_article_generation(
-            st=st,
-            user=user,
-            proj=proj,
-            project_id=project_id,
-            article_id=aid,
-            row=row,
-            writing_prompt_id=wp_id,
-            image_prompt_id=ip_id,
-            generate_image=bool(payload.generate_image),
-            focus_keyphrase_override=payload.focus_keyphrase,
-            mapped_products=mapped_products_payload,
-            mapped_pages=mapped_pages_payload,
-        )
+    async with user_generation_slot((user.get("id") or "").strip()):
+        async with generation_slot():
+            return await execute_article_generation(
+                st=st,
+                user=user,
+                proj=proj,
+                project_id=project_id,
+                article_id=aid,
+                row=row,
+                writing_prompt_id=wp_id,
+                image_prompt_id=ip_id,
+                generate_image=bool(payload.generate_image),
+                focus_keyphrase_override=payload.focus_keyphrase,
+                mapped_products=mapped_products_payload,
+                mapped_pages=mapped_pages_payload,
+            )
 
 
 @router.get("/{article_id}/events")
@@ -1904,16 +2255,17 @@ async def regenerate_article_featured_image(
         )
 
     try:
-        async with generation_slot():
-            return await execute_featured_image_regeneration(
-                st=st,
-                user=user,
-                proj=proj,
-                article_id=aid,
-                row=row,
-                image_prompt_id=ip_id,
-                custom_image_prompt=custom_prompt,
-            )
+        async with user_generation_slot((user.get("id") or "").strip()):
+            async with generation_slot():
+                return await execute_featured_image_regeneration(
+                    st=st,
+                    user=user,
+                    proj=proj,
+                    article_id=aid,
+                    row=row,
+                    image_prompt_id=ip_id,
+                    custom_image_prompt=custom_prompt,
+                )
     except HTTPException:
         raise
     except Exception as e:
@@ -2529,6 +2881,7 @@ async def publish_to_live_site(
     content_html = apply_context_links_html(content_html, links) if links else content_html
 
     wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
+    content_html = await rewrite_inline_media_for_wordpress(content_html, wp=wp)
 
     def _release_manual_claim(err_msg: str | None) -> None:
         """If we atomically claimed a scheduled job for this manual publish but
@@ -3008,6 +3361,7 @@ async def update_wordpress_post(
     content_html = apply_context_links_html(content_html, links) if links else content_html
 
     wp = WordpressClient(site_url=wp_site_url, username=wp_username, app_password=wp_app_password)
+    content_html = await rewrite_inline_media_for_wordpress(content_html, wp=wp)
 
     expects_featured_image = _article_has_stored_featured_image(st, a, aid) or image_file is not None
     featured_media_id: int | None = None
@@ -3171,8 +3525,11 @@ async def sync_article_from_wordpress_route(
 
     updates = result.get("updates") or {}
     if updates:
+        # $set instead of a full read-modify-replace -- build_article_updates_from_wp_post
+        # never sets image_url, so patch_article_fields is a behavior-preserving drop-in here.
         try:
-            saved = await run_sync(call_storage, st.update_article_fields, aid, updates)
+            patch_article = getattr(st, "patch_article_fields", None) or st.update_article_fields
+            saved = await run_sync(call_storage, patch_article, aid, updates)
         except Exception as e:
             raise_storage_http(e)
         if not saved:

@@ -17,6 +17,9 @@ const COMPARE_ROWS: { label: string; get: (p: PlanPublic) => { text: string; kin
   { label: "Bulk Upload", get: (p) => boolCell(p.allow_bulk_upload !== false) },
   { label: "Cluster Planner / Month", get: (p) => limitCell(p.max_cluster_plans_per_month) },
   { label: "Custom Curations / Month", get: (p) => limitCell(p.max_custom_research_per_month) },
+  { label: "Technical Audits / Month", get: (p) => limitCell(p.max_technical_audits_per_month) },
+  { label: "SEO Audits / Month", get: (p) => limitCell(p.max_seo_audits_per_month) },
+  { label: "SEO Audit URLs / Crawl", get: (p) => limitCell(p.max_seo_audit_urls_per_crawl) },
   { label: "Context Links", get: (p) => limitCell(p.max_context_links) },
   { label: "Writing Prompts", get: (p) => limitCell(p.max_writing_prompts) },
   { label: "Image Prompts", get: (p) => limitCell(p.max_image_prompts) },
@@ -32,6 +35,8 @@ const CARD_FEATURES: { label: string; get: (p: PlanPublic) => { text: string; ba
   { label: "Export", get: (p) => p.allow_export !== false ? (isUnlim(p.max_export_per_month) ? { text: "Unlimited", badgeKind: "unlimited" } : { text: `${p.max_export_per_month}/mo`, badgeKind: "limited" }) : { text: "Disabled", badgeKind: "disabled" } },
   { label: "Cluster Planner", get: (p) => limitBadge(p.max_cluster_plans_per_month) },
   { label: "Custom Curations", get: (p) => limitBadge(p.max_custom_research_per_month) },
+  { label: "Technical Audits", get: (p) => limitBadge(p.max_technical_audits_per_month) },
+  { label: "SEO Audits", get: (p) => limitBadge(p.max_seo_audits_per_month) },
   { label: "Context Links", get: (p) => limitBadge(p.max_context_links) },
 ];
 
@@ -79,6 +84,9 @@ function emptyDraft(): Partial<PlanPublic> & { key: string } {
     allow_bulk_upload: true,
     max_cluster_plans_per_month: null,
     max_custom_research_per_month: null,
+    max_technical_audits_per_month: null,
+    max_seo_audits_per_month: null,
+    max_seo_audit_urls_per_crawl: null,
     max_context_links: null,
     max_writing_prompts: null,
     writing_prompt_char_limit: null,
@@ -507,6 +515,22 @@ function EditView({
                 label="Custom Curations / Month"
                 value={draft.max_custom_research_per_month}
                 onChange={(v) => setDraft({ max_custom_research_per_month: v })}
+              />
+              <UnlimitedField
+                label="Technical Audits / Month"
+                value={draft.max_technical_audits_per_month}
+                onChange={(v) => setDraft({ max_technical_audits_per_month: v })}
+              />
+              <UnlimitedField
+                label="SEO Audits / Month"
+                value={draft.max_seo_audits_per_month}
+                onChange={(v) => setDraft({ max_seo_audits_per_month: v })}
+              />
+              <UnlimitedField
+                label="SEO Audit URLs / Crawl"
+                hint="Per crawl run"
+                value={draft.max_seo_audit_urls_per_crawl}
+                onChange={(v) => setDraft({ max_seo_audit_urls_per_crawl: v })}
               />
               <UnlimitedField
                 label="Context Links"

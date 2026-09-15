@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api, InvitationPublic } from "@/lib/api";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import styles from "./invitations.module.css";
+import lightTheme from "../lightTheme.module.css";
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -111,7 +112,7 @@ function InvitationsContent() {
   };
 
   return (
-    <div className={styles.page}>
+    <div className={`${styles.page} ${lightTheme.lightTheme}`}>
       <nav className={styles.topNav}>
         <Link href="/dashboard" className={styles.backLink}>← Dashboard</Link>
       </nav>

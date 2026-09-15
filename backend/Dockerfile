@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 COPY backend/app /app/app
 COPY backend/.env.example /app/.env.example
 COPY backend/wordpress_plugin /app/backend/wordpress_plugin
+COPY backend/newrelic.ini /app/newrelic.ini
+COPY backend/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 # Transitional: reuse existing modules while migrating to new architecture.
 COPY storage.py /app/storage.py
@@ -29,6 +32,8 @@ RUN mkdir -p /app/data/article_images && chown -R appuser:appuser /app
 USER appuser
 
 EXPOSE 8000
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # --proxy-headers + --forwarded-allow-ips: required behind nginx/load balancers so
 # request.client.host (rate limiting, audit logs) reflects the real client and not

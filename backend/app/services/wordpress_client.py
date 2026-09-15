@@ -3,11 +3,14 @@ from __future__ import annotations
 import base64
 import binascii
 import logging
+import re
 from typing import Any, Callable
 from urllib.parse import urlparse
 
 import httpx
+from bs4 import BeautifulSoup
 
+from app.services.image_naming import slugify_for_filename
 from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
 
 log = logging.getLogger(__name__)
@@ -114,19 +117,36 @@ class WordpressClient:
         res.raise_for_status()
         return res.json()
 
-    async def upload_media(self, *, filename: str, content_type: str, data: bytes, timeout: float = 60.0) -> Any:
+    async def upload_media(
+        self,
+        *,
+        filename: str,
+        content_type: str,
+        data: bytes,
+        title: str = "",
+        alt_text: str = "",
+        timeout: float = 60.0,
+    ) -> Any:
         url = self._url("/wp-json/wp/v2/media")
         safe_name = filename or "featured.png"
         ctype = content_type or "application/octet-stream"
         last_err: Exception | None = None
+        form: dict[str, Any] = {}
+        if title:
+            form["title"] = title
+        if alt_text:
+            form["alt_text"] = alt_text
 
         # WordPress expects multipart/form-data with a ``file`` field (most compatible).
+        # title/alt_text ride along as regular form fields in the same request -- without
+        # them WordPress falls back to naming the media library entry after the filename.
         try:
             async with self._guarded_client(timeout=timeout) as client:
                 res = await client.post(
                     url,
                     headers=dict(self._headers),
                     files={"file": (safe_name, data, ctype)},
+                    data=form or None,
                 )
             res.raise_for_status()
             return res.json()
@@ -134,6 +154,7 @@ class WordpressClient:
             last_err = e
 
         # Fallback: raw binary upload (some hosts accept Content-Disposition attachment).
+        # Raw uploads can't carry extra form fields, so set title/alt_text with a follow-up PATCH.
         headers = {
             **self._headers,
             "content-type": ctype,
@@ -143,7 +164,14 @@ class WordpressClient:
             async with self._guarded_client(timeout=timeout) as client:
                 res = await client.post(url, headers=headers, content=data)
             res.raise_for_status()
-            return res.json()
+            uploaded = res.json()
+            media_id = uploaded.get("id") if isinstance(uploaded, dict) else None
+            if media_id and form:
+                try:
+                    await self.put_json(f"/wp-json/wp/v2/media/{media_id}", form, timeout=timeout)
+                except Exception:
+                    log.debug("Could not set title/alt_text on WordPress media %s", media_id, exc_info=True)
+            return uploaded
         except Exception as e:
             last_err = e
 
@@ -157,6 +185,8 @@ class WordpressClient:
         filename: str,
         content_type: str,
         data: bytes,
+        title: str = "",
+        alt_text: str = "",
         timeout: float = 60.0,
     ) -> int | None:
         """
@@ -172,6 +202,8 @@ class WordpressClient:
                 filename=filename,
                 content_type=content_type,
                 data=data,
+                title=title,
+                alt_text=alt_text,
                 timeout=timeout,
             )
             if isinstance(up, dict) and isinstance(up.get("id"), int):
@@ -300,11 +332,80 @@ async def resolve_featured_media_id(
         parsed = await _featured_image_bytes_from_url(img_url, timeout=timeout)
     if not parsed:
         return None
-    data, content_type, filename = parsed
+    data, content_type, generic_filename = parsed
+    title = (row.get("title") or "").strip()
+    ext = generic_filename.rsplit(".", 1)[-1] if "." in generic_filename else "png"
+    filename = f"{slugify_for_filename(title)}.{ext}" if title else generic_filename
     return await wp.upload_media_optional(
         filename=filename,
         content_type=content_type,
         data=data,
+        title=title,
+        alt_text=title,
         timeout=timeout,
     )
+
+
+_ARTICLE_MEDIA_SRC_RE = re.compile(r"/public/article-media/([a-f0-9\-]{8,64})")
+
+
+async def rewrite_inline_media_for_wordpress(content_html: str, *, wp: WordpressClient, timeout: float = 90.0) -> str:
+    """
+    Find <img> tags pointing at this app's own /public/article-media/{id} route
+    (inserted via the article editor's "Insert Media" tool), upload each one to
+    WordPress's real media library, and rewrite src to the WordPress-hosted URL.
+
+    Uses ``wp.upload_media()`` directly, not ``upload_media_optional()`` -- the
+    latter only returns a numeric media id (all it needs for ``featured_media``),
+    but here we need the actual hosted URL to embed in the post body.
+
+    Best-effort per image: a failed upload leaves that one <img> tag untouched
+    rather than failing the whole publish (same posture as upload_media_optional).
+    """
+    from app.services.article_media_storage import load_article_media
+
+    if not content_html or "/public/article-media/" not in content_html:
+        return content_html
+
+    soup = BeautifulSoup(content_html, "html.parser")
+    changed = False
+    for img in soup.find_all("img"):
+        src = (img.get("src") or "").strip()
+        m = _ARTICLE_MEDIA_SRC_RE.search(src)
+        if not m:
+            continue
+        image_id = m.group(1)
+        loaded = load_article_media(image_id)
+        if not loaded:
+            continue
+        data, content_type = loaded
+        ext = (content_type.split("/")[-1] or "png").split(";")[0]
+        try:
+            uploaded = await wp.upload_media(
+                filename=f"{image_id}.{ext}",
+                content_type=content_type,
+                data=data,
+                timeout=timeout,
+            )
+        except Exception:
+            log.warning("Inline media upload to WordPress failed for image %s", image_id, exc_info=True)
+            continue
+        if not isinstance(uploaded, dict):
+            continue
+        source_url = (uploaded.get("source_url") or "").strip()
+        media_id = uploaded.get("id")
+        if not source_url:
+            continue
+        img["src"] = source_url
+        existing_class = img.get("class") or []
+        if isinstance(existing_class, str):
+            existing_class = existing_class.split()
+        if media_id is not None:
+            wp_class = f"wp-image-{media_id}"
+            if wp_class not in existing_class:
+                existing_class.append(wp_class)
+            img["class"] = existing_class
+        changed = True
+
+    return str(soup) if changed else content_html
 

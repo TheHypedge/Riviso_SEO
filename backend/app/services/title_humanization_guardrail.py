@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
+from app.services.generation_blocklist import strip_em_dashes
 from app.services.human_writing_guardrail import AI_DETECTOR_BANNED_PHRASES
 
 TitleRole = Literal["pillar", "cluster", "research"]
@@ -168,6 +169,7 @@ def scrub_title_linguistics(title: str) -> str:
     out = _normalize_title(title)
     if not out:
         return ""
+    out = strip_em_dashes(out)
     for pat, repl in _BAN_WORD_RES:
         out = pat.sub(repl, out)
     out = re.sub(r"\s{2,}", " ", out)
@@ -200,8 +202,12 @@ def humanize_planning_title(
 ) -> str:
     """
     Validate → scrub → semantic fallback. Never raises; safe for background queues.
+
+    Em dashes are stripped unconditionally, even on the otherwise-clean fast path —
+    they're a formatting tell independent of the cliché/template checks below, so a
+    title with no banned words but a stray "—" must not skip the scrub.
     """
-    candidate = _normalize_title(title)
+    candidate = strip_em_dashes(_normalize_title(title))
     if candidate and not title_has_banned_cliche(candidate) and not title_has_forbidden_template(candidate, role):
         return candidate[:300]
 
@@ -217,6 +223,7 @@ def format_title_ban_list_for_prompt() -> str:
     return (
         "TITLE BAN-LIST (reject any title containing these words/phrases, any casing):\n"
         f"{bullets}\n"
+        "- Never use an em dash (—) in a title. Use a colon, comma, or plain hyphen (-) instead.\n"
     )
 
 

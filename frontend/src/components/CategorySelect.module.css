@@ -15,8 +15,8 @@
   gap: 6px;
   width: 100%;
   min-width: 0;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline);
   border-radius: 6px;
   color: var(--aa-body-strong, #faf9f5);
   font-size: 12px;
@@ -30,8 +30,7 @@
 }
 
 .trigger:hover {
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.14);
+  border-color: var(--aa-primary);
 }
 
 .trigger:focus-visible {
@@ -54,7 +53,7 @@
 
 .chevron {
   flex-shrink: 0;
-  color: rgba(255, 255, 255, 0.35);
+  color: var(--aa-muted);
   transition: transform 0.15s ease, color 0.12s ease;
 }
 

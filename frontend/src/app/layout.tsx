@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Inter, Cormorant_Garamond } from "next/font/google";
+import { Geist, Geist_Mono, Inter, Cormorant_Garamond, JetBrains_Mono, Manrope } from "next/font/google";
 import "./globals.css";
 import ExtensionCleanup from "@/components/ExtensionCleanup";
 import { AppProviders } from "@/components/AppProviders";
@@ -25,6 +25,19 @@ const displaySerif = Cormorant_Garamond({
   variable: "--font-display-serif",
   subsets: ["latin"],
   weight: ["400", "500"],
+});
+
+// New design-system migration: JetBrains Mono, per design reference/tailwind.config.tokens.js.
+const jetbrainsMono = JetBrains_Mono({
+  variable: "--font-jetbrains-mono",
+  subsets: ["latin"],
+});
+
+// Figma design handoff ("Akhilesh" file) uses Manrope for headings/titles.
+const headingSans = Manrope({
+  variable: "--font-heading-sans",
+  subsets: ["latin"],
+  weight: ["600", "700", "800"],
 });
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL?.trim() || "https://riviso.com";
@@ -75,7 +88,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${uiSans.variable} ${displaySerif.variable}`}
+      className={`${geistSans.variable} ${geistMono.variable} ${uiSans.variable} ${displaySerif.variable} ${jetbrainsMono.variable} ${headingSans.variable}`}
       suppressHydrationWarning
     >
       <body suppressHydrationWarning>

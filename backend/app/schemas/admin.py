@@ -103,6 +103,9 @@ class PlanPublic(BaseModel):
     allow_bulk_upload: bool | None = None
     max_cluster_plans_per_month: int | None = None
     max_custom_research_per_month: int | None = None
+    max_technical_audits_per_month: int | None = None
+    max_seo_audits_per_month: int | None = None
+    max_seo_audit_urls_per_crawl: int | None = None
     max_context_links: int | None = None
     max_article_image_regenerations: int | None = None
     is_trial_plan: bool | None = None
@@ -141,6 +144,9 @@ class PlanUpsert(BaseModel):
     allow_bulk_upload: bool | None = None
     max_cluster_plans_per_month: int | None = None
     max_custom_research_per_month: int | None = None
+    max_technical_audits_per_month: int | None = None
+    max_seo_audits_per_month: int | None = None
+    max_seo_audit_urls_per_crawl: int | None = None
     max_context_links: int | None = None
     max_article_image_regenerations: int | None = None
     is_trial_plan: bool | None = None

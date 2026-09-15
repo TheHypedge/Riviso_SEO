@@ -310,45 +310,11 @@
 }
 
 .btnSecondary {
-  border: 1px solid color-mix(in oklab, var(--aa-hairline, rgba(255, 255, 255, 0.14)), transparent 10%);
-  background: color-mix(in oklab, #ffffff, transparent 92%);
-  color: var(--aa-ink, #fff);
-  border-radius: 10px;
-  padding: 10px 16px;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.btnSecondary:hover:not(:disabled) {
-  background: #ffffff;
-}
-
-.btnSecondary:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+  composes: btnSecondary from "../app/page.module.css";
 }
 
 .btnPrimary {
-  border: none;
-  background: var(--aa-primary, #d97757);
-  color: #fff;
-  border-radius: 10px;
-  padding: 10px 18px;
-  font-size: 13px;
-  font-weight: 800;
-  cursor: pointer;
-  box-shadow: 0 1px 0 color-mix(in oklab, var(--aa-primary, #d97757), #000 25%);
-  transition: background 0.15s ease, transform 0.1s ease;
-}
-
-.btnPrimary:hover {
-  background: var(--aa-primary-active, #c86a4c);
-}
-
-.btnPrimary:active {
-  transform: translateY(1px);
+  composes: button from "../app/page.module.css";
 }
 
 @media (max-width: 720px) {

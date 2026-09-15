@@ -12,6 +12,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
+from app.core.apm import background_task, set_transaction_name
 from app.core.config import settings
 from app.legacy.storage import get_legacy_storage_module
 from app.services.article_pipeline import (
@@ -24,6 +25,7 @@ from app.services.generation_queue import (
     clear_dedup,
     dequeue_blocking,
     generation_slot,
+    user_generation_slot,
     queue_depth,
     close_redis,
 )
@@ -176,33 +178,38 @@ async def _handle_article_generate(payload: dict) -> None:
         pass
 
     try:
-        async with generation_slot():
-            # Transition to "generating" once a worker slot is acquired.
-            try:
-                if hasattr(st, "patch_article_fields"):
-                    await run_sync(st.patch_article_fields, aid, {"status": "generating"})
-            except Exception:
-                pass
+        # Serialize this account's own generation jobs (one at a time) before
+        # competing for the shared global slot pool, so a burst of requests from
+        # one user can't starve every other account's throughput (F1.6).
+        async with user_generation_slot(uid):
+            async with generation_slot():
+                # Transition to "generating" once a worker slot is acquired.
+                try:
+                    if hasattr(st, "patch_article_fields"):
+                        await run_sync(st.patch_article_fields, aid, {"status": "generating"})
+                except Exception:
+                    pass
 
-            mapped_products = payload.get("mapped_products")
-            mapped_products_list = mapped_products if isinstance(mapped_products, list) else None
-            mapped_pages = payload.get("mapped_pages")
-            mapped_pages_list = mapped_pages if isinstance(mapped_pages, list) else None
+                mapped_products = payload.get("mapped_products")
+                mapped_products_list = mapped_products if isinstance(mapped_products, list) else None
+                mapped_pages = payload.get("mapped_pages")
+                mapped_pages_list = mapped_pages if isinstance(mapped_pages, list) else None
 
-            await execute_article_generation(
-                st=st,
-                user=user,
-                proj=proj,
-                project_id=pid,
-                article_id=aid,
-                row=row,
-                writing_prompt_id=payload.get("writing_prompt_id"),
-                generate_image=bool(payload.get("generate_image", True)),
-                image_prompt_id=payload.get("image_prompt_id"),
-                focus_keyphrase_override=payload.get("focus_keyphrase"),
-                mapped_products=mapped_products_list,
-                mapped_pages=mapped_pages_list,
-            )
+                await execute_article_generation(
+                    st=st,
+                    user=user,
+                    proj=proj,
+                    project_id=pid,
+                    article_id=aid,
+                    row=row,
+                    writing_prompt_id=payload.get("writing_prompt_id"),
+                    generate_image=bool(payload.get("generate_image", True)),
+                    image_prompt_id=payload.get("image_prompt_id"),
+                    focus_keyphrase_override=payload.get("focus_keyphrase"),
+                    mapped_products=mapped_products_list,
+                    mapped_pages=mapped_pages_list,
+                    reference_source_content=payload.get("reference_source_content"),
+                )
     except Exception as exc:
         from fastapi import HTTPException as FastAPIHTTPException
 
@@ -260,16 +267,17 @@ async def _handle_image_regenerate(payload: dict) -> None:
         pass
 
     try:
-        async with generation_slot():
-            await execute_featured_image_regeneration(
-                st=st,
-                user=user,
-                proj=proj,
-                article_id=aid,
-                row=row,
-                image_prompt_id=payload.get("image_prompt_id"),
-                custom_image_prompt=(payload.get("custom_image_prompt") or "").strip() or None,
-            )
+        async with user_generation_slot(uid):
+            async with generation_slot():
+                await execute_featured_image_regeneration(
+                    st=st,
+                    user=user,
+                    proj=proj,
+                    article_id=aid,
+                    row=row,
+                    image_prompt_id=payload.get("image_prompt_id"),
+                    custom_image_prompt=(payload.get("custom_image_prompt") or "").strip() or None,
+                )
     except Exception as exc:
         log.exception("Image regeneration failed for article %s", aid)
         detail = getattr(exc, "detail", None)
@@ -309,7 +317,13 @@ async def _handle_cluster_generate_all(payload: dict) -> None:
         raise RuntimeError("Project not found")
 
     svc = TopicClusterService(project=proj, owner_user_id=uid)
-    async with generation_slot():
+    # No outer generation_slot() here: generate_all() already acquires it per
+    # topic (it generates topics one at a time internally). Wrapping the whole
+    # multi-article batch in a single slot as well used to hold a global permit
+    # for the entire batch's duration (potentially tens of minutes), silently
+    # cutting effective system-wide concurrency from max_concurrent_generations
+    # down to as low as 1 whenever any account ran "Generate All" (F1.6).
+    async with user_generation_slot(uid):
         await svc.generate_all(
             user=user,
             cluster_id=cid,
@@ -411,7 +425,12 @@ async def _handle_scheduled_post_now(payload: dict) -> None:
         await clear_dedup(dedup)
 
 
+@background_task(name="process_generation_job", group="GenerationWorker")
 async def process_generation_job(job: GenerationJob) -> None:
+    # I5.8: one APM transaction per job, named by kind, so article generation,
+    # image regen, and scheduled publish show up as distinct throughput/latency
+    # buckets instead of one lumped "process_generation_job" entity.
+    set_transaction_name(f"generation/{job.kind.value}", group="GenerationWorker")
     if job.kind == GenerationJobKind.SCHEDULED_PREP:
         await _handle_scheduled_prep(job.payload)
     elif job.kind == GenerationJobKind.SCHEDULED_POST_NOW:

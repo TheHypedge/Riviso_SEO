@@ -23,15 +23,25 @@ const isProduction = process.env.NODE_ENV === "production";
 // (plus data: for base64 previews) because article/featured images are fetched
 // from arbitrary customer WordPress/Shopify sites, not a fixed set of domains.
 // connect-src is scoped to self + Sentry's ingest hosts (Sentry no-ops without a
-// DSN, so this is a no-op allowance when unconfigured). frame-ancestors 'none'
-// backs up X-Frame-Options for browsers that honor CSP over the legacy header.
+// DSN, so this is a no-op allowance when unconfigured) + New Relic Browser's
+// beacon hosts (I5.8; same no-op-when-unconfigured contract — the agent itself
+// never loads without NEXT_PUBLIC_NEW_RELIC_* set, see instrumentation-client.ts).
+// No script-src entry is needed for New Relic: it ships as an npm package
+// bundled into our own JS, not loaded from js-agent.newrelic.com. frame-ancestors
+// 'none' backs up X-Frame-Options for browsers that honor CSP over the legacy header.
+//
+// 'unsafe-eval' is added to script-src in dev only: Next.js/Turbopack dev mode uses
+// eval() to reconstruct readable stack traces for HMR/debugging (harmless — React
+// never uses eval() in production builds). Without it the browser console logs a
+// "eval() is not supported" warning on every dev page load; it's cosmetic, but
+// there's no reason to carry it since dev's CSP has no bearing on prod's.
 const cspDirectives = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  `script-src 'self' 'unsafe-inline'${isProduction ? "" : " 'unsafe-eval'"}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: https:",
   "font-src 'self' data:",
-  "connect-src 'self' https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.sentry.io",
+  "connect-src 'self' https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.sentry.io https://bam.nr-data.net https://bam-cell.nr-data.net",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -52,6 +62,14 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
+  // Next's own rewrite proxy (used for every /api/* call, see rewrites() below)
+  // defaults to a 30s timeout and returns a bare "Internal Server Error" past
+  // that, independent of the backend's own request handling or the frontend
+  // fetch client's DEFAULT_API_TIMEOUT_MS. Slow-but-legitimate calls (e.g. AI
+  // image generation) can exceed 30s, so match this to the client timeout.
+  experimental: {
+    proxyTimeout: 120_000,
+  },
   async headers() {
     return [
       {

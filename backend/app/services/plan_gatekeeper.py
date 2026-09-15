@@ -25,6 +25,8 @@ class PlanAction(str, Enum):
     BULK_EXPORT = "bulk_export"
     CLUSTER_PLAN = "cluster_plan"
     CUSTOM_RESEARCH = "custom_research"
+    TECHNICAL_AUDIT = "technical_audit"
+    SEO_AUDIT = "seo_audit"
 
 
 def _parse_iso_utc(raw: str) -> datetime | None:
@@ -175,6 +177,18 @@ def check_plan_limits(*, st, user: dict, action: PlanAction, consume: bool = Tru
         ok, msg = st.consume_custom_research_usage(uid, month_limit=plan.get("max_custom_research_per_month"), amount=1)
         if not ok:
             raise HTTPException(status_code=403, detail={"error": "quota_exceeded", "message": msg or "Custom research limit reached."})
+        return
+
+    if action == PlanAction.TECHNICAL_AUDIT and consume and hasattr(st, "consume_technical_audit_usage"):
+        ok, msg = st.consume_technical_audit_usage(uid, month_limit=plan.get("max_technical_audits_per_month"), amount=1)
+        if not ok:
+            raise HTTPException(status_code=403, detail={"error": "quota_exceeded", "message": msg or "Technical Audit limit reached."})
+        return
+
+    if action == PlanAction.SEO_AUDIT and consume and hasattr(st, "consume_seo_audit_usage"):
+        ok, msg = st.consume_seo_audit_usage(uid, month_limit=plan.get("max_seo_audits_per_month"), amount=1)
+        if not ok:
+            raise HTTPException(status_code=403, detail={"error": "quota_exceeded", "message": msg or "SEO Audit limit reached."})
         return
 
 

@@ -78,6 +78,8 @@ _semaphore: asyncio.Semaphore | None = None
 _local_job_queue: asyncio.Queue[GenerationJob] | None = None
 _redis_client: Any | None = None
 _redis_unavailable = False
+_user_locks: dict[str, asyncio.Lock] = {}
+_user_locks_guard: asyncio.Lock | None = None
 
 
 def get_generation_semaphore() -> asyncio.Semaphore:
@@ -97,6 +99,35 @@ async def generation_slot():
         yield
     finally:
         sem.release()
+
+
+def _get_user_locks_guard() -> asyncio.Lock:
+    global _user_locks_guard
+    if _user_locks_guard is None:
+        _user_locks_guard = asyncio.Lock()
+    return _user_locks_guard
+
+
+@asynccontextmanager
+async def user_generation_slot(user_id: str):
+    """
+    Serialize one account's own generation jobs (one at a time), while different
+    accounts still compete freely for the shared ``generation_slot()`` pool.
+
+    Must be acquired BEFORE ``generation_slot()`` in every caller: that way a
+    user's second queued job blocks on its own per-user lock instead of parking
+    inside a global slot while it waits, which would otherwise let one account's
+    burst of requests (e.g. bulk-generating N articles at once) starve every
+    other account of the shared max_concurrent_generations budget.
+
+    Per-process only, same as generation_slot() (see module docstring) — fine
+    under this app's one-worker-process deployment.
+    """
+    uid = (user_id or "").strip() or "anonymous"
+    async with _get_user_locks_guard():
+        lock = _user_locks.setdefault(uid, asyncio.Lock())
+    async with lock:
+        yield
 
 
 def _get_local_job_queue() -> asyncio.Queue[GenerationJob]:

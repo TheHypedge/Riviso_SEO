@@ -146,3 +146,103 @@ GET https://<host>/api/health/ready  (requires a valid access token)
 
 **Suggested SLO for 50 users:** 99.5% monthly availability on `/api/health`, p95 API
 latency < 1s for non-generation endpoints.
+
+---
+
+## I5.8 — APM + Real User Monitoring (New Relic)
+
+Full request/transaction tracing (APM, backend) and real-user page/AJAX/error
+monitoring (Browser, frontend), layered on top of Sentry (errors) and
+Prometheus (SLO metrics) — same **opt-in via env** contract: with no key set,
+neither agent loads.
+
+### Backend — APM
+
+| Process | Command | Enable with |
+|---------|---------|-------------|
+| API (`uvicorn app.main:app`) | wrapped by `backend/docker-entrypoint.sh` | `NEW_RELIC_LICENSE_KEY` |
+| Worker (`python -m app.run_background`) | same entrypoint | `NEW_RELIC_LICENSE_KEY` |
+| Scheduler (`python -m app.run_background`) | same entrypoint | `NEW_RELIC_LICENSE_KEY` |
+
+`docker-entrypoint.sh` prefixes the container's `CMD` with `newrelic-admin
+run-program` only when `NEW_RELIC_LICENSE_KEY` is present — with it unset,
+`docker compose up --build` behaves exactly as before New Relic was added
+(no agent import, no startup overhead). `backend/newrelic.ini` is checked in
+with a placeholder `license_key`; the env var always takes precedence, so the
+file never carries a secret.
+
+FastAPI/Starlette web transactions are captured **automatically** by the
+agent's import hooks — no code changes. httpx, pymongo, and redis calls
+(OpenAI, MongoDB, the generation queue) are auto-instrumented too, so a
+traced request shows its full downstream fan-out.
+
+The worker and scheduler loops are plain asyncio (no web framework), so they
+get no automatic transactions. Two entry points are wrapped explicitly with
+`app/core/apm.py`'s `@background_task()`:
+
+- `process_generation_job()` (`app/services/generation_worker.py`) — one
+  transaction per dequeued job, renamed by kind
+  (`generation/article_generate`, `generation/image_regenerate`, …).
+- `execute_scheduled_job_post_now()` (`app/services/scheduler.py`) — one
+  transaction per scheduled WordPress/Shopify publish.
+
+Each container reports as its **own APM entity** (`Riviso API`, `Riviso
+Worker`, `Riviso Scheduler` — set via `NEW_RELIC_APP_NAME` per service in
+`docker-compose.yml`) rather than one entity with API and background
+throughput conflated.
+
+**`newrelic.ini` must never contain a literal `license_key` or `app_name`
+line, even a placeholder.** The Python agent's ini loader overwrites its
+env-var-derived settings with whatever's literally written in the file —
+there is no `%(VAR)s` interpolation and no "env var wins" behavior, despite
+that being the intuitive assumption (it was this repo's original, wrong
+assumption, caught only after a real license key was rejected twice with
+`newrelic.agent.global_settings()` showing the agent was actually sending
+the ini's placeholder text as the license key, silently, the whole time).
+Both settings are sourced exclusively from `NEW_RELIC_LICENSE_KEY`
+(`backend/.env`) and `NEW_RELIC_APP_NAME` (`docker-compose.yml`, per
+service) — see the top-of-file comment in `newrelic.ini` before touching
+either of those two keys.
+
+To add a new instrumented background entry point, decorate it:
+
+```python
+from app.core.apm import background_task
+
+@background_task(name="my_new_job", group="SomeGroup")
+async def my_new_job(...): ...
+```
+
+### Frontend — Browser (RUM)
+
+`frontend/instrumentation-client.ts` initialises `@newrelic/browser-agent`'s
+`browser-agent` loader (New Relic's "Pro + SPA" feature set — tracks
+client-side route changes between Next.js pages, not just the first page
+load) when all three are set:
+
+- `NEXT_PUBLIC_NEW_RELIC_ACCOUNT_ID`
+- `NEXT_PUBLIC_NEW_RELIC_LICENSE_KEY` (Browser's key is meant to be public —
+  it ships in every visitor's JS bundle and can only submit RUM data, unlike
+  the backend APM license key, which is a real secret and stays out of any
+  `NEXT_PUBLIC_*`/committed file)
+- `NEXT_PUBLIC_NEW_RELIC_APP_ID`
+
+Set these in the Vercel project's environment variables (Production +
+Preview) — there is no `frontend/.env.example` in this repo (Sentry's
+frontend vars aren't templated there either); for local dev, put them in a
+gitignored `frontend/.env.local`.
+
+The npm-package loader ships as part of our own JS bundle (webpack), unlike
+the copy/paste `<script src="https://js-agent.newrelic.com/...">` snippet —
+so no `script-src` CSP change was needed. `next.config.ts`'s `connect-src`
+was extended with New Relic's beacon hosts (`bam.nr-data.net`,
+`bam-cell.nr-data.net`) so the agent's background POSTs aren't blocked by CSP.
+
+### Linking browser to backend (end-to-end traces)
+
+In the New Relic UI, open the `Riviso API` APM entity → **Add data** →
+**Browser** → link (or create) the Browser app, using the same account. With
+`distributed_tracing.enabled` on both sides (already set in `newrelic.ini`
+and `instrumentation-client.ts`), a single trace can be followed from a
+browser page load/click through the API request into the OpenAI/Mongo/
+WordPress calls it triggers.

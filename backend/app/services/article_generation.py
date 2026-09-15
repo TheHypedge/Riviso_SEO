@@ -64,6 +64,7 @@ def estimate_bundle_tokens(
     product_context: str | None = None,
     generate_image: bool,
     image_prompt_text: str | None = None,
+    reference_source_content: str | None = None,
     max_completion_tokens: int = 6_000,
 ) -> int:
     """
@@ -82,6 +83,7 @@ def estimate_bundle_tokens(
         product_context=product_context,
         shopify_product_mapping="Shopify product context" in (product_context or ""),
         wordpress_content_mapping="WordPress internal page" in (product_context or ""),
+        reference_source_content=reference_source_content,
     )
     estimate = estimate_generation_token_budget(
         system_prompt=sys,
@@ -156,6 +158,7 @@ def build_generation_messages(
     product_context: str | None = None,
     shopify_product_mapping: bool = False,
     wordpress_content_mapping: bool = False,
+    reference_source_content: str | None = None,
 ) -> tuple[str, str]:
     """Build (system, user) chat payloads — single source of truth for token estimation and generation."""
     bi = (brand_identity or "").strip()
@@ -195,6 +198,21 @@ def build_generation_messages(
             "- Include at least one natural inline internal link in the article body.\n"
             "- Do not invent posts, slugs, or URLs that are not in the context.\n"
         )
+
+    src = (reference_source_content or "").strip()
+    source_material_rules = (
+        "\n\nSOURCE MATERIAL — FAITHFUL REWRITE REQUIRED (critical, follow exactly):\n"
+        "- The user message includes the full extracted content of an existing source article. "
+        "This is the factual basis for this article, not background trivia.\n"
+        "- Preserve every fact, data point, statistic, name, date, example, and argument from the source. "
+        "Do not omit material information and do not invent facts, numbers, or examples that are not in the source.\n"
+        "- The intent and information conveyed must match the source exactly — same substance, same conclusions.\n"
+        "- However, express all of it in completely original wording, sentence structure, and paragraph "
+        "organization. Never copy sentences or distinctive phrases verbatim from the source — rewrite every "
+        "idea in your own words so the final text is not plagiarism.\n"
+        "- This is a faithful rewrite of the source for plagiarism-avoidance, NOT a shortened summary that "
+        "drops details, and NOT a new article merely inspired by the same general topic.\n"
+    ) if src else ""
 
     is_compiled = _is_compiled_template(writing_prompt_text)
 
@@ -263,6 +281,7 @@ def build_generation_messages(
         f"{format_banned_phrases_for_prompt()}"
         f"{flavor}"
         f"{product_rules}"
+        f"{source_material_rules}"
     )
 
     up = _apply_placeholders(
@@ -281,6 +300,11 @@ def build_generation_messages(
     )
     if platform_mapping and pc:
         user = f"{user}\n\n{pc}\n"
+    if src:
+        user = (
+            f"{user}\n\nSource article to rewrite (preserve every fact and data point below, "
+            f"but use fully original wording — do not copy sentences verbatim):\n{src}\n"
+        )
     return sys, user
 
 
@@ -339,6 +363,7 @@ async def generate_article_bundle(
     reference_image_url: str | None = None,
     shopify_mapped_products: list[dict[str, str]] | None = None,
     wordpress_mapped_pages: list[dict[str, str]] | None = None,
+    reference_source_content: str | None = None,
     **extra_kwargs: Any,
 ) -> dict:
     """
@@ -399,6 +424,7 @@ async def generate_article_bundle(
         product_context=product_context,
         shopify_product_mapping=shopify_mapping or bool(shopify_for_injection),
         wordpress_content_mapping=wp_mapping or bool(wp_for_injection),
+        reference_source_content=reference_source_content,
     )
 
     obj = await client.chat_json(model=settings.openai_text_model, system=sys, user=user)

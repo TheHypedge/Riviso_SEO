@@ -288,6 +288,36 @@ def init_db() -> None:
     # research_cache TTL: expire stale cached SERP/research responses (expires_at is a BSON date).
     db.research_cache.create_index("expires_at", expireAfterSeconds=0, sparse=True)
 
+    # I8.1: indexes for query shapes that were still full collection scans --
+    # notifications and project_activity had no indexes defined at all, and
+    # users.created_at is the admin listing's sort key with nothing backing it.
+    db.users.create_index("created_at")
+    db.notifications.create_index([("user_id", 1), ("created_at", -1)])
+    db.project_activity.create_index([("project_id", 1), ("created_at", -1)])
+
+    # serp_index: shared cross-project keyword/SERP store (storage.py get_serp_index_entry /
+    # upsert_serp_index_entry). `_id` is already the unique (gl, hl, query_norm) key; this
+    # backs the background serp_refresh_worker's staleness scan.
+    db.serp_index.create_index("fetched_at")
+
+    # technical_audits: Site Audit Phase 1 (PageSpeed Insights) -- append-only, one doc per
+    # run; "latest"/"history" both sort on created_at.
+    db.technical_audits.create_index([("project_id", 1), ("created_at", -1)])
+
+    # seo_audits + friends: Site Audit "SEO Audit" crawler -- one immutable snapshot per
+    # crawl run, spread across 4 collections (storage.py's SEO Audit crawler section has
+    # the full read/write API). Indexes match backend/docs/SEO-Audit-Design.md §87.
+    db.seo_audits.create_index([("project_id", 1), ("started_at", -1)])
+    db.seo_audits.create_index([("status", 1), ("queued_at", 1)])
+    db.seo_audit_urls.create_index([("audit_id", 1), ("normalized_url", 1)], unique=True)
+    db.seo_audit_urls.create_index([("audit_id", 1), ("status_code", 1)])
+    db.seo_audit_urls.create_index([("audit_id", 1), ("indexability", 1)])
+    db.seo_audit_urls.create_index([("audit_id", 1), ("fetched_at", -1)])
+    db.seo_audit_links.create_index([("audit_id", 1), ("target_url", 1)])
+    db.seo_audit_links.create_index([("audit_id", 1), ("source_url_id", 1)])
+    db.seo_audit_issues.create_index([("audit_id", 1), ("rule_id", 1)])
+    db.seo_audit_issues.create_index([("audit_id", 1), ("severity", 1)])
+
 
 def remove_scoped_session() -> None:
     """No-op: kept for compatibility with any teardown hooks."""

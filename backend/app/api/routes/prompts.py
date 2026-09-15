@@ -93,18 +93,23 @@ _DEFAULT_WRITING_PROMPT_TEXT = (
     "- Pillar topics: 4,500–6,000 words\n"
     "Do not add filler — every section must contribute unique value.\n\n"
     "ARTICLE STRUCTURE\n\n"
-    "Write in the following order:\n\n"
-    "INTRODUCTION (3–4 paragraphs)\n"
+    "Write in the following order. These are structural instructions for you, the writer, "
+    "not literal headings to print — never use a generic template label ('Introduction', "
+    "'Quick Answer', 'TL;DR', 'Main Content', 'Conclusion', 'Summary') as an actual heading "
+    "in the output. Every visible heading must be specific to this article's topic.\n\n"
+    "OPENING (3–4 paragraphs, no heading — start directly with prose under the title)\n"
     "- Immediately identify the user's problem or the situation the reader is in.\n"
     "- Explain why the topic matters.\n"
     "- Establish relevance and credibility.\n"
     "- Naturally include the focus keyphrase within the first 100 words.\n\n"
-    "QUICK ANSWER (50–100 words)\n"
-    "Provide a concise, direct answer to the primary search query immediately after the introduction. "
-    "Optimised for featured snippets, Google AI Overviews, Perplexity summaries, and voice search. "
-    "Use a clear callout or bold label.\n\n"
+    "DIRECT-ANSWER LEAD-IN (50–100 words, no heading)\n"
+    "Immediately after the opening, give a concise, direct answer to the primary search query "
+    "as a bolded lead sentence or short paragraph woven into the text — not a separate section "
+    "with its own heading or callout box. Optimised for featured snippets, Google AI Overviews, "
+    "Perplexity summaries, and voice search.\n\n"
     "MAIN CONTENT (5–8 H2 sections)\n"
-    "Each H2 must:\n"
+    "Each H2 must use a specific, topic-relevant heading (never a generic label like 'Main "
+    "Content' or 'Overview') and:\n"
     "- Cover a distinct aspect of the topic.\n"
     "- Begin with a direct answer paragraph of 40–80 words (required for AEO and AI Overview eligibility).\n"
     "- Contain at least 400–600 words.\n"
@@ -165,10 +170,21 @@ _DEFAULT_WRITING_PROMPT_TEXT = (
     "Each answer: 50–120 words, direct, specific, and optimised for AI extraction and featured snippets.\n\n"
     "KEY TAKEAWAYS\n"
     "8–10 bullet points summarising the most important insights from the article.\n\n"
-    "CONCLUSION (2–3 paragraphs)\n"
+    "CLOSING (2–3 paragraphs)\n"
     "Summarise the key insights and reinforce the main takeaway. No promotional language. "
-    "No aggressive calls-to-action."
+    "No aggressive calls-to-action. Give this section either no heading, or a specific, "
+    "topic-relevant one — never the literal words 'Conclusion', 'Summary', or 'In Conclusion'."
 )
+
+# Fingerprint of the pre-fix default prompt's structure block (before the "no literal
+# Introduction/Quick Answer/Conclusion headings" fix). Several historical revisions of
+# _DEFAULT_WRITING_PROMPT_TEXT exist in already-seeded project rows (e.g. one predating
+# the em-dash/semicolon/colon ban lines added separately), so an exact full-text match
+# missed most of them — this checks for the distinctive old section markers instead,
+# which every revision shares. A prompt a user has since edited to remove/reword these
+# exact markers is correctly left alone; one that still has all three is still the
+# untouched seeded default, whatever else around it might differ.
+_STALE_DEFAULT_PROMPT_MARKERS = ("INTRODUCTION (3", "QUICK ANSWER (50", "CONCLUSION (2")
 
 
 def _ensure_default_prompt(*, st, project_id: str, proj: dict) -> dict:
@@ -205,7 +221,17 @@ def _ensure_default_prompt(*, st, project_id: str, proj: dict) -> dict:
 
 
 def migrate_all_default_prompts(st) -> int:
-    """Replace legacy default prompt text across all projects. Returns count of projects updated."""
+    """
+    Refresh auto-seeded default prompt rows across all projects. Returns count of
+    projects updated.
+
+    Two independent triggers, both content-based rather than a blanket "any prompt
+    named X" overwrite (which would risk clobbering a user's own edits kept under
+    the same name):
+    - name == the old legacy sentinel (pre-rename default, no longer seeded) — rename + refresh.
+    - text carries every marker in _STALE_DEFAULT_PROMPT_MARKERS (still the untouched
+      seeded default, whatever its name or exact historical revision) — refresh text only.
+    """
     try:
         projects = st.load_projects() or []
     except Exception:
@@ -220,8 +246,13 @@ def migrate_all_default_prompts(st) -> int:
         prompts = [p for p in (proj.get("prompts") or []) if isinstance(p, dict)]
         updated = False
         for p in prompts:
-            if isinstance(p, dict) and (p.get("name") or "").strip() == _LEGACY_WRITING_PROMPT_NAME:
+            if not isinstance(p, dict):
+                continue
+            if (p.get("name") or "").strip() == _LEGACY_WRITING_PROMPT_NAME:
                 p["name"] = _DEFAULT_WRITING_PROMPT_NAME
+                p["text"] = _DEFAULT_WRITING_PROMPT_TEXT
+                updated = True
+            elif all(marker in (p.get("text") or "") for marker in _STALE_DEFAULT_PROMPT_MARKERS):
                 p["text"] = _DEFAULT_WRITING_PROMPT_TEXT
                 updated = True
         if updated:

@@ -124,6 +124,9 @@ export type PlanPublic = {
   allow_bulk_upload?: boolean | null;
   max_cluster_plans_per_month?: number | null;
   max_custom_research_per_month?: number | null;
+  max_technical_audits_per_month?: number | null;
+  max_seo_audits_per_month?: number | null;
+  max_seo_audit_urls_per_crawl?: number | null;
   max_context_links?: number | null;
   max_article_image_regenerations?: number | null;
   is_trial_plan?: boolean | null;
@@ -197,6 +200,8 @@ export type ProjectFeatureLimits = {
   is_admin: boolean;
   cluster_plans: MonthlyFeatureLimit;
   custom_research: MonthlyFeatureLimit;
+  technical_audit?: MonthlyFeatureLimit;
+  seo_audit?: MonthlyFeatureLimit;
   scheduled_articles?: MonthlyFeatureLimit;
   export_articles?: MonthlyFeatureLimit;
   context_links: CountFeatureLimit;
@@ -336,6 +341,225 @@ export type GscSitemapList = {
   property_url?: string | null;
   suggested_sitemap_url?: string | null;
   sitemaps: GscSitemap[];
+};
+
+/* --- Site Audit: Technical Audit (PageSpeed Insights) -------------------- */
+
+export type TechnicalAuditCwvEntry = {
+  display_value?: string | null;
+  numeric_value?: number | null;
+  status?: "good" | "needs_improvement" | "poor" | null;
+  source?: "field" | "lab" | null;
+};
+
+export type TechnicalAuditOpportunity = {
+  id: string;
+  title?: string | null;
+  description?: string | null;
+  display_value?: string | null;
+  overall_savings_ms?: number | null;
+  overall_savings_bytes?: number | null;
+  affected_resources?: number;
+};
+
+export type TechnicalAuditFinding = {
+  id: string;
+  title?: string | null;
+  description?: string | null;
+  display_value?: string | null;
+  score?: number | null;
+};
+
+export type TechnicalAuditCategorySummary = { passed: number; warnings: number; failed: number };
+
+export type TechnicalAuditStrategyResult = {
+  scores: {
+    performance: number | null;
+    accessibility: number | null;
+    best_practices: number | null;
+    pagespeed_seo: number | null;
+  };
+  core_web_vitals: Record<string, TechnicalAuditCwvEntry>;
+  opportunities: TechnicalAuditOpportunity[];
+  diagnostics: TechnicalAuditFinding[];
+  accessibility_failures: TechnicalAuditFinding[];
+  best_practices_failures: TechnicalAuditFinding[];
+  accessibility_summary?: TechnicalAuditCategorySummary | null;
+  best_practices_summary?: TechnicalAuditCategorySummary | null;
+  fetch_time?: string | null;
+  final_url?: string | null;
+};
+
+export type TechnicalAuditRun = {
+  id: string;
+  project_id: string;
+  website_url: string;
+  created_at: string;
+  mobile: TechnicalAuditStrategyResult;
+  desktop: TechnicalAuditStrategyResult;
+};
+
+export type TechnicalAuditWebsite = { url: string | null; connected: boolean };
+
+export type TechnicalAuditLatestResponse = {
+  website: TechnicalAuditWebsite;
+  pagespeed_configured: boolean;
+  audit?: TechnicalAuditRun | null;
+  running?: boolean;
+  error?: string | null;
+};
+
+/* --- Site Audit: SEO Audit (Riviso crawler) ------------------------------ */
+
+export type SeoAuditStatus = "queued" | "running" | "analyzing" | "completed" | "partial" | "failed" | "cancelled";
+
+export type SeoAuditAnalysisProgress = {
+  stage: "loading_pages" | "mapping_links" | "evaluating_issues";
+  loaded: number | null;
+  total: number | null;
+};
+
+export type SeoAuditCounts = {
+  discovered: number;
+  fetched: number;
+  queued: number;
+  blocked: number;
+  failed: number;
+  internal: number;
+  external: number;
+  // Tracked incrementally during the crawl (added after older runs were stored,
+  // so absent on audits crawled before this field existed) so the KPI strip can
+  // show Broken Links / Redirects live instead of only after the run completes.
+  broken_links?: number;
+  redirects?: number;
+  // Same live treatment: indexability is known the moment a page is fetched, so
+  // this updates during the crawl instead of waiting for the whole pipeline.
+  indexability_breakdown?: { indexable: number; non_indexable: number; blocked: number; unknown: number };
+};
+
+export type SeoAuditHealthScore = {
+  overall: number | null;
+  crawlability: number | null;
+  indexability: number | null;
+  on_page: number | null;
+  internal_links: number | null;
+};
+
+export type SeoAuditSeverityCounts = { issue: number; warning: number; opportunity: number };
+
+export type SeoAuditRun = {
+  id: string;
+  project_id: string;
+  website_url: string;
+  status: SeoAuditStatus;
+  config: { max_urls: number; respect_robots: boolean };
+  queued_at: string;
+  started_at: string;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  counts: SeoAuditCounts;
+  health_score?: SeoAuditHealthScore | null;
+  severity_counts?: SeoAuditSeverityCounts | null;
+  orphan_count?: number;
+  indexability_breakdown?: { indexable: number; non_indexable: number; blocked: number; unknown: number } | null;
+  depth_distribution?: Record<string, number> | null;
+  redirects_count?: number | null;
+  broken_links_count?: number | null;
+  avg_response_time_ms?: number | null;
+  analysis_progress?: SeoAuditAnalysisProgress | null;
+  cancel_requested?: boolean;
+  error?: string | null;
+  // Set when this run was an incremental re-crawl seeded from a prior audit
+  // (only the homepage + genuinely new links were fetched fresh; everything
+  // else was carried forward, not re-verified this run).
+  previous_audit_id?: string | null;
+};
+
+export type SeoAuditWebsite = { url: string | null; connected: boolean };
+
+export type SeoAuditLatestResponse = {
+  website: SeoAuditWebsite;
+  audit: SeoAuditRun | null;
+  running: boolean;
+};
+
+export type SeoAuditUrlRow = {
+  id: string;
+  audit_id: string;
+  url: string;
+  normalized_url: string;
+  discovered_from: string | null;
+  discovery_type: string;
+  crawl_depth: number;
+  folder_depth: number;
+  content_type: string | null;
+  status_code: number | null;
+  status_text: string | null;
+  indexability: "indexable" | "non_indexable" | "blocked" | "unknown";
+  indexability_reason: string | null;
+  title: string | null;
+  title_length: number | null;
+  title_count: number;
+  meta_description: string | null;
+  meta_description_length: number | null;
+  meta_description_count: number;
+  h1: string | null;
+  h1_count: number;
+  h2: string | null;
+  h2_count: number;
+  canonical: string | null;
+  robots_meta: string | null;
+  x_robots_tag: string | null;
+  word_count: number | null;
+  response_time_ms: number | null;
+  redirect_url: string | null;
+  redirect_type: string | null;
+  redirect_hop_count: number;
+  inlink_count?: number;
+};
+
+export type SeoAuditUrlsPageResponse = { items: SeoAuditUrlRow[]; total: number; page: number; per_page: number };
+
+export type SeoAuditLinkRow = {
+  audit_id: string;
+  source_url_id: string;
+  target_url_id: string | null;
+  target_url: string;
+  type: string;
+  anchor_text: string;
+  rel: string[];
+  followable: boolean;
+  discovered_in: string;
+};
+
+export type SeoAuditUrlDetailResponse = {
+  url: SeoAuditUrlRow;
+  inlinks: SeoAuditLinkRow[];
+  outlinks: SeoAuditLinkRow[];
+  issues: SeoAuditIssue[];
+};
+
+export type SeoAuditIssue = {
+  id: string;
+  audit_id: string;
+  rule_id: string;
+  rule_version: string;
+  category: string;
+  severity: "issue" | "warning" | "opportunity";
+  priority: "high" | "medium" | "low";
+  url_id: string | null;
+  url: string;
+  evidence: Record<string, unknown>;
+  recommendation: string;
+};
+
+export type SeoAuditIssueGroup = {
+  rule_id: string;
+  category: string;
+  severity: "issue" | "warning" | "opportunity";
+  priority: "high" | "medium" | "low"; // shown as "Impact" in the UI
+  effort?: "high" | "medium" | "low"; // absent on issues stored before this field existed
+  affected_urls: number;
 };
 
 /* --- Feature 1: GSC ROI Dashboard ---------------------------------------- */
@@ -750,6 +974,7 @@ export type ArticleListItem = {
   project_id: string;
   title: string;
   status: string;
+  created_at?: string | null;
   keywords?: string[];
   focus_keyphrase?: string | null;
   gsc_status?: string | null;
@@ -787,6 +1012,7 @@ export type ArticlePublic = {
   shopify_article_id?: number | null;
   shopify_link?: string | null;
   wp_category_ids?: string | null;
+  source_url?: string | null;
 };
 
 export type ArticleListPage = {
@@ -894,8 +1120,18 @@ export type ArticleGenerationWaitOptions = {
 
 /** Poll generation-status while a worker runs (Mongo + queue can be slow). */
 const GENERATION_STATUS_TIMEOUT_MS = 45_000;
-/** Default max wait for queued article generation (matches long-running backend work). */
-const GENERATION_POLL_MAX_WAIT_MS = 600_000;
+/**
+ * Default max wait for queued article generation. The backend's own OpenAI read
+ * timeout for a single generation call can be up to 600s (gpt-5 models) on top of
+ * any queue wait if this account already has another generation in flight (the
+ * backend now serializes one account's own jobs to protect other accounts'
+ * throughput — see generation_queue.py's user_generation_slot). Matching this to
+ * exactly 600s left zero margin: a single call landing anywhere near its own
+ * worst case, with no queueing at all, would already report "timed out" while
+ * the backend was about to succeed. 900s covers one full-length generation plus
+ * realistic same-account queue wait.
+ */
+const GENERATION_POLL_MAX_WAIT_MS = 900_000;
 const POLL_INITIAL_INTERVAL_MS = 4000;
 const POLL_MAX_INTERVAL_MS = 12000;
 const POLL_BACKOFF_FACTOR = 1.35;
@@ -2411,7 +2647,10 @@ export const api = {
   },
   /** Fetch all pages for export (bounded). */
   async listArticlesAll(projectId: string, query: Omit<ArticleListQuery, "page" | "per_page"> = {}) {
-    const per_page = 500;
+    // listArticlesPage clamps per_page to 100 server-side (Math.min(..., 100)) regardless of
+    // what's requested here -- this constant must match that cap, or the lastPage math below
+    // computes too few pages and silently truncates the export past the first 100 rows.
+    const per_page = 100;
     const MAX_PAGES = 50;
     // P2.7: fetch page 1 to learn the total, then pull the remaining pages with
     // bounded concurrency instead of a serial 50-request waterfall.
@@ -2442,11 +2681,78 @@ export const api = {
   async consumeExportQuota(projectId: string) {
     return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/articles/export/consume`, { method: "POST" });
   },
-  async createArticle(projectId: string, title: string) {
+  async createArticle(
+    projectId: string,
+    params: { title: string; focus_keyphrase?: string; keywords?: string[] },
+  ) {
     return apiFetch<ArticlePublic>(`/api/projects/${projectId}/articles`, {
       method: "POST",
-      body: JSON.stringify({ title, keywords: [] }),
+      body: JSON.stringify({
+        title: params.title,
+        focus_keyphrase: params.focus_keyphrase || undefined,
+        keywords: params.keywords || [],
+      }),
     });
+  },
+  async suggestArticleMetadata(projectId: string, idea: string) {
+    return apiFetch<{ title: string; focus_keyphrase: string; keywords: string[] }>(
+      `/api/projects/${projectId}/articles/suggest-metadata`,
+      { method: "POST", body: JSON.stringify({ idea }) },
+    );
+  },
+  async createArticleFromSource(projectId: string, source_url: string) {
+    return apiFetch<ArticlePublic>(`/api/projects/${projectId}/articles/from-source`, {
+      method: "POST",
+      body: JSON.stringify({ source_url }),
+    });
+  },
+  async regenerateArticleSelection(
+    projectId: string,
+    articleId: string,
+    params: {
+      selected_text: string;
+      context_before?: string;
+      context_after?: string;
+      focus_keyphrase?: string;
+      keywords?: string[];
+    },
+  ) {
+    return apiFetch<{ rewritten: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/regenerate-selection`,
+      { method: "POST", body: JSON.stringify(params) },
+    );
+  },
+  async insertArticleMediaFromUrl(projectId: string, articleId: string, url: string) {
+    return apiFetch<{ id: string; url: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/media/from-url`,
+      { method: "POST", body: JSON.stringify({ url }) },
+    );
+  },
+  async insertArticleMediaUpload(projectId: string, articleId: string, file: File) {
+    const fd = new FormData();
+    fd.set("file", file);
+    const res = await apiFetchRaw(
+      `/api/projects/${projectId}/articles/${articleId}/media/upload`,
+      { method: "POST", body: fd },
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      let msg = text || `${res.status} ${res.statusText}`;
+      try {
+        const parsed = JSON.parse(text) as { detail?: unknown };
+        if (parsed && typeof parsed.detail === "string") msg = parsed.detail;
+      } catch {
+        // keep msg
+      }
+      throw new ApiError(msg, res.status);
+    }
+    return (await res.json()) as { id: string; url: string };
+  },
+  async generateArticleMediaAi(projectId: string, articleId: string, prompt: string) {
+    return apiFetch<{ id: string; url: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/media/generate`,
+      { method: "POST", body: JSON.stringify({ prompt }) },
+    );
   },
   async bulkDeleteArticles(projectId: string, article_ids: string[]) {
     return apiFetch<{ ok: true; deleted: number }>(`/api/projects/${projectId}/articles/bulk`, {
@@ -3587,6 +3893,65 @@ export const api = {
   },
   async adminGetUserWorkspace(userId: string) {
     return apiFetch<AdminWorkspaceResponse>(`/api/admin/users/${encodeURIComponent(userId)}/workspace`);
+  },
+
+  /* --- Site Audit: Technical Audit --------------------------------------- */
+  async getTechnicalAuditLatest(projectId: string, opts?: ApiFetchOptions) {
+    return apiFetch<TechnicalAuditLatestResponse>(`/api/projects/${projectId}/site-audit/technical/latest`, undefined, opts);
+  },
+  async getTechnicalAuditHistory(projectId: string) {
+    return apiFetch<{ runs: TechnicalAuditRun[] }>(`/api/projects/${projectId}/site-audit/technical/history`);
+  },
+  async runTechnicalAudit(projectId: string) {
+    return apiFetch<TechnicalAuditLatestResponse>(`/api/projects/${projectId}/site-audit/technical/run`, { method: "POST" });
+  },
+
+  /* --- Site Audit: SEO Audit (Riviso crawler) ----------------------------- */
+  async getSeoAuditLatest(projectId: string, opts?: ApiFetchOptions) {
+    return apiFetch<SeoAuditLatestResponse>(`/api/projects/${projectId}/site-audit/seo/latest`, undefined, opts);
+  },
+  async getSeoAuditHistory(projectId: string) {
+    return apiFetch<{ runs: SeoAuditRun[] }>(`/api/projects/${projectId}/site-audit/seo/history`);
+  },
+  async getSeoAudit(projectId: string, auditId: string) {
+    return apiFetch<SeoAuditRun>(`/api/projects/${projectId}/site-audit/seo/${auditId}`);
+  },
+  async runSeoAudit(projectId: string, opts?: { full?: boolean }) {
+    const qs = opts?.full ? "?full=true" : "";
+    return apiFetch<SeoAuditLatestResponse>(`/api/projects/${projectId}/site-audit/seo/run${qs}`, { method: "POST" });
+  },
+  async resumeSeoAudit(projectId: string, auditId: string) {
+    return apiFetch<SeoAuditLatestResponse>(`/api/projects/${projectId}/site-audit/seo/${auditId}/resume`, { method: "POST" });
+  },
+  async cancelSeoAudit(projectId: string, auditId: string) {
+    return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/site-audit/seo/${auditId}/cancel`, { method: "POST" });
+  },
+  async getSeoAuditRecentUrls(projectId: string, auditId: string, limit = 20) {
+    return apiFetch<{ items: SeoAuditUrlRow[] }>(`/api/projects/${projectId}/site-audit/seo/${auditId}/urls/recent?limit=${limit}`);
+  },
+  async getSeoAuditUrls(
+    projectId: string,
+    auditId: string,
+    params: { page?: number; per_page?: number; q?: string; status_code?: string; indexability?: string; sort?: string } = {},
+  ) {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set("page", String(params.page));
+    if (params.per_page) qs.set("per_page", String(params.per_page));
+    if (params.q) qs.set("q", params.q);
+    if (params.status_code) qs.set("status_code", params.status_code);
+    if (params.indexability) qs.set("indexability", params.indexability);
+    if (params.sort) qs.set("sort", params.sort);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<SeoAuditUrlsPageResponse>(`/api/projects/${projectId}/site-audit/seo/${auditId}/urls${suffix}`);
+  },
+  async getSeoAuditUrlDetail(projectId: string, auditId: string, urlId: string) {
+    return apiFetch<SeoAuditUrlDetailResponse>(`/api/projects/${projectId}/site-audit/seo/${auditId}/urls/${urlId}`);
+  },
+  async getSeoAuditIssueGroups(projectId: string, auditId: string) {
+    return apiFetch<{ groups: SeoAuditIssueGroup[] }>(`/api/projects/${projectId}/site-audit/seo/${auditId}/issues`);
+  },
+  async getSeoAuditIssuesForRule(projectId: string, auditId: string, ruleId: string) {
+    return apiFetch<{ issues: SeoAuditIssue[] }>(`/api/projects/${projectId}/site-audit/seo/${auditId}/issues?rule_id=${encodeURIComponent(ruleId)}`);
   },
 
   async researchIdeas(

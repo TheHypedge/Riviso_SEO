@@ -43,6 +43,8 @@ from app.middleware.request_id import RequestIdMiddleware
 from app.services.scheduler import scheduler_loop
 from app.services.generation_worker import start_generation_worker, stop_generation_worker
 from app.services.subscription_daily_reset import subscription_daily_reset_loop
+from app.services.serp_refresh_worker import serp_refresh_loop
+from app.services.seo_crawl_worker import seo_crawl_loop
 from app.middleware.plan_limits import PlanLimitsMiddleware
 from app.legacy.storage import get_legacy_storage_module
 
@@ -156,9 +158,10 @@ async def lifespan(app: FastAPI):
 
         asyncio.create_task(_run_listing_backfill())
 
-    # Migrate legacy default writing prompt ("Default writing prompt") to the
-    # new SEO/AEO/GEO version across all projects. Idempotent — only updates
-    # prompts whose name still matches the legacy sentinel.
+    # Refresh auto-seeded default writing prompts across all projects: renames the
+    # old legacy-named prompt, and separately upgrades any prompt still carrying
+    # the exact pre-heading-fix default text (see migrate_all_default_prompts()).
+    # Idempotent and content-based — never touches a prompt a user has edited.
     async def _run_default_prompt_migration() -> None:
         try:
             from app.api.routes.prompts import migrate_all_default_prompts
@@ -173,6 +176,8 @@ async def lifespan(app: FastAPI):
     scheduler_task: asyncio.Task | None = None
     generation_worker_task: asyncio.Task | None = None
     subscription_reset_task: asyncio.Task | None = None
+    serp_refresh_task: asyncio.Task | None = None
+    seo_crawl_task: asyncio.Task | None = None
 
     # Prefer Settings (pydantic-settings reads backend/.env) so the .env value wins
     # over any ENABLE_GENERATION_WORKER=0 set by the Procfile or a process manager.
@@ -188,6 +193,17 @@ async def lifespan(app: FastAPI):
         # (app.run_background) runs it instead.
         subscription_reset_task = asyncio.create_task(subscription_daily_reset_loop())
 
+    # Dedicated worker only (ENABLE_SERP_REFRESH_WORKER=0 everywhere else) — same
+    # singleton-job reasoning as the subscription reset above: one replica, not bound
+    # to the API process by default.
+    if settings.enable_serp_refresh_worker:
+        serp_refresh_task = asyncio.create_task(serp_refresh_loop())
+
+    # Dedicated worker only (ENABLE_SEO_CRAWL_WORKER=0 everywhere else) -- same
+    # singleton-job reasoning as serp-refresh above.
+    if settings.enable_seo_crawl_worker:
+        seo_crawl_task = asyncio.create_task(seo_crawl_loop())
+
     yield
 
     if subscription_reset_task:
@@ -202,6 +218,18 @@ async def lifespan(app: FastAPI):
         scheduler_task.cancel()
         try:
             await scheduler_task
+        except asyncio.CancelledError:
+            pass
+    if serp_refresh_task:
+        serp_refresh_task.cancel()
+        try:
+            await serp_refresh_task
+        except asyncio.CancelledError:
+            pass
+    if seo_crawl_task:
+        seo_crawl_task.cancel()
+        try:
+            await seo_crawl_task
         except asyncio.CancelledError:
             pass
 

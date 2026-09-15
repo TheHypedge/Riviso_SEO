@@ -56,6 +56,16 @@ services:
       REDIS_URL: redis://redis:6379/0
       ENABLE_SCHEDULER: "0"
       ENABLE_GENERATION_WORKER: "0"
+      ENABLE_SERP_REFRESH_WORKER: "0"
+      # I5.8 — New Relic APM. NEW_RELIC_LICENSE_KEY lives in backend/.env (secret,
+      # never committed); its absence keeps docker-entrypoint.sh's newrelic-admin
+      # wrap a no-op. One app name per service so API/worker/scheduler show as
+      # distinct APM entities instead of one entity with conflated throughput.
+      # NEW_RELIC_APP_NAME must ONLY be set here (or backend/.env for a non-Docker
+      # run) — never as a literal value inside newrelic.ini, see that file's
+      # top-of-file note for why.
+      NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
+      NEW_RELIC_APP_NAME: Riviso API
     volumes:
       - app_data:/app/data
     ports:
@@ -86,6 +96,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       ENABLE_GENERATION_WORKER: "1"
       ENABLE_SCHEDULER: "0"
+      ENABLE_SERP_REFRESH_WORKER: "0"
+      NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
+      NEW_RELIC_APP_NAME: Riviso Worker
     volumes:
       - app_data:/app/data
     depends_on:
@@ -115,12 +128,84 @@ services:
       REDIS_URL: redis://redis:6379/0
       ENABLE_SCHEDULER: "1"
       ENABLE_GENERATION_WORKER: "0"
+      ENABLE_SERP_REFRESH_WORKER: "0"
+      NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
+      NEW_RELIC_APP_NAME: Riviso Scheduler
     volumes:
       - app_data:/app/data
     depends_on:
       - redis
     healthcheck:
       test: ["CMD", "python", "-c", "import os,time; p='/tmp/riviso_scheduler.heartbeat'; d=os.path.getmtime(p) if os.path.exists(p) else 0; exit(0 if time.time()-d<120 else 1)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    mem_limit: 512m
+    cpus: 0.5
+
+  # ------------------------------------------------------------------
+  # SERP index refresh worker — keeps the shared cross-project keyword/SERP
+  # index (serp_index collection) fresh in the background. Disabled by
+  # default (ships opt-in); run exactly ONE replica.
+  # ------------------------------------------------------------------
+  serp-refresh:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.run_background"]
+    env_file:
+      - ./backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      ENABLE_SERP_REFRESH_WORKER: "1"
+      ENABLE_SCHEDULER: "0"
+      ENABLE_GENERATION_WORKER: "0"
+      NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
+      NEW_RELIC_APP_NAME: Riviso SERP Refresh
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; p='/tmp/riviso_serp_refresh.heartbeat'; d=os.path.getmtime(p) if os.path.exists(p) else 0; exit(0 if time.time()-d<120 else 1)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    mem_limit: 512m
+    cpus: 0.5
+
+  # ------------------------------------------------------------------
+  # SEO Audit crawl worker — runs the Site Audit "SEO Audit" crawler
+  # (seo_audits/seo_audit_urls/seo_audit_links/seo_audit_issues collections).
+  # Disabled by default (ships opt-in); run exactly ONE replica -- claims are
+  # atomic (find_one_and_update) so more replicas would only add idle pollers,
+  # not more throughput, until real usage justifies Phase "Scale" work.
+  # ------------------------------------------------------------------
+  seo-crawl:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.run_background"]
+    env_file:
+      - ./backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      ENABLE_SEO_CRAWL_WORKER: "1"
+      ENABLE_SCHEDULER: "0"
+      ENABLE_GENERATION_WORKER: "0"
+      ENABLE_SERP_REFRESH_WORKER: "0"
+      NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
+      NEW_RELIC_APP_NAME: Riviso SEO Crawl
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; p='/tmp/riviso_seo_crawl.heartbeat'; d=os.path.getmtime(p) if os.path.exists(p) else 0; exit(0 if time.time()-d<120 else 1)"]
       interval: 60s
       timeout: 5s
       retries: 3

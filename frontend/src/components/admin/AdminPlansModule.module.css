@@ -36,42 +36,23 @@
 }
 
 /* ── Buttons ──────────────────────────────────────────────────────────────── */
+/* Composes the canonical button (page.module.css) instead of redeclaring
+ * height/radius/hover/focus -- only the icon+label flex layout is local. */
 .btnPrimary {
+  composes: button from "../../app/page.module.css";
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 9px 18px;
-  background: var(--aa-primary);
-  color: #fff;
-  border: none;
-  border-radius: var(--aa-r-lg);
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s, transform 0.1s;
   white-space: nowrap;
 }
-.btnPrimary:hover { background: var(--aa-primary-hover); }
-.btnPrimary:active { transform: scale(0.97); }
-.btnPrimary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
 .btnSecondary {
+  composes: btnSecondary from "../../app/page.module.css";
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 9px 16px;
-  background: rgba(255,255,255,0.07);
-  color: var(--aa-ink);
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: var(--aa-r-lg);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
   white-space: nowrap;
 }
-.btnSecondary:hover { background: rgba(255,255,255,0.12); }
-.btnSecondary:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .btnGhost {
   display: inline-flex;
@@ -166,21 +147,23 @@
   grid-template-columns: repeat(3, 1fr);
   gap: 18px;
 }
+/* Flat-by-default (DESIGN.md): this sits in a grid, in page flow -- it
+ * doesn't escape it on hover, so it doesn't earn a shadow or a lift.
+ * Previously had both; now a border-color shift only, same language as
+ * the canonical button/input hover treatment elsewhere in the app. */
 .planCard {
   background: var(--aa-surface-card);
-  border: 1px solid rgba(255,255,255,0.07);
+  border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-lg);
   padding: 22px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s ease;
   position: relative;
 }
 .planCard:hover {
-  border-color: rgba(255,255,255,0.14);
-  transform: translateY(-2px);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.25);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
 }
 
 /* ── Plan card header ─────────────────────────────────────────────────────── */
@@ -573,19 +556,7 @@
   letter-spacing: 0.02em;
 }
 .fieldInput {
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 8px;
-  color: var(--aa-ink);
-  font-size: 13px;
-  padding: 9px 12px;
-  width: 100%;
-  box-sizing: border-box;
-  transition: border-color 0.12s;
-}
-.fieldInput:focus {
-  outline: none;
-  border-color: var(--aa-primary);
+  composes: fieldInput from "../../app/page.module.css";
 }
 .fieldInputError { border-color: rgba(248,113,113,0.6) !important; }
 .fieldHint {

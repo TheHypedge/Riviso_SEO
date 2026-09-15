@@ -1,0 +1,6 @@
+/* Project page's light-theme wrapper. Token values live in the shared
+ * ../lightTheme.module.css (single source of truth, composed here rather
+ * than redeclared -- see that file's comment). */
+.projectsLightTheme {
+  composes: lightTheme from "../lightTheme.module.css";
+}

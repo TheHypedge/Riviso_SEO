@@ -1,0 +1,64 @@
+/*
+ * Single source of truth for the new light-theme token overrides, mirroring
+ * darkTheme.module.css's `composes` pattern for the same reason that file
+ * documents: hand-duplicating this block per route is how tokens drifted
+ * before (--aa-primary-active mixed toward black in one file, white in
+ * another). Consumers `composes` this class instead of redeclaring it.
+ *
+ * The plain :root tokens are NOT a usable light theme as-is: --aa-surface-
+ * card is #141414 (dark) at :root regardless of theme -- by original design
+ * the base tokens assumed dark cards/chrome on an off-white canvas. This
+ * class instead targets the actual new light design system (see
+ * design reference/tailwind.config.tokens.js): white surfaces, off-white
+ * canvas, dark ink text.
+ *
+ * --aa-primary intentionally uses the new system's accent (#E15A2C) rather
+ * than the legacy ember (#d97757) used elsewhere in the still-dark app --
+ * both accents coexist during the migration; unifying them is a separate,
+ * whole-app decision.
+ */
+.lightTheme {
+  --aa-canvas: #fafaf8;
+  --aa-surface-soft: #f4f3f0;
+  --aa-surface-card: #ffffff;
+  --aa-surface-dark: #ffffff;
+  --aa-surface-dark-elevated: #f4f3f0;
+  --aa-surface-dark-soft: #f4f3f0;
+  /* Undeclared everywhere else in the app -- these three only ever existed
+     as hardcoded-dark var() fallbacks (e.g. `var(--aa-void-elevated,
+     #121214)`), never an actual :root declaration. Declaring them here only
+     affects this scope's descendants (CSS custom properties don't leak
+     upward or sideways), so it's safe alongside still-dark routes that hit
+     the same fallback-only rules elsewhere. */
+  --aa-void-elevated: #ffffff;
+  --aa-surface-raised: #ffffff;
+  --aa-surface: #ffffff;
+
+  --aa-ink: #1b1a17;
+  --aa-body: #1b1a17;
+  --aa-body-strong: #1b1a17;
+  --aa-muted: #6e6b64;
+  --aa-muted-soft: #a6a29a;
+  /* Semi-transparent black instead of a flat opaque gray -- blends with whatever
+     surface it sits on instead of drawing a hard ruled line, and hairline-soft is
+     now genuinely softer than hairline instead of the same value under two names. */
+  --aa-hairline: rgba(27, 26, 23, 0.08);
+  --aa-hairline-soft: rgba(27, 26, 23, 0.05);
+
+  --aa-primary: #e15a2c;
+  --aa-primary-hover: #c74c22;
+  --aa-primary-active: #c74c22;
+
+  --aa-on-primary: #ffffff;
+  --aa-on-dark: #1b1a17;
+  --aa-on-dark-soft: #6e6b64;
+
+  --background: var(--aa-canvas);
+  --foreground: var(--aa-surface-card);
+  --text-primary: var(--aa-ink);
+  --text-secondary: var(--aa-muted);
+  --button-secondary-border: var(--aa-hairline);
+
+  background: var(--aa-canvas);
+  color: var(--aa-ink);
+}

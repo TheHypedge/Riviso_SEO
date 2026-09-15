@@ -28,7 +28,7 @@ from app.core.article_duplicates import normalize_article_title_key, sync_projec
 from app.legacy.storage import get_legacy_storage_module
 from app.services.article_pipeline import execute_article_generation
 from app.services.generation_queue import generation_slot
-from app.services.research_scraper import extract_serp, fetch_google_serp_html
+from app.services.serp_index import get_or_fetch_serp
 from app.services.topic_cluster_llm import derive_topical_cluster_map
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 
@@ -162,8 +162,9 @@ class TopicClusterService:
         results: list[dict[str, Any]] = []
         fetched_at = 0.0
         try:
-            html = await fetch_google_serp_html(query=q, gl=gl, hl=hl, timeout_s=14.0)
-            ext = extract_serp(query=q, gl=gl, hl=hl, html=html)
+            # P: shared cross-project SERP index -- serves instantly on a recent hit for this
+            # exact (query, gl, hl), live-scrapes and writes back into the shared index on a miss.
+            ext = await get_or_fetch_serp(query=q, gl=gl, hl=hl, source="live", timeout_s=14.0)
             fetched_at = float(ext.fetched_at or 0.0)
             for r in (ext.results or [])[:10]:
                 if not isinstance(r, dict):

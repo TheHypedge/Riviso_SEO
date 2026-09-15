@@ -1095,6 +1095,28 @@ def consume_custom_research_usage(user_id: str, *, month_limit: int | None, amou
     )
 
 
+def consume_technical_audit_usage(user_id: str, *, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
+    return _consume_monthly_counter(
+        user_id,
+        month_field="usage_monthly_technical_audit_month",
+        count_field="usage_monthly_technical_audit_count",
+        month_limit=month_limit,
+        amount=amount,
+        limit_message="Monthly Technical Audit limit reached for your plan.",
+    )
+
+
+def consume_seo_audit_usage(user_id: str, *, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
+    return _consume_monthly_counter(
+        user_id,
+        month_field="usage_monthly_seo_audit_month",
+        count_field="usage_monthly_seo_audit_count",
+        month_limit=month_limit,
+        amount=amount,
+        limit_message="Monthly SEO Audit limit reached for your plan.",
+    )
+
+
 def check_llm_token_budget(user_id: str, estimated_tokens: int, month_limit: int | None) -> tuple[bool, str]:
     """
     Verify the user can afford ``estimated_tokens`` this month against ``month_limit``.
@@ -2370,6 +2392,7 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "featured_image_storage": (d.get("featured_image_storage") or "")[:16],
         "wp_post_id": wp_id,
         "wp_link": (d.get("wp_link") or "")[:2048],
+        "source_url": (d.get("source_url") or "")[:2048],
         "wp_rest_base": (d.get("wp_rest_base") or "")[:200],
         "wp_last_wp_status": (d.get("wp_last_wp_status") or "")[:32],
         "wp_modified_at": (d.get("wp_modified_at") or "")[:64],
@@ -2576,6 +2599,7 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "featured_image_regeneration_count",
             "featured_image_storage",
             "wp_link",
+            "source_url",
             "wp_rest_base",
             "wp_last_wp_status",
             "wp_modified_at",
@@ -2919,17 +2943,48 @@ def get_project_listing_by_id(project_id: str) -> dict[str, Any] | None:
     return _mongo_doc_to_project(doc)
 
 
+# P3.1: project access-row cache. get_project_access_row is read on nearly every
+# authenticated per-project request (require_project_access / async_require_project_access
+# with full=False). Shared by reference with the async Motor reader in
+# mongo_listings_async.fetch_project_access_row -- both sides import this same dict, so a
+# write from either path is visible everywhere.
+#
+# Only the lean access-row is cached, never get_project_by_id's full doc: that function also
+# backs the scheduler/generation-worker's live publish decisions, where a stale credential or
+# platform field could mean acting on the wrong target. Short TTL below is chosen because
+# collaborator add/remove is already a separate, uncached lookup (get_collaborator_for_user) --
+# not part of this cached row -- and this codebase has no "transfer project ownership" write
+# path, so the only real staleness case is "project deleted moments ago", bounded by the TTL.
+_PROJECT_ACCESS_CACHE: dict[str, tuple[float, dict[str, Any] | None]] = {}
+_PROJECT_ACCESS_CACHE_TTL_SECONDS = 30.0
+_project_access_cache_lock = threading.Lock()
+
+
+def _invalidate_project_access_cache(project_id: str | None = None) -> None:
+    global _PROJECT_ACCESS_CACHE
+    with _project_access_cache_lock:
+        if project_id:
+            _PROJECT_ACCESS_CACHE.pop((project_id or "").strip(), None)
+        else:
+            _PROJECT_ACCESS_CACHE = {}
+
+
 def get_project_access_row(project_id: str) -> dict[str, Any] | None:
-    """Auth + platform verification fields without heavy project blobs."""
+    """Auth + platform verification fields without heavy project blobs (cached ~30s)."""
     pid = (project_id or "").strip()
     if not pid:
         return None
+    cached = _PROJECT_ACCESS_CACHE.get(pid)
+    if cached is not None and cached[0] > time.time():
+        return cached[1]
     if _storage_mode != "mongo":
-        return get_project_listing_by_id(pid)
-    doc = get_db().projects.find_one({"id": pid}, _PROJECT_ACCESS_MONGO_PROJECTION)
-    if not isinstance(doc, dict):
-        return None
-    return _mongo_doc_to_project(doc)
+        row = get_project_listing_by_id(pid)
+    else:
+        doc = get_db().projects.find_one({"id": pid}, _PROJECT_ACCESS_MONGO_PROJECTION)
+        row = _mongo_doc_to_project(doc) if isinstance(doc, dict) else None
+    with _project_access_cache_lock:
+        _PROJECT_ACCESS_CACHE[pid] = (time.time() + _PROJECT_ACCESS_CACHE_TTL_SECONDS, row)
+    return row
 
 
 def get_project_shopify_catalog_doc(project_id: str) -> dict[str, Any] | None:
@@ -3336,9 +3391,13 @@ def load_wp_published_articles_for_project(project_id: str, limit: int = 500) ->
                 {"wp_post_id": {"$not": {"$in": [None, 0, ""]}}},
             ],
         }
+        # Sync pulls full article bodies (needed for the content-drift check) for every
+        # published article in one call. Explicit batch_size keeps each round trip to
+        # Atlas small instead of one unbounded fetch, so a large project or a slow moment
+        # on the connection doesn't blow the whole request past socketTimeoutMS.
         return [
             _normalize_article_dict(dict(a))
-            for a in get_db().articles.find(query, {"_id": 0}).limit(limit)
+            for a in get_db().articles.find(query, {"_id": 0}).batch_size(25).limit(limit)
         ]
     # JSON fallback
     rows = [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
@@ -3378,6 +3437,89 @@ def load_articles_by_ids_for_project(project_id: str, article_ids: list[str]) ->
         "created_at": 1,
     }
     for doc in get_db().articles.find({"project_id": pid, "id": {"$in": aids}}, stub_proj):
+        if isinstance(doc, dict):
+            aid = (doc.get("id") or "").strip()
+            if aid:
+                out[aid] = dict(doc)
+    return out
+
+
+# P4.1: dedicated projection for the WordPress "sync linked articles" bulk operation --
+# build_article_updates_from_wp_post (wordpress_sync.py) diffs against the article body,
+# WP-status/meta fields, and rest_base, none of which are in load_articles_by_ids_for_project's
+# lean stub. A separate function keeps that shared stub's payload size unchanged for its other
+# (bulk-schedule / bulk-delete-conflict-check) callers.
+_WP_RESYNC_MONGO_PROJECTION: dict[str, int] = {
+    "_id": 0,
+    "id": 1,
+    "title": 1,
+    "article": 1,
+    "wp_post_id": 1,
+    "wp_link": 1,
+    "wp_rest_base": 1,
+    "wp_last_wp_status": 1,
+    "meta_title": 1,
+    "meta_description": 1,
+    "focus_keyphrase": 1,
+}
+
+
+def load_articles_for_wp_resync(project_id: str, article_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Batch read of the fields WordPress resync's change-detection needs, keyed by id."""
+    pid = (project_id or "").strip()
+    aids = sorted({(x or "").strip() for x in (article_ids or []) if (x or "").strip()})
+    if not pid or not aids:
+        return {}
+    if _storage_mode != "mongo":
+        out: dict[str, dict[str, Any]] = {}
+        for a in _load_json_list("articles.json"):
+            if not isinstance(a, dict):
+                continue
+            aid = (a.get("id") or "").strip()
+            if aid in aids and (a.get("project_id") or "").strip() == pid:
+                out[aid] = _normalize_article_dict(a)
+        return out
+    out: dict[str, dict[str, Any]] = {}
+    for doc in get_db().articles.find({"project_id": pid, "id": {"$in": aids}}, _WP_RESYNC_MONGO_PROJECTION):
+        if isinstance(doc, dict):
+            aid = (doc.get("id") or "").strip()
+            if aid:
+                out[aid] = dict(doc)
+    return out
+
+
+# P4.2: dedicated projection for cluster_internal_link_service.py's sibling/pillar lookups --
+# is_article_live_on_wordpress needs wp_last_wp_status + status, article_to_mapped_page needs
+# image_url as an image fallback -- neither is in load_articles_by_ids_for_project's lean stub.
+_CLUSTER_LINKS_MONGO_PROJECTION: dict[str, int] = {
+    "_id": 0,
+    "id": 1,
+    "title": 1,
+    "status": 1,
+    "wp_link": 1,
+    "wp_post_id": 1,
+    "wp_last_wp_status": 1,
+    "image_url": 1,
+}
+
+
+def load_articles_for_cluster_links(project_id: str, article_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Batch read of the fields cluster sibling/pillar-link resolution needs, keyed by id."""
+    pid = (project_id or "").strip()
+    aids = sorted({(x or "").strip() for x in (article_ids or []) if (x or "").strip()})
+    if not pid or not aids:
+        return {}
+    if _storage_mode != "mongo":
+        out: dict[str, dict[str, Any]] = {}
+        for a in _load_json_list("articles.json"):
+            if not isinstance(a, dict):
+                continue
+            aid = (a.get("id") or "").strip()
+            if aid in aids and (a.get("project_id") or "").strip() == pid:
+                out[aid] = _normalize_article_dict(a)
+        return out
+    out: dict[str, dict[str, Any]] = {}
+    for doc in get_db().articles.find({"project_id": pid, "id": {"$in": aids}}, _CLUSTER_LINKS_MONGO_PROJECTION):
         if isinstance(doc, dict):
             aid = (doc.get("id") or "").strip()
             if aid:
@@ -4133,6 +4275,515 @@ def load_research_ideas_runs(*, project_id: str, limit: int = 30) -> list[dict[s
     return [dict(d) for d in cur]
 
 
+# ----------------------------
+# Technical Audit runs (Site Audit, Phase 1) -- append-only, same shape as
+# research_ideas_runs above: one document per run, "latest" = most recent by created_at.
+# A failed re-run never touches a prior successful row (nothing to migrate/preserve).
+# ----------------------------
+
+
+def save_technical_audit_run(run: dict[str, Any]) -> None:
+    """Persist one Technical Audit run. Caller must set `id` and `project_id`."""
+    r = dict(run or {})
+    pid = (r.get("project_id") or "").strip()
+    rid = (r.get("id") or "").strip()
+    if not pid or not rid:
+        return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("technical_audits.json") if isinstance(x, dict)]
+            rows.append(r)
+            rows = rows[-2000:]
+            _save_json("technical_audits.json", rows)
+        return
+    doc = dict(r)
+    doc["_id"] = rid
+    with _db_write_lock:
+        get_db().technical_audits.update_one({"_id": rid}, {"$set": doc}, upsert=True)
+
+
+def load_latest_technical_audit(project_id: str) -> dict[str, Any] | None:
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("technical_audits.json") if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid]
+        if not rows:
+            return None
+        rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        return rows[0]
+    doc = get_db().technical_audits.find_one({"project_id": pid}, {"_id": 0}, sort=[("created_at", -1)])
+    return dict(doc) if isinstance(doc, dict) else None
+
+
+def load_technical_audit_history(project_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    lim = max(1, min(int(limit or 20), 100))
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("technical_audits.json") if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid]
+        rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        return rows[:lim]
+    cur = get_db().technical_audits.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).limit(lim)
+    return [dict(d) for d in cur]
+
+
+# ----------------------------
+# SEO Audit crawler (Site Audit, Phase 1: Crawl Foundation + Core SEO).
+#
+# Four collections, each a permanent, immutable-once-completed record of one crawl
+# run -- never a rollup that discards detail (see backend/docs/SEO-Audit-Design.md
+# §86/§95 and the plan this was built from):
+#   seo_audits        -- one doc per crawl run (job state + summary + health score)
+#   seo_audit_urls    -- one doc per crawled URL per audit (the CrawlUrl model)
+#   seo_audit_links   -- one doc per discovered link relationship (first-class graph)
+#   seo_audit_issues  -- one doc per (rule, URL) finding (the evidence store)
+# ----------------------------
+
+
+def create_seo_audit(audit: dict[str, Any]) -> None:
+    """Insert a new SEO Audit run. Caller sets `id`/`project_id`/`status` (typically "queued")."""
+    a = dict(audit or {})
+    pid = (a.get("project_id") or "").strip()
+    aid = (a.get("id") or "").strip()
+    if not pid or not aid:
+        return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("seo_audits.json") if isinstance(x, dict)]
+            rows.append(a)
+            rows = rows[-5000:]
+            _save_json("seo_audits.json", rows)
+        return
+    doc = dict(a)
+    doc["_id"] = aid
+    with _db_write_lock:
+        get_db().seo_audits.insert_one(doc)
+
+
+def update_seo_audit_fields(audit_id: str, fields: dict[str, Any]) -> bool:
+    """`$set`-style patch (status transitions, counts, health_score, cancel_requested, ...)."""
+    aid = (audit_id or "").strip()
+    if not aid or not fields:
+        return False
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("seo_audits.json") if isinstance(x, dict)]
+            for i, r in enumerate(rows):
+                if (r.get("id") or "").strip() == aid:
+                    rows[i] = {**r, **fields}
+                    _save_json("seo_audits.json", rows)
+                    return True
+        return False
+    res = get_db().seo_audits.update_one({"_id": aid}, {"$set": dict(fields)})
+    return bool(res.matched_count)
+
+
+def claim_next_queued_seo_audit(started_at_iso: str) -> dict[str, Any] | None:
+    """Atomically claim the oldest `status="queued"` audit for the crawl worker
+    (find_one_and_update under a status filter -- safe even with multiple worker
+    replicas, mirrors the poll-and-claim shape serp_refresh_worker.py uses)."""
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("seo_audits.json") if isinstance(x, dict)]
+            queued = [r for r in rows if (r.get("status") or "") == "queued"]
+            queued.sort(key=lambda r: str(r.get("queued_at") or ""))
+            if not queued:
+                return None
+            target_id = queued[0].get("id")
+            for i, r in enumerate(rows):
+                if r.get("id") == target_id:
+                    rows[i] = {**r, "status": "running", "started_at": started_at_iso}
+                    _save_json("seo_audits.json", rows)
+                    return rows[i]
+        return None
+    doc = get_db().seo_audits.find_one_and_update(
+        {"status": "queued"},
+        {"$set": {"status": "running", "started_at": started_at_iso}},
+        sort=[("queued_at", 1)],
+    )
+    if not doc:
+        return None
+    doc = dict(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+def load_seo_audit_by_id(audit_id: str) -> dict[str, Any] | None:
+    aid = (audit_id or "").strip()
+    if not aid:
+        return None
+    if _storage_mode != "mongo":
+        for r in _load_json_list("seo_audits.json"):
+            if isinstance(r, dict) and (r.get("id") or "").strip() == aid:
+                return r
+        return None
+    doc = get_db().seo_audits.find_one({"_id": aid}, {"_id": 0})
+    return dict(doc) if isinstance(doc, dict) else None
+
+
+def load_latest_seo_audit(project_id: str) -> dict[str, Any] | None:
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("seo_audits.json") if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid]
+        if not rows:
+            return None
+        rows.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
+        return rows[0]
+    doc = get_db().seo_audits.find_one({"project_id": pid}, {"_id": 0}, sort=[("started_at", -1)])
+    return dict(doc) if isinstance(doc, dict) else None
+
+
+def load_seo_audit_history(project_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    lim = max(1, min(int(limit or 20), 100))
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("seo_audits.json") if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid]
+        rows.sort(key=lambda r: str(r.get("started_at") or ""), reverse=True)
+        return rows[:lim]
+    cur = get_db().seo_audits.find({"project_id": pid}, {"_id": 0}).sort("started_at", -1).limit(lim)
+    return [dict(d) for d in cur]
+
+
+def insert_seo_audit_urls_bulk(rows: list[dict[str, Any]]) -> None:
+    """Batch-insert crawled-URL records as pages complete (not one write per page)."""
+    items = [dict(r) for r in (rows or []) if isinstance(r, dict) and (r.get("audit_id") or "").strip() and (r.get("id") or "").strip()]
+    if not items:
+        return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            existing = [x for x in _load_json_list("seo_audit_urls.json") if isinstance(x, dict)]
+            existing.extend(items)
+            existing = existing[-200000:]
+            _save_json("seo_audit_urls.json", existing)
+        return
+    docs = []
+    for it in items:
+        d = dict(it)
+        d["_id"] = d["id"]
+        docs.append(d)
+    from pymongo.errors import BulkWriteError
+
+    with _db_write_lock:
+        try:
+            get_db().seo_audit_urls.insert_many(docs, ordered=False)
+        except BulkWriteError as exc:
+            # A duplicate (audit_id, normalized_url) should never happen if the crawler's own
+            # frontier dedup is correct -- tolerate it rather than aborting the crawl over it.
+            non_dupe = [e for e in exc.details.get("writeErrors", []) if e.get("code") != 11000]
+            if non_dupe:
+                raise
+
+
+def count_seo_audit_urls(audit_id: str) -> int:
+    aid = (audit_id or "").strip()
+    if not aid:
+        return 0
+    if _storage_mode != "mongo":
+        return sum(1 for x in _load_json_list("seo_audit_urls.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid)
+    return int(get_db().seo_audit_urls.count_documents({"audit_id": aid}))
+
+
+def load_seo_audit_urls_page(
+    audit_id: str,
+    *,
+    page: int = 1,
+    per_page: int = 50,
+    q: str | None = None,
+    status_filter: str | None = None,
+    indexability_filter: str | None = None,
+    sort: str = "crawl_depth",
+) -> dict[str, Any]:
+    """Server-side paginated URL Explorer rows. Returns {"items": [...], "total": N}."""
+    aid = (audit_id or "").strip()
+    if not aid:
+        return {"items": [], "total": 0}
+    pg = max(1, int(page or 1))
+    pp = max(1, min(int(per_page or 50), 500))
+    skip = (pg - 1) * pp
+    qs = (q or "").strip().lower()
+    sf = (status_filter or "").strip()
+    idf = (indexability_filter or "").strip()
+    sort_field = sort if sort in ("crawl_depth", "status_code", "response_time_ms", "word_count", "url") else "crawl_depth"
+
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("seo_audit_urls.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid]
+        if qs:
+            rows = [r for r in rows if qs in str(r.get("url") or "").lower() or qs in str(r.get("title") or "").lower()]
+        if sf:
+            rows = [r for r in rows if str(r.get("status_code") or "") == sf]
+        if idf:
+            rows = [r for r in rows if (r.get("indexability") or "") == idf]
+        rows.sort(key=lambda r: (r.get(sort_field) if r.get(sort_field) is not None else 0, str(r.get("url") or "")))
+        return {"items": rows[skip : skip + pp], "total": len(rows)}
+
+    match: dict[str, Any] = {"audit_id": aid}
+    if qs:
+        match["$or"] = [{"url": {"$regex": re.escape(qs), "$options": "i"}}, {"title": {"$regex": re.escape(qs), "$options": "i"}}]
+    if sf:
+        try:
+            match["status_code"] = int(sf)
+        except ValueError:
+            pass
+    if idf:
+        match["indexability"] = idf
+    db = get_db()
+    total = int(db.seo_audit_urls.count_documents(match))
+    cur = db.seo_audit_urls.find(match, {"_id": 0}).sort(sort_field, 1).skip(skip).limit(pp)
+    return {"items": [dict(d) for d in cur], "total": total}
+
+
+def load_seo_audit_url_by_id(url_id: str) -> dict[str, Any] | None:
+    uid = (url_id or "").strip()
+    if not uid:
+        return None
+    if _storage_mode != "mongo":
+        for r in _load_json_list("seo_audit_urls.json"):
+            if isinstance(r, dict) and (r.get("id") or "").strip() == uid:
+                return r
+        return None
+    doc = get_db().seo_audit_urls.find_one({"_id": uid}, {"_id": 0})
+    return dict(doc) if isinstance(doc, dict) else None
+
+
+def insert_seo_audit_links_bulk(rows: list[dict[str, Any]]) -> None:
+    """Batch-insert discovered link relationships (first-class graph, never comma-joined)."""
+    items = [dict(r) for r in (rows or []) if isinstance(r, dict) and (r.get("audit_id") or "").strip()]
+    if not items:
+        return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            existing = [x for x in _load_json_list("seo_audit_links.json") if isinstance(x, dict)]
+            existing.extend(items)
+            existing = existing[-500000:]
+            _save_json("seo_audit_links.json", existing)
+        return
+    with _db_write_lock:
+        get_db().seo_audit_links.insert_many(items, ordered=False)
+
+
+def aggregate_seo_audit_inlink_counts(audit_id: str) -> dict[str, int]:
+    """{target_url: inlink_count} for one audit -- powers orphan/inlink detection."""
+    aid = (audit_id or "").strip()
+    if not aid:
+        return {}
+    if _storage_mode != "mongo":
+        counts: dict[str, int] = {}
+        for r in _load_json_list("seo_audit_links.json"):
+            if isinstance(r, dict) and (r.get("audit_id") or "").strip() == aid and r.get("type") == "anchor":
+                t = (r.get("target_url") or "").strip()
+                if t:
+                    counts[t] = counts.get(t, 0) + 1
+        return counts
+    pipeline = [
+        {"$match": {"audit_id": aid, "type": "anchor"}},
+        {"$group": {"_id": "$target_url", "n": {"$sum": 1}}},
+    ]
+    return {str(d["_id"]): int(d["n"]) for d in get_db().seo_audit_links.aggregate(pipeline) if d.get("_id")}
+
+
+def load_seo_audit_inlinks_for_url(audit_id: str, target_url: str, limit: int = 200) -> list[dict[str, Any]]:
+    aid = (audit_id or "").strip()
+    tu = (target_url or "").strip()
+    if not aid or not tu:
+        return []
+    lim = max(1, min(int(limit or 200), 1000))
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("seo_audit_links.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid and (x.get("target_url") or "").strip() == tu]
+        return rows[:lim]
+    cur = get_db().seo_audit_links.find({"audit_id": aid, "target_url": tu}, {"_id": 0}).limit(lim)
+    return [dict(d) for d in cur]
+
+
+def load_seo_audit_outlinks_for_url(audit_id: str, source_url_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    aid = (audit_id or "").strip()
+    sid = (source_url_id or "").strip()
+    if not aid or not sid:
+        return []
+    lim = max(1, min(int(limit or 200), 1000))
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("seo_audit_links.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid and (x.get("source_url_id") or "").strip() == sid]
+        return rows[:lim]
+    cur = get_db().seo_audit_links.find({"audit_id": aid, "source_url_id": sid}, {"_id": 0}).limit(lim)
+    return [dict(d) for d in cur]
+
+
+def load_all_seo_audit_links(audit_id: str, *, batch_size: int = 50, on_progress: Any = None) -> list[dict[str, Any]]:
+    """Every link-relationship doc for one audit -- for the post-crawl issue-evaluation
+    pass (broken-internal-link detection needs the whole graph in memory at once, so the
+    *result* is still the full unpaginated list). What's chunked is how we get it there:
+    a large site can have thousands of link-edge docs (many more than pages), and pulling
+    them in one unbounded `find()` risks a single slow network round-trip exceeding Mongo's
+    socket timeout under degraded conditions. `batch_size` keeps each getMore small instead;
+    `on_progress(loaded_count)` -- called every `batch_size` docs -- lets a caller surface
+    real "N of M loaded" progress instead of a silent multi-second wait."""
+    aid = (audit_id or "").strip()
+    if not aid:
+        return []
+    if _storage_mode != "mongo":
+        return [x for x in _load_json_list("seo_audit_links.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid]
+    bs = max(1, min(int(batch_size or 50), 200))
+    cur = get_db().seo_audit_links.find({"audit_id": aid}, {"_id": 0}).batch_size(bs)
+    out: list[dict[str, Any]] = []
+    for d in cur:
+        out.append(dict(d))
+        if on_progress and len(out) % bs == 0:
+            on_progress(len(out))
+    if on_progress:
+        on_progress(len(out))
+    return out
+
+
+def insert_seo_audit_issues_bulk(rows: list[dict[str, Any]]) -> None:
+    """Batch-insert issue findings -- every finding traceable to a URL and rule input."""
+    items = [dict(r) for r in (rows or []) if isinstance(r, dict) and (r.get("audit_id") or "").strip()]
+    if not items:
+        return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            existing = [x for x in _load_json_list("seo_audit_issues.json") if isinstance(x, dict)]
+            existing.extend(items)
+            existing = existing[-200000:]
+            _save_json("seo_audit_issues.json", existing)
+        return
+    chunk = 200  # avoid one giant insert_many on large audits -- same reasoning as the read side
+    with _db_write_lock:
+        for i in range(0, len(items), chunk):
+            get_db().seo_audit_issues.insert_many(items[i : i + chunk], ordered=False)
+
+
+def load_seo_audit_issues(audit_id: str, *, severity: str | None = None, rule_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+    aid = (audit_id or "").strip()
+    if not aid:
+        return []
+    lim = max(1, min(int(limit or 500), 5000))
+    sev = (severity or "").strip()
+    rid = (rule_id or "").strip()
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("seo_audit_issues.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid]
+        if sev:
+            rows = [r for r in rows if (r.get("severity") or "") == sev]
+        if rid:
+            rows = [r for r in rows if (r.get("rule_id") or "") == rid]
+        return rows[:lim]
+    match: dict[str, Any] = {"audit_id": aid}
+    if sev:
+        match["severity"] = sev
+    if rid:
+        match["rule_id"] = rid
+    cur = get_db().seo_audit_issues.find(match, {"_id": 0}).limit(lim)
+    return [dict(d) for d in cur]
+
+
+def aggregate_seo_audit_issue_groups(audit_id: str) -> list[dict[str, Any]]:
+    """One row per rule: category/severity/priority/effort + affected-URL count, for the Issues summary list."""
+    aid = (audit_id or "").strip()
+    if not aid:
+        return []
+    if _storage_mode != "mongo":
+        groups: dict[str, dict[str, Any]] = {}
+        for r in _load_json_list("seo_audit_issues.json"):
+            if not isinstance(r, dict) or (r.get("audit_id") or "").strip() != aid:
+                continue
+            rid = (r.get("rule_id") or "").strip()
+            if not rid:
+                continue
+            g = groups.setdefault(
+                rid,
+                {"rule_id": rid, "category": r.get("category"), "severity": r.get("severity"), "priority": r.get("priority"), "effort": r.get("effort"), "affected_urls": 0},
+            )
+            g["affected_urls"] += 1
+        return sorted(groups.values(), key=lambda g: (-{"critical": 3, "high": 2, "medium": 1, "low": 0}.get(g.get("priority") or "", 0), -g["affected_urls"]))
+    pipeline = [
+        {"$match": {"audit_id": aid}},
+        {
+            "$group": {
+                "_id": "$rule_id",
+                "category": {"$first": "$category"},
+                "severity": {"$first": "$severity"},
+                "priority": {"$first": "$priority"},
+                "effort": {"$first": "$effort"},
+                "affected_urls": {"$sum": 1},
+            }
+        },
+        {"$project": {"_id": 0, "rule_id": "$_id", "category": 1, "severity": 1, "priority": 1, "effort": 1, "affected_urls": 1}},
+    ]
+    out = list(get_db().seo_audit_issues.aggregate(pipeline))
+    order = {"critical": 3, "high": 2, "medium": 1, "low": 0}
+    out.sort(key=lambda g: (-order.get(g.get("priority") or "", 0), -int(g.get("affected_urls") or 0)))
+    return out
+
+
+def load_all_seo_audit_urls(audit_id: str, *, batch_size: int = 50, on_progress: Any = None) -> list[dict[str, Any]]:
+    """Every crawled-URL doc for one audit -- post-crawl analysis passes (link-graph
+    stats, issue evaluation) need the whole crawl in memory, not one page of it, so the
+    return value is still the complete list. Fetched via a small `batch_size` cursor
+    (see `load_all_seo_audit_links` for why) with an optional `on_progress` callback."""
+    aid = (audit_id or "").strip()
+    if not aid:
+        return []
+    if _storage_mode != "mongo":
+        return [x for x in _load_json_list("seo_audit_urls.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid]
+    bs = max(1, min(int(batch_size or 50), 200))
+    cur = get_db().seo_audit_urls.find({"audit_id": aid}, {"_id": 0}).batch_size(bs)
+    out: list[dict[str, Any]] = []
+    for d in cur:
+        out.append(dict(d))
+        if on_progress and len(out) % bs == 0:
+            on_progress(len(out))
+    if on_progress:
+        on_progress(len(out))
+    return out
+
+
+def load_recent_seo_audit_urls(audit_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    """Most-recently-crawled URLs for an in-progress audit -- powers the live
+    "crawling now" feed. Newest first, by `fetched_at`."""
+    aid = (audit_id or "").strip()
+    if not aid:
+        return []
+    lim = max(1, min(int(limit or 20), 100))
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("seo_audit_urls.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid]
+        rows.sort(key=lambda r: str(r.get("fetched_at") or ""), reverse=True)
+        return rows[:lim]
+    cur = get_db().seo_audit_urls.find({"audit_id": aid}, {"_id": 0}).sort("fetched_at", -1).limit(lim)
+    return [dict(d) for d in cur]
+
+
+def update_seo_audit_url_inlink_counts(audit_id: str, counts_by_normalized_url: dict[str, int]) -> None:
+    """Bulk-patch `inlink_count` onto each crawled-URL doc from the aggregated link graph."""
+    aid = (audit_id or "").strip()
+    if not aid or not counts_by_normalized_url:
+        return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("seo_audit_urls.json") if isinstance(x, dict)]
+            for r in rows:
+                if (r.get("audit_id") or "").strip() != aid:
+                    continue
+                r["inlink_count"] = counts_by_normalized_url.get((r.get("normalized_url") or "").strip(), 0)
+            _save_json("seo_audit_urls.json", rows)
+        return
+    from pymongo import UpdateOne
+
+    ops = [
+        UpdateOne({"audit_id": aid, "normalized_url": norm_url}, {"$set": {"inlink_count": count}})
+        for norm_url, count in counts_by_normalized_url.items()
+    ]
+    if not ops:
+        return
+    chunk = 200  # one bulk_write per chunk -- same timeout-safety reasoning as the read side
+    with _db_write_lock:
+        for i in range(0, len(ops), chunk):
+            get_db().seo_audit_urls.bulk_write(ops[i : i + chunk], ordered=False)
+
+
 def get_research_cache(*, cache_key: str, max_age_s: int = 6 * 60 * 60) -> dict[str, Any] | None:
     """Fetch a cached research response by key if still fresh."""
     key = (cache_key or "").strip()
@@ -4201,6 +4852,111 @@ def set_research_cache(*, cache_key: str, value: dict[str, Any]) -> None:
 
 
 # ----------------------------
+# Shared SERP index (cross-project, unlike research_cache/research_serp above)
+# ----------------------------
+#
+# research_cache is keyed by an entire request signature (brand/tone/exclude_titles/...) and
+# research_serp is a per-project history log fed back into the LLM as context. Neither is
+# reusable across different users/projects searching the same keyword. serp_index is: one row
+# per (query_norm, gl, hl), written by both live user searches and the background
+# serp_refresh_worker (see app.services.serp_index.get_or_fetch_serp), so a query anyone has
+# already fetched anywhere in the system serves instantly instead of re-scraping Google.
+
+
+def _serp_index_key(query_norm: str, gl: str, hl: str) -> str:
+    return f"{gl}:{hl}:{query_norm}"
+
+
+def get_serp_index_entry(*, query_norm: str, gl: str, hl: str) -> dict[str, Any] | None:
+    """Shared cross-project SERP lookup by normalized query + locale."""
+    qn = (query_norm or "").strip().casefold()
+    g = (gl or "US").strip()[:8] or "US"
+    h = (hl or "en").strip()[:8] or "en"
+    if not qn:
+        return None
+    key = _serp_index_key(qn, g, h)
+    if _storage_mode != "mongo":
+        for r in _load_json_list("serp_index.json"):
+            if isinstance(r, dict) and (r.get("_id") or "") == key:
+                return r
+        return None
+    doc = get_db().serp_index.find_one({"_id": key})
+    return dict(doc) if isinstance(doc, dict) else None
+
+
+def upsert_serp_index_entry(
+    *,
+    query: str,
+    query_norm: str,
+    gl: str,
+    hl: str,
+    results: list[dict[str, Any]],
+    related_searches: list[str],
+    source: str,
+) -> None:
+    """Upsert the shared cross-project SERP index entry for (query_norm, gl, hl)."""
+    qn = (query_norm or "").strip().casefold()
+    g = (gl or "US").strip()[:8] or "US"
+    h = (hl or "en").strip()[:8] or "en"
+    if not qn:
+        return
+    key = _serp_index_key(qn, g, h)
+    now = float(time.time())
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("serp_index.json") if isinstance(x, dict)]
+            idx = next((i for i, r in enumerate(rows) if (r.get("_id") or "") == key), None)
+            fetch_count = int((rows[idx].get("fetch_count") or 0) if idx is not None else 0) + 1
+            doc = {
+                "_id": key,
+                "query": (query or "").strip()[:500],
+                "query_norm": qn,
+                "gl": g,
+                "hl": h,
+                "results": results or [],
+                "related_searches": related_searches or [],
+                "fetched_at": now,
+                "source": (source or "live").strip().lower(),
+                "fetch_count": fetch_count,
+            }
+            if idx is not None:
+                rows[idx] = doc
+            else:
+                rows.append(doc)
+            _save_json("serp_index.json", rows)
+        return
+    with _db_write_lock:
+        db = get_db()
+        existing = db.serp_index.find_one({"_id": key}, {"fetch_count": 1})
+        fetch_count = int((existing or {}).get("fetch_count") or 0) + 1
+        doc = {
+            "query": (query or "").strip()[:500],
+            "query_norm": qn,
+            "gl": g,
+            "hl": h,
+            "results": results or [],
+            "related_searches": related_searches or [],
+            "fetched_at": now,
+            "source": (source or "live").strip().lower(),
+            "fetch_count": fetch_count,
+        }
+        db.serp_index.update_one({"_id": key}, {"$set": doc}, upsert=True)
+
+
+def load_stale_serp_index_entries(*, max_age_days: int, limit: int = 30) -> list[dict[str, Any]]:
+    """Oldest-first serp_index entries past max_age_days, for the background refresh worker."""
+    lim = max(1, min(int(limit or 30), 200))
+    cutoff = time.time() - (max(1, int(max_age_days or 1)) * 86400)
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("serp_index.json") if isinstance(x, dict)]
+        stale = [r for r in rows if float(r.get("fetched_at") or 0.0) < cutoff]
+        stale.sort(key=lambda r: float(r.get("fetched_at") or 0.0))
+        return stale[:lim]
+    cur = get_db().serp_index.find({"fetched_at": {"$lt": cutoff}}).sort("fetched_at", 1).limit(lim)
+    return [dict(d) for d in cur]
+
+
+# ----------------------------
 # Scheduled jobs (queue table)
 # ----------------------------
 
@@ -4211,17 +4967,24 @@ def load_scheduled_jobs(
     article_id: str | None = None,
     state: str | None = None,
     limit: int | None = None,
+    offset: int = 0,
+    sort_desc: bool = False,
 ) -> list[dict[str, Any]]:
     """
     Load scheduled jobs, optionally filtered.
 
     Historically this function only filtered by project_id and returned the full list; the editor
     view for a single article now uses `article_id` to avoid scanning all jobs for large projects.
+
+    `offset`/`sort_desc` exist so callers doing real pagination (limit + "latest first") can push the
+    sort/skip/limit down to the query instead of over-fetching then truncating in Python -- callers
+    that don't pass them keep the original ascending, unbounded-unless-limited behavior unchanged.
     """
     pid = (project_id or "").strip()
     aid = (article_id or "").strip()
     st = (state or "").strip().lower()
     lim = int(limit) if isinstance(limit, int) and limit > 0 else None
+    off = int(offset) if isinstance(offset, int) and offset > 0 else 0
     if _storage_mode != "mongo":
         rows = [_normalize_scheduled_job_dict(x) for x in _load_json_list("scheduled_jobs.json")]
         out = rows
@@ -4231,6 +4994,10 @@ def load_scheduled_jobs(
             out = [r for r in out if (r.get("article_id") or "").strip() == aid]
         if st:
             out = [r for r in out if (r.get("state") or "").strip().lower() == st]
+        if sort_desc:
+            out = sorted(out, key=lambda r: (r.get("run_at") or ""), reverse=True)
+        if off:
+            out = out[off:]
         if lim is not None:
             out = out[:lim]
         return out
@@ -4243,7 +5010,9 @@ def load_scheduled_jobs(
     if st:
         q["state"] = st
 
-    cur = get_db().scheduled_jobs.find(q, _SCHEDULED_JOB_LISTING_PROJECTION).sort("run_at", 1)
+    cur = get_db().scheduled_jobs.find(q, _SCHEDULED_JOB_LISTING_PROJECTION).sort("run_at", -1 if sort_desc else 1)
+    if off:
+        cur = cur.skip(off)
     if lim is not None:
         cur = cur.limit(lim)
     out: list[dict[str, Any]] = []
@@ -4677,6 +5446,7 @@ def project_ids_for_owner(user_id: str) -> list[str]:
 
 def save_projects_replace_all(projects: list[dict[str, Any]]) -> None:
     """Replace all projects (import/backup only). Deletes all articles first."""
+    _invalidate_project_access_cache()
     with _db_write_lock:
         db = get_db()
         db.articles.delete_many({})
@@ -4721,6 +5491,7 @@ def update_project_fields(project_id: str, updates: dict[str, Any]) -> bool:
             _apply_project_updates_dict(d, updates)
             rows[idx] = _normalize_project_dict(d)
             _save_json_projects(rows)
+        _invalidate_project_access_cache(project_id)
         return True
     with _db_write_lock:
         db = get_db()
@@ -4732,7 +5503,10 @@ def update_project_fields(project_id: str, updates: dict[str, Any]) -> bool:
         norm = _encrypt_project_secrets(_normalize_project_dict(d))
         new_doc = {**norm, "_id": norm["id"]}
         res = db.projects.replace_one({"id": project_id}, new_doc)
-        return bool(res.acknowledged and res.matched_count == 1)
+        ok = bool(res.acknowledged and res.matched_count == 1)
+    if ok:
+        _invalidate_project_access_cache(project_id)
+    return ok
 
 
 def delete_project_and_resources(project_id: str) -> bool:
@@ -4754,6 +5528,7 @@ def delete_project_and_resources(project_id: str) -> bool:
             # Scheduled jobs are stored separately from the project row.
             jobs = [_normalize_scheduled_job_dict(dict(j)) for j in _load_json_list("scheduled_jobs.json")]
             _save_json_scheduled_jobs([j for j in jobs if (j.get("project_id") or "") != project_id])
+        _invalidate_project_access_cache(project_id)
         return True
 
     with _db_write_lock:
@@ -4763,7 +5538,8 @@ def delete_project_and_resources(project_id: str) -> bool:
         db.articles.delete_many({"project_id": project_id})
         db.scheduled_jobs.delete_many({"project_id": project_id})
         db.projects.delete_one({"id": project_id})
-        return True
+    _invalidate_project_access_cache(project_id)
+    return True
 
 
 def delete_project_and_articles(project_id: str) -> bool:
@@ -5739,7 +6515,7 @@ def patch_invitation_fields(invitation_id: str, updates: dict[str, Any]) -> bool
 # ---------------------------------------------------------------------------
 
 def get_notifications_for_user(
-    user_id: str, *, unread_only: bool = False, limit: int = 50
+    user_id: str, *, unread_only: bool = False, limit: int = 50, before: str | None = None
 ) -> list[dict[str, Any]]:
     uid = (user_id or "").strip()
     if not uid:
@@ -5749,6 +6525,9 @@ def get_notifications_for_user(
     q: dict[str, Any] = {"user_id": uid}
     if unread_only:
         q["read"] = False
+    cursor_before = (before or "").strip()
+    if cursor_before:
+        q["created_at"] = {"$lt": cursor_before}
     cur = get_db().notifications.find(q, {"_id": 0}).sort("created_at", -1).limit(limit)
     return [_normalize_notification_dict(doc) for doc in cur]
 
@@ -5809,14 +6588,18 @@ def insert_activity(data: dict[str, Any]) -> None:
         get_db().project_activity.insert_one({**norm, "_id": norm["id"]})
 
 
-def get_project_activity(project_id: str, *, limit: int = 50) -> list[dict[str, Any]]:
+def get_project_activity(project_id: str, *, limit: int = 50, before: str | None = None) -> list[dict[str, Any]]:
     pid = (project_id or "").strip()
     if not pid:
         return []
     if _storage_mode != "mongo":
         return []
+    q: dict[str, Any] = {"project_id": pid}
+    cursor_before = (before or "").strip()
+    if cursor_before:
+        q["created_at"] = {"$lt": cursor_before}
     cur = (
-        get_db().project_activity.find({"project_id": pid}, {"_id": 0})
+        get_db().project_activity.find(q, {"_id": 0})
         .sort("created_at", -1)
         .limit(limit)
     )

@@ -87,7 +87,18 @@ async def sync_project(
 
     wp = _get_wp_client(proj)
 
-    articles = await run_sync(st.load_wp_published_articles_for_project, project_id, 500)
+    try:
+        articles = await run_sync(st.load_wp_published_articles_for_project, project_id, 500)
+    except Exception as exc:
+        # A slow/failed DB read here previously surfaced as an unhandled 500 with no
+        # useful message. This is retryable (transient network/DB hiccup), not a real
+        # server bug, so report it as such instead of crashing the request.
+        log.error("Failed to load published articles for sync (project %s): %s", project_id, exc, exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Could not load articles to sync right now — please try again in a moment.",
+        ) from exc
+
     if not articles:
         return ProjectSyncResponse(
             project_id=project_id,

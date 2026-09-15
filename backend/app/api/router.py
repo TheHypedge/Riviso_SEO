@@ -10,6 +10,7 @@ from fastapi import APIRouter
 
 from app.api.routes import auth
 from app.api.routes import articles
+from app.api.routes import article_media_public
 from app.api.routes import admin
 from app.api.routes import context_links
 from app.api.routes import health
@@ -34,11 +35,14 @@ from app.api.routes import project_collaboration
 from app.api.routes import invitations
 from app.api.routes import notifications
 from app.api.routes import wordpress_sync
+from app.api.routes import site_audit_technical
+from app.api.routes import site_audit_seo
 
 api_router = APIRouter()
 
 api_router.include_router(health.router)
 api_router.include_router(auth.router)
+api_router.include_router(article_media_public.router)
 api_router.include_router(profile.router)
 api_router.include_router(projects.router)
 api_router.include_router(articles.router)
@@ -64,4 +68,6 @@ api_router.include_router(project_collaboration.router)
 api_router.include_router(invitations.router)
 api_router.include_router(notifications.router)
 api_router.include_router(wordpress_sync.router)
+api_router.include_router(site_audit_technical.router)
+api_router.include_router(site_audit_seo.router)
 

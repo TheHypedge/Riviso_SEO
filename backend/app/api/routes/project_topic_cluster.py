@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -74,11 +74,15 @@ def _enforce_cluster_plan_quota(*, st, user: dict) -> None:
 
 
 @router.get("")
-async def list_clusters(project_id: str, user: dict = Depends(get_current_user)) -> dict:
+async def list_clusters(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict:
     st = get_legacy_storage_module()
     proj = _require_project(st=st, user=user, project_id=project_id, full=False)
     svc = TopicClusterService(project=proj, owner_user_id=(user.get("id") or "").strip())
-    return {"clusters": svc.list_for_project()}
+    return {"clusters": svc.list_for_project(limit=limit)}
 
 
 class TopicClusterPlanPayload(BaseModel):

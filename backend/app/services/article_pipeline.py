@@ -111,6 +111,7 @@ async def execute_article_generation(
     focus_keyphrase_override: str | None = None,
     mapped_products: list[dict] | None = None,
     mapped_pages: list[dict] | None = None,
+    reference_source_content: str | None = None,
 ) -> dict:
     """
     Run the same steps as ``POST /projects/{id}/articles/{article_id}/generate``.
@@ -174,6 +175,7 @@ async def execute_article_generation(
         product_context=platform_extras.get("product_context"),
         generate_image=generate_image,
         image_prompt_text=(resolved_image or {}).get("text") or None,
+        reference_source_content=reference_source_content,
     )
 
     plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
@@ -219,6 +221,7 @@ async def execute_article_generation(
             wordpress_mapped_pages=platform_extras.get("wp_mapped_pages"),
             generate_image=generate_image,
             image_prompt_text=(resolved_image or {}).get("text") or None,
+            reference_source_content=reference_source_content,
         )
     except HTTPException:
         if quota_consumed and hasattr(st, "refund_article_usage"):

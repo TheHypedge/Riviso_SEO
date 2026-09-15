@@ -1,30 +1,5 @@
 .projectsDark {
-  /* Local token overrides: matte black theme (match dashboard). */
-  --aa-canvas: #0b0b0d;
-  --aa-surface-soft: rgba(255, 255, 255, 0.04);
-  --aa-surface-card: rgba(18, 18, 20, 0.72);
-  --aa-surface-dark: #0b0b0d;
-  --aa-surface-dark-elevated: rgba(18, 18, 20, 0.88);
-  --aa-surface-dark-soft: rgba(255, 255, 255, 0.05);
-
-  --aa-ink: rgba(255, 255, 255, 0.94);
-  --aa-body: rgba(255, 255, 255, 0.86);
-  --aa-body-strong: rgba(255, 255, 255, 0.92);
-  --aa-muted: rgba(255, 255, 255, 0.62);
-  --aa-muted-soft: rgba(255, 255, 255, 0.46);
-  --aa-hairline: rgba(255, 255, 255, 0.10);
-  --aa-hairline-soft: rgba(255, 255, 255, 0.07);
-
-  --aa-primary: #d97757;
-  --aa-primary-active: color-mix(in oklab, #d97757, #ffffff 14%);
-
-  --background: var(--aa-canvas);
-  --foreground: var(--aa-surface-card);
-  --text-primary: var(--aa-ink);
-  --text-secondary: var(--aa-muted);
-  --button-secondary-border: var(--aa-hairline);
-
-  background: var(--aa-canvas);
+  composes: darkTheme from "../darkTheme.module.css";
 }
 
 .projectsDark :global(body) {
@@ -43,7 +18,7 @@
 /* ── Members tab ─────────────────────────────────────────────────────────── */
 .membersCard {
   background: var(--aa-void-elevated, #121214);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-lg, 12px);
   padding: 24px;
   margin-bottom: 16px;
@@ -71,31 +46,14 @@
 }
 
 .membersEmailInput {
-  flex: 1;
+  composes: memberEmailInput from "../page.module.css";
   min-width: 200px;
-  padding: 9px 12px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: var(--aa-r-sm, 6px);
-  color: var(--aa-on-dark, #faf9f5);
-  font-size: 14px;
-  outline: none;
-  transition: border-color 0.12s ease;
 }
-.membersEmailInput:focus { border-color: var(--aa-primary, #d97757); }
 .membersEmailInput::placeholder { color: rgba(160, 157, 150, 0.55); }
 
 .membersRoleSelect {
-  padding: 9px 10px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: var(--aa-r-sm, 6px);
-  color: var(--aa-on-dark, #faf9f5);
-  font-size: 13px;
-  cursor: pointer;
-  outline: none;
+  composes: memberRoleSelect from "../page.module.css";
 }
-.membersRoleSelect:focus { border-color: var(--aa-primary, #d97757); }
 .membersRoleSelect:disabled { opacity: 0.5; cursor: default; }
 
 .membersInviteError {
@@ -104,12 +62,16 @@
   color: var(--aa-error, #c64545);
 }
 
+/* Divider tokenized to var(--aa-hairline-soft) -- third different divider
+ * treatment for the same "row separator" role (Articles: var(--aa-hairline)
+ * via .table/.td; Schedule: previously the legacy --button-secondary-border
+ * alias; here: raw rgba with no token at all). */
 .memberRow {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--aa-hairline-soft);
 }
 .memberRow:last-child { border-bottom: none; }
 
@@ -129,8 +91,8 @@
 }
 
 .memberAvatarPending {
-  background: rgba(255,255,255,0.06);
-  color: rgba(160,157,150,0.5);
+  background: var(--aa-surface-soft);
+  color: var(--aa-muted);
 }
 
 .memberInfo {
@@ -198,7 +160,7 @@
 .memberResendBtn {
   padding: 5px 10px;
   background: transparent;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-sm, 6px);
   color: var(--aa-on-dark-soft, #a09d96);
   font-size: 12px;
@@ -207,7 +169,7 @@
   transition: background 0.1s ease;
 }
 .memberResendBtn:hover:not(:disabled) {
-  background: rgba(255,255,255,0.05);
+  background: var(--aa-surface-soft);
   color: var(--aa-on-dark, #faf9f5);
 }
 .memberResendBtn:disabled { opacity: 0.45; cursor: default; }
@@ -243,7 +205,7 @@
   right: 10px;
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255,255,255,0.12);
+  border: 2px solid var(--aa-hairline);
   border-top-color: var(--aa-primary, #d97757);
   border-radius: 50%;
   animation: membersSpinKf 0.7s linear infinite;

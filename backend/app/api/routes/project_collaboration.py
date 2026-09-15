@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from app.core.deps import get_current_user
@@ -449,12 +449,14 @@ async def cancel_invitation(
 async def get_activity(
     project_id: str,
     user: dict = Depends(get_current_user),
+    limit: int = Query(default=50, ge=1, le=200),
+    before: str | None = Query(default=None, description="created_at cursor — returns items strictly older than this"),
 ) -> list[ActivityRecord]:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
     _get_member_context_or_403(st, project_id, uid)
 
-    records = st.get_project_activity(project_id, limit=50)
+    records = st.get_project_activity(project_id, limit=limit, before=before)
     return [
         ActivityRecord(
             id=r["id"],

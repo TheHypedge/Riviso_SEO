@@ -97,6 +97,10 @@ class Settings(BaseSettings):
     # Google Indexing API (service account JSON; raw JSON or base64 JSON)
     google_indexing_service_account_json: str = Field(default="", validation_alias="GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON")
 
+    # Google PageSpeed Insights (Technical Audit) — a plain Cloud Console API key, distinct
+    # from the OAuth client above; PSI authenticates via a `key=` query param, not OAuth.
+    google_pagespeed_api_key: str = Field(default="", validation_alias="GOOGLE_PAGESPEED_API_KEY")
+
     # Process control — read from Settings so .env values always win over Procfile env vars.
     enable_generation_worker: bool = Field(
         default=True,
@@ -107,6 +111,43 @@ class Settings(BaseSettings):
         default=True,
         validation_alias="ENABLE_SCHEDULER",
         description="Run the scheduler loop inside this process.",
+    )
+    enable_serp_refresh_worker: bool = Field(
+        default=False,
+        validation_alias="ENABLE_SERP_REFRESH_WORKER",
+        description="Run the background shared-SERP-index refresh loop inside this process (dedicated worker only).",
+    )
+    enable_seo_crawl_worker: bool = Field(
+        default=False,
+        validation_alias="ENABLE_SEO_CRAWL_WORKER",
+        description="Run the background SEO Audit crawl loop inside this process (dedicated worker only).",
+    )
+
+    # SEO Audit crawler (Site Audit → SEO Audit sub-tab)
+    seo_crawl_user_agent: str = Field(
+        default="RivisoBot/1.0 (+https://riviso.cloud/seo-audit)",
+        validation_alias="SEO_CRAWL_USER_AGENT",
+        description="User-Agent sent by the SEO Audit crawler; identifies Riviso to crawled sites' robots.txt/logs.",
+    )
+    seo_crawl_default_max_urls: int = Field(
+        default=500,
+        validation_alias="SEO_CRAWL_DEFAULT_MAX_URLS",
+        description="Fallback per-crawl URL cap when a plan has no explicit max_seo_audit_urls_per_crawl set.",
+    )
+    seo_crawl_concurrency_per_host: int = Field(
+        default=4,
+        validation_alias="SEO_CRAWL_CONCURRENCY_PER_HOST",
+        description="Max simultaneous in-flight fetches against the crawled host (politeness, §12 of the spec).",
+    )
+    seo_crawl_request_timeout_seconds: float = Field(
+        default=20.0,
+        validation_alias="SEO_CRAWL_REQUEST_TIMEOUT_SECONDS",
+        description="Per-request timeout for the SEO crawler's HTTP fetcher.",
+    )
+    seo_crawl_max_duration_seconds: float = Field(
+        default=1800.0,
+        validation_alias="SEO_CRAWL_MAX_DURATION_SECONDS",
+        description="Hard wall-clock ceiling for one crawl run, regardless of remaining queue depth.",
     )
 
     # Generation queue (Redis-backed; falls back to in-process queue when Redis is down)
@@ -175,6 +216,7 @@ class Settings(BaseSettings):
         "shopify_api_key",
         "shopify_api_secret",
         "openai_api_key",
+        "google_pagespeed_api_key",
         mode="before",
     )
     @classmethod

@@ -11,11 +11,33 @@ import TurndownService from "turndown";
 import styles from "@/app/page.module.css";
 import { EditorLinesSkeleton } from "@/components/skeleton";
 import { markdownToArticleHtml } from "@/lib/articleMarkdown";
+import { ArticleImage } from "@/components/ArticleImageExtension";
 
 const turndown = new TurndownService({
   headingStyle: "atx",
   codeBlockStyle: "fenced",
   bulletListMarker: "-",
+});
+
+// Inline article images (Insert Media) carry width/alignment that plain
+// `![alt](src)` markdown can't represent — always emit a raw <img> tag
+// instead (both Turndown's caller and `marked`/CommonMark on the way back in
+// pass inline raw HTML through untouched, so this round-trips losslessly).
+turndown.addRule("articleImage", {
+  filter: "img",
+  replacement: (_content, node) => {
+    const el = node as HTMLImageElement;
+    const src = el.getAttribute("src") || "";
+    if (!src) return "";
+    const alt = el.getAttribute("alt") || "";
+    const style = el.getAttribute("style");
+    const className = el.getAttribute("class");
+    let tag = `<img src="${src}" alt="${alt}"`;
+    if (style) tag += ` style="${style}"`;
+    if (className) tag += ` class="${className}"`;
+    tag += ">";
+    return tag;
+  },
 });
 
 function htmlToMarkdown(html: string): string {
@@ -75,6 +97,7 @@ export function ArticleRichEditor({ value, onChange, placeholder, contentRevisio
           class: "article-editor-link",
         },
       }),
+      ArticleImage,
     ],
     [placeholder],
   );

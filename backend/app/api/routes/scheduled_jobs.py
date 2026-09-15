@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.deps import get_current_user
 from app.core.project_lookup import async_require_project_access, require_project_access
@@ -41,6 +41,11 @@ def _parse_job_timestamp(raw: str) -> datetime | None:
 def _heal_stale_posting_jobs(*, st, project_id: str, rows: list[dict]) -> list[dict]:
     """
     Reset jobs stuck in ``posting`` with no WordPress post id (crashed worker, tab closed, etc.).
+
+    Sync (does a blocking ``st.update_scheduled_job_fields`` write per stale row) --
+    I7.1: callers must wrap this in ``run_sync``. It was previously called unwrapped
+    from both GET /scheduled-jobs and GET /board, so a write-amplifying blocking
+    call ran on the event loop on every poll (the board is polled every ~6s).
     """
     if not rows or not hasattr(st, "update_scheduled_job_fields"):
         return rows
@@ -267,11 +272,22 @@ def _find_article_for_job(*, st, project_id: str, article_id: str) -> dict | Non
 
 
 @router.get("", response_model=list[ScheduledJobPublic])
-async def list_scheduled(project_id: str, user: dict = Depends(get_current_user)) -> list[ScheduledJobPublic]:
+async def list_scheduled(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+    limit: int | None = Query(default=None, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> list[ScheduledJobPublic]:
     st = get_legacy_storage_module()
     await _require_project_access(st=st, user=user, project_id=project_id)
-    rows = await run_sync(st.load_scheduled_jobs, project_id=project_id) if hasattr(st, "load_scheduled_jobs") else []
-    rows = _heal_stale_posting_jobs(st=st, project_id=project_id, rows=[r for r in (rows or []) if isinstance(r, dict)])
+    # Unbounded by default (preserves prior behavior for existing callers); when a caller
+    # explicitly paginates, push sort+skip+limit down to the query instead of loading the
+    # full project history.
+    load_kwargs: dict = {"project_id": project_id}
+    if limit is not None:
+        load_kwargs.update(limit=limit, offset=offset, sort_desc=True)
+    rows = await run_sync(st.load_scheduled_jobs, **load_kwargs) if hasattr(st, "load_scheduled_jobs") else []
+    rows = await run_sync(_heal_stale_posting_jobs, st=st, project_id=project_id, rows=[r for r in (rows or []) if isinstance(r, dict)])
     out = [
         _to_public(r)
         for r in (rows or [])
@@ -283,7 +299,12 @@ async def list_scheduled(project_id: str, user: dict = Depends(get_current_user)
 
 
 @router.get("/board", response_model=list[ScheduledJobPublic])
-async def list_scheduled_board(project_id: str, user: dict = Depends(get_current_user)) -> list[ScheduledJobPublic]:
+async def list_scheduled_board(
+    project_id: str,
+    user: dict = Depends(get_current_user),
+    limit: int | None = Query(default=None, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> list[ScheduledJobPublic]:
     """
     Scheduled tab: jobs plus orphan article stubs in one request (deduped server-side).
     Avoids loading every article page client-side.
@@ -295,7 +316,10 @@ async def list_scheduled_board(project_id: str, user: dict = Depends(get_current
     # fetch them concurrently instead of one after the other.
     async def _load_rows() -> list:
         if hasattr(st, "load_scheduled_jobs"):
-            return await run_sync(st.load_scheduled_jobs, project_id=project_id) or []
+            load_kwargs: dict = {"project_id": project_id}
+            if limit is not None:
+                load_kwargs.update(limit=limit, offset=offset, sort_desc=True)
+            return await run_sync(st.load_scheduled_jobs, **load_kwargs) or []
         return []
 
     async def _load_stubs() -> list:
@@ -306,7 +330,7 @@ async def list_scheduled_board(project_id: str, user: dict = Depends(get_current
         return []
 
     rows, stubs = await asyncio.gather(_load_rows(), _load_stubs())
-    rows = _heal_stale_posting_jobs(st=st, project_id=project_id, rows=[r for r in (rows or []) if isinstance(r, dict)])
+    rows = await run_sync(_heal_stale_posting_jobs, st=st, project_id=project_id, rows=[r for r in (rows or []) if isinstance(r, dict)])
     jobs = [
         _to_public(r)
         for r in (rows or [])

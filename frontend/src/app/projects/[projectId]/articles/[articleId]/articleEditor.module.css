@@ -29,7 +29,7 @@
   align-items: center;
   gap: 8px;
   padding: 8px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--aa-hairline);
   flex-shrink: 0;
 }
 
@@ -76,7 +76,7 @@
 
 .titleHero {
   padding: 16px 32px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--aa-hairline);
   flex-shrink: 0;
 }
 
@@ -124,7 +124,7 @@
   position: sticky;
   top: 0;
   z-index: var(--z-sticky);
-  background: rgba(11, 11, 13, 0.92);
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 8%);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   padding: 0 32px;
@@ -133,7 +133,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--aa-hairline);
   transform: translateY(-100%);
   opacity: 0;
   pointer-events: none;
@@ -182,10 +182,10 @@
   align-items: center;
   gap: 4px;
   padding: 6px 32px;
-  background: rgba(11, 11, 13, 0.94);
+  background: color-mix(in oklab, var(--aa-surface-card), transparent 6%);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--aa-hairline);
   transition: top 0.2s ease;
 }
 
@@ -240,7 +240,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+  scrollbar-color: var(--aa-hairline) transparent;
 }
 
 .editorCol::-webkit-scrollbar {
@@ -252,7 +252,7 @@
 }
 
 .editorCol::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--aa-surface-soft);
   border-radius: 2px;
 }
 
@@ -271,11 +271,260 @@
 }
 
 .editorBody {
+  position: relative;
   flex: 1;
   min-height: 320px;
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+
+/* ── Inline "AI regenerate selection" tool ──────────────────────────────── */
+
+.selectionAiLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: var(--z-dropdown, 500);
+}
+
+.selectionRegenOverlay {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 3px;
+  background: linear-gradient(
+    110deg,
+    color-mix(in oklab, var(--aa-primary), transparent 92%) 8%,
+    color-mix(in oklab, var(--aa-primary), transparent 60%) 18%,
+    color-mix(in oklab, var(--aa-primary), transparent 92%) 33%
+  );
+  background-size: 200% 100%;
+  animation: selectionRegenShimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes selectionRegenShimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .selectionRegenOverlay {
+    animation: none;
+  }
+}
+
+.selectionAiPill {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  height: 28px;
+  padding: 0 7px;
+  border: 1px solid var(--aa-hairline);
+  border-radius: 999px;
+  background: var(--aa-surface-card);
+  color: var(--aa-primary);
+  box-shadow: var(--aa-shadow-xs, 0 1px 3px rgba(0, 0, 0, 0.12));
+  cursor: pointer;
+  pointer-events: auto;
+  overflow: hidden;
+  transition: padding 0.18s ease, gap 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.selectionAiPill:hover,
+.selectionAiPill:focus-visible {
+  gap: 6px;
+  padding: 0 12px 0 8px;
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 55%);
+  background: color-mix(in oklab, var(--aa-primary), var(--aa-surface-card) 90%);
+  outline: none;
+}
+
+.selectionAiPillLabel {
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-width 0.18s ease, opacity 0.15s ease 0.03s;
+}
+
+.selectionAiPill:hover .selectionAiPillLabel,
+.selectionAiPill:focus-visible .selectionAiPillLabel {
+  max-width: 120px;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .selectionAiPill,
+  .selectionAiPillLabel {
+    transition: none;
+  }
+}
+
+/* ── Inline article image (Insert Media): drag-resize + align NodeView ──── */
+
+.articleImageNodeView {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  margin: 12px 0;
+}
+
+.articleImageNodeView[data-align="left"] {
+  float: left;
+  margin-right: 16px;
+}
+
+.articleImageNodeView[data-align="right"] {
+  float: right;
+  margin-left: 16px;
+}
+
+.articleImageNodeView[data-align="center"] {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.articleImageNodeView[data-selected="true"] {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+}
+
+.articleImageNodeView img {
+  max-width: 100%;
+}
+
+.articleImageHandle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--aa-primary);
+  border: 2px solid var(--aa-surface-card);
+  box-shadow: var(--aa-shadow-xs, 0 1px 3px rgba(0, 0, 0, 0.2));
+  z-index: var(--z-dropdown, 100);
+}
+
+.articleImageAlignRow {
+  position: absolute;
+  top: -38px;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--aa-hairline);
+  border-radius: 8px;
+  background: var(--aa-surface-card);
+  box-shadow: var(--aa-shadow-xs, 0 1px 3px rgba(0, 0, 0, 0.12));
+  z-index: var(--z-dropdown, 100);
+}
+
+.articleImageAlignBtn,
+.articleImageDeleteBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aa-ink);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.articleImageAlignBtn:hover,
+.articleImageDeleteBtn:hover {
+  background: var(--aa-surface-soft);
+}
+
+.articleImageAlignBtn[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--aa-primary), transparent 85%);
+  color: var(--aa-primary);
+}
+
+.articleImageDeleteBtn {
+  color: var(--aa-error);
+  margin-left: 4px;
+  border-left: 1px solid var(--aa-hairline);
+  border-radius: 0 6px 6px 0;
+  padding-left: 4px;
+}
+
+/* Reusable editor tooltip (data-tooltip attr, shown on hover/focus). Native
+   `title` tooltips are unstyleable and rendered black-on-black under some
+   Chromium dark-mode conditions regardless of this app's own `color-scheme:
+   light` — this is a real, always-legible replacement. Dark bg + near-white
+   text keeps contrast solid for every tone; the Figma success/warning/danger
+   colors show as a left accent bar rather than a full fill, since several of
+   those brand colors don't meet AA contrast against white at this font size. */
+.editorTooltip {
+  position: relative;
+}
+
+.editorTooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  z-index: var(--z-tooltip, 600);
+  padding: 5px 9px 5px 8px;
+  border-radius: 6px;
+  border-left: 3px solid var(--aa-muted);
+  background: #16161c;
+  color: color-mix(in oklab, #ffffff, var(--aa-muted) 12%);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.42);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(-50%) translateY(2px);
+  transition: opacity 0.14s ease, visibility 0.14s ease, transform 0.14s ease;
+}
+
+.editorTooltip:hover::after,
+.editorTooltip:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+.editorTooltip[data-tone="danger"]::after { border-left-color: var(--aa-error); }
+.editorTooltip[data-tone="success"]::after { border-left-color: var(--aa-success); }
+.editorTooltip[data-tone="warning"]::after { border-left-color: var(--aa-warning); }
+
+@media (prefers-reduced-motion: reduce) {
+  .editorTooltip::after {
+    transition: none;
+  }
+}
+
+.insertMediaShimmer {
+  height: 120px;
+  border-radius: 8px;
+  margin-top: 10px;
+  background: linear-gradient(
+    110deg,
+    color-mix(in oklab, var(--aa-primary), transparent 92%) 8%,
+    color-mix(in oklab, var(--aa-primary), transparent 60%) 18%,
+    color-mix(in oklab, var(--aa-primary), transparent 92%) 33%
+  );
+  background-size: 200% 100%;
+  animation: selectionRegenShimmer 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .insertMediaShimmer {
+    animation: none;
+  }
 }
 
 .contentHint {
@@ -314,8 +563,8 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--aa-muted);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -343,8 +592,8 @@
 .contextPanel {
   display: flex;
   flex-direction: column;
-  border-left: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(18, 18, 20, 0.55);
+  border-left: 1px solid var(--aa-hairline);
+  background: var(--aa-canvas);
   min-width: 0;
   height: 100%;
   overflow: hidden;
@@ -360,8 +609,8 @@
   width: 20px;
   height: 40px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(18, 18, 20, 0.95);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card);
   color: var(--aa-muted);
   cursor: pointer;
   display: flex;
@@ -406,31 +655,30 @@
 
 /* ── Tab bar ── */
 
+/* Figma 45:2 "sidebar-tabs": gray segmented control, white pill for the
+   active tab -- not an underline-tab bar. */
 .contextTabBar {
   display: flex;
-  gap: 0;
-  padding: 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--aa-surface-soft);
   flex-shrink: 0;
 }
 
 .contextTabBtn {
   flex: 1;
-  padding: 10px 6px 8px;
+  padding: 8px 6px;
+  border-radius: 7px;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--aa-muted);
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
   cursor: pointer;
   text-align: center;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  transition: color 0.15s ease, background-color 0.15s ease;
   white-space: nowrap;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
 }
 
 .contextTabBtn:hover {
@@ -439,17 +687,13 @@
 
 .contextTabBtnActive {
   color: var(--aa-ink);
-  border-bottom-color: var(--aa-primary);
+  font-weight: 600;
+  background: var(--aa-surface-card);
+  box-shadow: var(--aa-shadow-xs, none);
 }
 
 .contextTabIcon {
-  font-size: 14px;
-  line-height: 1;
-  opacity: 0.7;
-}
-
-.contextTabBtnActive .contextTabIcon {
-  opacity: 1;
+  display: none;
 }
 
 /* Collapsed state: only show icons */
@@ -460,6 +704,7 @@
 }
 
 .editorLayoutCollapsed .contextTabIcon {
+  display: inline;
   font-size: 16px;
 }
 
@@ -475,7 +720,7 @@
   overflow-x: hidden;
   padding: 16px;
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+  scrollbar-color: var(--aa-hairline) transparent;
 }
 
 .contextTabContent::-webkit-scrollbar {
@@ -487,7 +732,7 @@
 }
 
 .contextTabContent::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--aa-surface-soft);
   border-radius: 2px;
 }
 
@@ -496,7 +741,7 @@
 .panelSection {
   padding-bottom: 12px;
   margin-bottom: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid var(--aa-hairline);
 }
 
 .panelSection:last-child {
@@ -522,8 +767,8 @@
 .contextPanel :global(select.input),
 .contextPanel :global(textarea.input) {
   color: var(--aa-ink);
-  background: rgba(0, 0, 0, 0.3);
-  border-color: rgba(255, 255, 255, 0.08);
+  background: var(--aa-surface-soft);
+  border-color: var(--aa-hairline);
 }
 
 .contextPanel :global(.input:focus),
@@ -543,8 +788,8 @@
   gap: 16px;
   padding: 14px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.025);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline);
   margin-bottom: 14px;
 }
 
@@ -594,11 +839,59 @@
   flex-shrink: 0;
 }
 
+/* ── On-Page Checks / Readability checklists (Figma 45:2 right panel) ── */
+.checkCard {
+  border-radius: 10px;
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.checkCardTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--aa-ink);
+  padding: 12px 14px 8px;
+}
+
+.checkRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border-top: 1px solid var(--aa-hairline);
+  font-size: 12px;
+  color: var(--aa-body);
+}
+
+.checkIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.checkIconPass {
+  background: color-mix(in oklab, var(--aa-success), transparent 84%);
+  color: var(--aa-success);
+}
+
+.checkIconFail {
+  background: color-mix(in oklab, var(--aa-error), transparent 84%);
+  color: var(--aa-error);
+}
+
 .seoScoreRowTrack {
   flex: 1;
   height: 3px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--aa-surface-soft);
   overflow: hidden;
 }
 
@@ -631,8 +924,8 @@
   box-sizing: border-box;
   padding: 8px 10px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
   color: var(--aa-ink);
   font-size: 13px;
   line-height: 1.5;
@@ -655,8 +948,8 @@
   box-sizing: border-box;
   padding: 8px 10px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
   color: var(--aa-ink);
   font-size: 13px;
   line-height: 1.5;
@@ -674,6 +967,131 @@
 .seoTextarea:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ── Category pill picker (type-to-filter, click-to-add) ── */
+
+.categoryPicker {
+  position: relative;
+  width: 100%;
+}
+
+.categoryPickerField {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 38px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
+  cursor: text;
+  transition: border-color 0.15s ease;
+}
+
+.categoryPickerField:focus-within {
+  border-color: var(--aa-primary);
+}
+
+.categoryPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--aa-primary), transparent 88%);
+  color: var(--aa-primary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.categoryPillRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 999px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.categoryPillRemove:hover {
+  background: color-mix(in oklab, var(--aa-primary), transparent 70%);
+}
+
+.categoryPickerInput {
+  flex: 1 1 80px;
+  min-width: 80px;
+  border: none;
+  background: transparent;
+  color: var(--aa-ink);
+  font-size: 13px;
+  padding: 4px 2px;
+  outline: none;
+}
+
+.categoryPickerInput:disabled {
+  cursor: default;
+}
+
+.categoryPickerDropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: var(--z-dropdown, 500);
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-card);
+  box-shadow: var(--aa-shadow-md, 0 8px 24px rgba(20, 20, 19, 0.16));
+}
+
+.categoryPickerOption {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--aa-ink);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.categoryPickerOption:hover,
+.categoryPickerOptionActive {
+  background: color-mix(in oklab, var(--aa-primary), transparent 90%);
+}
+
+.categoryPickerEmpty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--aa-muted);
+}
+
+@media (max-width: 480px) {
+  .categoryPickerDropdown {
+    max-height: 160px;
+  }
 }
 
 .seoCharCounter {
@@ -704,8 +1122,8 @@
   gap: 6px;
   padding: 8px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
   min-height: 38px;
   align-items: center;
 }
@@ -783,8 +1201,8 @@
   gap: 8px;
   padding: 10px 10px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
   color: var(--aa-muted);
   font-size: 11px;
   font-weight: 600;
@@ -795,9 +1213,9 @@
 }
 
 .aiActionBtn:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--aa-surface-soft);
   color: var(--aa-ink);
-  border-color: rgba(255, 255, 255, 0.10);
+  border-color: var(--aa-hairline);
 }
 
 .aiActionBtn:disabled {
@@ -816,7 +1234,7 @@
 .banner {
   padding: 12px 14px;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--aa-hairline);
   font-size: 13px;
   line-height: 1.55;
   margin: 0 32px 16px;
@@ -850,8 +1268,8 @@
   gap: 8px 12px;
   padding: 8px 12px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
 }
 
 .liveUrlBarTrashed {
@@ -899,7 +1317,7 @@
   font-weight: 600;
   padding: 3px 8px;
   border-radius: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--aa-hairline);
   background: transparent;
   color: var(--aa-muted);
   cursor: pointer;
@@ -913,7 +1331,7 @@
 
 .liveUrlBarBtn:hover:not(:disabled) {
   color: var(--aa-ink);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--aa-surface-soft);
 }
 
 .liveUrlBarBtn:disabled {
@@ -964,12 +1382,15 @@
   color: var(--aa-muted);
 }
 
+/* Matched to .seoInput/.seoTextarea's recessed-field background+border --
+ * previously a slightly different hand-tuned opacity (0.25/0.06 vs 0.3/0.08)
+ * for what is visually the same "inset field on a card" treatment. */
 .settingsInput {
   width: 100%;
   padding: 8px 10px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
   color: var(--aa-ink);
   font-size: 12px;
   font-family: var(--font-mono, "Geist Mono", ui-monospace, monospace);
@@ -993,7 +1414,7 @@
   width: 32px;
   height: 18px;
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--aa-surface-soft);
   position: relative;
   flex-shrink: 0;
   transition: background 0.15s ease;
@@ -1038,8 +1459,8 @@
   text-align: center;
   line-height: 1.5;
   border-radius: 8px;
-  border: 1px dashed rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.015);
+  border: 1px dashed var(--aa-hairline);
+  background: var(--aa-surface-soft);
 }
 
 .imageSkeleton {
@@ -1169,15 +1590,15 @@
   margin-bottom: 12px;
   padding: 10px 12px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
   font-size: 12px;
   line-height: 1.55;
 }
 
 .clusterContextTitle {
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.90);
+  color: var(--aa-body-strong);
   margin-bottom: 4px;
 }
 
@@ -1192,7 +1613,7 @@
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border: 1px solid var(--aa-hairline);
   background: transparent;
   color: inherit;
   transition: border-color 0.15s ease, background 0.15s ease;
@@ -1228,12 +1649,36 @@
   gap: 10px;
   padding: 10px 14px;
   border-radius: 8px;
+  border-left: 3px solid var(--aa-muted);
   background: rgba(18, 18, 20, 0.95);
-  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-top: 1px solid var(--aa-hairline);
+  border-right: 1px solid var(--aa-hairline);
+  border-bottom: 1px solid var(--aa-hairline);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   max-width: 340px;
   min-width: 180px;
   backdrop-filter: blur(8px);
+}
+
+/* Dark surface, so text/icon colors are near-white (matching .editorTooltip's
+   proven-contrast pattern) — `var(--aa-ink)` was near-black, i.e. black text
+   on this near-black background. Tone (success/warning/danger, from Figma
+   branding) tints the actual background fill, not just the left border: mixed
+   into the dark base rather than used at full saturation, since a full-strength
+   fill with white text fails AA for warning/success at this font size (checked:
+   white-on-#b8770b ≈ 3.9:1, white-on-#2e8b57 ≈ 4.2:1 — both under the 4.5
+   minimum) — mixed toward the dark base instead, all three clear >7:1. */
+.toast[data-tone="success"] .toastInner {
+  background: color-mix(in oklab, var(--aa-success) 35%, rgba(18, 18, 20, 0.95));
+  border-left-color: var(--aa-success);
+}
+.toast[data-tone="warning"] .toastInner {
+  background: color-mix(in oklab, var(--aa-warning) 35%, rgba(18, 18, 20, 0.95));
+  border-left-color: var(--aa-warning);
+}
+.toast[data-tone="danger"] .toastInner {
+  background: color-mix(in oklab, var(--aa-error) 35%, rgba(18, 18, 20, 0.95));
+  border-left-color: var(--aa-error);
 }
 
 .toastText {
@@ -1241,7 +1686,7 @@
   font-size: 12px;
   font-weight: 500;
   line-height: 1.5;
-  color: var(--aa-ink);
+  color: color-mix(in oklab, #ffffff, var(--aa-muted) 12%);
 }
 
 .toastClose {
@@ -1251,12 +1696,12 @@
   padding: 0;
   font-size: 16px;
   line-height: 1;
-  color: var(--aa-muted);
+  color: color-mix(in oklab, #ffffff, var(--aa-muted) 40%);
   cursor: pointer;
   transition: color 0.15s ease;
 }
 
-.toastClose:hover { color: var(--aa-ink); }
+.toastClose:hover { color: #ffffff; }
 
 @keyframes toastIn {
   from { opacity: 0; transform: translateY(8px); }
@@ -1272,7 +1717,7 @@
 .skeletonLine {
   height: 12px;
   border-radius: 6px;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.10) 50%, rgba(255, 255, 255, 0.04) 100%);
+  background: linear-gradient(90deg, var(--aa-hairline-soft) 0%, var(--aa-hairline) 50%, var(--aa-hairline-soft) 100%);
   background-size: 200% 100%;
   animation: editorSkeletonPulse 1.4s ease-in-out infinite;
 }
@@ -1283,7 +1728,7 @@
 
 .skeletonEditor { display: grid; gap: 12px; min-height: min(52vh, 420px); padding: 16px 4px; }
 .skeletonRingRow { display: flex; align-items: center; gap: 12px; }
-.skeletonRing { width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; background: rgba(255, 255, 255, 0.06); animation: editorSkeletonPulse 1.4s ease-in-out infinite; }
+.skeletonRing { width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; background: var(--aa-surface-soft); animation: editorSkeletonPulse 1.4s ease-in-out infinite; }
 .skeletonRingMeta { flex: 1; display: grid; gap: 8px; }
 
 /* ── Responsive ── */
@@ -1322,7 +1767,7 @@
     height: auto;
     overflow: visible;
     border-left: none;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid var(--aa-hairline);
   }
 
   .contextTabContent {

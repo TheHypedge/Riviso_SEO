@@ -210,7 +210,12 @@ async def fetch_user_by_id(user_id: str) -> dict[str, Any] | None:
 
 
 async def fetch_project_access_row(project_id: str) -> dict[str, Any] | None:
-    """Non-blocking project access/verification read (P4.8), heavy blobs excluded."""
+    """
+    Non-blocking project access/verification read (P4.8), heavy blobs excluded.
+
+    P3.1: cached ~30s via storage._PROJECT_ACCESS_CACHE, the same dict the sync
+    get_project_access_row reader uses -- a write from either side invalidates both.
+    """
     st = _storage()
     pid = (project_id or "").strip()
     if not pid:
@@ -219,11 +224,24 @@ async def fetch_project_access_row(project_id: str) -> dict[str, Any] | None:
         reader = getattr(st, "get_project_access_row", None) or st.get_project_by_id
         return await anyio.to_thread.run_sync(reader, pid)
 
-    from storage import _PROJECT_ACCESS_MONGO_PROJECTION, _mongo_doc_to_project
+    from storage import (
+        _PROJECT_ACCESS_CACHE,
+        _PROJECT_ACCESS_CACHE_TTL_SECONDS,
+        _PROJECT_ACCESS_MONGO_PROJECTION,
+        _mongo_doc_to_project,
+        _project_access_cache_lock,
+    )
+
+    cached = _PROJECT_ACCESS_CACHE.get(pid)
+    if cached is not None and cached[0] > time.time():
+        return cached[1]
 
     db = _database_module().get_async_db()
     doc = await db.projects.find_one({"id": pid}, _PROJECT_ACCESS_MONGO_PROJECTION)
-    return _mongo_doc_to_project(doc) if doc else None
+    row = _mongo_doc_to_project(doc) if doc else None
+    with _project_access_cache_lock:
+        _PROJECT_ACCESS_CACHE[pid] = (time.time() + _PROJECT_ACCESS_CACHE_TTL_SECONDS, row)
+    return row
 
 
 async def fetch_projects_listing(owner_user_id: str) -> list[dict[str, Any]]:

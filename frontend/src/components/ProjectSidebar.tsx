@@ -5,43 +5,53 @@ import Link from "next/link";
 import styles from "../app/page.module.css";
 import sidebarStyles from "./ProjectSidebar.module.css";
 import { ProjectTabIcon, SidebarBackIcon, type ProjectTabKey } from "./ProjectTabIcon";
+import { NavGroup, NavItem } from "./ui";
 
 type TabKey =
   | "overview"
   | "articles"
-  | "products"
   | "research"
   | "scheduled_articles"
   | "prompts"
   | "context_links"
   | "tools"
-  | "performance"
+  | "site_audit"
+  | "members"
   | "project_settings";
 
 const TAB_LABELS: Record<TabKey, string> = {
   overview: "Overview",
   articles: "Articles",
-  products: "Products",
   research: "Research",
   scheduled_articles: "Scheduled Articles",
   prompts: "Prompts",
   context_links: "Context links",
   tools: "Tools",
-  performance: "Performance & Analysis",
+  site_audit: "Site Audit",
+  members: "Members",
   project_settings: "Project Settings",
 };
 
 const DEFAULT_TAB_ORDER: TabKey[] = [
   "overview",
   "articles",
-  "products",
   "research",
   "scheduled_articles",
   "prompts",
   "context_links",
   "tools",
-  "performance",
+  "site_audit",
+  "members",
   "project_settings",
+];
+
+/** IA grouping matching the Figma "Akhilesh" design handoff literally: Content /
+ * Workspace, same items and order as the main project page's NAV_GROUPS
+ * (projects/[projectId]/page.tsx) -- this sidebar must stay in sync with that
+ * one since Figma shows the identical left rail on every screen. */
+const NAV_GROUPS: { label: string; tabs: TabKey[] }[] = [
+  { label: "Content", tabs: ["overview", "articles", "research", "scheduled_articles", "prompts", "context_links"] },
+  { label: "Workspace", tabs: ["tools", "site_audit", "members", "project_settings"] },
 ];
 
 export type ProjectSidebarProps = {
@@ -150,22 +160,27 @@ export function ProjectSidebar({
 
           <div className={styles.sidebarDivider} aria-hidden="true" />
 
-          <div className={styles.sidebarTitle}>SECTIONS</div>
-          <div className={styles.navGroup} role="navigation" aria-label="Project sections">
-            {visibleTabs.map((k) => (
-              <button
-                key={k}
-                type="button"
-                className={`${styles.navItem} ${activeTab === k ? styles.navItemActive : ""}`}
-                onClick={() => {
-                  onTabClick(k);
-                  onMobileClose?.();
-                }}
-              >
-                <ProjectTabIcon tab={k as ProjectTabKey} className={styles.navItemIcon} />
-                <span className={styles.navItemLabel}>{TAB_LABELS[k]}</span>
-              </button>
-            ))}
+          <div role="navigation" aria-label="Project sections" className="flex flex-col gap-6">
+            {NAV_GROUPS.map((group) => {
+              const tabsInGroup = group.tabs.filter((k) => visibleTabs.includes(k));
+              if (tabsInGroup.length === 0) return null;
+              return (
+                <NavGroup key={group.label} label={group.label}>
+                  {tabsInGroup.map((k) => (
+                    <NavItem
+                      key={k}
+                      label={TAB_LABELS[k]}
+                      icon={<ProjectTabIcon tab={k as ProjectTabKey} />}
+                      active={activeTab === k}
+                      onClick={() => {
+                        onTabClick(k);
+                        onMobileClose?.();
+                      }}
+                    />
+                  ))}
+                </NavGroup>
+              );
+            })}
           </div>
         </div>
 

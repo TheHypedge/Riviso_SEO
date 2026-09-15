@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import time
 from datetime import datetime
@@ -12,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
-from app.core.project_lookup import require_project_access
+from app.core.project_lookup import async_require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.wordpress import WordpressCategory, WordpressPostType
 from app.services.wordpress_client import RIVISO_WP_USER_AGENT, WordpressClient
@@ -32,6 +33,9 @@ _WP_REST_TIMEOUT_S = 45.0
 # every page open.  Key: project_id.  Value: (expires_at, parsed list).
 _CAT_CACHE: dict[str, tuple[float, list[WordpressCategory]]] = {}
 _CAT_CACHE_TTL_S: float = 300.0  # 5 minutes
+
+_POST_TYPES_CACHE: dict[str, tuple[float, list[WordpressPostType]]] = {}
+_POST_TYPES_CACHE_TTL_S: float = 300.0  # 5 minutes
 
 
 def _wp_upstream_error_detail(exc: httpx.HTTPStatusError) -> str:
@@ -474,12 +478,18 @@ async def _probe_riviso_plugin(
         )
 
 
-def _require_project_access(*, st, user: dict, project_id: str, allow_collaborators: bool = False) -> dict:
+async def _require_project_access(*, user: dict, project_id: str, allow_collaborators: bool = False) -> dict:
     # allow_collaborators=True is for content endpoints (WP categories/post-types/
     # sync-linked-articles) that shared collaborators must be able to use. Project
     # Settings, connection verify, and other credential-bearing endpoints keep the
     # default (owner or global-admin only).
-    return require_project_access(st=st, user=user, project_id=project_id, full=True, allow_collaborators=allow_collaborators)
+    #
+    # I7.1: was the sync require_project_access, called unwrapped on every WP
+    # settings/verify/categories/post-types/sync-linked-articles route --
+    # blocked the event loop on the access check for all of them.
+    return await async_require_project_access(
+        user=user, project_id=project_id, full=True, allow_collaborators=allow_collaborators
+    )
 
 
 def _is_shopify_project(proj: dict) -> bool:
@@ -543,7 +553,7 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
     # shopify_client_id) are redacted below for non-owners; the mutating PATCH stays
     # strict owner-only, and the Project Settings tab that surfaces this data is
     # already hidden from non-owners in the frontend.
-    proj = _require_project_access(st=st, user=user, project_id=project_id, allow_collaborators=True)
+    proj = await _require_project_access(user=user, project_id=project_id, allow_collaborators=True)
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
     is_owner = role == "admin" or user_ids_equal(proj.get("owner_user_id"), uid)
@@ -625,7 +635,7 @@ async def update_project_settings(
     user: dict = Depends(get_current_user),
 ) -> ProjectSettingsPublic:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = await _require_project_access(user=user, project_id=project_id)
     pid = (proj.get("id") or "").strip()
 
     updates: dict = {}
@@ -766,7 +776,7 @@ async def verify_wordpress_connection(
     user: dict = Depends(get_current_user),
 ) -> WordpressVerifyResponse:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    proj = await _require_project_access(user=user, project_id=project_id)
     if ((proj.get("platform") or "wordpress").strip().lower() == "shopify"):
         raise HTTPException(
             status_code=400,
@@ -900,9 +910,18 @@ async def verify_wordpress_connection(
 @router.get("/projects/{project_id}/wordpress/post-types", response_model=list[WordpressPostType])
 async def wordpress_post_types(project_id: str, user: dict = Depends(get_current_user)) -> list[WordpressPostType]:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, allow_collaborators=True)
+    proj = await _require_project_access(user=user, project_id=project_id, allow_collaborators=True)
     if _is_shopify_project(proj):
         return []
+
+    # Serve from cache when fresh — skips the external WordPress round-trip.
+    cached = _POST_TYPES_CACHE.get(project_id)
+    if cached:
+        expires_at, types = cached
+        if expires_at > time.time():
+            return types
+        _POST_TYPES_CACHE.pop(project_id, None)
+
     wp = _get_wp_client_for_project(proj)
     # Many hosts block context=edit on /types even when the Riviso plugin publish route works.
     data = await _wp_try_get_json(
@@ -914,13 +933,15 @@ async def wordpress_post_types(project_id: str, user: dict = Depends(get_current
         ),
     )
     parsed = _parse_wp_post_types(data)
-    return parsed if parsed else _default_wp_post_types()
+    result = parsed if parsed else _default_wp_post_types()
+    _POST_TYPES_CACHE[project_id] = (time.time() + _POST_TYPES_CACHE_TTL_S, result)
+    return result
 
 
 @router.get("/projects/{project_id}/wordpress/categories", response_model=list[WordpressCategory])
 async def wordpress_categories(project_id: str, user: dict = Depends(get_current_user)) -> list[WordpressCategory]:
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, allow_collaborators=True)
+    proj = await _require_project_access(user=user, project_id=project_id, allow_collaborators=True)
     if _is_shopify_project(proj):
         return []
 
@@ -958,7 +979,7 @@ async def sync_linked_articles_from_wordpress(
     from app.services.wordpress_sync import resolve_wp_post_id, sync_article_from_wordpress
 
     st = get_legacy_storage_module()
-    proj = _require_project_access(st=st, user=user, project_id=project_id, allow_collaborators=True)
+    proj = await _require_project_access(user=user, project_id=project_id, allow_collaborators=True)
     if _is_shopify_project(proj):
         raise HTTPException(status_code=400, detail="WordPress sync is not available for Shopify projects.")
     if (proj.get("wp_verified_status") or "").strip().lower() != "connected":
@@ -979,30 +1000,50 @@ async def sync_linked_articles_from_wordpress(
         raise_storage_http(e)
 
     linked = [a for a in rows if isinstance(a, dict) and resolve_wp_post_id(a)]
+    aids = [aid for aid in ((row.get("id") or "").strip() for row in linked) if aid]
+
+    # P4.1: one batched read instead of one storage round-trip per article, then bound the
+    # WP REST calls (the actual I/O cost) to a handful concurrently instead of fully serial --
+    # falls back to the old per-article get_article loop if a legacy storage module doesn't
+    # expose the batch reader.
+    if hasattr(st, "load_articles_for_wp_resync"):
+        full_by_id = await run_sync(call_storage, st.load_articles_for_wp_resync, pid, aids)
+    else:
+        full_by_id = {}
+        for aid in aids:
+            row = await run_sync(call_storage, st.get_article, project_id=pid, article_id=aid)
+            if isinstance(row, dict):
+                full_by_id[aid] = row
+
     synced = 0
     skipped = 0
     errors: list[dict] = []
+    sync_semaphore = asyncio.Semaphore(8)
 
-    for row in linked:
-        aid = (row.get("id") or "").strip()
-        if not aid:
-            continue
-        try:
-            full = await run_sync(call_storage, st.get_article, project_id=pid, article_id=aid)
-            if not isinstance(full, dict):
-                skipped += 1
-                continue
-            result = await sync_article_from_wordpress(
-                wp=wp,
-                article=full,
-                rest_base=(full.get("wp_rest_base") or "").strip() or None,
-            )
-            updates = result.get("updates") or {}
-            if updates:
-                await run_sync(call_storage, st.update_article_fields, aid, updates)
-            synced += 1
-        except Exception as e:
-            errors.append({"article_id": aid, "message": str(e)[:300]})
+    async def _sync_one(aid: str) -> None:
+        nonlocal synced, skipped
+        full = full_by_id.get(aid)
+        if not isinstance(full, dict):
+            skipped += 1
+            return
+        async with sync_semaphore:
+            try:
+                result = await sync_article_from_wordpress(
+                    wp=wp,
+                    article=full,
+                    rest_base=(full.get("wp_rest_base") or "").strip() or None,
+                )
+                updates = result.get("updates") or {}
+                if updates:
+                    # $set instead of a full read-modify-replace per article -- build_article_updates_from_wp_post
+                    # never sets image_url, so patch_article_fields is a behavior-preserving drop-in here.
+                    patch_article = getattr(st, "patch_article_fields", None) or st.update_article_fields
+                    await run_sync(call_storage, patch_article, aid, updates)
+                synced += 1
+            except Exception as e:
+                errors.append({"article_id": aid, "message": str(e)[:300]})
+
+    await asyncio.gather(*(_sync_one(aid) for aid in aids))
 
     return {
         "ok": True,

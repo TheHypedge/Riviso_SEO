@@ -17,6 +17,7 @@ class ArticleListItem(BaseModel):
     project_id: str
     title: str
     status: str = Field(default="pending", description="Derived listing status.")
+    created_at: str | None = Field(default=None, description="Used for date-range filtering/sorting in the Articles export.")
     keywords: list[str] = Field(default_factory=list)
     focus_keyphrase: str | None = None
     gsc_status: str | None = Field(default=None, description="For indexing tooltip in the list UI.")
@@ -87,6 +88,7 @@ class ArticlePublic(BaseModel):
     wp_modified_at: str | None = Field(default=None, description="Last modified timestamp from WordPress.")
     wp_synced_at: str | None = Field(default=None, description="When Riviso last pulled this post from WordPress.")
     wp_category_ids: str = Field(default="", description="Comma-separated WordPress category IDs assigned to this article.")
+    source_url: str | None = Field(default=None, description="Source URL this article was drafted from (Through Source tab), for provenance display only.")
 
 
 class ArticleCreate(BaseModel):
@@ -95,6 +97,61 @@ class ArticleCreate(BaseModel):
     title: str = Field(min_length=1, max_length=500, description="Must be unique per project when normalized (NFKC + casefold).")
     keywords: list[str] = Field(default_factory=list, max_length=10)
     focus_keyphrase: str | None = Field(default=None, max_length=500)
+
+
+class SuggestArticleMetadataRequest(BaseModel):
+    """Payload for ``POST .../articles/suggest-metadata`` (Add Article — AI Generate tab)."""
+
+    idea: str = Field(min_length=2, max_length=500, description="Free-text keyword, idea, or sentence to expand into article metadata.")
+
+
+class SuggestArticleMetadataResponse(BaseModel):
+    """AI-suggested metadata to prefill the Add Article form — no article is created by this call."""
+
+    title: str
+    focus_keyphrase: str
+    keywords: list[str] = Field(default_factory=list)
+
+
+class ArticleFromSourceRequest(BaseModel):
+    """Payload for ``POST .../articles/from-source`` (Add Article — Through Source tab)."""
+
+    source_url: str = Field(min_length=1, max_length=2048)
+
+
+class RegenerateSelectionRequest(BaseModel):
+    """Payload for ``POST .../articles/{article_id}/regenerate-selection`` (inline editor tool)."""
+
+    selected_text: str = Field(min_length=1, max_length=8000)
+    context_before: str = Field(default="", max_length=1000)
+    context_after: str = Field(default="", max_length=1000)
+    focus_keyphrase: str | None = Field(default=None, max_length=500)
+    keywords: list[str] = Field(default_factory=list, max_length=10)
+
+
+class RegenerateSelectionResponse(BaseModel):
+    """Reworded replacement for the selected text — same facts/meaning, different wording."""
+
+    rewritten: str
+
+
+class ArticleMediaFromUrlRequest(BaseModel):
+    """Payload for POST .../articles/{article_id}/media/from-url (Insert Media — URL tab)."""
+
+    url: str = Field(min_length=1, max_length=2048)
+
+
+class ArticleMediaGenerateRequest(BaseModel):
+    """Payload for POST .../articles/{article_id}/media/generate (Insert Media — AI Generate tab)."""
+
+    prompt: str = Field(min_length=1, max_length=200)
+
+
+class ArticleMediaResponse(BaseModel):
+    """{id, url} returned by all three Insert Media endpoints (from-url/upload/generate)."""
+
+    id: str
+    url: str
 
 
 class BulkActionRequest(BaseModel):

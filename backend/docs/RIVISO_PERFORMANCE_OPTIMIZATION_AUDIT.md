@@ -4,9 +4,46 @@
 > **Backend:** FastAPI + synchronous PyMongo (`backend/app/`, repo-root `storage.py`, `database.py`).
 > **Frontend:** Next.js 16 / React 19 (`frontend/src/`).
 > **Lens requested:** (1) Data structures, (2) OOP concepts, (3) Structuring of API calls.
-> **Companion doc:** `RIVISO_BACKEND_ARCHITECTURE_BLUEPRINT.md` (architecture reference).
+> **Companion doc:** `RIVISO_BACKEND_ARCHITECTURE_BLUEPRINT.md` (architecture reference). 
 
 Every finding below cites a real `file:line` so you can jump straight to it. Findings are grouped by the three lenses, then a prioritized roadmap is given at the end.
+
+---
+
+## Implementation status — updated 2026-08-10
+
+This audit has since driven two rounds of real fixes, verified via `pytest` + a live local boot against production MongoDB (scheduler/generation-worker disabled) after each change. Findings below are annotated **✅ FIXED** inline where confirmed in the current codebase; unannotated findings are still open. Summary:
+
+**Round 1 — the 🔴 findings** (request-scoped caching, blocking-call fixes, indexed lookups):
+- §1.1 A/B — `load_articles_by_ids_for_project` and indexed `get_article` now used in place of the 20k-row scans (see inline `P2.4` tags in `articles.py` / `scheduled_jobs.py`).
+- §1.1 C — `wordpress.py`'s hot GET paths (settings/verify/categories/post-types) now route through `async_require_project_access`; one lower-traffic write-path re-fetch (`wordpress.py:766`, post-settings-save reload) still does the linear `load_projects()` scan — not yet migrated.
+- §3.3 (partial) / roadmap Phase 1 #1 — `app/core/request_cache.py` (`cache_user`/`cache_subscription`) added and wired into `deps.py` + `middleware/plan_limits.py`; eliminates the 3–5 duplicate user/subscription reads per request described here. `project_shopify.py`'s `sync_catalog` no longer re-runs the full `status()` handler — extracted into `_build_shopify_status()` + one fresh read.
+- §3.4 (partial) / roadmap Phase 1 #3 — `project_shopify.py`, `wordpress.py`, and `scheduled_jobs.py`'s heal-on-GET now wrap their storage calls in `run_sync` / `async_require_project_access` instead of blocking sync PyMongo directly on the event loop. `deps.py`/`middleware/plan_limits.py` and `project_lookup.py` were not re-audited line-by-line beyond the calls above.
+
+**Round 2 — Data & Database Optimization pass** (separate follow-up scoped from a generic caching/pagination/indexing/N+1/pooling checklist, cross-checked against this audit):
+- §1.5 — **correction, not a fix**: this audit's claim that `site_maps`/`content_monitors` indexes were missing was stale — both already exist in `database.py`, confirmed directly. What *was* actually missing and has now been added: `users.created_at`, `notifications.(user_id, created_at)`, `project_activity.(project_id, created_at)` — none of which this audit called out.
+- §3.2 row 1 — **✅ FIXED**: `wordpress.py`'s bulk `sync-linked-articles` N+1 (serial storage-get → WP REST GET → storage-update per article) now does one batched storage read (`load_articles_for_wp_resync`, `$in` query) and bounds the WP REST calls to 8 concurrent via `asyncio.Semaphore` + `asyncio.gather`, exactly as prescribed here.
+- Not from this audit, added alongside it: `limit`/`offset` pagination on `scheduled-jobs`/`board`/`topic-clusters`; a 5-min TTL cache on `wordpress_post_types` (mirroring the existing category cache); a shared 30s TTL cache for the project access-row read (both the sync `storage.get_project_access_row` and the async Motor path in `mongo_listings_async.fetch_project_access_row`), invalidated on every project write; removal of a duplicate, since-redundant `load_plans()` cache in `articles.py` (the module-level one this audit's §3.3 fix already asked for exists in `storage.py`, `_PLANS_CACHE`); `before`-cursor pagination on `GET /notifications` and the project activity feed (backend only — no frontend "load more" UI exists yet to wire it to, confirmed by grep before building anything).
+
+**Round 3 — remaining backend items, re-verified against current code before touching anything** (2026-08-10; frontend and the §2 storage.py/domain-model rewrite explicitly excluded from this round — see below):
+
+Several more findings turned out to already be fixed by prior work this audit hadn't caught up to. Re-checked directly rather than assumed:
+- §1.3 — **already fixed**: `bulk_update_articles` (`storage.py`) already does one batched `$in` read + a single `bulk_write([ReplaceOne, ...])` instead of per-item read/replace. No audit-described N+1 remains here.
+- §1.4 A — **already fixed**: `has_body` is now a persisted field (tag `P4.3`), recomputed on every write (`_normalize_article_dict`, `patch_article_fields`) with a backfill migration (`storage.py` ~3862) and a fallback to the live `$strLenCP` computation only for un-backfilled rows. The pre-`$limit` full-collection body scan this finding described no longer happens on backfilled data.
+- §1.4 B — **already fixed**: `_default_plans()` is called once above the `for doc in cur:` loop in `_load_plans_uncached` (`storage.py`), not per-document. (Also moot in practice — `load_plans()` has had a 60s TTL cache since the earlier round.)
+- §3.2 (clear/cancel scheduled jobs row) — **already fixed**: both routes now do one `delete_many` (tags `P4.4`/`P4.6`), falling back to per-row deletes only if that repository method is unavailable.
+- §3.3 (`update_scheduled_job` double project-fetch / triple job-reload) — **already fixed**: single indexed job lookup, `patch_scheduled_job_fields` ($set), and the article-sync side-effect reuses the in-memory row — no reload loop remains.
+- §3.6 — **correction, still open**: initially assumed the `P4.3` persisted `listing_status` field closed this, but checked the actual caller (`articles.py`'s `_count_listing_with_derived_status` / `_listing_page_with_derived_status`) and it doesn't use it — it merges *live* scheduled-job overlay data (`_fetch_posted_job_overlay_for_article_ids`) into each row before deriving status, because "posting right now" depends on live job state the persisted article field alone can't answer. The batch-scan-and-merge this finding describes is real and unchanged.
+
+Actually fixed in this round:
+- §3.2 (`cluster_internal_link_service.py`) — **✅ FIXED**: `resolve_cluster_mapped_pages` (called on every article generation via `article_pipeline.py`) and `build_cluster_link_context` (editor sibling panel) both looped calling `get_article` once per sibling/pillar slot. Added `load_articles_for_cluster_links` (a dedicated `$in` projection: id/title/status/wp_link/wp_post_id/wp_last_wp_status/image_url — the exact fields these two call sites read) and a shared `_load_articles_batch` helper; both loops now do one batched read instead of N.
+- §3.3 (PATCH-article / WP-sync double-fetch) — **partially addressed**: didn't remove the pre- and post-update re-fetches (risked silently getting a derived field like `has_body`/`listing_status` wrong in the response if reconstructed by hand in Python instead of read back from Mongo). Instead made the **write** itself cheap: `articles.py`'s `update_article` route, `sync_article_from_wordpress_route`, and `wordpress.py`'s bulk-sync route all now call `patch_article_fields` ($set) instead of `update_article_fields` (full read-modify-`replace_one`) — verified safe because none of these callers' update dicts ever touch `image_url` (the one field `patch_article_fields` treats specially). Confirmed via a live round-trip write against production Mongo that derived fields and write semantics are unchanged.
+
+Investigated and deliberately left alone:
+- §3.2 (`retry_all_failed_preparations`) — still calls `get_article` once per failed job, but each call is already an indexed single-doc lookup (not a scan), it's a low-frequency admin action, and the article's full document is genuinely needed for generation — a batch fetch here would need a brand-new full-doc `$in` primitive for marginal benefit. Left as-is.
+- §3.2 (`wordpress.py` REST path probe, `_wp_try_get_json`) — still uncached, but its two real callers (categories, post-types) are both now cache-fronted at 5-minute TTLs from the earlier round, so this probe rarely re-runs in practice already. Lower priority than when the audit was written.
+
+**Still open, unchanged**: §1.1 C's one residual `wordpress.py:766` scan, §1.2 (projections — `get_project_by_id`/`get_user_by_id`; checked `get_user_by_id` specifically: `_user_doc_to_public` already consumes ~30 of the document's fields, so a projection would save little for real risk — not worth doing), §3.6 (filtered-listing double scan — the persisted `listing_status` field doesn't cover this caller's *live* scheduled-job overlay merge, see correction above), §2 (OOP/typed-domain-model — explicitly out of scope, architectural), §3.1 (`asyncio.gather` opportunities beyond Shopify/board), articles.py `bulk_schedule`'s N+1, §3.5 and §3.7–§3.9 (frontend — explicitly out of scope this round), and roadmap Phase 1 items #6–#7 and all of Phase 2/3 items not called out above.
 
 ---
 
@@ -28,23 +65,26 @@ The single biggest structural fact driving most issues: **the data layer is 100 
 
 ### 1.1 🔴 Linear scans where a dict/set index belongs
 
-**A. Validate bulk IDs by loading 20k rows and scanning**
+**A. Validate bulk IDs by loading 20k rows and scanning** — ✅ **FIXED**
 **Where:** `backend/app/api/routes/articles.py:1028-1037`
 **Now:** To check whether ≤500 submitted article IDs belong to a project, the handler loads up to 20,000 listing rows and linearly scans them building an `allowed` set.
 **Why slow:** O(project size) work + full listing transfer to validate a tiny set.
 **Fix:** Add `storage.load_articles_by_ids_for_project(project_id, ids)` backed by a Mongo `{"id": {"$in": ids}}` existence query; build the set from that.
+**Status:** Done — the route now calls `load_articles_by_ids_for_project` when available (tagged `P2.4` in code), falling back to the old scan only if a legacy storage module doesn't expose it.
 
-**B. Find one article by scanning the whole project**
+**B. Find one article by scanning the whole project** — ✅ **FIXED**
 **Where:** `backend/app/api/routes/scheduled_jobs.py:246-256` (`_find_article_for_job`)
 **Now:** `load_articles_listing_for_project(pid, limit=20000)` then `for a in rows: if a["id"] == aid`.
 **Why slow:** O(n) per lookup, and this is called inside loops (heal, retry-all).
 **Fix:** Use the existing `storage.get_article(project_id, article_id)` single-doc indexed read.
+**Status:** Done — `_find_article_for_job` (tagged `P2.4`) now uses the indexed single-doc lookup, scan only as a JSON-mode fallback.
 
-**C. WordPress routes scan all projects in Python**
+**C. WordPress routes scan all projects in Python** — ⚠️ **MOSTLY FIXED**
 **Where:** `backend/app/api/routes/wordpress.py:470-472`
 **Now:** `next((p for p in (st.load_projects() or []) if p["id"] == pid), None)` on every WP settings/verify/categories call.
 **Why slow:** Full owner project list pulled + linearly scanned for one project, synchronously, on the event loop.
 **Fix:** Route through `app.core.project_lookup.require_project_access` (indexed `find_one` + cache).
+**Status:** The hot GET paths (settings, verify, categories, post-types) now route through `async_require_project_access`, which as of the Data & DB Optimization pass also hits a shared 30s TTL cache. One lower-traffic instance remains at `wordpress.py:766` — a post-settings-save re-fetch that still does the linear `load_projects()` scan — not yet migrated.
 
 **D. JSON-mode article lookups re-load and scan the whole file**
 **Where:** `storage.py:2531-2536`, `2805-2818`, `3035-3037`
@@ -80,25 +120,28 @@ The single biggest structural fact driving most issues: **the data layer is 100 
 **Why slow:** Thousands of rows transferred to produce one integer.
 **Fix:** Mirror the Mongo `count_documents` path; never materialize to count.
 
-### 1.3 🟠 Read-modify-write of full documents to change one field
+### 1.3 🟠 Read-modify-write of full documents to change one field — ⚠️ **PARTIALLY FIXED**
 
 **Where:** `storage.py:4104-4113` (articles), `4006-4015` (projects), `4167-4177` (`bulk_update_articles`)
 **Now:** `find_one(full doc)` → mutate dict in Python → `replace_one(full doc)`. `bulk_update_articles` does this per item (a classic N+1: K reads + K replaces, each carrying the body).
 **Why slow:** 2× wire cost + full BSON re-encode of the body on every small update.
 **Fix:** Route partial updates through `update_one(..., {"$set": fields})` (the `patch_article_fields` helper at `4117-4134` already does this — make it the default). For bulk: one `find({"id": {"$in": ids}}, projection)` + a single `bulk_write` of `$set` ops.
+**Status (2026-08-10):** `bulk_update_articles` — **already fixed**, does one batched `$in` read + a single `bulk_write([ReplaceOne, ...])`. Per-article single-field updates — three real call sites (`articles.py`'s `update_article` PATCH route, `sync_article_from_wordpress_route`, `wordpress.py`'s bulk-sync route) switched from `update_article_fields` to `patch_article_fields` this round. `update_project_fields` (the projects side of this finding) is still a full read-modify-`replace_one` — not changed.
 
 ### 1.4 🟠 Recomputing derived values per element
 
-**A. `hasBody` computed for every row before `$limit`**
+**A. `hasBody` computed for every row before `$limit`** — ✅ **FIXED**
 **Where:** `storage.py:3045-3060` (also `3201-3207`, `3348-3391`)
 **Now:** The listing `$project` runs `$strLenCP` over `$article` for **all** matched rows, *then* sorts and limits.
 **Why slow:** A 10k-article project requesting 50 rows still scans 10k bodies.
 **Fix:** Persist a `has_body: bool` flag on write, or reorder to `$sort` → `$limit` → compute `hasBody` only on the page (relies on `{project_id, created_at}` index).
+**Status:** `has_body` is a persisted field (tag `P4.3`), recomputed on every write, with a backfill migration and a live-computed fallback only for rows that predate the backfill.
 
-**B. `_default_plans()` rebuilt inside a per-document loop**
+**B. `_default_plans()` rebuilt inside a per-document loop** — ✅ **FIXED**
 **Where:** `storage.py:1205-1213`
 **Now:** The default-plans dict is reconstructed for every plan document in the cursor.
 **Fix:** Hoist `defaults = _default_plans()` above the loop.
+**Status:** Already hoisted above the `for doc in cur:` loop in `_load_plans_uncached`; also moot in practice since `load_plans()` has carried a 60s TTL cache since the earlier optimization round.
 
 ### 1.5 🟠 Missing indexes for live query shapes
 
@@ -106,6 +149,7 @@ The single biggest structural fact driving most issues: **the data layer is 100 
 **Now:** No index on `site_maps.project_id` or the monitor due-query shape; `research_cache` has no TTL on stale entries.
 **Why slow:** Collection scans grow linearly as these collections fill.
 **Fix:** Add `db.site_maps.create_index([("project_id",1),("post_modified_at",-1)])`, a monitor index matching the due filter, and a TTL index on `research_cache`.
+**Status — correction (2026-08-09):** This claim was stale when re-checked. All three already exist in `database.py`: `site_maps.(project_id, post_modified_at)`, `content_monitors.next_check_at` + `content_monitors.(project_id, updated_at)`, and a `research_cache.expires_at` TTL index. What *was* actually missing (and has now been added): `users.created_at`, `notifications.(user_id, created_at)`, `project_activity.(project_id, created_at)` — none of which this audit flagged.
 
 ---
 
@@ -161,15 +205,15 @@ The single biggest structural fact driving most issues: **the data layer is 100 
 
 | Where | Pattern | Fix |
 |-------|---------|-----|
-| `wordpress.py:960-977` (bulk sync) | per linked article: storage get → WP REST GET → storage update, **fully serial** (500 articles ≈ 1,500 serial I/O ops) | batch storage reads by `$in`; `asyncio.gather` WP calls with a bounded semaphore (5–10) |
-| `scheduled_jobs.py:469-488` (retry-all) | per failed job: update → 20k article scan → reload **all** jobs | reuse the row already in hand; batch article fetch once; drop the reload |
-| `scheduled_jobs.py:762-771`, `717-725` (clear/cancel) | one `await delete_scheduled_job` per job | bulk `delete_many` by project / `article_id` |
+| `wordpress.py:960-977` (bulk sync) — ✅ **FIXED** | per linked article: storage get → WP REST GET → storage update, **fully serial** (500 articles ≈ 1,500 serial I/O ops) | batch storage reads by `$in`; `asyncio.gather` WP calls with a bounded semaphore (5–10) — done: `load_articles_for_wp_resync` (`$in`) + `asyncio.Semaphore(8)`; per-article write also switched to `patch_article_fields` ($set) |
+| `scheduled_jobs.py:469-488` (retry-all) — investigated, left as-is | per failed job: update → 20k article scan → reload **all** jobs | ~~reuse the row already in hand; batch article fetch once; drop the reload~~ — the "reload all jobs" part is already fixed (in-memory row reuse); the per-job `get_article` is already an indexed single-doc lookup, not a scan, on a low-frequency admin action — batching it needs a new full-doc `$in` primitive for marginal benefit, not done |
+| `scheduled_jobs.py:762-771`, `717-725` (clear/cancel) — ✅ **FIXED** | one `await delete_scheduled_job` per job | bulk `delete_many` by project / `article_id` — done (tags `P4.4`/`P4.6`), per-row loop is now only a fallback |
 | `articles.py:2021-2037` (bulk_schedule) | `_persist_schedule_row` per article (each may re-query jobs) | one bulk upsert API for scheduled jobs |
-| `cluster_internal_link_service.py:196-208` | one `get_article` per sibling slot | batch-load all sibling IDs in one `$in` query |
-| `wordpress.py:79-90` (REST path probe) | tries candidate paths serially on failure | parallel probe (`asyncio.wait(FIRST_COMPLETED)`) and cache the winning path per project |
+| `cluster_internal_link_service.py:196-208` — ✅ **FIXED** | one `get_article` per sibling slot | batch-load all sibling IDs in one `$in` query — done: `load_articles_for_cluster_links` + `_load_articles_batch`, both `resolve_cluster_mapped_pages` and `build_cluster_link_context` now batch |
+| `wordpress.py:79-90` (REST path probe) — lower priority now | tries candidate paths serially on failure | parallel probe (`asyncio.wait(FIRST_COMPLETED)`) and cache the winning path per project — not done; its two real callers (categories, post-types) are now cache-fronted at 5-min TTLs, so this rarely re-runs in practice |
 | frontend `listArticlesAll` (`api.ts:1963-1975`) | up to **50 sequential** `page=N&per_page=500` requests for Overview/Tools/export | use `workspaceOverview()` aggregate, or true server-side pagination |
 
-### 3.3 🔴 The same record is fetched multiple times per request
+### 3.3 🔴 The same record is fetched multiple times per request — ⚠️ **PARTIALLY FIXED**
 
 **Where:** `core/deps.py:58-60` + `middleware/plan_limits.py:79-90` + `services/plan_gatekeeper.py:92-97`
 **Now:** On every mutating `/api/*` request:
@@ -184,12 +228,15 @@ That's **3–5 blocking DB reads of full documents** before the handler body exe
 - Add a module-level TTL cache (≈60s) for `load_plans()` invalidated on `upsert_plan`.
 - In handlers, apply `updates` to the in-memory row and skip the re-fetch; return the merged dict.
 
-### 3.4 🔴 Blocking (sync) PyMongo on the event loop
+**Status:** The first two bullets are done — `app/core/request_cache.py` (`cache_user`/`cache_subscription`) memoizes user/subscription per-request, wired into both `deps.py` and `middleware/plan_limits.py`; `load_plans()` has a 60s TTL cache in `storage.py` (`_PLANS_CACHE`), and a second, redundant 120s cache that had grown independently in `articles.py` was removed in favor of it. Shopify's `sync_catalog` no longer re-runs `status()` — extracted into `_build_shopify_status()`. `update_scheduled_job` — **already fixed**: single indexed job lookup, `patch_scheduled_job_fields` ($set), article-sync side-effect reuses the in-memory row, no reload loop. PATCH-article and WP-sync's re-fetches are still there (third bullet, the actual "skip the re-fetch" ask, not done — too risky to hand-merge derived fields like `has_body`/`listing_status` in Python instead of reading them back), but as of 2026-08-10 the **write** each does beforehand is now `patch_article_fields` ($set) instead of a full read-modify-`replace_one` — see §1.3.
+
+### 3.4 🔴 Blocking (sync) PyMongo on the event loop — ⚠️ **PARTIALLY FIXED**
 
 **Where:** `core/deps.py:58-60` (`get_current_user`), `core/project_lookup.py:27-45` (`require_project_access`), `middleware/plan_limits.py:79-90`, several Shopify routes (`project_shopify.py:315-318,462,741-747`), `scheduled_jobs.py:78` (heal write).
 **Now:** These run synchronous `storage`/`call_storage` calls directly inside `async def` without `run_sync`.
 **Why slow:** Blocks the event loop, so unrelated concurrent requests stall during Mongo I/O — thread-pool benefits are bypassed.
 **Fix:** Wrap every sync storage call in `await run_sync(...)`, or migrate these hot reads to the async Motor path (`mongo_listings_async.py` already proves the pattern for listings).
+**Status:** `project_shopify.py`'s `_require_project` now calls `async_require_project_access` (async Motor path); `wordpress.py`'s `_require_project_access` does the same; `scheduled_jobs.py`'s heal-on-GET (`_heal_stale_posting_jobs`) is wrapped in `run_sync` at both call sites. `deps.py`/`project_lookup.py`'s own internals and `middleware/plan_limits.py` were not re-audited line-by-line beyond confirming they use the `request_cache` memoization from §3.3.
 
 ### 3.5 🟠 Heavy payloads where a light projection/endpoint exists
 
@@ -206,6 +253,7 @@ That's **3–5 blocking DB reads of full documents** before the handler body exe
 **Where:** `articles.py:731-751`, `774-795` (`_count_listing_with_derived_status`, `_listing_page_with_derived_status`)
 **Now:** When a `status=` filter is applied, both count and page paginate through up to `_LISTING_MAX_SCAN` (20,000) rows in 200-row batches, merging job overlays per batch — worst case ≈100 round-trips, doubled.
 **Fix:** Persist the derived listing status on the article document and `$match` on it directly in Mongo.
+**Status (2026-08-10, note not a fix):** `has_body`/`listing_status` are now persisted fields elsewhere in the codebase (§1.4 A, tag `P4.3`) — worth checking whether that closes this, but it doesn't: this specific pair of functions merges *live* scheduled-job overlay data (`_fetch_posted_job_overlay_for_article_ids`) per row before deriving status, because "is this posting right now" depends on live job state the persisted article field can't capture alone. The batch-scan-and-merge described here is unchanged.
 
 ### 3.7 🟠 Polling design (frontend) — frequency, backoff, visibility
 
@@ -252,20 +300,24 @@ That's **3–5 blocking DB reads of full documents** before the handler body exe
 ## 5. Prioritized roadmap
 
 ### Phase 1 — High ROI, low risk (do first)
-1. **Request-scoped cache for user/subscription/plan** — eliminate 3–5 reads/request. (`deps.py`, `plan_limits.py`, `plan_gatekeeper.py`; §3.3)
-2. **TTL cache for `load_plans()`.** (`storage.py:1205`, `plan_gatekeeper.py`; §1.4B/§3.3)
-3. **Wrap all sync storage in `run_sync`** on hot async paths. (`deps.py`, `project_lookup.py`, `wordpress.py`, `project_shopify.py`; §3.4)
-4. **Add `load_articles_by_ids_for_project` + use it** in `bulk_action`, `_find_article_for_job`. (§1.1A/B, §3.2)
-5. **`asyncio.gather` the obvious serial pairs** (`editor-shell`, board, Shopify sync). (§3.1)
-6. **Frontend: visibility guard + backoff on all poll loops.** (§3.7)
-7. **Frontend: replace `listArticlesAll` on Overview/Tools with the aggregate endpoint.** (§3.2, §3.8)
+1. ✅ **Request-scoped cache for user/subscription/plan** — eliminate 3–5 reads/request. (`deps.py`, `plan_limits.py`, `plan_gatekeeper.py`; §3.3) — `request_cache.py` added, user/subscription memoized; plan caching covered by item 2.
+2. ✅ **TTL cache for `load_plans()`.** (`storage.py:1205`, `plan_gatekeeper.py`; §1.4B/§3.3) — `_PLANS_CACHE` (60s) in `storage.py`; duplicate cache in `articles.py` removed in favor of it.
+3. ⚠️ **Wrap all sync storage in `run_sync`** on hot async paths. (`deps.py`, `project_lookup.py`, `wordpress.py`, `project_shopify.py`; §3.4) — done for `project_shopify.py`, `wordpress.py`, `scheduled_jobs.py` heal-on-GET; `deps.py`/`project_lookup.py` internals not re-audited.
+4. ✅ **Add `load_articles_by_ids_for_project` + use it** in `bulk_action`, `_find_article_for_job`. (§1.1A/B, §3.2) — both wired in (tagged `P2.4`).
+5. **`asyncio.gather` the obvious serial pairs** (`editor-shell`, board, Shopify sync). (§3.1) — not done.
+6. **Frontend: visibility guard + backoff on all poll loops.** (§3.7) — not done.
+7. **Frontend: replace `listArticlesAll` on Overview/Tools with the aggregate endpoint.** (§3.2, §3.8) — not done.
+
+**Added outside this audit's original scope, same phase-1 spirit:** 3 missing indexes (`users.created_at`, `notifications`, `project_activity`); pagination on `scheduled-jobs`/`board`/`topic-clusters`; a TTL cache on `wordpress_post_types`; a shared TTL cache for the project access-row read (sync + async); `before`-cursor pagination on notifications/activity (backend only); the WordPress bulk-sync N+1 from §3.2 row 1 (see below).
 
 ### Phase 2 — Structural (medium effort)
-8. **Projections everywhere**: split `get_project_by_id`, `get_user_by_id`, `load_projects`, scheduler queries into light vs full. (§1.2)
-9. **Route all partial writes through `$set`**; batch `bulk_update_articles`. (§1.3)
-10. **Persist `has_body` and derived listing status** to kill the pre-`$limit` body scans and double 20k scans. (§1.4A, §3.6)
-11. **Bulk scheduled-job APIs** (upsert/delete) + move heal to the worker. (§3.2, §3.7)
-12. **Add missing indexes / TTLs** (`site_maps`, monitors, `research_cache`). (§1.5)
+8. **Projections everywhere**: split `get_project_by_id`, `get_user_by_id`, `load_projects`, scheduler queries into light vs full. (§1.2) — not done; `get_project_by_id`'s hottest caller (generation worker) already has its own slim `get_project_for_generation` projection from a prior round, and `get_user_by_id` was checked and found low-value to project (see §1.2 C status).
+9. ✅ **Route all partial writes through `$set`**; batch `bulk_update_articles`. (§1.3) — `bulk_update_articles` was already batched when re-checked; `update_article`/WP-sync/WP-bulk-sync routes switched to `patch_article_fields` this round.
+10. ⚠️ **Persist `has_body` and derived listing status** to kill the pre-`$limit` body scans and double 20k scans. (§1.4A, §3.6) — `has_body` done (`P4.3`); the double-20k-scan listing functions still can't use the persisted status because they merge live scheduled-job state per row (§3.6).
+11. ⚠️ **Bulk scheduled-job APIs** (upsert/delete) + move heal to the worker. (§3.2, §3.7) — bulk delete done (`P4.4`/`P4.6`); moving heal-on-GET into the background worker itself not done (it's `run_sync`-wrapped, no longer blocking, but still runs on the GET path).
+12. ✅ **Add missing indexes / TTLs** (`site_maps`, monitors, `research_cache`). (§1.5) — all three already existed (audit was stale here); the real gaps found and fixed were `users`/`notifications`/`project_activity`.
+
+**Also fixed this round, not originally itemized here:** the `cluster_internal_link_service.py` sibling-lookup N+1 (§3.2) and `update_scheduled_job`'s triple-fetch (§3.3, already fixed when re-checked).
 
 ### Phase 3 — Architecture (higher effort, compounding payoff)
 13. **Introduce typed repositories + domain models** with explicit heavy/light fields. (§2.1, §2.2)
@@ -278,29 +330,29 @@ That's **3–5 blocking DB reads of full documents** before the handler body exe
 
 ## 6. Quick reference — top 20 findings by impact
 
-| # | Lens | Location | Issue | Fix |
-|---|------|----------|-------|-----|
-| 1 | API | `deps.py`+`plan_limits.py`+`plan_gatekeeper.py` | 3–5× user/sub/plan reads per request | request-scoped cache |
-| 2 | API | `wordpress.py:960-977` | serial WP sync per article (1,500 ops) | batch + bounded `gather` |
-| 3 | Data | `storage.py:2506` | `load_articles()` full collection | scoped queries + projection |
-| 4 | Data | `storage.py:3045-3060` | `hasBody` computed before `$limit` | persist flag / reorder |
-| 5 | API | `articles.py:731-795` | double 20k scan for filtered list | persist derived status |
-| 6 | API | `deps.py:60`,`project_lookup.py:27` | blocking PyMongo on event loop | `run_sync` / Motor |
-| 7 | Data | `storage.py:4167-4177` | N+1 in `bulk_update_articles` | `$in` read + bulk `$set` |
-| 8 | API | `shopify_sync.py:196-250` | 6 serial Shopify REST calls | `asyncio.gather` |
-| 9 | Data | `articles.py:1028-1037` | 20k load to validate IDs | `$in` / `get_by_ids` |
-| 10 | Data | `storage.py:2323,2490` | project/full-doc no projection | per-call projections |
-| 11 | OOP | `storage.py` (whole) | dicts everywhere, no heavy/light typing | domain models/repos |
-| 12 | API | `scheduled_jobs.py:469-488` | retry-all triple work per job | reuse row, batch fetch |
-| 13 | FE | `api.ts:1963-1975` | 50-page waterfall for Overview | aggregate endpoint |
-| 14 | FE | poll loops (`api.ts`,`page.tsx`) | no visibility guard / backoff | `document.hidden` + backoff |
-| 15 | API | `articles.py:531,1314` | full body on detail GET | split endpoints |
-| 16 | Data | `storage.py:1515` | full user doc + regex fallback every auth | projection + canonical ids |
-| 17 | API | `scheduled_jobs.py:307-442` | 3× job reload + 2× project fetch | reuse in-memory row |
-| 18 | FE | `page.tsx:1171-1218` | shell refetch on every tab switch | drop `tab` from deps |
-| 19 | Data | `database.py` | missing `site_maps`/monitor indexes | add indexes + TTL |
-| 20 | FE | `page.tsx:1290-1372` | GSC analytics fetched 3× | fetch once, share |
+| # | Lens | Location | Issue | Fix | Status |
+|---|------|----------|-------|-----|--------|
+| 1 | API | `deps.py`+`plan_limits.py`+`plan_gatekeeper.py` | 3–5× user/sub/plan reads per request | request-scoped cache | ✅ Fixed |
+| 2 | API | `wordpress.py:960-977` | serial WP sync per article (1,500 ops) | batch + bounded `gather` | ✅ Fixed |
+| 3 | Data | `storage.py:2506` | `load_articles()` full collection | scoped queries + projection | Open |
+| 4 | Data | `storage.py:3045-3060` | `hasBody` computed before `$limit` | persist flag / reorder | ✅ Fixed (`P4.3`) |
+| 5 | API | `articles.py:731-795` | double 20k scan for filtered list | persist derived status | Open — persisted `listing_status` (`P4.3`) doesn't cover this caller's live job-overlay merge |
+| 6 | API | `deps.py:60`,`project_lookup.py:27` | blocking PyMongo on event loop | `run_sync` / Motor | ⚠️ Partial (Shopify/WP/scheduled-jobs routes done) |
+| 7 | Data | `storage.py:4167-4177` | N+1 in `bulk_update_articles` | `$in` read + bulk `$set` | ✅ Fixed (already, when re-checked) |
+| 8 | API | `shopify_sync.py:196-250` | 6 serial Shopify REST calls | `asyncio.gather` | Open |
+| 9 | Data | `articles.py:1028-1037` | 20k load to validate IDs | `$in` / `get_by_ids` | ✅ Fixed |
+| 10 | Data | `storage.py:2323,2490` | project/full-doc no projection | per-call projections | Open |
+| 11 | OOP | `storage.py` (whole) | dicts everywhere, no heavy/light typing | domain models/repos | Open — explicitly out of scope (architectural) |
+| 12 | API | `scheduled_jobs.py:469-488` | retry-all triple work per job | reuse row, batch fetch | ⚠️ Partial — reload-all-jobs part fixed; per-job article fetch (already indexed) left as-is, low value to batch further |
+| 13 | FE | `api.ts:1963-1975` | 50-page waterfall for Overview | aggregate endpoint | Open |
+| 14 | FE | poll loops (`api.ts`,`page.tsx`) | no visibility guard / backoff | `document.hidden` + backoff | Open |
+| 15 | API | `articles.py:531,1314` | full body on detail GET | split endpoints | Open |
+| 16 | Data | `storage.py:1515` | full user doc + regex fallback every auth | projection + canonical ids | Open — checked: `_user_doc_to_public` consumes ~30 fields already, projection has little to save |
+| 17 | API | `scheduled_jobs.py:307-442` | 3× job reload + 2× project fetch | reuse in-memory row | ✅ Fixed (already, when re-checked) |
+| 18 | FE | `page.tsx:1171-1218` | shell refetch on every tab switch | drop `tab` from deps | Open |
+| 19 | Data | `database.py` | missing `site_maps`/monitor indexes | add indexes + TTL | ❌ Was already false — see §1.5 correction; real gaps (users/notifications/project_activity) fixed instead |
+| 20 | FE | `page.tsx:1290-1372` | GSC analytics fetched 3× | fetch once, share | Open |
 
 ---
 
-*End of audit. Pair with `RIVISO_BACKEND_ARCHITECTURE_BLUEPRINT.md` for system context. No source files were modified to produce this document.*
+*End of audit. Pair with `RIVISO_BACKEND_ARCHITECTURE_BLUEPRINT.md` for system context. No source files were modified to produce the original findings below — see "Implementation status" above for what has since been fixed, updated through 2026-08-10. Fixes were made locally (no `.git` repo in this working copy) and are not yet deployed to the VPS.*

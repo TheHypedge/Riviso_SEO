@@ -1,0 +1,46 @@
+/*
+ * Single source of truth for the matte-black dark-theme token overrides used
+ * by both the dashboard and the project workspace.
+ *
+ * Previously this block was hand-duplicated in dashboard.module.css
+ * (.dashboardDark) and projectsDark.module.css (.projectsDark) -- ~90%
+ * identical, and it had already drifted: --aa-primary-active mixed toward
+ * black in one file and white in the other, so the app's most common
+ * button hover/press state visibly differed depending on which screen you
+ * were on. Consumers `composes` this class instead of redeclaring it, so
+ * that class of drift is now structurally impossible, not just unlikely.
+ *
+ * --aa-primary / --aa-primary-hover / --aa-primary-active are deliberately
+ * NOT overridden here -- globals.css's fixed values (#d97757 / #c86a4c /
+ * #c86a4c, per DESIGN.md's documented "ember-deep on hover" spec) already
+ * work on this dark surface and don't need a per-theme color-mix() variant.
+ */
+.darkTheme {
+  --aa-canvas: #0b0b0d;
+  --aa-surface-soft: rgba(255, 255, 255, 0.04);
+  --aa-surface-card: rgba(18, 18, 20, 0.72);
+  --aa-surface-dark: #0b0b0d;
+  --aa-surface-dark-elevated: rgba(18, 18, 20, 0.88);
+  --aa-surface-dark-soft: rgba(255, 255, 255, 0.05);
+
+  --aa-ink: rgba(255, 255, 255, 0.94);
+  --aa-body: rgba(255, 255, 255, 0.86);
+  --aa-body-strong: rgba(255, 255, 255, 0.92);
+  --aa-muted: rgba(255, 255, 255, 0.62);
+  --aa-muted-soft: rgba(255, 255, 255, 0.46);
+  --aa-hairline: rgba(255, 255, 255, 0.1);
+  --aa-hairline-soft: rgba(255, 255, 255, 0.07);
+
+  /* Legacy-mapped vars some older components still read directly instead of
+     --aa-*. Kept resolving to the same dark values here so nothing that
+     reaches for --background/--foreground/--text-primary/--button-secondary-
+     border silently falls back to the light-mode base. Do not add new
+     component styles against these -- use --aa-* directly. */
+  --background: var(--aa-canvas);
+  --foreground: var(--aa-surface-card);
+  --text-primary: var(--aa-ink);
+  --text-secondary: var(--aa-muted);
+  --button-secondary-border: var(--aa-hairline);
+
+  background: var(--aa-canvas);
+}

@@ -8,11 +8,13 @@ import { useRouter } from "next/navigation";
 import { DashboardNavIcon } from "@/components/DashboardNavIcon";
 import { ShopifyManualConnectGuide } from "@/components/shopify/ShopifyManualConnectGuide";
 import { TutorialStepperModal } from "@/components/TutorialStepperModal";
-import { ProjectOverviewDashboard } from "@/components/overview/ProjectOverviewDashboard";
+import { ProjectOverviewDashboardLight } from "@/components/overview/ProjectOverviewDashboardLight";
 import { DashboardProjectsSkeleton, DetailPanelSkeleton, FormFieldsSkeleton } from "@/components/skeleton";
 import NotificationBell from "@/components/NotificationBell";
+import { StatCard, NavGroup, NavItem } from "@/components/ui";
 import styles from "../page.module.css";
 import dashStyles from "./dashboard.module.css";
+import dashLightStyles from "./dashboardLight.module.css";
 import {
   AdminUserDetails,
   AdminUserPublic,
@@ -104,6 +106,34 @@ export default function DashboardPage() {
 
   const usersDirty = useMemo(() => Object.keys(userEdits).length > 0, [userEdits]);
   const usersDirtyCount = useMemo(() => Object.keys(userEdits).length, [userEdits]);
+
+  const [usersSearch, setUsersSearch] = useState("");
+  const [usersRoleFilter, setUsersRoleFilter] = useState("");
+  const [usersStatusFilter, setUsersStatusFilter] = useState("");
+  const [usersSubscriptionFilter, setUsersSubscriptionFilter] = useState("");
+
+  const usersStats = useMemo(() => {
+    let active = 0;
+    let deleted = 0;
+    let admins = 0;
+    for (const u of users) {
+      if (u.is_deleted) deleted += 1;
+      else if ((u.account_status || "active") === "active") active += 1;
+      if (u.role === "admin") admins += 1;
+    }
+    return { total: users.length, active, deleted, admins };
+  }, [users]);
+
+  const usersVisible = useMemo(() => {
+    const q = usersSearch.trim().toLowerCase();
+    return users.filter((u) => {
+      if (q && !(u.full_name || "").toLowerCase().includes(q) && !u.email.toLowerCase().includes(q)) return false;
+      if (usersRoleFilter && u.role !== usersRoleFilter) return false;
+      if (usersStatusFilter && (u.account_status || "active") !== usersStatusFilter) return false;
+      if (usersSubscriptionFilter && (u.subscription_type || "") !== usersSubscriptionFilter) return false;
+      return true;
+    });
+  }, [users, usersSearch, usersRoleFilter, usersStatusFilter, usersSubscriptionFilter]);
 
   const token = useMemo(() => getAccessToken(), []);
   const isAdmin = (meRole || "").trim().toLowerCase() === "admin";
@@ -262,11 +292,16 @@ export default function DashboardPage() {
     setShareCancelBusy(null);
   };
 
+  const [projectSearch, setProjectSearch] = useState("");
+
   const filteredProjects = useMemo(() => {
-    if (projectFilter === "owned") return projects.filter(p => !p.is_shared);
-    if (projectFilter === "shared") return projects.filter(p => p.is_shared);
-    return projects;
-  }, [projects, projectFilter]);
+    let list = projects;
+    if (projectFilter === "owned") list = list.filter(p => !p.is_shared);
+    else if (projectFilter === "shared") list = list.filter(p => p.is_shared);
+    const q = projectSearch.trim().toLowerCase();
+    if (q) list = list.filter(p => p.name.toLowerCase().includes(q) || (p.website_url || "").toLowerCase().includes(q));
+    return list;
+  }, [projects, projectFilter, projectSearch]);
 
   function normalizePlatform(p: ProjectPublic | null | undefined): ProjectPlatform {
     const raw = ((p?.platform || "") as string).trim().toLowerCase();
@@ -724,7 +759,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className={`${styles.page} ${styles.pageTop} ${dashStyles.dashboardDark}`}>
+    <div className={`${styles.page} ${styles.pageTop} ${dashLightStyles.dashboardLightTheme}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
         <div className={styles.mobileTopBar}>
           <button type="button" className={styles.mobileMenuBtn} onClick={() => setMobileNavOpen(true)} aria-label="Open menu">
@@ -754,81 +789,64 @@ export default function DashboardPage() {
               <span className={styles.sidebarBrandText}>Riviso</span>
             </Link>
             <div className={`${styles.sidebarNavMain} ${dashStyles.sidebarNavCompact}`}>
-              <div className={styles.sidebarTitle}>{isAdmin ? "Admin" : "Workspace"}</div>
-              <div className={styles.navGroup}>
-                <button
-                  type="button"
-                  className={`${styles.navItem} ${section === "overview" ? styles.navItemActive : ""}`}
+              <NavGroup label="Workspace">
+                <NavItem
+                  label="Project overview"
+                  icon={<DashboardNavIcon nav="overview" />}
+                  active={section === "overview"}
                   onClick={() => goSection("overview")}
-                >
-                  <DashboardNavIcon nav="overview" className={styles.navItemIcon} />
-                  <span className={styles.navItemLabel}>Project overview</span>
-                </button>
-                <button
-                  type="button"
-                  className={`${styles.navItem} ${section === "projects" ? styles.navItemActive : ""}`}
+                />
+                <NavItem
+                  label="Project management"
+                  icon={<DashboardNavIcon nav="projects" />}
+                  active={section === "projects"}
                   onClick={() => goSection("projects")}
-                >
-                  <DashboardNavIcon nav="projects" className={styles.navItemIcon} />
-                  <span className={styles.navItemLabel}>Project management</span>
-                </button>
-                {isAdmin ? (
-                  <>
-                    <button
-                      type="button"
-                      className={`${styles.navItem} ${section === "users" ? styles.navItemActive : ""}`}
-                      onClick={() => goSection("users")}
-                    >
-                      <DashboardNavIcon nav="users" className={styles.navItemIcon} />
-                      <span className={styles.navItemLabel}>Manage users</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`${styles.navItem} ${section === "limits" ? styles.navItemActive : ""}`}
-                      onClick={() => goSection("limits")}
-                    >
-                      <DashboardNavIcon nav="limits" className={styles.navItemIcon} />
-                      <span className={styles.navItemLabel}>System limitations</span>
-                    </button>
-                  </>
-                ) : null}
-              </div>
+                />
+              </NavGroup>
+
+              {isAdmin ? (
+                <NavGroup label="Manage">
+                  <NavItem
+                    label="Manage users"
+                    icon={<DashboardNavIcon nav="users" />}
+                    active={section === "users"}
+                    onClick={() => goSection("users")}
+                  />
+                  <NavItem
+                    label="System limitations"
+                    icon={<DashboardNavIcon nav="limits" />}
+                    active={section === "limits"}
+                    onClick={() => goSection("limits")}
+                  />
+                </NavGroup>
+              ) : null}
             </div>
 
-            <div className={`${styles.sidebarFooter} ${dashStyles.sidebarFooterCompact}`}>
-              <div className={styles.sidebarTitle}>Account</div>
-              <div className={styles.navGroup} style={{ marginBottom: 0 }}>
-                <button
-                  type="button"
-                  className={`${styles.navItem} ${section === "profile" ? styles.navItemActive : ""}`}
+            <div className={styles.sidebarFooter}>
+              <NavGroup label="Account">
+                <NavItem
+                  label="User profile"
+                  icon={<DashboardNavIcon nav="profile" />}
+                  active={section === "profile"}
                   onClick={() => goSection("profile")}
-                >
-                  <DashboardNavIcon nav="profile" className={styles.navItemIcon} />
-                  <span className={styles.navItemLabel}>User profile</span>
-                </button>
-                <button
-                  type="button"
-                  className={styles.navItem}
+                />
+                <NavItem
+                  label="Watch tutorial"
+                  icon={<DashboardNavIcon nav="tutorial" />}
                   onClick={() => {
                     setMobileNavOpen(false);
                     setShowTutorial(true);
                   }}
-                >
-                  <DashboardNavIcon nav="tutorial" className={styles.navItemIcon} />
-                  <span className={styles.navItemLabel}>Watch tutorial</span>
-                </button>
-                <button
-                  type="button"
-                  className={styles.navItem}
+                />
+                <NavItem
+                  label="Logout"
+                  icon={<DashboardNavIcon nav="logout" />}
                   onClick={() => {
                     setMobileNavOpen(false);
                     logout();
                   }}
-                >
-                  <DashboardNavIcon nav="logout" className={styles.navItemIcon} />
-                  <span className={styles.navItemLabel}>Logout</span>
-                </button>
-              </div>
+                />
+              </NavGroup>
 
               <div className={styles.sidebarAccountCard} aria-label="Signed-in account">
                 <div className={styles.sidebarAvatar} aria-hidden="true">
@@ -875,7 +893,7 @@ export default function DashboardPage() {
             ) : null}
 
             {section === "overview" ? (
-              <ProjectOverviewDashboard
+              <ProjectOverviewDashboardLight
                 onGoProjects={() => goSection("projects")}
               />
             ) : null}
@@ -886,6 +904,24 @@ export default function DashboardPage() {
                   <h1>Projects</h1>
                   <p>Create and manage projects from your workspace.</p>
                 </div>
+
+                {!loading && projects.length > 0 ? (
+                  <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
+                    <StatCard value={projects.length} label="Total" hero />
+                    <StatCard
+                      value={projects.length - projects.filter((p) => normalizePlatform(p) === "shopify" && !p.shopify_connected).length}
+                      label="Connected"
+                    />
+                    <StatCard
+                      value={projects.filter((p) => normalizePlatform(p) === "shopify" && !p.shopify_connected).length}
+                      label="Needs attention"
+                    />
+                    <StatCard
+                      value={lastSyncedAt && !dataMayBeStale ? new Date(lastSyncedAt).toLocaleTimeString() : "—"}
+                      label="Last synced"
+                    />
+                  </div>
+                ) : null}
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
                   <div className={dashStyles.cardHeaderRow}>
@@ -902,6 +938,15 @@ export default function DashboardPage() {
                       </div>
                     </div>
                     <div className={dashStyles.cardHeaderRight}>
+                      <input
+                        type="search"
+                        className={styles.input}
+                        style={{ width: 220 }}
+                        value={projectSearch}
+                        onChange={(e) => setProjectSearch(e.target.value)}
+                        placeholder="Search projects…"
+                        aria-label="Search projects"
+                      />
                       <NotificationBell />
                       <button
                         type="button"
@@ -944,7 +989,9 @@ export default function DashboardPage() {
 
                   {!loading && filteredProjects.length === 0 && projects.length === 0 ? <p className={styles.muted}>No projects yet.</p> : null}
                   {!loading && filteredProjects.length === 0 && projects.length > 0 ? (
-                    <p className={styles.muted}>No {projectFilter} projects.</p>
+                    <p className={styles.muted}>
+                      {projectSearch.trim() ? "No projects match your search." : `No ${projectFilter} projects.`}
+                    </p>
                   ) : null}
 
                   {loading && projects.length === 0 ? (
@@ -1300,89 +1347,156 @@ export default function DashboardPage() {
                   </div>
                 ) : null}
 
+                {!usersLoading ? (
+                  <div className={dashStyles.usersStatsRow}>
+                    <StatCard value={usersStats.total} label="Total Users" valueClassName="text-[#ee3b00]" />
+                    <StatCard value={usersStats.active} label="Active" valueClassName="text-[#16a34a]" />
+                    <StatCard value={usersStats.deleted} label="Deleted" valueClassName="text-[#e23d3d]" />
+                    <StatCard value={usersStats.admins} label="Admins" valueClassName="text-[#5b4cf5]" />
+                  </div>
+                ) : null}
+
                 <div className={`${styles.card} ${styles.cardWide}`}>
                   {usersLoading ? <DetailPanelSkeleton /> : null}
                   {!usersLoading ? (
-                    <table className={styles.table}>
-                      <thead>
-                        <tr>
-                          <th className={styles.th}>Full name</th>
-                          <th className={styles.th}>Email</th>
-                          <th className={styles.th}>Role</th>
-                          <th className={styles.th}>Subscription</th>
-                          <th className={styles.th}>Status</th>
-                          <th className={styles.th}>Projects</th>
-                          <th className={styles.th}>Details</th>
-                          <th className={styles.th}>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {users.map((u) => {
-                          const isDirty = !!userEdits[u.id];
-                          return (
-                            <tr key={u.id} className={isDirty ? dashStyles.usersDirtyRow : undefined}>
-                              <td className={styles.td}>
-                                <input
-                                  className={styles.inputSmall}
-                                  value={u.full_name || ""}
-                                  onChange={(e) => updateUserField(u.id, "full_name", e.target.value)}
-                                  placeholder="—"
-                                  aria-label="Full name"
-                                />
-                              </td>
-                              <td className={`${styles.td} ${styles.tdMuted}`}>{u.email}</td>
-                              <td className={styles.td}>
-                                <select
-                                  className={styles.select}
-                                  value={u.role}
-                                  onChange={(e) => updateUserField(u.id, "role", e.target.value)}
-                                  aria-label="Role"
-                                >
-                                  <option value="user">User</option>
-                                  <option value="admin">Admin</option>
-                                </select>
-                              </td>
-                              <td className={styles.td}>
-                                <select
-                                  className={styles.select}
-                                  value={u.subscription_type || ""}
-                                  onChange={(e) => updateUserField(u.id, "subscription_type", e.target.value)}
-                                  aria-label="Subscription plan"
-                                >
-                                  <option value="">— Unassigned —</option>
-                                  {plans.map((p) => (
-                                    <option key={p.key} value={p.key}>
-                                      {p.name || p.key}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-                              <td className={styles.td}>
-                                <span className={styles.pill}>{u.account_status || "active"}</span>
-                              </td>
-                              <td className={styles.td}>
-                                <div className={dashStyles.workspaceCell}>
-                                  <span className={styles.muted}>{u.total_projects ?? 0}</span>
-                                  <button className={styles.miniBtn} type="button" onClick={() => openUserWorkspace(u.id)}>
-                                    Open
-                                  </button>
-                                </div>
-                              </td>
-                              <td className={styles.td}>
-                                <button className={styles.miniBtn} type="button" onClick={() => viewUserDetails(u.id)}>
-                                  View details
-                                </button>
-                              </td>
-                              <td className={styles.td}>
-                                <button className={`${styles.miniBtn} ${styles.miniDanger}`} type="button" onClick={() => promptDeleteUser(u)}>
-                                  Deactivate
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                    <>
+                      <div className={dashStyles.usersFilterBar}>
+                        <input
+                          className={`${styles.input} ${dashStyles.usersFilterSearch}`}
+                          value={usersSearch}
+                          onChange={(e) => setUsersSearch(e.target.value)}
+                          placeholder="Search name or email…"
+                          aria-label="Search users"
+                        />
+                        <select
+                          className={`${styles.select} ${dashStyles.usersFilterSelect}`}
+                          value={usersRoleFilter}
+                          onChange={(e) => setUsersRoleFilter(e.target.value)}
+                          aria-label="Filter by role"
+                        >
+                          <option value="">All roles</option>
+                          <option value="user">User</option>
+                          <option value="admin">Admin</option>
+                        </select>
+                        <select
+                          className={`${styles.select} ${dashStyles.usersFilterSelect}`}
+                          value={usersStatusFilter}
+                          onChange={(e) => setUsersStatusFilter(e.target.value)}
+                          aria-label="Filter by status"
+                        >
+                          <option value="">All statuses</option>
+                          <option value="active">Active</option>
+                          <option value="deactivated">Deactivated</option>
+                        </select>
+                        <select
+                          className={`${styles.select} ${dashStyles.usersFilterSelect}`}
+                          value={usersSubscriptionFilter}
+                          onChange={(e) => setUsersSubscriptionFilter(e.target.value)}
+                          aria-label="Filter by subscription"
+                        >
+                          <option value="">All subscriptions</option>
+                          {plans.map((p) => (
+                            <option key={p.key} value={p.key}>
+                              {p.name || p.key}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className={styles.button}
+                          disabled
+                          title="Coming soon"
+                          aria-disabled="true"
+                        >
+                          + Invite User
+                        </button>
+                      </div>
+
+                      <table className={styles.table}>
+                        <thead>
+                          <tr>
+                            <th className={styles.th}>User</th>
+                            <th className={styles.th}>Role</th>
+                            <th className={styles.th}>Subscription</th>
+                            <th className={styles.th}>Status</th>
+                            <th className={styles.th}>Projects</th>
+                            <th className={styles.th}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {usersVisible.map((u) => {
+                            const isDirty = !!userEdits[u.id];
+                            const initial = (u.full_name || u.email || "?").trim().charAt(0).toUpperCase();
+                            return (
+                              <tr key={u.id} className={isDirty ? dashStyles.usersDirtyRow : undefined}>
+                                <td className={styles.td}>
+                                  <div className={dashStyles.usersAvatarCell}>
+                                    <span className={dashStyles.usersAvatar} aria-hidden="true">{initial}</span>
+                                    <div className={dashStyles.usersAvatarInfo}>
+                                      <input
+                                        className={`${styles.inputSmall} ${dashStyles.usersAvatarName}`}
+                                        value={u.full_name || ""}
+                                        onChange={(e) => updateUserField(u.id, "full_name", e.target.value)}
+                                        placeholder="—"
+                                        aria-label="Full name"
+                                      />
+                                      <span className={dashStyles.usersAvatarEmail}>{u.email}</span>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className={styles.td}>
+                                  <select
+                                    className={styles.select}
+                                    value={u.role}
+                                    onChange={(e) => updateUserField(u.id, "role", e.target.value)}
+                                    aria-label="Role"
+                                  >
+                                    <option value="user">User</option>
+                                    <option value="admin">Admin</option>
+                                  </select>
+                                </td>
+                                <td className={styles.td}>
+                                  <select
+                                    className={styles.select}
+                                    value={u.subscription_type || ""}
+                                    onChange={(e) => updateUserField(u.id, "subscription_type", e.target.value)}
+                                    aria-label="Subscription plan"
+                                  >
+                                    <option value="">— Unassigned —</option>
+                                    {plans.map((p) => (
+                                      <option key={p.key} value={p.key}>
+                                        {p.name || p.key}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </td>
+                                <td className={styles.td}>
+                                  <span className={styles.pill}>{u.account_status || "active"}</span>
+                                </td>
+                                <td className={styles.td}>
+                                  <div className={dashStyles.workspaceCell}>
+                                    <span className={styles.muted}>{u.total_projects ?? 0}</span>
+                                    <button className={styles.miniBtn} type="button" onClick={() => openUserWorkspace(u.id)}>
+                                      Open
+                                    </button>
+                                  </div>
+                                </td>
+                                <td className={styles.td}>
+                                  <div className={dashStyles.usersActionsCell}>
+                                    <button className={styles.miniBtn} type="button" onClick={() => viewUserDetails(u.id)}>
+                                      Details
+                                    </button>
+                                    <button className={`${styles.miniBtn} ${styles.miniDanger}`} type="button" onClick={() => promptDeleteUser(u)}>
+                                      Deactivate
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </>
                   ) : null}
                 </div>
 
@@ -1423,10 +1537,16 @@ export default function DashboardPage() {
             ) : null}
 
             {section === "limits" && isAdmin ? (
-              <AdminPlansModule users={users} />
+              <div className={dashLightStyles.dashboardLightTheme}>
+                <AdminPlansModule users={users} />
+              </div>
             ) : null}
 
-            {section === "profile" ? <UserProfileModule /> : null}
+            {section === "profile" ? (
+              <div className={dashLightStyles.dashboardLightTheme}>
+                <UserProfileModule />
+              </div>
+            ) : null}
           </section>
         </div>
       </main>
@@ -1447,11 +1567,11 @@ export default function DashboardPage() {
             <div className={styles.modalBody}>
               {addProjectStep === "form" ? (
                 <>
-                  <label className={styles.label}>
+                  <label className="flex flex-col gap-1.5 text-sm text-ink">
                     Project name
                     <input className={styles.input} value={name} onChange={(e) => setName(e.target.value)} />
                   </label>
-                  <label className={styles.label}>
+                  <label className="flex flex-col gap-1.5 text-sm text-ink">
                     Website URL
                     <input
                       className={styles.input}

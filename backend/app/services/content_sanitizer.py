@@ -22,7 +22,11 @@ from __future__ import annotations
 
 import re
 
-from app.services.generation_blocklist import sanitize_line_banned_phrases, strip_banned_phrases_from_text
+from app.services.generation_blocklist import (
+    sanitize_line_banned_phrases,
+    strip_banned_phrases_from_text,
+    strip_em_dashes,
+)
 
 __all__ = [
     "sanitize_article_body",
@@ -183,7 +187,7 @@ def sanitize_article_body(text: str | None) -> str:
 def _strip_meta_string(text: str | None) -> str:
     if not text:
         return ""
-    s = strip_banned_phrases_from_text(str(text).strip())
+    s = strip_em_dashes(strip_banned_phrases_from_text(str(text).strip()))
     # Drop wrapping code fences (rare).
     if s.startswith("```") and s.endswith("```"):
         s = s[3:-3].strip()
