@@ -2141,6 +2141,7 @@
   max-width: 100%;
   min-width: 0;
   grid-template-columns:
+    36px
     minmax(0, 1.8fr)
     minmax(0, 1fr)
     minmax(0, 160px)
@@ -2173,7 +2174,7 @@
   white-space: nowrap;
 }
 
-.articlesTableHead span:nth-child(8) {
+.articlesTableHead span:nth-child(6) {
   text-align: right;
 }
 
@@ -4182,6 +4183,7 @@
   .articlesTableHead,
   .articlesTableRowMain {
     grid-template-columns:
+      32px
       minmax(0, 1.6fr)
       minmax(0, 1fr)
       minmax(0, 130px)

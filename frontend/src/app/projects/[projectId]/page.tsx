@@ -6113,6 +6113,32 @@ export default function ProjectPage() {
 
                   <div className={styles.mobileActionChips}>
                     <button
+                      className={styles.chipButton}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setBulkUploadErrors([]);
+                        setBulkUploadRows([]);
+                        setBulkParseDupTitles([]);
+                        setShowBulkUpload(true);
+                      }}
+                    >
+                      Bulk Upload
+                    </button>
+                    <button
+                      className={styles.chipButton}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setExportFrom(dateFrom || "");
+                        setExportTo(dateTo || "");
+                        setExportStatus(status || "");
+                        setShowExportArticles(true);
+                      }}
+                    >
+                      Export
+                    </button>
+                    <button
                       className={`${styles.chipButton} ${styles.chipButtonPrimary}${status || dateFrom || dateTo ? ` ${styles.chipButtonFilterActive}` : ""}`}
                       type="button"
                       onClick={() => setShowMobileFilters(true)}
@@ -6120,6 +6146,18 @@ export default function ProjectPage() {
                     >
                       Filter{status || dateFrom || dateTo ? " · On" : ""}
                     </button>
+                    {selectedIds.length ? (
+                      <button
+                        className={`${styles.chipButton} ${styles.buttonHighlight}`}
+                        type="button"
+                        onClick={() => {
+                          setBulkMode("root");
+                          setShowBulkPopup(true);
+                        }}
+                      >
+                        Actions…
+                      </button>
+                    ) : null}
                   </div>
                 </>
               ) : tab === "scheduled_articles" ? (
@@ -6244,6 +6282,172 @@ export default function ProjectPage() {
 
         {tab === "articles" ? (
           <>
+            {showBulkPopup ? (
+              <>
+                <div className={styles.bulkBackdrop} onClick={() => setShowBulkPopup(false)} />
+                <div
+                  className={`${styles.bulkPopup} ${bulkMode === "schedule" ? styles.bulkPopupScheduleLayout : ""} ${bulkMode === "root" || bulkMode === "change_status" ? styles.bulkPopupCompact : ""}`}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="Bulk actions"
+                >
+                  <div className={styles.bulkPopupHead}>
+                    <div className={styles.bulkPopupTitle}>
+                      <strong>
+                        {bulkMode === "schedule"
+                          ? "Schedule articles"
+                          : bulkMode === "change_status"
+                            ? "Change status"
+                            : "Bulk actions"}
+                      </strong>
+                      {bulkMode === "schedule" ? (
+                        <div className={styles.bulkScheduleMetaChips}>
+                          <span className={styles.bulkScheduleMetaChip}>
+                            <Icon.Document className={styles.icon16} />
+                            {bulkScheduleSeedRows.length} article{bulkScheduleSeedRows.length === 1 ? "" : "s"}
+                          </span>
+                          {profileTz ? (
+                            <span className={styles.bulkScheduleMetaChip}>
+                              <Icon.Clock className={styles.icon16} />
+                              {profileTz}
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : bulkMode === "root" ? (
+                        <span className={styles.bulkPopupSubtitle}>
+                          {selectedIds.length} article{selectedIds.length === 1 ? "" : "s"} selected
+                        </span>
+                      ) : bulkMode === "change_status" ? (
+                        <span className={styles.bulkPopupSubtitle}>
+                          Apply to {selectedIds.length} article{selectedIds.length === 1 ? "" : "s"}
+                        </span>
+                      ) : null}
+                    </div>
+                    <button className={styles.iconButton} type="button" aria-label="Close bulk actions" onClick={() => setShowBulkPopup(false)}>
+                      <Icon.X className={styles.icon20} />
+                    </button>
+                  </div>
+                  {bulkMode === "root" ? (
+                    <div className={styles.bulkActionList} role="menu">
+                      <button
+                        className={styles.bulkActionItem}
+                        type="button"
+                        role="menuitem"
+                        onClick={bulkEdit}
+                        disabled={selectedIds.length !== 1}
+                        title={selectedIds.length !== 1 ? "Select exactly 1 article to edit" : "Edit selected article"}
+                      >
+                        <span className={styles.bulkActionIcon} aria-hidden="true">
+                          <Icon.Edit className={styles.icon20} />
+                        </span>
+                        <span className={styles.bulkActionText}>
+                          <span className={styles.bulkActionLabel}>Edit article</span>
+                          <span className={styles.bulkActionHint}>Opens the editor for one article</span>
+                        </span>
+                      </button>
+                      <button
+                        className={styles.bulkActionItem}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => setBulkMode("change_status")}
+                      >
+                        <span className={styles.bulkActionIcon} aria-hidden="true">
+                          <Icon.Status className={styles.icon20} />
+                        </span>
+                        <span className={styles.bulkActionText}>
+                          <span className={styles.bulkActionLabel}>Change status</span>
+                          <span className={styles.bulkActionHint}>Pending, draft, or published</span>
+                        </span>
+                        <Icon.ChevronRight className={styles.bulkActionChevron} />
+                      </button>
+                      <button className={styles.bulkActionItem} type="button" role="menuitem" onClick={bulkSchedule}>
+                        <span className={styles.bulkActionIcon} aria-hidden="true">
+                          <Icon.Calendar className={styles.icon20} />
+                        </span>
+                        <span className={styles.bulkActionText}>
+                          <span className={styles.bulkActionLabel}>Schedule articles</span>
+                          <span className={styles.bulkActionHint}>Set WordPress publish times</span>
+                        </span>
+                        <Icon.ChevronRight className={styles.bulkActionChevron} />
+                      </button>
+                      <button
+                        className={`${styles.bulkActionItem} ${styles.bulkActionItemDanger}`}
+                        type="button"
+                        role="menuitem"
+                        onClick={bulkDelete}
+                      >
+                        <span className={`${styles.bulkActionIcon} ${styles.bulkActionIconDanger}`} aria-hidden="true">
+                          <Icon.Trash className={styles.icon20} />
+                        </span>
+                        <span className={styles.bulkActionText}>
+                          <span className={styles.bulkActionLabel}>Delete articles</span>
+                          <span className={styles.bulkActionHint}>Removes selected articles permanently</span>
+                        </span>
+                      </button>
+                    </div>
+                  ) : bulkMode === "change_status" ? (
+                    <>
+                      <button type="button" className={styles.bulkActionBack} onClick={() => setBulkMode("root")}>
+                        <Icon.Back className={styles.icon20} />
+                        Back to actions
+                      </button>
+                      <div className={styles.bulkActionList} role="menu">
+                        <button
+                          className={styles.bulkActionItem}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => bulkChangeStatus("pending")}
+                        >
+                          <span className={`${styles.bulkActionStatusDot} ${styles.bulkActionStatusDotPending}`} aria-hidden="true" />
+                          <span className={styles.bulkActionText}>
+                            <span className={styles.bulkActionLabel}>Pending</span>
+                          </span>
+                        </button>
+                        <button
+                          className={styles.bulkActionItem}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => bulkChangeStatus("draft")}
+                        >
+                          <span className={`${styles.bulkActionStatusDot} ${styles.bulkActionStatusDotDraft}`} aria-hidden="true" />
+                          <span className={styles.bulkActionText}>
+                            <span className={styles.bulkActionLabel}>Draft</span>
+                          </span>
+                        </button>
+                        <button
+                          className={styles.bulkActionItem}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => bulkChangeStatus("published")}
+                        >
+                          <span className={`${styles.bulkActionStatusDot} ${styles.bulkActionStatusDotPublished}`} aria-hidden="true" />
+                          <span className={styles.bulkActionText}>
+                            <span className={styles.bulkActionLabel}>Published</span>
+                          </span>
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <BulkScheduleForm
+                      seedRows={bulkScheduleSeedRows}
+                      active={showBulkPopup && bulkMode === "schedule"}
+                      profileTz={profileTz}
+                      defaults={wpDefaults}
+                      wpTypesForSchedule={wpTypesForSchedule}
+                      scheduleWritingPrompts={scheduleWritingPrompts}
+                      scheduleImagePrompts={scheduleImagePrompts}
+                      submitting={bulkScheduling}
+                      error={error}
+                      onCancel={() => setBulkMode("root")}
+                      onValidationError={setError}
+                      onSubmit={bulkScheduleSubmit}
+                      cancelLabel="Back to actions"
+                    />
+                  )}
+                </div>
+              </>
+            ) : null}
+
               <div className={`${styles.card} ${styles.cardWide} ${styles.hideOnMobile} ${styles.articlesToolbar}`}>
                 {tab === "articles"
                   ? renderLimitStrip([
@@ -6335,12 +6539,62 @@ export default function ProjectPage() {
                         {syncRunning ? "Syncing…" : "Sync Website"}
                       </button>
                     ) : null}
+                    <button
+                      className={styles.articlesToolbarBtn}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setBulkUploadErrors([]);
+                        setBulkUploadRows([]);
+                        setBulkParseDupTitles([]);
+                        setShowBulkUpload(true);
+                      }}
+                    >
+                      Bulk Upload
+                    </button>
+                    <button
+                      className={styles.articlesToolbarBtn}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setExportFrom(dateFrom || "");
+                        setExportTo(dateTo || "");
+                        setExportStatus(status || "");
+                        setShowExportArticles(true);
+                      }}
+                    >
+                      Export
+                    </button>
+                  </div>
+
+                  <div className={styles.articlesToolbarSelection}>
+                    <span className={styles.articlesSelectedCount}>{selectedIds.length} selected</span>
+                    <button
+                      className={`${styles.articlesToolbarActionsBtn} ${selectedIds.length ? styles.articlesToolbarActionsBtnActive : ""}`}
+                      type="button"
+                      onClick={() => {
+                        if (!selectedIds.length) return;
+                        setBulkMode("root");
+                        setShowBulkPopup(true);
+                      }}
+                      disabled={selectedIds.length === 0}
+                    >
+                      Actions…
+                    </button>
                   </div>
                 </div>
               </div>
               <div className={`${styles.card} ${styles.cardWide} ${styles.articleListCard}`} style={{ padding: 0 }}>
                 <div className={`${styles.articlesTableScroll} ${styles.articlesDesktopOnly}`}>
                   <div className={styles.articlesTableHead} role="row">
+                    <span className={styles.articlesTableCheckboxCol}>
+                      <input
+                        type="checkbox"
+                        checked={allOnPageSelected}
+                        onChange={toggleAllOnPage}
+                        aria-label="Select all articles on this page"
+                      />
+                    </span>
                     <span>Title</span>
                     <span>Keyword</span>
                     <span>Category</span>
@@ -6371,6 +6625,14 @@ export default function ProjectPage() {
                         return (
                           <article key={a.id} className={styles.articleRow}>
                             <div className={styles.articlesTableRowMain}>
+                              <span className={styles.articlesTableCheckboxCol}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!selected[a.id]}
+                                  onChange={() => toggleOne(a.id)}
+                                  aria-label={`Select ${title}`}
+                                />
+                              </span>
                               <div className={`${styles.articlesTableCell} ${styles.articlesTableCellTitle}`}>
                                 <Link
                                   href={`/projects/${projectId}/articles/${a.id}`}
@@ -6437,6 +6699,14 @@ export default function ProjectPage() {
                         return (
                           <article key={`mobile-${a.id}`} className={styles.articlesMobileCard}>
                             <div className={styles.articlesMobileCardTop}>
+                              <label className={styles.articlesMobileCardCheck}>
+                                <input
+                                  type="checkbox"
+                                  checked={!!selected[a.id]}
+                                  onChange={() => toggleOne(a.id)}
+                                  aria-label={`Select ${title}`}
+                                />
+                              </label>
                               <span className={statusPillClass(a.status)} title={statusTitle}>
                                 {statusLabel}
                               </span>
