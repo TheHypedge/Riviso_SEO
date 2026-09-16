@@ -122,6 +122,11 @@ class Settings(BaseSettings):
         validation_alias="ENABLE_SEO_CRAWL_WORKER",
         description="Run the background SEO Audit crawl loop inside this process (dedicated worker only).",
     )
+    enable_ai_citation_worker: bool = Field(
+        default=False,
+        validation_alias="ENABLE_AI_CITATION_WORKER",
+        description="Run the background AI Citation Tracking check loop inside this process (dedicated worker only).",
+    )
 
     # SEO Audit crawler (Site Audit → SEO Audit sub-tab)
     seo_crawl_user_agent: str = Field(
@@ -199,6 +204,21 @@ class Settings(BaseSettings):
     # to detect "intent overlap" between proposed topics and existing content.
     openai_embedding_model: str = "text-embedding-3-small"
 
+    # AI Citation Tracking (AI Toolkit-style brand-mention monitoring) — each engine is
+    # independently flagged so ChatGPT (which reuses openai_api_key above) can ship without
+    # waiting on the others' keys. See app/services/ai_citation/.
+    ai_citation_chatgpt_enabled: bool = Field(default=True, validation_alias="AI_CITATION_CHATGPT_ENABLED")
+    ai_citation_perplexity_enabled: bool = Field(default=False, validation_alias="AI_CITATION_PERPLEXITY_ENABLED")
+    ai_citation_gemini_enabled: bool = Field(default=False, validation_alias="AI_CITATION_GEMINI_ENABLED")
+    ai_citation_google_ai_overview_enabled: bool = Field(default=False, validation_alias="AI_CITATION_GOOGLE_AI_OVERVIEW_ENABLED")
+    perplexity_api_key: str = Field(default="", validation_alias="PERPLEXITY_API_KEY")
+    gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
+    ai_citation_max_concurrent_checks: int = Field(
+        default=5,
+        validation_alias="AI_CITATION_MAX_CONCURRENT_CHECKS",
+        description="Max simultaneous in-flight engine calls in the AI Citation worker (fan-out, mirrors max_concurrent_generations).",
+    )
+
     # Comma-separated phrases forbidden in generated article bodies/headings (merged with built-in defaults).
     generation_banned_phrases: str = Field(
         default="",
@@ -217,6 +237,8 @@ class Settings(BaseSettings):
         "shopify_api_secret",
         "openai_api_key",
         "google_pagespeed_api_key",
+        "perplexity_api_key",
+        "gemini_api_key",
         mode="before",
     )
     @classmethod

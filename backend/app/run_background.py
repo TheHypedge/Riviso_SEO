@@ -9,14 +9,16 @@ a slow publish never contends with request handling. Toggle each loop with env f
     ENABLE_SCHEDULER=1           # run the scheduler loop (+ subscription daily reset)
     ENABLE_SERP_REFRESH_WORKER=1 # run the shared SERP index background refresh loop
     ENABLE_SEO_CRAWL_WORKER=1    # run the SEO Audit crawl loop
+    ENABLE_AI_CITATION_WORKER=1  # run the AI Citation Tracking check loop
 
 Recommended topology for ~50 users (see RIVISO_PRODUCTION_HARDENING_PLAN I3.1):
 
-    api          : ENABLE_SCHEDULER=0  ENABLE_GENERATION_WORKER=0  ENABLE_SERP_REFRESH_WORKER=0  ENABLE_SEO_CRAWL_WORKER=0  -> uvicorn app.main:app
-    worker       : ENABLE_GENERATION_WORKER=1 ENABLE_SCHEDULER=0   ENABLE_SERP_REFRESH_WORKER=0  ENABLE_SEO_CRAWL_WORKER=0  -> python -m app.run_background
-    scheduler    : ENABLE_SCHEDULER=1 ENABLE_GENERATION_WORKER=0   ENABLE_SERP_REFRESH_WORKER=0  ENABLE_SEO_CRAWL_WORKER=0  -> python -m app.run_background
-    serp-refresh : ENABLE_SERP_REFRESH_WORKER=1 ENABLE_SCHEDULER=0 ENABLE_GENERATION_WORKER=0    ENABLE_SEO_CRAWL_WORKER=0  -> python -m app.run_background
-    seo-crawl    : ENABLE_SEO_CRAWL_WORKER=1 ENABLE_SCHEDULER=0    ENABLE_GENERATION_WORKER=0     ENABLE_SERP_REFRESH_WORKER=0  -> python -m app.run_background
+    api          : all ENABLE_* flags above =0                                                    -> uvicorn app.main:app
+    worker       : ENABLE_GENERATION_WORKER=1, all others =0                                      -> python -m app.run_background
+    scheduler    : ENABLE_SCHEDULER=1, all others =0                                               -> python -m app.run_background
+    serp-refresh : ENABLE_SERP_REFRESH_WORKER=1, all others =0                                     -> python -m app.run_background
+    seo-crawl    : ENABLE_SEO_CRAWL_WORKER=1, all others =0                                         -> python -m app.run_background
+    ai-citation  : ENABLE_AI_CITATION_WORKER=1, all others =0                                       -> python -m app.run_background
 
 Run with:  python -m app.run_background
 """
@@ -39,6 +41,7 @@ from app.services.scheduler import scheduler_loop
 from app.services.subscription_daily_reset import subscription_daily_reset_loop
 from app.services.serp_refresh_worker import serp_refresh_loop
 from app.services.seo_crawl_worker import seo_crawl_loop
+from app.services.ai_citation_worker import ai_citation_check_loop
 
 _log = logging.getLogger("riviso.background")
 
@@ -48,6 +51,7 @@ _WORKER_HEARTBEAT = "/tmp/riviso_worker.heartbeat"
 _SCHEDULER_HEARTBEAT = "/tmp/riviso_scheduler.heartbeat"
 _SERP_REFRESH_HEARTBEAT = "/tmp/riviso_serp_refresh.heartbeat"
 _SEO_CRAWL_HEARTBEAT = "/tmp/riviso_seo_crawl.heartbeat"
+_AI_CITATION_HEARTBEAT = "/tmp/riviso_ai_citation.heartbeat"
 _HEARTBEAT_INTERVAL = 30  # seconds
 
 
@@ -94,11 +98,13 @@ async def _run() -> None:
     run_scheduler = _flag_enabled("ENABLE_SCHEDULER")
     run_serp_refresh = _flag_enabled("ENABLE_SERP_REFRESH_WORKER")
     run_seo_crawl = _flag_enabled("ENABLE_SEO_CRAWL_WORKER")
+    run_ai_citation = _flag_enabled("ENABLE_AI_CITATION_WORKER")
 
-    if not run_worker and not run_scheduler and not run_serp_refresh and not run_seo_crawl:
+    if not run_worker and not run_scheduler and not run_serp_refresh and not run_seo_crawl and not run_ai_citation:
         _log.error(
             "Nothing to run: set ENABLE_GENERATION_WORKER=1, ENABLE_SCHEDULER=1, "
-            "ENABLE_SERP_REFRESH_WORKER=1, and/or ENABLE_SEO_CRAWL_WORKER=1. Exiting."
+            "ENABLE_SERP_REFRESH_WORKER=1, ENABLE_SEO_CRAWL_WORKER=1, and/or "
+            "ENABLE_AI_CITATION_WORKER=1. Exiting."
         )
         return
 
@@ -120,6 +126,10 @@ async def _run() -> None:
         _log.info("Starting SEO Audit crawl loop")
         tasks.append(asyncio.create_task(seo_crawl_loop(), name="seo_crawl"))
         tasks.append(asyncio.create_task(_heartbeat_loop(_SEO_CRAWL_HEARTBEAT), name="seo_crawl_heartbeat"))
+    if run_ai_citation:
+        _log.info("Starting AI Citation Tracking check loop")
+        tasks.append(asyncio.create_task(ai_citation_check_loop(), name="ai_citation"))
+        tasks.append(asyncio.create_task(_heartbeat_loop(_AI_CITATION_HEARTBEAT), name="ai_citation_heartbeat"))
 
     stop = asyncio.Event()
 

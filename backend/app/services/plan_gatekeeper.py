@@ -27,6 +27,7 @@ class PlanAction(str, Enum):
     CUSTOM_RESEARCH = "custom_research"
     TECHNICAL_AUDIT = "technical_audit"
     SEO_AUDIT = "seo_audit"
+    AI_CITATION_CHECK = "ai_citation_check"
 
 
 def _parse_iso_utc(raw: str) -> datetime | None:
@@ -189,6 +190,17 @@ def check_plan_limits(*, st, user: dict, action: PlanAction, consume: bool = Tru
         ok, msg = st.consume_seo_audit_usage(uid, month_limit=plan.get("max_seo_audits_per_month"), amount=1)
         if not ok:
             raise HTTPException(status_code=403, detail={"error": "quota_exceeded", "message": msg or "SEO Audit limit reached."})
+        return
+
+    if action == PlanAction.AI_CITATION_CHECK and consume and hasattr(st, "consume_ai_citation_usage"):
+        # Route handlers call consume_ai_citation_usage directly with the real cell
+        # count (prompts x engines) after computing it -- see ai_citation.py's /run,
+        # same "gate with consume=False, meter the real amount in the route" pattern
+        # SEO_AUDIT/TECHNICAL_AUDIT use. This branch only covers a generic
+        # consume=True caller (none exist today) with a 1-unit fallback.
+        ok, msg = st.consume_ai_citation_usage(uid, month_limit=plan.get("max_ai_citation_checks_per_month"), amount=1)
+        if not ok:
+            raise HTTPException(status_code=403, detail={"error": "quota_exceeded", "message": msg or "AI Citation Tracking limit reached."})
         return
 
 

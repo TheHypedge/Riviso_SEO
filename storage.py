@@ -1117,6 +1117,17 @@ def consume_seo_audit_usage(user_id: str, *, month_limit: int | None, amount: in
     )
 
 
+def consume_ai_citation_usage(user_id: str, *, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
+    return _consume_monthly_counter(
+        user_id,
+        month_field="usage_monthly_ai_citation_month",
+        count_field="usage_monthly_ai_citation_count",
+        month_limit=month_limit,
+        amount=amount,
+        limit_message="Monthly AI Citation Tracking limit reached for your plan.",
+    )
+
+
 def check_llm_token_budget(user_id: str, estimated_tokens: int, month_limit: int | None) -> tuple[bool, str]:
     """
     Verify the user can afford ``estimated_tokens`` this month against ``month_limit``.
@@ -4849,6 +4860,279 @@ def set_research_cache(*, cache_key: str, value: dict[str, Any]) -> None:
     }
     with _db_write_lock:
         get_db().research_cache.update_one({"_id": key}, {"$set": doc}, upsert=True)
+
+
+# ----------------------------
+# AI Citation Tracking (AI Toolkit-style brand-mention monitoring)
+#
+# One collection, ai_citation_checks -- one immutable doc per (prompt, engine, run).
+# A single "run" (one click of Run Citation Check) fans out to N prompts x M enabled
+# engines, all sharing a run_id, exactly like seo_audits/seo_audit_urls above: a
+# permanent record, never a rollup. History/trend views are computed on read by
+# grouping this flat collection -- see app.services.ai_citation.
+# ----------------------------
+
+
+def create_ai_citation_checks_bulk(rows: list[dict[str, Any]]) -> None:
+    """Batch-insert queued check cells for one run (not one write per cell)."""
+    items = [dict(r) for r in (rows or []) if isinstance(r, dict) and (r.get("run_id") or "").strip() and (r.get("id") or "").strip()]
+    if not items:
+        return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            existing = [x for x in _load_json_list("ai_citation_checks.json") if isinstance(x, dict)]
+            existing.extend(items)
+            existing = existing[-200000:]
+            _save_json("ai_citation_checks.json", existing)
+        return
+    docs = []
+    for it in items:
+        d = dict(it)
+        d["_id"] = d["id"]
+        docs.append(d)
+    from pymongo.errors import BulkWriteError
+
+    with _db_write_lock:
+        try:
+            get_db().ai_citation_checks.insert_many(docs, ordered=False)
+        except BulkWriteError as exc:
+            non_dupe = [e for e in exc.details.get("writeErrors", []) if e.get("code") != 11000]
+            if non_dupe:
+                raise
+
+
+def update_ai_citation_check_fields(check_id: str, fields: dict[str, Any]) -> bool:
+    """`$set`-style patch (status transitions, response_text, cited, error, ...)."""
+    cid = (check_id or "").strip()
+    if not cid or not fields:
+        return False
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("ai_citation_checks.json") if isinstance(x, dict)]
+            for i, r in enumerate(rows):
+                if (r.get("id") or "").strip() == cid:
+                    rows[i] = {**r, **fields}
+                    _save_json("ai_citation_checks.json", rows)
+                    return True
+        return False
+    res = get_db().ai_citation_checks.update_one({"_id": cid}, {"$set": dict(fields)})
+    return bool(res.matched_count)
+
+
+def claim_next_queued_ai_citation_check(started_at_iso: str) -> dict[str, Any] | None:
+    """Atomically claim the oldest `status="queued"` check cell for the worker
+    (find_one_and_update under a status filter -- safe with multiple worker replicas,
+    mirrors claim_next_queued_seo_audit)."""
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("ai_citation_checks.json") if isinstance(x, dict)]
+            queued = [r for r in rows if (r.get("status") or "") == "queued"]
+            queued.sort(key=lambda r: str(r.get("queued_at") or ""))
+            if not queued:
+                return None
+            target_id = queued[0].get("id")
+            for i, r in enumerate(rows):
+                if r.get("id") == target_id:
+                    rows[i] = {**r, "status": "running", "started_at": started_at_iso}
+                    _save_json("ai_citation_checks.json", rows)
+                    return rows[i]
+        return None
+    doc = get_db().ai_citation_checks.find_one_and_update(
+        {"status": "queued"},
+        {"$set": {"status": "running", "started_at": started_at_iso}},
+        sort=[("queued_at", 1)],
+    )
+    if not doc:
+        return None
+    doc = dict(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+def load_latest_ai_citation_run(project_id: str) -> dict[str, Any] | None:
+    """Latest run_id's cells for a project, as {"run_id": ..., "checks": [...]}."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return None
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("ai_citation_checks.json") if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid]
+    else:
+        rows = [dict(d) for d in get_db().ai_citation_checks.find({"project_id": pid}, {"_id": 0})]
+    if not rows:
+        return None
+    rows.sort(key=lambda r: str(r.get("queued_at") or ""), reverse=True)
+    latest_run_id = rows[0].get("run_id")
+    checks = [r for r in rows if r.get("run_id") == latest_run_id]
+    checks.sort(key=lambda r: str(r.get("queued_at") or ""))
+    return {"run_id": latest_run_id, "checks": checks}
+
+
+def load_ai_citation_history(project_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    """One summary row per run_id (most recent runs first): counts + cited rate."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    lim = max(1, min(int(limit or 20), 100))
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("ai_citation_checks.json") if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid]
+    else:
+        rows = [dict(d) for d in get_db().ai_citation_checks.find({"project_id": pid}, {"_id": 0})]
+    runs: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        runs.setdefault(r.get("run_id") or "", []).append(r)
+    summaries = []
+    for run_id, cells in runs.items():
+        if not run_id:
+            continue
+        queued_at = min((c.get("queued_at") or "" for c in cells), default="")
+        completed = [c for c in cells if (c.get("status") or "") in {"done", "failed"}]
+        cited_count = sum(1 for c in cells if c.get("cited"))
+        summaries.append(
+            {
+                "run_id": run_id,
+                "queued_at": queued_at,
+                "total": len(cells),
+                "completed": len(completed),
+                "cited": cited_count,
+            }
+        )
+    summaries.sort(key=lambda s: str(s.get("queued_at") or ""), reverse=True)
+    return summaries[:lim]
+
+
+def load_ai_citation_checks_page(
+    project_id: str,
+    *,
+    page: int = 1,
+    per_page: int = 30,
+    q: str | None = None,
+    status_filter: str | None = None,
+    engine_filter: str | None = None,
+) -> dict[str, Any]:
+    """
+    Server-side paginated Checks table -- across ALL runs for the project, not just
+    the latest one. `/latest` intentionally only ever returns one run's cells (for
+    the "is a check currently running" poll); this is the accumulated-history view
+    so real coverage growing over many runs is actually visible instead of looking
+    stuck at whatever the most recent run's size happens to be.
+
+    `status_filter`: "cited" | "not_cited" | "checking" | "error" (matches the
+    frontend's filter chips -- same bucketing as citedPillLabel there).
+    Returns {"items": [...], "total": N}.
+    """
+    pid = (project_id or "").strip()
+    if not pid:
+        return {"items": [], "total": 0}
+    pg = max(1, int(page or 1))
+    pp = max(1, min(int(per_page or 30), 200))
+    skip = (pg - 1) * pp
+    qs = (q or "").strip().lower()
+    sf = (status_filter or "").strip()
+    ef = (engine_filter or "").strip()
+
+    def _matches_status(r: dict[str, Any]) -> bool:
+        if not sf:
+            return True
+        status = (r.get("status") or "").strip()
+        if sf == "checking":
+            return status in {"queued", "running"}
+        if sf == "error":
+            return status == "failed"
+        if sf == "cited":
+            return status == "done" and bool(r.get("cited"))
+        if sf == "not_cited":
+            return status == "done" and not bool(r.get("cited"))
+        return True
+
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("ai_citation_checks.json") if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid]
+        if qs:
+            rows = [r for r in rows if qs in str(r.get("keyword") or "").lower()]
+        if ef:
+            rows = [r for r in rows if (r.get("engine") or "") == ef]
+        rows = [r for r in rows if _matches_status(r)]
+        rows.sort(key=lambda r: str(r.get("queued_at") or ""), reverse=True)
+        return {"items": rows[skip : skip + pp], "total": len(rows)}
+
+    match: dict[str, Any] = {"project_id": pid}
+    if qs:
+        match["keyword"] = {"$regex": re.escape(qs), "$options": "i"}
+    if ef:
+        match["engine"] = ef
+    if sf == "checking":
+        match["status"] = {"$in": ["queued", "running"]}
+    elif sf == "error":
+        match["status"] = "failed"
+    elif sf == "cited":
+        match["status"] = "done"
+        match["cited"] = True
+    elif sf == "not_cited":
+        match["status"] = "done"
+        match["cited"] = False
+    db = get_db()
+    total = int(db.ai_citation_checks.count_documents(match))
+    cur = db.ai_citation_checks.find(match, {"_id": 0}).sort("queued_at", -1).skip(skip).limit(pp)
+    return {"items": [dict(d) for d in cur], "total": total}
+
+
+def load_ai_citation_trend(project_id: str, weeks: int = 12) -> list[dict[str, Any]]:
+    """Week x engine citation-rate aggregation, computed on read (no stored rollup).
+    Returns [{"engine": ..., "week_start": "YYYY-MM-DD", "checked": N, "cited": N, "rate": 0..1}]."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    wks = max(1, min(int(weeks or 12), 52))
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("ai_citation_checks.json") if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid]
+    else:
+        rows = [dict(d) for d in get_db().ai_citation_checks.find({"project_id": pid}, {"_id": 0})]
+    cutoff = datetime.utcnow() - timedelta(weeks=wks)
+    buckets: dict[tuple[str, str], dict[str, int]] = {}
+    for r in rows:
+        if (r.get("status") or "") not in {"done", "failed"}:
+            continue
+        completed_at = (r.get("completed_at") or "").strip()
+        if not completed_at:
+            continue
+        try:
+            dt = datetime.fromisoformat(completed_at.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            continue
+        if dt < cutoff:
+            continue
+        week_start = (dt - timedelta(days=dt.weekday())).date().isoformat()
+        engine = (r.get("engine") or "").strip() or "unknown"
+        key = (engine, week_start)
+        b = buckets.setdefault(key, {"checked": 0, "cited": 0})
+        b["checked"] += 1
+        if r.get("cited"):
+            b["cited"] += 1
+    out = [
+        {
+            "engine": engine,
+            "week_start": week_start,
+            "checked": b["checked"],
+            "cited": b["cited"],
+            "rate": (b["cited"] / b["checked"]) if b["checked"] else 0.0,
+        }
+        for (engine, week_start), b in buckets.items()
+    ]
+    out.sort(key=lambda p: (p["week_start"], p["engine"]))
+    return out
+
+
+def load_ai_citation_checked_keywords(project_id: str) -> set[str]:
+    """Casefolded set of every keyword this project has ever been checked for --
+    lets a new run exclude them and cover new ground instead of re-checking the
+    same top keywords every time ("continue more" instead of all at once)."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return set()
+    if _storage_mode != "mongo":
+        rows = [x for x in _load_json_list("ai_citation_checks.json") if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid]
+        return {(r.get("keyword") or "").strip().casefold() for r in rows if (r.get("keyword") or "").strip()}
+    vals = get_db().ai_citation_checks.distinct("keyword", {"project_id": pid})
+    return {(v or "").strip().casefold() for v in vals if (v or "").strip()}
 
 
 # ----------------------------
