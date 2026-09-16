@@ -29,10 +29,14 @@ def call_storage(fn: Callable[..., T], /, *args, **kwargs) -> T:
     import os
 
     db = _database_module()
-    # 2 attempts: PyMongo's retryReads/retryWrites handles the first transient
-    # error transparently.  Our outer retry adds one reset-and-reconnect for the
-    # edge cases PyMongo doesn't handle (e.g. pool fully exhausted).
-    attempts = int(os.environ.get("MONGODB_API_RETRY_ATTEMPTS") or "2")
+    # 5 attempts (was 2): PyMongo's retryReads/retryWrites handles the first
+    # transient error transparently. Our outer retry covers what PyMongo doesn't
+    # (pool exhaustion, Atlas DNS/connection blips) — 2 attempts only added 0.3s,
+    # too short for the multi-second-to-minutes Atlas blips seen in production
+    # (e.g. scheduling an article failing with "Database temporarily unavailable"
+    # because the write gave up before a real outage passed). 5 attempts adds up
+    # to ~3s of backoff (run_with_retry sleeps 0.3s * attempt) before giving up.
+    attempts = int(os.environ.get("MONGODB_API_RETRY_ATTEMPTS") or "5")
     return db.run_with_retry(lambda: fn(*args, **kwargs), attempts=max(1, attempts))
 
 
