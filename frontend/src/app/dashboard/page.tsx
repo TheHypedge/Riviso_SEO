@@ -11,10 +11,10 @@ import { TutorialStepperModal } from "@/components/TutorialStepperModal";
 import { ProjectOverviewDashboardLight } from "@/components/overview/ProjectOverviewDashboardLight";
 import { DashboardProjectsSkeleton, DetailPanelSkeleton, FormFieldsSkeleton } from "@/components/skeleton";
 import NotificationBell from "@/components/NotificationBell";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatCard, NavGroup, NavItem } from "@/components/ui";
 import styles from "../page.module.css";
 import dashStyles from "./dashboard.module.css";
-import dashLightStyles from "./dashboardLight.module.css";
 import {
   AdminUserDetails,
   AdminUserPublic,
@@ -759,7 +759,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className={`${styles.page} ${styles.pageTop} ${dashLightStyles.dashboardLightTheme}`}>
+    <div className={`${styles.page} ${styles.pageTop}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
         <div className={styles.mobileTopBar}>
           <button type="button" className={styles.mobileMenuBtn} onClick={() => setMobileNavOpen(true)} aria-label="Open menu">
@@ -777,17 +777,20 @@ export default function DashboardPage() {
                 <Icon.X className={styles.icon20} />
               </button>
             </div>
-            <Link href="/dashboard" className={styles.sidebarBrand} aria-label="Riviso — go to dashboard">
-              <Image
-                src="/riviso-logo.png"
-                alt=""
-                width={32}
-                height={32}
-                priority
-                className={styles.sidebarBrandLogo}
-              />
-              <span className={styles.sidebarBrandText}>Riviso</span>
-            </Link>
+            <div className={styles.sidebarBrandRow}>
+              <Link href="/dashboard" className={styles.sidebarBrand} aria-label="Riviso — go to dashboard">
+                <Image
+                  src="/riviso-logo.png"
+                  alt=""
+                  width={32}
+                  height={32}
+                  priority
+                  className={styles.sidebarBrandLogo}
+                />
+                <span className={styles.sidebarBrandText}>Riviso</span>
+              </Link>
+              <ThemeToggle className={styles.themeToggleBtn} />
+            </div>
             <div className={`${styles.sidebarNavMain} ${dashStyles.sidebarNavCompact}`}>
               <NavGroup label="Workspace">
                 <NavItem
@@ -1536,17 +1539,9 @@ export default function DashboardPage() {
               </>
             ) : null}
 
-            {section === "limits" && isAdmin ? (
-              <div className={dashLightStyles.dashboardLightTheme}>
-                <AdminPlansModule users={users} />
-              </div>
-            ) : null}
+            {section === "limits" && isAdmin ? <AdminPlansModule users={users} /> : null}
 
-            {section === "profile" ? (
-              <div className={dashLightStyles.dashboardLightTheme}>
-                <UserProfileModule />
-              </div>
-            ) : null}
+            {section === "profile" ? <UserProfileModule /> : null}
           </section>
         </div>
       </main>

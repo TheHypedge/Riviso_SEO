@@ -3677,6 +3677,19 @@
 /* Brand row pinned to the top of every sidebar. The image is transparent
    so it adapts to whatever background the sidebar uses; the wordmark sits
    beside it for product recognition. */
+/* Row wrapper: brand link (logo + name) on the left, ThemeToggle on the
+   right, inline on the same row -- see ThemeToggle.tsx and the three call
+   sites (project workspace / dashboard / article-editor sidebars). Owns the
+   bottom margin .sidebarBrand used to own by itself, since it's now one of
+   two children instead of the row's only element. */
+.sidebarBrandRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 20px;
+}
+
 .sidebarBrand {
   display: flex;
   align-items: center;
@@ -3684,10 +3697,34 @@
   text-decoration: none;
   color: var(--aa-body-strong);
   padding: 4px 6px;
-  margin: 0 0 20px;
+  margin: 0;
   border-radius: var(--aa-r-md);
   flex-shrink: 0;
+  min-width: 0;
   transition: background-color 120ms ease;
+}
+
+.themeToggleBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md);
+  background: transparent;
+  color: var(--aa-muted);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.themeToggleBtn:hover,
+.themeToggleBtn:focus-visible {
+  background: color-mix(in oklab, var(--aa-primary), transparent 92%);
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 60%);
+  color: var(--aa-primary);
+  outline: none;
 }
 
 .sidebarBrand:hover,
@@ -4638,6 +4675,208 @@
   }
 }
 
+/* ── Scheduled Articles: Calendar view ─────────────────────────────────────
+   Same status color tokens as .scheduledState* above (success/info/error/
+   warning/primary/neutral) reused on block left-borders, so a status means
+   the same color everywhere in this tab, list or calendar. */
+
+.scheduledCalendarWrap {
+  overflow-x: auto;
+}
+
+.scheduledCalendarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 2px 2px 14px;
+}
+
+.scheduledCalendarTitle {
+  margin: 0;
+  min-width: 160px;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.scheduledCalendarNav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scheduledCalendarNavBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--aa-r-md);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-canvas);
+  color: var(--aa-ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.scheduledCalendarNavBtn:hover {
+  background: color-mix(in oklab, var(--aa-ink), transparent 95%);
+}
+
+.scheduledCalendarGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(120px, 1fr));
+  min-width: 840px;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md);
+  overflow: hidden;
+}
+
+.scheduledCalendarWeekday {
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  color: var(--aa-muted);
+  background: color-mix(in oklab, var(--aa-ink), transparent 96%);
+  border-bottom: 1px solid var(--aa-hairline);
+}
+
+.scheduledCalendarDay {
+  min-height: 108px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--aa-canvas);
+  border-right: 1px solid var(--aa-hairline);
+  border-bottom: 1px solid var(--aa-hairline);
+}
+
+.scheduledCalendarGrid .scheduledCalendarDay:nth-child(7n) {
+  border-right: none;
+}
+
+.scheduledCalendarDayOtherMonth {
+  background: color-mix(in oklab, var(--aa-ink), transparent 97%);
+}
+
+.scheduledCalendarDayOtherMonth .scheduledCalendarDayNum {
+  opacity: 0.55;
+}
+
+.scheduledCalendarDayToday {
+  background: color-mix(in oklab, var(--aa-primary), transparent 94%);
+}
+
+.scheduledCalendarDayNum {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.scheduledCalendarDayToday .scheduledCalendarDayNum {
+  color: var(--aa-primary);
+}
+
+.scheduledCalendarBlocks {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.scheduledCalendarBlock {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  border-radius: 5px;
+  border: none;
+  border-left: 3px solid var(--aa-primary);
+  background: color-mix(in oklab, var(--aa-primary), transparent 88%);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.scheduledCalendarBlock:hover {
+  background: color-mix(in oklab, var(--aa-primary), transparent 76%);
+}
+
+.scheduledCalendarBlockTime {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.scheduledCalendarBlockTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scheduledCalendarBlockReady {
+  border-left-color: var(--aa-success);
+  background: color-mix(in oklab, var(--aa-success), transparent 88%);
+}
+
+.scheduledCalendarBlockPosted {
+  border-left-color: var(--aa-info);
+  background: color-mix(in oklab, var(--aa-info), transparent 88%);
+}
+
+.scheduledCalendarBlockFailed {
+  border-left-color: var(--aa-error);
+  background: color-mix(in oklab, var(--aa-error), transparent 88%);
+}
+
+.scheduledCalendarBlockActive {
+  border-left-color: var(--aa-warning);
+  background: color-mix(in oklab, var(--aa-warning), transparent 88%);
+}
+
+.scheduledCalendarBlockScheduled {
+  border-left-color: var(--aa-primary);
+  background: color-mix(in oklab, var(--aa-primary), transparent 88%);
+}
+
+.scheduledCalendarBlockNeutral {
+  border-left-color: var(--aa-muted);
+  background: color-mix(in oklab, var(--text-primary), transparent 92%);
+}
+
+.scheduledCalendarMoreBtn {
+  padding: 2px 4px;
+  border: none;
+  background: none;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--aa-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (max-width: 900px) {
+  .scheduledCalendarGrid {
+    min-width: 700px;
+  }
+
+  .scheduledCalendarDay {
+    min-height: 88px;
+  }
+}
+
 .muted {
   color: var(--text-secondary);
   font-size: 13px;
@@ -5045,6 +5284,9 @@
   flex-wrap: wrap;
 }
 .segmentGroup .miniBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 0;
   background: transparent;
   border-radius: 9px;
@@ -9212,24 +9454,14 @@ a.secondary {
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  .logo {
-    filter: invert();
-  }
-
-  .page {
-    /* Keep the app on the Claude light canvas even if the OS is set to dark mode. */
-    --background: var(--aa-canvas);
-    --foreground: var(--aa-canvas);
-
-    --text-primary: var(--aa-ink);
-    --text-secondary: var(--aa-muted);
-
-    --button-primary-hover: var(--aa-primary-active);
-    --button-secondary-hover: var(--aa-surface-soft);
-    --button-secondary-border: var(--aa-hairline);
-  }
-}
+/* NOTE: this used to force the app back to the light canvas whenever the OS
+   was set to dark mode (a guard against the browser's own dark preference
+   fighting the app's then-light-only design). Removed now that dark mode is
+   a real, explicit, user-controlled toggle (ThemeToggle.tsx / [data-theme] in
+   globals.css) -- keeping this would have silently overridden that toggle
+   back to light on any OS set to dark, since a property set directly on
+   .page always wins over one inherited from the <html> ancestor regardless
+   of which rule appears later in the file. */
 
 /* ---- Articles overview dashboard (matte black / Riviso brand) ---- */
 .articlesViewNav {

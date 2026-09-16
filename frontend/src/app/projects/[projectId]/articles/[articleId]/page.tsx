@@ -7,7 +7,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 
 import styles from "../../../../page.module.css";
 import editorStyles from "./articleEditor.module.css";
-import projectsLight from "../../../projectsLight.module.css";
 import {
   api,
   ApiError,
@@ -1815,7 +1814,7 @@ export default function ArticleEditPage() {
 
   if (!editorPath) {
     return (
-      <div className={`${styles.page} ${styles.pageTop} ${projectsLight.projectsLightTheme}`}>
+      <div className={`${styles.page} ${styles.pageTop}`}>
         <main className={`${styles.main} ${styles.mainWide}`}>
           <section className={styles.contentCol}>
             <div className={`${styles.card} ${styles.cardWide}`}>
@@ -1847,7 +1846,7 @@ export default function ArticleEditPage() {
   ];
 
   return (
-    <div className={`${styles.page} ${projectsLight.projectsLightTheme} ${editorStyles.editorPage}`}>
+    <div className={`${styles.page} ${editorStyles.editorPage}`}>
       <div className={editorStyles.editorShell}>
         <ProjectSidebar
           projectId={params.projectId}

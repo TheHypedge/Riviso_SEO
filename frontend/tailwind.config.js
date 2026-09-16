@@ -16,6 +16,15 @@
  * than the literal family-name strings the handoff doc used, so fonts stay
  * on Next.js's optimized self-hosted loading instead of being fetched a
  * second time — same visual fonts, correct loading mechanism.
+ *
+ * Colors reference the same --aa-* / --aa-tw-* CSS custom properties globals.css
+ * defines (light at :root, dark under [data-theme="dark"]) instead of literal
+ * hex, so every Tailwind-based `ui/` component (Sidebar, DataTable, ...) reacts
+ * to the app's dark-mode toggle automatically -- no per-component `dark:`
+ * variant classes needed. None of these colors are used with Tailwind's
+ * opacity-modifier syntax (`bg-accent/50` etc.) anywhere in the codebase, so
+ * plain var() references are safe here (that syntax needs a special R G B
+ * channel format these tokens don't use).
  */
 
 /** @type {import('tailwindcss').Config} */
@@ -30,41 +39,41 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        bg: "#FAFAF8",
-        surface: "#FFFFFF",
-        "surface-sunken": "#F4F3F0",
+        bg: "var(--aa-canvas)",
+        surface: "var(--aa-surface-card)",
+        "surface-sunken": "var(--aa-surface-soft)",
         border: {
-          DEFAULT: "#E8E6E1",
-          strong: "#D8D5CE",
+          DEFAULT: "var(--aa-hairline)",
+          strong: "var(--aa-tw-border-strong)",
         },
         ink: {
-          DEFAULT: "#1B1A17",
-          secondary: "#6E6B64",
-          tertiary: "#A6A29A",
+          DEFAULT: "var(--aa-ink)",
+          secondary: "var(--aa-muted)",
+          tertiary: "var(--aa-muted-soft)",
         },
         accent: {
-          DEFAULT: "#E15A2C",
-          hover: "#C74C22",
-          tint: "#FDECE4",
-          "tint-border": "#F6C9B4",
+          DEFAULT: "var(--aa-primary)",
+          hover: "var(--aa-primary-hover)",
+          tint: "var(--aa-tw-accent-tint)",
+          "tint-border": "var(--aa-tw-accent-tint-border)",
         },
         success: {
-          DEFAULT: "#2E8B57",
-          strong: "#1F7A44",
-          tint: "#E7F4EC",
+          DEFAULT: "var(--aa-success)",
+          strong: "var(--aa-tw-success-strong)",
+          tint: "var(--aa-tw-success-tint)",
         },
         warning: {
-          DEFAULT: "#B8770B",
-          tint: "#FBF1DE",
+          DEFAULT: "var(--aa-warning)",
+          tint: "var(--aa-tw-warning-tint)",
         },
         info: {
-          DEFAULT: "#3B6FE0",
-          strong: "#2451B8",
-          tint: "#EAF0FE",
+          DEFAULT: "var(--aa-info)",
+          strong: "var(--aa-tw-info-strong)",
+          tint: "var(--aa-tw-info-tint)",
         },
         danger: {
-          DEFAULT: "#C13B2D",
-          tint: "#FDECEA",
+          DEFAULT: "var(--aa-error)",
+          tint: "var(--aa-tw-danger-tint)",
         },
       },
       borderRadius: {
