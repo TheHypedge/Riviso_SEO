@@ -7,7 +7,16 @@
 @tailwind utilities;
 
 :root {
-  /* Claude-inspired neutrals: matte charcoal + off-white surfaces + orange accent. */
+  /* Light theme (canonical default) -- these values are lightTheme.module.css's
+     proven light palette, promoted to be the actual global default instead of
+     something pages had to opt into via `composes: lightTheme`. The OLD values
+     that used to live here (near-black --aa-surface-card etc.) were themselves
+     the leftover dark-first "Operations Room" base this app's Aug-15 redesign
+     moved away from -- every page already composed lightTheme.module.css over
+     them, so promoting those values here changes nothing about how the app
+     looks; it just makes light the true default instead of a per-page opt-in,
+     which is what a real dark-mode toggle needs (see the [data-theme="dark"]
+     block below, and ThemeProvider.tsx / ThemeToggle.tsx for the toggle itself). */
   --aa-primary: #e15a2c; /* accent orange -- matches tailwind.config.js `accent` (Figma brand palette) */
   /* DESIGN.md: "Transitions to ember-deep on hover" -- hover and
      pressed/active share one shade by design, not three separate mixes.
@@ -20,31 +29,61 @@
   --aa-primary-active: #c74c22;
   --aa-primary-disabled: #757575;
 
-  --aa-ink: #141413; /* near-black text */
-  --aa-body: #2c2c2a;
-  --aa-body-strong: #1f1f1e;
-  --aa-muted: #64625d;
-  --aa-muted-soft: #7a7872;
+  --aa-ink: #1b1a17;
+  --aa-body: #1b1a17;
+  --aa-body-strong: #1b1a17;
+  --aa-muted: #6e6b64;
+  --aa-muted-soft: #a6a29a;
 
-  --aa-hairline: #7575751a;
-  --aa-hairline-soft: rgb(43, 43, 43);
+  /* Semi-transparent black instead of a flat opaque gray -- blends with
+     whatever surface it sits on instead of drawing a hard ruled line. */
+  --aa-hairline: rgba(27, 26, 23, 0.08);
+  --aa-hairline-soft: rgba(27, 26, 23, 0.05);
 
-  --aa-canvas: #fbfbf8; /* off-white */
-  --aa-surface-soft: #070707;
-  --aa-surface-card: #141414;
+  --aa-canvas: #fafaf8; /* off-white page background */
+  --aa-surface-soft: #f4f3f0;
+  --aa-surface-card: #ffffff;
   --aa-surface-cream-strong: #efede7;
 
-  /* Matte charcoals (use for sidebar/header accents). */
-  --aa-surface-dark: #1f1f1e;
-  --aa-surface-dark-elevated: #262625;
-  --aa-surface-dark-soft: #232322;
+  --aa-surface-dark: #ffffff;
+  --aa-surface-dark-elevated: #f4f3f0;
+  --aa-surface-dark-soft: #f4f3f0;
+  /* Only ever referenced via var(--aa-x, <hardcoded fallback>) at call sites
+     until now -- declaring them explicitly, in both themes, replaces those
+     implicit fallbacks with a real, theme-aware value. */
+  --aa-void-elevated: #ffffff;
+  --aa-surface-raised: #ffffff;
+  --aa-surface: #ffffff;
+
   --aa-on-primary: #ffffff;
-  --aa-on-dark: #faf9f5;
-  --aa-on-dark-soft: #a09d96;
+  --aa-on-dark: #1b1a17;
+  --aa-on-dark-soft: #6e6b64;
+
+  /* Status colors intentionally do NOT vary by theme -- they're already
+     saturated enough to read clearly on both a white and a near-black
+     surface, and keeping one value avoids a second axis of drift. */
   --aa-success: #2e8b57; /* matches tailwind.config.js `success` (Figma brand palette) */
   --aa-warning: #b8770b; /* matches tailwind.config.js `warning` */
   --aa-error: #c13b2d; /* matches tailwind.config.js `danger` */
   --aa-info: #3b6fe0; /* matches tailwind.config.js `info` */
+
+  /* Tailwind bridge tokens -- tailwind.config.js's `ui/` component-kit colors
+     (Sidebar, DataTable, etc.) reference these var()s instead of hardcoded
+     hex, so those Tailwind utility classes re-theme via [data-theme] the same
+     way the CSS-Modules --aa-* tokens above do, with no per-component dark:
+     variant classes needed. Only the pale "tint" backgrounds need real
+     light/dark pairs (a light pastel tint reads as an almost-invisible smear
+     on a dark surface) -- the saturated DEFAULT/strong values stay constant,
+     same reasoning as --aa-success etc. above. */
+  --aa-tw-border-strong: #d8d5ce;
+  --aa-tw-accent-tint: #fdece4;
+  --aa-tw-accent-tint-border: #f6c9b4;
+  --aa-tw-success-strong: #1f7a44;
+  --aa-tw-success-tint: #e7f4ec;
+  --aa-tw-warning-tint: #fbf1de;
+  --aa-tw-info-strong: #2451b8;
+  --aa-tw-info-tint: #eaf0fe;
+  --aa-tw-danger-tint: #fdecea;
 
   /* Radii */
   --aa-r-xs: 4px;
@@ -90,6 +129,56 @@
   /* App base mapping */
   --background: var(--aa-canvas);
   --foreground: var(--aa-surface-card);
+}
+
+/* Dark theme -- values are darkTheme.module.css's proven matte-black palette
+   (previously only reachable by composing that class per-page; see that
+   file's own history comment). Toggled by ThemeToggle.tsx via
+   ThemeProvider.tsx, which sets this attribute on <html> and persists the
+   choice to localStorage (src/lib/theme.ts) -- see THEME_INIT_SCRIPT in
+   layout.tsx for how a returning user's choice is applied before first paint.
+   Deliberately only overrides tokens that actually differ by theme (surfaces,
+   ink/text, hairlines) -- radii/shadows/spacing/fonts/status colors are the
+   same in both, see the :root comment above on why status colors don't vary. */
+html[data-theme="dark"] {
+  --aa-canvas: #0b0b0d;
+  --aa-surface-soft: rgba(255, 255, 255, 0.04);
+  --aa-surface-card: rgba(18, 18, 20, 0.72);
+  --aa-surface-dark: #0b0b0d;
+  --aa-surface-dark-elevated: rgba(18, 18, 20, 0.88);
+  --aa-surface-dark-soft: rgba(255, 255, 255, 0.05);
+  --aa-void-elevated: #121214;
+  --aa-surface-raised: rgba(18, 18, 20, 0.88);
+  --aa-surface: rgba(18, 18, 20, 0.72);
+
+  --aa-ink: rgba(255, 255, 255, 0.94);
+  --aa-body: rgba(255, 255, 255, 0.86);
+  --aa-body-strong: rgba(255, 255, 255, 0.92);
+  --aa-muted: rgba(255, 255, 255, 0.62);
+  --aa-muted-soft: rgba(255, 255, 255, 0.46);
+  --aa-hairline: rgba(255, 255, 255, 0.1);
+  --aa-hairline-soft: rgba(255, 255, 255, 0.07);
+
+  --aa-on-primary: #ffffff;
+  --aa-on-dark: rgba(255, 255, 255, 0.94);
+  --aa-on-dark-soft: rgba(255, 255, 255, 0.62);
+
+  /* Tailwind bridge tokens, dark values -- see the :root definitions for why
+     only the pale tints need a real dark pairing. */
+  --aa-tw-border-strong: rgba(255, 255, 255, 0.18);
+  --aa-tw-accent-tint: rgba(225, 90, 44, 0.16);
+  --aa-tw-accent-tint-border: rgba(225, 90, 44, 0.4);
+  --aa-tw-success-strong: #3ba869;
+  --aa-tw-success-tint: rgba(46, 139, 87, 0.18);
+  --aa-tw-warning-tint: rgba(184, 119, 11, 0.18);
+  --aa-tw-info-strong: #5b86e6;
+  --aa-tw-info-tint: rgba(59, 111, 224, 0.18);
+  --aa-tw-danger-tint: rgba(193, 59, 45, 0.18);
+
+  --background: var(--aa-canvas);
+  --foreground: var(--aa-surface-card);
+
+  color-scheme: dark;
 }
 
 html {

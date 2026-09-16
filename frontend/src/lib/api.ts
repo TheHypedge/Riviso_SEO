@@ -202,6 +202,7 @@ export type ProjectFeatureLimits = {
   custom_research: MonthlyFeatureLimit;
   technical_audit?: MonthlyFeatureLimit;
   seo_audit?: MonthlyFeatureLimit;
+  ai_citations?: MonthlyFeatureLimit;
   scheduled_articles?: MonthlyFeatureLimit;
   export_articles?: MonthlyFeatureLimit;
   context_links: CountFeatureLimit;
@@ -407,6 +408,66 @@ export type TechnicalAuditLatestResponse = {
   audit?: TechnicalAuditRun | null;
   running?: boolean;
   error?: string | null;
+};
+
+export type AiCitationEngine = "chatgpt" | "perplexity" | "gemini" | "google_ai_overview";
+
+export type AiCitationCheck = {
+  id: string;
+  run_id: string;
+  project_id: string;
+  engine: AiCitationEngine;
+  prompt: string;
+  keyword: string;
+  keyword_source: string;
+  status: "queued" | "running" | "done" | "failed";
+  queued_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  response_text: string | null;
+  cited: boolean;
+  match_type: "domain_in_text" | "domain_in_citation_url" | "brand_name_in_text" | null;
+  matched_snippet: string | null;
+  citation_urls: string[];
+  error: string | null;
+};
+
+export type AiCitationWebsite = { url: string | null; connected: boolean };
+
+export type AiCitationLatestResponse = {
+  website: AiCitationWebsite;
+  run_id: string | null;
+  checks: AiCitationCheck[];
+  running: boolean;
+  engines_configured: AiCitationEngine[];
+};
+
+export type AiCitationRunSummary = {
+  run_id: string;
+  queued_at: string;
+  total: number;
+  completed: number;
+  cited: number;
+};
+
+export type AiCitationTrendPoint = {
+  engine: AiCitationEngine;
+  week_start: string;
+  checked: number;
+  cited: number;
+  rate: number;
+};
+
+export type AiCitationRunStartResponse = {
+  website: AiCitationWebsite;
+  running: boolean;
+  run_id: string | null;
+  is_refresh?: boolean;
+};
+
+export type AiCitationChecksPageResponse = {
+  items: AiCitationCheck[];
+  total: number;
 };
 
 /* --- Site Audit: SEO Audit (Riviso crawler) ------------------------------ */
@@ -3952,6 +4013,33 @@ export const api = {
   },
   async getSeoAuditIssuesForRule(projectId: string, auditId: string, ruleId: string) {
     return apiFetch<{ issues: SeoAuditIssue[] }>(`/api/projects/${projectId}/site-audit/seo/${auditId}/issues?rule_id=${encodeURIComponent(ruleId)}`);
+  },
+
+  /* --- AI Citation Tracking ------------------------------------------------ */
+  async getAiCitationLatest(projectId: string, opts?: ApiFetchOptions) {
+    return apiFetch<AiCitationLatestResponse>(`/api/projects/${projectId}/ai-citations/latest`, undefined, opts);
+  },
+  async getAiCitationHistory(projectId: string) {
+    return apiFetch<{ runs: AiCitationRunSummary[] }>(`/api/projects/${projectId}/ai-citations/history`);
+  },
+  async getAiCitationTrend(projectId: string, weeks = 12) {
+    return apiFetch<{ points: AiCitationTrendPoint[] }>(`/api/projects/${projectId}/ai-citations/trend?weeks=${weeks}`);
+  },
+  async runAiCitationCheck(projectId: string) {
+    return apiFetch<AiCitationRunStartResponse>(`/api/projects/${projectId}/ai-citations/run`, { method: "POST" });
+  },
+  async getAiCitationChecks(
+    projectId: string,
+    params: { page?: number; per_page?: number; q?: string; status?: string; engine?: string } = {},
+  ) {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set("page", String(params.page));
+    if (params.per_page) qs.set("per_page", String(params.per_page));
+    if (params.q) qs.set("q", params.q);
+    if (params.status) qs.set("status", params.status);
+    if (params.engine) qs.set("engine", params.engine);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return apiFetch<AiCitationChecksPageResponse>(`/api/projects/${projectId}/ai-citations/checks${suffix}`);
   },
 
   async researchIdeas(

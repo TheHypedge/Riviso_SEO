@@ -45,6 +45,7 @@ from app.services.generation_worker import start_generation_worker, stop_generat
 from app.services.subscription_daily_reset import subscription_daily_reset_loop
 from app.services.serp_refresh_worker import serp_refresh_loop
 from app.services.seo_crawl_worker import seo_crawl_loop
+from app.services.ai_citation_worker import ai_citation_check_loop
 from app.middleware.plan_limits import PlanLimitsMiddleware
 from app.legacy.storage import get_legacy_storage_module
 
@@ -178,6 +179,7 @@ async def lifespan(app: FastAPI):
     subscription_reset_task: asyncio.Task | None = None
     serp_refresh_task: asyncio.Task | None = None
     seo_crawl_task: asyncio.Task | None = None
+    ai_citation_task: asyncio.Task | None = None
 
     # Prefer Settings (pydantic-settings reads backend/.env) so the .env value wins
     # over any ENABLE_GENERATION_WORKER=0 set by the Procfile or a process manager.
@@ -203,6 +205,11 @@ async def lifespan(app: FastAPI):
     # singleton-job reasoning as serp-refresh above.
     if settings.enable_seo_crawl_worker:
         seo_crawl_task = asyncio.create_task(seo_crawl_loop())
+
+    # Dedicated worker only (ENABLE_AI_CITATION_WORKER=0 everywhere else) -- same
+    # singleton-job reasoning as seo-crawl above.
+    if settings.enable_ai_citation_worker:
+        ai_citation_task = asyncio.create_task(ai_citation_check_loop())
 
     yield
 
@@ -230,6 +237,12 @@ async def lifespan(app: FastAPI):
         seo_crawl_task.cancel()
         try:
             await seo_crawl_task
+        except asyncio.CancelledError:
+            pass
+    if ai_citation_task:
+        ai_citation_task.cancel()
+        try:
+            await ai_citation_task
         except asyncio.CancelledError:
             pass
 

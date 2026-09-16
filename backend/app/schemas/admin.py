@@ -106,6 +106,8 @@ class PlanPublic(BaseModel):
     max_technical_audits_per_month: int | None = None
     max_seo_audits_per_month: int | None = None
     max_seo_audit_urls_per_crawl: int | None = None
+    max_ai_citation_checks_per_month: int | None = None
+    max_ai_citation_keywords_per_run: int | None = None
     max_context_links: int | None = None
     max_article_image_regenerations: int | None = None
     is_trial_plan: bool | None = None
@@ -147,6 +149,8 @@ class PlanUpsert(BaseModel):
     max_technical_audits_per_month: int | None = None
     max_seo_audits_per_month: int | None = None
     max_seo_audit_urls_per_crawl: int | None = None
+    max_ai_citation_checks_per_month: int | None = None
+    max_ai_citation_keywords_per_run: int | None = None
     max_context_links: int | None = None
     max_article_image_regenerations: int | None = None
     is_trial_plan: bool | None = None

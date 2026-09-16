@@ -106,6 +106,21 @@ class OpenAIClient:
             raise RuntimeError("Model JSON response is not an object")
         return obj
 
+    async def chat_text(self, *, model: str, user: str, timeout_s: float = 30.0) -> str:
+        """
+        Plain free-text chat completion (no JSON mode) -- used by AI Citation
+        Tracking to ask ChatGPT a brand/topic prompt and read its natural-language
+        answer, unlike chat_json's structured-extraction use case above.
+        """
+        payload: dict[str, Any] = {"model": model, "messages": [{"role": "user", "content": user}]}
+        if not model.startswith("gpt-5"):
+            payload["temperature"] = 0.6
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0, read=timeout_s)) as client:
+            res = await client.post("https://api.openai.com/v1/chat/completions", headers=self._headers(), json=payload)
+        res.raise_for_status()
+        data = res.json()
+        return (((data.get("choices") or [None])[0] or {}).get("message") or {}).get("content") or ""
+
     async def generate_image_url(
         self,
         *,

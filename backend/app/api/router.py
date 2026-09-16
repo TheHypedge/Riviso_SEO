@@ -37,6 +37,7 @@ from app.api.routes import notifications
 from app.api.routes import wordpress_sync
 from app.api.routes import site_audit_technical
 from app.api.routes import site_audit_seo
+from app.api.routes import ai_citation
 
 api_router = APIRouter()
 
@@ -70,4 +71,5 @@ api_router.include_router(notifications.router)
 api_router.include_router(wordpress_sync.router)
 api_router.include_router(site_audit_technical.router)
 api_router.include_router(site_audit_seo.router)
+api_router.include_router(ai_citation.router)
 

@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import styles from "../app/page.module.css";
 import sidebarStyles from "./ProjectSidebar.module.css";
+import { ThemeToggle } from "./ThemeToggle";
 import { ProjectTabIcon, SidebarBackIcon, type ProjectTabKey } from "./ProjectTabIcon";
 import { NavGroup, NavItem } from "./ui";
 
@@ -111,17 +112,20 @@ export function ProjectSidebar({
           </svg>
         </button>
 
-        <Link href="/dashboard" className={styles.sidebarBrand} aria-label="Riviso — go to dashboard">
-          <Image
-            src="/riviso-logo.png"
-            alt=""
-            width={32}
-            height={32}
-            priority
-            className={styles.sidebarBrandLogo}
-          />
-          <span className={styles.sidebarBrandText}>Riviso</span>
-        </Link>
+        <div className={styles.sidebarBrandRow}>
+          <Link href="/dashboard" className={styles.sidebarBrand} aria-label="Riviso — go to dashboard">
+            <Image
+              src="/riviso-logo.png"
+              alt=""
+              width={32}
+              height={32}
+              priority
+              className={styles.sidebarBrandLogo}
+            />
+            <span className={styles.sidebarBrandText}>Riviso</span>
+          </Link>
+          <ThemeToggle className={styles.themeToggleBtn} />
+        </div>
 
         <div className={styles.sidebarNavMain}>
           <Link className={styles.sidebarBackLink} href="/dashboard">

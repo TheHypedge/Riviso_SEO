@@ -363,6 +363,8 @@ def _plan_to_public(key: str, d: dict) -> PlanPublic:
         "max_technical_audits_per_month": base.get("max_technical_audits_per_month"),
         "max_seo_audits_per_month": base.get("max_seo_audits_per_month"),
         "max_seo_audit_urls_per_crawl": base.get("max_seo_audit_urls_per_crawl"),
+        "max_ai_citation_checks_per_month": base.get("max_ai_citation_checks_per_month"),
+        "max_ai_citation_keywords_per_run": base.get("max_ai_citation_keywords_per_run"),
         "max_context_links": base.get("max_context_links"),
         "max_article_image_regenerations": base.get("max_article_image_regenerations"),
         "is_trial_plan": base.get("is_trial_plan"),

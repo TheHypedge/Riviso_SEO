@@ -15,6 +15,19 @@ RUN useradd --create-home --system --uid 10001 appuser
 COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
+# Headless Chromium for the AI Citation Tracking Google AI Overview scraper
+# (app/services/ai_citation/google_ai_overview_engine.py) -- Google only renders
+# that block client-side via JS, so a plain httpx fetch (like the rest of this
+# repo's scraping) can never read it; a real browser is required. `--with-deps`
+# apt-installs Chromium's system libraries as root, before USER appuser below.
+# This adds real image size (~300-400MB) to every service built from this one
+# shared Dockerfile (api/worker/scheduler/serp-refresh/seo-crawl/ai-citation),
+# not just the ai-citation worker that actually uses it -- accepted deliberately
+# to keep the single-Dockerfile convention this repo already uses for every
+# other background worker, rather than adding a second Dockerfile for one engine.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN playwright install --with-deps chromium
+
 COPY backend/app /app/app
 COPY backend/.env.example /app/.env.example
 COPY backend/wordpress_plugin /app/backend/wordpress_plugin
@@ -27,7 +40,7 @@ COPY storage.py /app/storage.py
 COPY database.py /app/database.py
 
 # Pre-create the data directory so named volumes (app_data) initialize with correct ownership.
-RUN mkdir -p /app/data/article_images && chown -R appuser:appuser /app
+RUN mkdir -p /app/data/article_images && chown -R appuser:appuser /app /ms-playwright
 
 USER appuser
 

@@ -7,7 +7,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import styles from "../../page.module.css";
 import projectsDark from "../projectsDark.module.css";
-import projectsLight from "../projectsLight.module.css";
 import { CategorySelect } from "@/components/CategorySelect";
 import { ArticlesOverview } from "@/components/ArticlesOverview";
 import { ArticlesTableSkeleton, FormFieldsSkeleton, InlineListSkeleton, TextLinesSkeleton } from "@/components/skeleton";
@@ -30,6 +29,15 @@ import {
   SiteAuditInsightBanner,
   formatSiteAuditTimestamp,
 } from "@/components/TechnicalAuditResults";
+import {
+  AiCitationSummary,
+  AiCitationCheckList,
+  AiCitationHistoryList,
+  AiCitationTrendChart,
+  formatAiCitationTimestamp,
+} from "@/components/AiCitationResults";
+import { ScheduledArticlesCalendar } from "@/components/ScheduledArticlesCalendar";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import {
   SeoAuditIssuesList,
   SeoAuditUrlExplorer,
@@ -97,10 +105,11 @@ type TabKey =
   | "site_audit";
 
 type ResearchSubTabKey = "cluster" | "curations";
-type SiteAuditSubTabKey = "technical" | "seo";
+type SiteAuditSubTabKey = "technical" | "seo" | "ai_citations";
 const SITE_AUDIT_SUBS: { key: SiteAuditSubTabKey; label: string }[] = [
   { key: "technical", label: "Technical Audit" },
   { key: "seo", label: "SEO Audit" },
+  { key: "ai_citations", label: "AI Citations" },
 ];
 
 // Whitelist of valid tab values from the URL — anything else falls back to the
@@ -137,7 +146,10 @@ const SIDEBAR_TAB_ORDER: TabKey[] = [
 /** IA grouping matching the Figma "Akhilesh" design handoff literally: Content /
  * Workspace, same items Figma's sidebar mockup shows.
  * "site_audit" has real dedicated Figma frames even though Figma's simplified
- * sidebar mockup omitted it from the nav list, so it's kept here. */
+ * sidebar mockup omitted it from the nav list, so it's kept here. AI Citation
+ * Tracking lives as a third Site Audit sub-tab (SITE_AUDIT_SUBS) rather than its
+ * own sidebar entry -- one "Site Audit" umbrella for all brand/site visibility
+ * checks, not a growing list of top-level items. */
 const NAV_GROUPS: { label: string; tabs: TabKey[] }[] = [
   { label: "Content", tabs: ["overview", "articles", "research", "scheduled_articles", "prompts", "context_links"] },
   { label: "Workspace", tabs: ["tools", "site_audit", "members", "project_settings"] },
@@ -734,6 +746,16 @@ export default function ProjectPage() {
   const [selectedSeoHistoricalRunId, setSelectedSeoHistoricalRunId] = useState<string | null>(null);
   const [seoAuditSecondaryTab, setSeoAuditSecondaryTab] = useState<"overview" | "issues" | "explorer" | "history">("overview");
 
+  // ---- AI Citation Tracking -------------------------------------------------
+  const [aiCitation, setAiCitation] = useState<import("@/lib/api").AiCitationLatestResponse | null>(null);
+  const [aiCitationBusy, setAiCitationBusy] = useState<boolean>(false);
+  const [aiCitationRunning, setAiCitationRunning] = useState<boolean>(false);
+  const [aiCitationJustCompleted, setAiCitationJustCompleted] = useState<boolean>(false);
+  const [aiCitationErr, setAiCitationErr] = useState<string | null>(null);
+  const [aiCitationSoftNotice, setAiCitationSoftNotice] = useState<string | null>(null);
+  const [aiCitationHistory, setAiCitationHistory] = useState<import("@/lib/api").AiCitationRunSummary[]>([]);
+  const [aiCitationTrend, setAiCitationTrend] = useState<import("@/lib/api").AiCitationTrendPoint[]>([]);
+
   // ---- Feature 3: Site map (Internal Linking) -------------------------------
   const [siteMap, setSiteMap] = useState<import("@/lib/api").SiteMapListResponse | null>(null);
   const [siteMapBusy, setSiteMapBusy] = useState<boolean>(false);
@@ -936,6 +958,7 @@ export default function ProjectPage() {
   const [scheduledSearch, setScheduledSearch] = useState("");
   const [scheduledOrder, setScheduledOrder] = useState<"desc" | "asc">("desc");
   const [scheduledStatusFilter, setScheduledStatusFilter] = useState("");
+  const [scheduledView, setScheduledView] = useState<"list" | "calendar">("calendar");
   // ``shopifyCatalog`` is shared with the "Map products" step in the Research
   // curation modals (loaded on-demand via ``loadShopifyCatalogIfNeeded``) —
   // the Products tab that used to be its other consumer was removed (no
@@ -2478,6 +2501,85 @@ export default function ProjectPage() {
     setTechnicalAuditErr("Technical Audit is taking longer than expected. Check back in a moment.");
   }
 
+  // ---- AI Citation Tracking handlers ---------------------------------------
+  async function reloadAiCitation(opts: { silent?: boolean } = {}) {
+    if (!projectId) return;
+    if (!opts.silent) setAiCitationBusy(true);
+    setAiCitationErr(null);
+    setAiCitationSoftNotice(null);
+    try {
+      const [res, historyRes, trendRes] = await Promise.all([
+        api.getAiCitationLatest(projectId),
+        api.getAiCitationHistory(projectId).catch(() => ({ runs: [] })),
+        api.getAiCitationTrend(projectId).catch(() => ({ points: [] })),
+      ]);
+      setAiCitation(res);
+      setAiCitationHistory(historyRes.runs || []);
+      setAiCitationTrend(trendRes.points || []);
+      setAiCitationRunning(res.running);
+      // Picks the poll back up automatically if a run from an earlier session (or
+      // a tab that was closed) is still in progress server-side -- this is what
+      // makes progress durable across sessions, not just within one page load.
+      if (res.running) void pollAiCitationUntilDone();
+    } catch (e) {
+      setAiCitationErr(e instanceof Error ? e.message : "Failed to load AI Citation Tracking");
+    } finally {
+      if (!opts.silent) setAiCitationBusy(false);
+    }
+  }
+
+  async function runAiCitationCheckNow() {
+    if (!projectId || aiCitationRunning) return;
+    setAiCitationRunning(true);
+    setAiCitationErr(null);
+    setAiCitationSoftNotice(null);
+    try {
+      await api.runAiCitationCheck(projectId);
+    } catch (e) {
+      setAiCitationErr(e instanceof Error ? e.message : "Could not start an AI Citation check.");
+      setAiCitationRunning(false);
+      return;
+    }
+    void pollAiCitationUntilDone();
+  }
+
+  async function pollAiCitationUntilDone() {
+    if (!projectId) return;
+    // The worker processes cells concurrently (fan-out, not one-at-a-time), so a
+    // real run should finish well within this -- the ceiling is a generous safety
+    // margin for a large batch, not the expected duration.
+    const maxAttempts = 200; // ~10 minutes at 3s/poll
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      try {
+        const res = await api.getAiCitationLatest(projectId);
+        setAiCitation(res);
+        if (!res.running) {
+          setAiCitationJustCompleted(true);
+          setTimeout(() => setAiCitationJustCompleted(false), 2500);
+          setAiCitationRunning(false);
+          void api
+            .getAiCitationHistory(projectId)
+            .then((h) => setAiCitationHistory(h.runs || []))
+            .catch(() => {});
+          void api
+            .getAiCitationTrend(projectId)
+            .then((t) => setAiCitationTrend(t.points || []))
+            .catch(() => {});
+          return;
+        }
+      } catch {
+        // Transient poll failure -- keep trying rather than aborting the whole run on one hiccup.
+      }
+    }
+    // Stop polling client-side, but the run itself keeps going server-side and is
+    // saved as it completes -- reopening this tab (reloadAiCitation) picks the poll
+    // back up automatically since /latest still reports running=true, so this is
+    // never a dead end, just a pause in this tab.
+    setAiCitationRunning(false);
+    setAiCitationSoftNotice("Still checking in the background -- this can take a while for a large batch. Your progress is saved; reopen this tab anytime to pick up where it left off, or refresh now.");
+  }
+
   // ---- Site Audit: SEO Audit (Riviso crawler) handlers --------------------
   async function reloadSeoAudit(opts: { silent?: boolean } = {}) {
     if (!projectId) return;
@@ -2801,6 +2903,14 @@ export default function ProjectPage() {
   useEffect(() => {
     if (!token || tab !== "site_audit" || siteAuditSubTab !== "seo") return;
     if (!seoAudit) void reloadSeoAudit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, tab, siteAuditSubTab, token]);
+
+  // Load AI Citation Tracking when its Site Audit sub-tab is first opened for this
+  // project. Refreshing the browser must not trigger a new check run -- only /latest here.
+  useEffect(() => {
+    if (!token || tab !== "site_audit" || siteAuditSubTab !== "ai_citations") return;
+    if (!aiCitation) void reloadAiCitation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, siteAuditSubTab, token]);
 
@@ -3735,6 +3845,29 @@ export default function ProjectPage() {
     setEditJobWritingPromptId((j.writing_prompt_id || meta.writingPrompts?.default_id || "").trim());
     setEditJobImagePromptId((j.image_prompt_id || meta.imagePrompts?.default_id || "").trim());
     setEditJobGenerateImage(Boolean(j.generate_image ?? true));
+  }
+
+  /** Default action for clicking a calendar block -- mirrors what the list row's
+   * primary affordance already does per state, so the calendar isn't a second,
+   * diverging set of behaviors: posted -> jump to the live post (or the article
+   * if it somehow has no link yet), cancelled -> just view the article, anything
+   * still in flight -> open the same re-schedule modal the list's "Re-Schedule"
+   * button opens. */
+  function handleScheduledCalendarSelect(j: import("@/lib/api").ScheduledJobPublic) {
+    const state = (j.state || "").toLowerCase();
+    if (state === "posted") {
+      if (j.wp_link) {
+        window.open(j.wp_link, "_blank", "noopener,noreferrer");
+      } else {
+        router.push(`/projects/${projectId}/articles/${j.article_id}`);
+      }
+      return;
+    }
+    if (state === "cancelled") {
+      router.push(`/projects/${projectId}/articles/${j.article_id}`);
+      return;
+    }
+    void openEditScheduledJob(j);
   }
 
   async function saveRescheduleChanges() {
@@ -5817,41 +5950,6 @@ export default function ProjectPage() {
     return false;
   }
 
-  function monthlyLimitStatus(label: string, limit?: import("@/lib/api").MonthlyFeatureLimit | null) {
-    if (!limit) return null;
-    if (limit.enabled === false) {
-      return `${label}: not enabled for your ${featureLimits?.plan_key || "current"} plan.`;
-    }
-    if (limit.unlimited) return `${label}: unlimited for this plan.`;
-    const used = Number(limit.month_used || 0);
-    const max = Number(limit.month_limit || 0);
-    const remaining = typeof limit.month_remaining === "number" ? limit.month_remaining : Math.max(0, max - used);
-    if (remaining <= 0) {
-      return `the max limit of ${label} is exhausted and will be renewed on ${formatRenewalDate(limit.month_reset_at)}.`;
-    }
-    return `${label}: ${used}/${max} used this month (${remaining} remaining).`;
-  }
-
-  function articleGenerationLimitStatus() {
-    if (!articleQuota) return null;
-    if (articleQuota.unlimited) return "Article generation: unlimited for this plan.";
-    const pieces: string[] = [];
-    if (typeof articleQuota.day_limit === "number") {
-      pieces.push(`${articleQuota.day_used}/${articleQuota.day_limit} daily`);
-    }
-    if (typeof articleQuota.month_limit === "number") {
-      pieces.push(`${articleQuota.month_used}/${articleQuota.month_limit} monthly`);
-    }
-    if ((articleQuota.max_can_consume_now ?? 0) <= 0) {
-      const resetAt =
-        articleQuota.day_remaining === 0
-          ? articleQuota.day_reset_at
-          : articleQuota.month_reset_at || articleQuota.day_reset_at;
-      return `the max limit of Article generation is exhausted and will be renewed on ${formatRenewalDate(resetAt)}.`;
-    }
-    return `Article generation: ${pieces.join(", ")} (${articleQuota.max_can_consume_now ?? 0} available now).`;
-  }
-
   function contextLinksLimitStatus() {
     const cap = featureLimits?.context_links;
     if (!cap) return null;
@@ -5862,22 +5960,8 @@ export default function ProjectPage() {
     return `Context links: ${cap.used}/${cap.limit} used (${cap.remaining} remaining).`;
   }
 
-  function renderLimitStrip(items: Array<string | null | undefined>) {
-    const lines = items.filter(Boolean) as string[];
-    if (!lines.length) return null;
-    return (
-      <div className={styles.limitStatusStrip}>
-        {lines.map((line) => (
-          <span key={line} className={line.startsWith("the max limit") ? styles.limitStatusExhausted : undefined}>
-            {line}
-          </span>
-        ))}
-      </div>
-    );
-  }
-
   return (
-    <div className={`${styles.page} ${styles.pageTop} ${projectsLight.projectsLightTheme}`}>
+    <div className={`${styles.page} ${styles.pageTop}`}>
       <main className={`${styles.main} ${styles.mainWide}`}>
         <div className={styles.mobileTabsBar} role="navigation" aria-label="Project sections">
          
@@ -5941,17 +6025,20 @@ export default function ProjectPage() {
             </div>
           ) : null}
           <aside className={styles.sidebar} aria-label="Project navigation">
-            <Link href="/dashboard" className={styles.sidebarBrand} aria-label="Riviso — go to dashboard">
-              <Image
-                src="/riviso-logo.png"
-                alt=""
-                width={32}
-                height={32}
-                priority
-                className={styles.sidebarBrandLogo}
-              />
-              <span className={styles.sidebarBrandText}>Riviso</span>
-            </Link>
+            <div className={styles.sidebarBrandRow}>
+              <Link href="/dashboard" className={styles.sidebarBrand} aria-label="Riviso — go to dashboard">
+                <Image
+                  src="/riviso-logo.png"
+                  alt=""
+                  width={32}
+                  height={32}
+                  priority
+                  className={styles.sidebarBrandLogo}
+                />
+                <span className={styles.sidebarBrandText}>Riviso</span>
+              </Link>
+              <ThemeToggle className={styles.themeToggleBtn} />
+            </div>
             <div className={styles.sidebarNavMain}>
             
             <Link className={styles.sidebarBackLink} href="/dashboard">
@@ -6257,7 +6344,9 @@ export default function ProjectPage() {
                   ) : null}
                   {tab === "site_audit" ? (
                     <p className={styles.scheduledPageLead}>
-                      Google PageSpeed performance, Core Web Vitals, and accessibility for your site.
+                      {siteAuditSubTab === "ai_citations"
+                        ? "Whether your brand gets cited when AI answer engines are asked about your topics."
+                        : "Google PageSpeed performance, Core Web Vitals, and accessibility for your site."}
                     </p>
                   ) : null}
                 </>
@@ -6449,13 +6538,6 @@ export default function ProjectPage() {
             ) : null}
 
               <div className={`${styles.card} ${styles.cardWide} ${styles.hideOnMobile} ${styles.articlesToolbar}`}>
-                {tab === "articles"
-                  ? renderLimitStrip([
-                      articleGenerationLimitStatus(),
-                      monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles),
-                      monthlyLimitStatus("Article export", featureLimits?.export_articles),
-                    ])
-                  : null}
 
                 <div className={styles.articlesToolbarMain}>
                   <div className={styles.articlesToolbarFilters} role="group" aria-label="Article filters">
@@ -8177,11 +8259,6 @@ export default function ProjectPage() {
                 <strong> Schedule</strong> imports + auto-publishes them to WordPress. Tick rows
                 individually, or leave selection empty to act on every pending topic.
               </p>
-              {renderLimitStrip([
-                monthlyLimitStatus("Cluster Planner", featureLimits?.cluster_plans),
-                articleGenerationLimitStatus(),
-                monthlyLimitStatus("Article scheduling", featureLimits?.scheduled_articles),
-              ])}
 
               {topicClusters.length === 0 && !topicClustersLoading ? (
                 <div className={styles.clusterEmptyHint}>
@@ -8731,7 +8808,6 @@ export default function ProjectPage() {
                   {researchMsg}
                 </div>
               ) : null}
-              {renderLimitStrip([monthlyLimitStatus("Custom Curations", featureLimits?.custom_research)])}
 
               {researchKeywordAnalysis ? (
                 <div className={styles.researchKeywordBlock}>
@@ -9164,17 +9240,19 @@ export default function ProjectPage() {
 
               <div className={styles.articlesToolbarMain}>
                 <div className={styles.articlesToolbarFilters} role="group" aria-label="Scheduled article filters">
-                  <label className={styles.articlesFilterField}>
-                    <span className={styles.articlesFilterLabel}>Order</span>
-                    <select
-                      className={styles.articlesFilterControl}
-                      value={scheduledOrder}
-                      onChange={(e) => setScheduledOrder(e.target.value as "asc" | "desc")}
-                    >
-                      <option value="desc">Latest → Oldest</option>
-                      <option value="asc">Oldest → Latest</option>
-                    </select>
-                  </label>
+                  {scheduledView === "list" ? (
+                    <label className={styles.articlesFilterField}>
+                      <span className={styles.articlesFilterLabel}>Order</span>
+                      <select
+                        className={styles.articlesFilterControl}
+                        value={scheduledOrder}
+                        onChange={(e) => setScheduledOrder(e.target.value as "asc" | "desc")}
+                      >
+                        <option value="desc">Latest → Oldest</option>
+                        <option value="asc">Oldest → Latest</option>
+                      </select>
+                    </label>
+                  ) : null}
                   <label className={styles.articlesFilterField}>
                     <span className={styles.articlesFilterLabel}>Status</span>
                     <select
@@ -9218,6 +9296,26 @@ export default function ProjectPage() {
                   >
                     <Icon.Refresh className={styles.icon20} />
                   </button>
+                  <div className={styles.segmentGroup} aria-label="List or calendar view">
+                    <button
+                      type="button"
+                      className={styles.miniBtn}
+                      aria-pressed={scheduledView === "list"}
+                      onClick={() => setScheduledView("list")}
+                    >
+                      <Icon.List className={styles.icon16} />
+                      List
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.miniBtn}
+                      aria-pressed={scheduledView === "calendar"}
+                      onClick={() => setScheduledView("calendar")}
+                    >
+                      <Icon.Calendar className={styles.icon16} />
+                      Calendar
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -9225,10 +9323,23 @@ export default function ProjectPage() {
               {error ? <p className={styles.error} style={{ margin: 0 }}>{error}</p> : null}
             </div>
 
-            <div className={`${styles.card} ${styles.cardWide} ${styles.scheduledListCard}`}>
-              {scheduledVisible.length === 0 && !scheduledLoading ? (
+            {scheduledVisible.length === 0 && !scheduledLoading ? (
+              <div className={`${styles.card} ${styles.cardWide} ${styles.scheduledListCard}`}>
                 <div className={styles.scheduledEmpty}>No scheduled articles yet.</div>
-              ) : (
+              </div>
+            ) : scheduledView === "calendar" ? (
+              <div className={`${styles.card} ${styles.cardWide}`}>
+                <ScheduledArticlesCalendar
+                  jobs={scheduledVisible}
+                  profileTz={profileTz}
+                  articleTitleFor={articleTitleFor}
+                  jobStateLabel={jobStateLabel}
+                  onSelectJob={handleScheduledCalendarSelect}
+                  styles={styles as unknown as Record<string, string>}
+                />
+              </div>
+            ) : (
+            <div className={`${styles.card} ${styles.cardWide} ${styles.scheduledListCard}`}>
                 <>
                   <div className={styles.scheduledListHeader} aria-hidden="true">
                     <span>Article</span>
@@ -9338,8 +9449,8 @@ export default function ProjectPage() {
                     );
                   })}
                 </>
-              )}
             </div>
+            )}
 
             {editJob ? (
               <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Re-schedule article">
@@ -10831,6 +10942,150 @@ export default function ProjectPage() {
                       );
                     })()
                   : null}
+              </>
+            ) : siteAuditSubTab === "ai_citations" ? (
+              <>
+                <div>
+                  <h2 className={styles.sectionTitle}>AI Citation Tracking</h2>
+                  <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 13 }}>
+                    Checks whether your brand or domain is cited when ChatGPT, Perplexity, Gemini, or
+                    Google AI Overview are asked about topics from your existing keywords.
+                  </p>
+                </div>
+
+                <div className={`${styles.card} ${styles.cardWide}`}>
+                  <div className={styles.analyticsHeaderRow}>
+                    <div className={styles.analyticsHeaderTitle}>
+                      {aiCitation?.website?.url ? (
+                        <div className={styles.analyticsPropertyTag}>
+                          {faviconUrlForSite(aiCitation.website.url) ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={faviconUrlForSite(aiCitation.website.url) as string}
+                              alt=""
+                              className={styles.siteAuditWebsiteFavicon}
+                              width={20}
+                              height={20}
+                            />
+                          ) : (
+                            <span className={styles.analyticsPropertyDot} aria-hidden="true" />
+                          )}
+                          <span>
+                            <a href={aiCitation.website.url} target="_blank" rel="noreferrer">
+                              <code className={styles.analyticsPropertyCode}>{aiCitation.website.url}</code>
+                            </a>
+                          </span>
+                        </div>
+                      ) : (
+                        <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
+                          {aiCitation ? "Website not connected." : "Loading…"}
+                        </p>
+                      )}
+                      {aiCitation?.checks?.length ? (
+                        <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 12 }}>
+                          Last checked: {formatAiCitationTimestamp(aiCitation.checks[aiCitation.checks.length - 1]?.queued_at)}
+                        </p>
+                      ) : null}
+                    </div>
+                    <div className={styles.analyticsHeaderActions}>
+                      {!aiCitation && aiCitationBusy ? (
+                        <button type="button" className={styles.btnSecondary} disabled>
+                          Loading…
+                        </button>
+                      ) : aiCitation?.website?.connected ? (
+                        <button
+                          type="button"
+                          className={styles.button}
+                          onClick={() => void runAiCitationCheckNow()}
+                          disabled={aiCitationRunning || !(aiCitation?.engines_configured?.length)}
+                          title={
+                            !(aiCitation?.engines_configured?.length)
+                              ? "No AI engines are configured yet"
+                              : aiCitation?.checks?.length
+                                ? "Checks new keywords first; refreshes existing ones once every keyword has been covered"
+                                : undefined
+                          }
+                        >
+                          {aiCitationRunning ? (
+                            <>
+                              <span className={styles.siteAuditBtnSpinner} aria-hidden="true" />
+                              Checking…
+                            </>
+                          ) : aiCitationJustCompleted ? (
+                            "Check Complete"
+                          ) : aiCitationErr ? (
+                            "Retry Check"
+                          ) : aiCitation?.checks?.length ? (
+                            "Check More Keywords"
+                          ) : (
+                            "Run Citation Check"
+                          )}
+                        </button>
+                      ) : aiCitation ? (
+                        <button type="button" className={styles.btnSecondary} onClick={() => goTab("project_settings")}>
+                          Go to Project Settings
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+
+                {aiCitation && aiCitation.website?.connected && !aiCitation.engines_configured?.length ? (
+                  <div className={`${styles.card} ${styles.cardWide}`}>
+                    <p className={styles.muted} style={{ margin: 0 }}>
+                      No AI engines are configured yet for AI Citation Tracking.
+                    </p>
+                  </div>
+                ) : null}
+
+                {aiCitationErr ? (
+                  <div className={`${styles.card} ${styles.cardWide}`} style={{ borderColor: "var(--aa-error)" }}>
+                    <p style={{ margin: 0, color: "var(--aa-error)", fontSize: 13 }}>{aiCitationErr}</p>
+                  </div>
+                ) : null}
+
+                {aiCitationSoftNotice ? (
+                  <div className={`${styles.card} ${styles.cardWide}`} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                    <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>{aiCitationSoftNotice}</p>
+                    <button type="button" className={styles.btnSecondary} onClick={() => void reloadAiCitation()}>
+                      Refresh now
+                    </button>
+                  </div>
+                ) : null}
+
+                {aiCitationRunning ? (
+                  <div className={`${styles.card} ${styles.cardWide}`}>
+                    <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Running AI Citation Check</p>
+                    <p className={styles.muted} style={{ margin: 0, fontSize: 12 }}>
+                      {(() => {
+                        const total = aiCitation?.checks?.length || 0;
+                        const done = (aiCitation?.checks || []).filter((c) => c.status === "done" || c.status === "failed").length;
+                        return total > 0
+                          ? `${done} of ${total} checked so far — asking each configured engine about your project's keywords.`
+                          : "Asking each configured engine about your project's keywords. This can take a few minutes.";
+                      })()}
+                    </p>
+                  </div>
+                ) : null}
+
+                {!aiCitationBusy && aiCitation && aiCitation.checks.length === 0 && !aiCitationRunning ? (
+                  <div className={`${styles.card} ${styles.cardWide}`} style={{ alignItems: "center", textAlign: "center", padding: "40px 24px" }}>
+                    <p style={{ margin: 0, fontWeight: 600 }}>No check has been run yet.</p>
+                    <p className={styles.muted} style={{ margin: 0, maxWidth: 420 }}>
+                      Run a Citation Check to see whether AI answer engines mention your brand for topics
+                      from your existing articles and topic clusters.
+                    </p>
+                  </div>
+                ) : null}
+
+                {aiCitation && aiCitation.checks.length > 0 ? (
+                  <>
+                    <AiCitationSummary checks={aiCitation.checks} styles={styles} />
+                    <AiCitationTrendChart points={aiCitationTrend} styles={styles} />
+                    <AiCitationHistoryList history={aiCitationHistory} styles={styles} />
+                    <AiCitationCheckList projectId={projectId} styles={styles} refreshSignal={aiCitationRunning} />
+                  </>
+                ) : null}
               </>
             ) : (
               <>

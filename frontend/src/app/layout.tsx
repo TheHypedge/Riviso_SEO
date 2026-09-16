@@ -4,6 +4,7 @@ import "./globals.css";
 import ExtensionCleanup from "@/components/ExtensionCleanup";
 import { AppProviders } from "@/components/AppProviders";
 import { GlobalLoadingProvider } from "@/components/GlobalLoadingProvider";
+import { THEME_INIT_SCRIPT } from "@/lib/theme";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -91,6 +92,15 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${uiSans.variable} ${displaySerif.variable} ${jetbrainsMono.variable} ${headingSans.variable}`}
       suppressHydrationWarning
     >
+      <head>
+        {/* Must run before first paint, synchronously -- reads the persisted
+            theme choice and sets data-theme on <html> before React hydrates,
+            so a returning dark-mode user never sees a light-then-dark flash.
+            Static script text (THEME_INIT_SCRIPT is a compile-time constant,
+            not user input), so dangerouslySetInnerHTML is the correct,
+            standard tool here -- this is not markdown-derived content. */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body suppressHydrationWarning>
         {/*
           Browser extensions (e.g. ChatGPT-Translate) inject siblings into

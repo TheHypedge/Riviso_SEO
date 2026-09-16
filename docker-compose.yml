@@ -213,6 +213,38 @@ services:
     mem_limit: 512m
     cpus: 0.5
 
+  ai-citation:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "app.run_background"]
+    env_file:
+      - ./backend/.env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      ENABLE_AI_CITATION_WORKER: "1"
+      ENABLE_SCHEDULER: "0"
+      ENABLE_GENERATION_WORKER: "0"
+      ENABLE_SERP_REFRESH_WORKER: "0"
+      ENABLE_SEO_CRAWL_WORKER: "0"
+      NEW_RELIC_CONFIG_FILE: /app/newrelic.ini
+      NEW_RELIC_APP_NAME: Riviso AI Citation
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; p='/tmp/riviso_ai_citation.heartbeat'; d=os.path.getmtime(p) if os.path.exists(p) else 0; exit(0 if time.time()-d<120 else 1)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # Headless Chromium (Google AI Overview scraping) needs materially more
+    # memory/CPU than the httpx-only scrapers (serp-refresh, seo-crawl) above.
+    mem_limit: 1024m
+    cpus: 1.0
+
   # ------------------------------------------------------------------
   # Nginx — API gateway on port 80.
   # TLS terminates at Cloudflare/edge; nginx receives plain HTTP and
