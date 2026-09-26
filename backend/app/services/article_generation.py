@@ -7,6 +7,8 @@ from datetime import datetime
 from functools import lru_cache
 from typing import Any, Callable
 
+import httpx
+
 from app.core.config import settings
 from app.services.content_sanitizer import (
     sanitize_article_body,
@@ -533,7 +535,18 @@ async def generate_featured_image_only(
         )
     except Exception as e:
         log.exception("Featured image generation failed")
-        raise RuntimeError(f"OpenAI image request failed: {e}") from e
+        # httpx's timeout/connect exceptions frequently stringify to "" (no
+        # message on the exception itself, all the useful detail is in its
+        # type) -- str(e) alone silently produced "OpenAI image request
+        # failed: " with nothing after the colon, which read as broken rather
+        # than "transient network issue, try again."
+        if isinstance(e, httpx.TimeoutException):
+            detail = "Connection to the image model timed out. This is usually transient -- try again in a moment."
+        elif isinstance(e, httpx.HTTPStatusError):
+            detail = f"Image model returned {e.response.status_code}: {e.response.text[:300]}"
+        else:
+            detail = str(e) or type(e).__name__
+        raise RuntimeError(f"OpenAI image request failed: {detail}") from e
     if not image_url:
         raise RuntimeError("Image generation did not return an image (empty response from model).")
     return {

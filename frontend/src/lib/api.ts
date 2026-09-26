@@ -203,6 +203,7 @@ export type ProjectFeatureLimits = {
   technical_audit?: MonthlyFeatureLimit;
   seo_audit?: MonthlyFeatureLimit;
   ai_citations?: MonthlyFeatureLimit;
+  image_prompt_tests?: MonthlyFeatureLimit;
   scheduled_articles?: MonthlyFeatureLimit;
   export_articles?: MonthlyFeatureLimit;
   context_links: CountFeatureLimit;
@@ -496,6 +497,8 @@ export type SeoAuditCounts = {
   // Same live treatment: indexability is known the moment a page is fetched, so
   // this updates during the crawl instead of waiting for the whole pipeline.
   indexability_breakdown?: { indexable: number; non_indexable: number; blocked: number; unknown: number };
+  // Same live treatment: HTTP status is known the moment a page is fetched.
+  status_breakdown?: { "2xx": number; "3xx": number; "4xx": number; "5xx": number; failed: number };
 };
 
 export type SeoAuditHealthScore = {
@@ -1339,6 +1342,16 @@ export type PromptItem = {
 export type PromptListResponse = {
   items: PromptItem[];
   default_id?: string | null;
+};
+
+export type ImagePromptTestResult = {
+  id: string;
+  image_prompt_id: string;
+  prompt_text: string;
+  final_prompt: string;
+  image_url: string;
+  model: string;
+  created_at: string;
 };
 
 export type ContextLinkItem = {
@@ -3177,6 +3190,26 @@ export const api = {
     await apiFetch<unknown>(`/api/projects/${projectId}/image-prompts/${promptId}`, { method: "DELETE" });
     _cacheImagePrompts.delete(projectId);
     return { ok: true as const };
+  },
+
+  // Runs a real, one-off test generation for the given prompt text (draft or
+  // saved) -- never touches image_prompts itself, only the small test-history
+  // list keyed by promptId. No caching: every call is a fresh generation.
+  // Timeout is set above the backend's own 300s OpenAI read-timeout ceiling
+  // (generate_featured_image_only) plus headroom for its concurrency-slot wait --
+  // a shorter client timeout was silently aborting real, still-in-flight
+  // generations, which is what "the image is not getting generated" turned out
+  // to be: the request was cancelled client-side before the backend could finish.
+  async testImagePrompt(projectId: string, body: { prompt_id: string; text: string }) {
+    return apiFetch<ImagePromptTestResult>(
+      `/api/projects/${projectId}/image-prompts/test`,
+      { method: "POST", body: JSON.stringify(body) },
+      { timeoutMs: 320_000 },
+    );
+  },
+
+  async getImagePromptTests(projectId: string, promptId: string) {
+    return apiFetch<{ items: ImagePromptTestResult[] }>(`/api/projects/${projectId}/image-prompts/${promptId}/tests`);
   },
 
   // Context links

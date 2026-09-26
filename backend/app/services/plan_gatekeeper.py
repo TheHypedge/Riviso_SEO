@@ -28,6 +28,7 @@ class PlanAction(str, Enum):
     TECHNICAL_AUDIT = "technical_audit"
     SEO_AUDIT = "seo_audit"
     AI_CITATION_CHECK = "ai_citation_check"
+    TEST_IMAGE_PROMPT = "test_image_prompt"
 
 
 def _parse_iso_utc(raw: str) -> datetime | None:
@@ -201,6 +202,15 @@ def check_plan_limits(*, st, user: dict, action: PlanAction, consume: bool = Tru
         ok, msg = st.consume_ai_citation_usage(uid, month_limit=plan.get("max_ai_citation_checks_per_month"), amount=1)
         if not ok:
             raise HTTPException(status_code=403, detail={"error": "quota_exceeded", "message": msg or "AI Citation Tracking limit reached."})
+        return
+
+    if action == PlanAction.TEST_IMAGE_PROMPT and consume and hasattr(st, "consume_image_prompt_test_usage"):
+        # Same "gate with consume=False, meter for real in the route" pattern as
+        # AI_CITATION_CHECK above -- image_prompts.py's /test route consumes
+        # directly. This branch only covers a generic consume=True caller.
+        ok, msg = st.consume_image_prompt_test_usage(uid, month_limit=plan.get("max_image_prompt_tests_per_month"), amount=1)
+        if not ok:
+            raise HTTPException(status_code=403, detail={"error": "quota_exceeded", "message": msg or "Image prompt test limit reached."})
         return
 
 

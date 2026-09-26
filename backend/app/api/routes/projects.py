@@ -777,6 +777,12 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
             "usage_monthly_ai_citation_count",
             "max_ai_citation_checks_per_month",
         ),
+        "image_prompt_tests": _monthly(
+            "image_prompt_tests",
+            "usage_monthly_image_prompt_test_month",
+            "usage_monthly_image_prompt_test_count",
+            "max_image_prompt_tests_per_month",
+        ),
         "scheduled_articles": {
             **_monthly(
                 "scheduled_articles",

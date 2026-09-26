@@ -1,16 +1,41 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
-from app.schemas.prompts import PromptCreate, PromptItem, PromptListResponse, PromptUpdate, SetDefaultRequest
+from app.schemas.prompts import (
+    ImagePromptTestHistoryResponse,
+    ImagePromptTestRequest,
+    ImagePromptTestResult,
+    PromptCreate,
+    PromptItem,
+    PromptListResponse,
+    PromptUpdate,
+    SetDefaultRequest,
+)
+from app.services.article_generation import generate_featured_image_only
+from app.services.generation_queue import generation_slot, user_generation_slot
+from app.services.plan_gatekeeper import PlanAction, require_plan_action_for_project
 from app.services.prompt_validation import validate_image_prompt
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["image-prompts"])
+
+# Fixed, clearly-generic stand-in content for a prompt test -- there's no real
+# article to test against (per design: testing is content-agnostic, only the
+# project's own brand_identity/niche_identifier -- the part that actually varies
+# per project -- gets folded in for real by build_programmatic_image_prompt).
+_TEST_TITLE = "A Complete Guide to Getting Started"
+_TEST_FOCUS_KEYPHRASE = "your topic"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _plan_limit(plan: dict, field: str) -> int | None:
@@ -194,4 +219,69 @@ async def set_default_image_prompt(project_id: str, payload: SetDefaultRequest, 
         raise HTTPException(status_code=404, detail="Image prompt not found")
     st.update_project_fields(project_id, {"default_image_prompt_id": pid})
     return {"ok": True, "default_id": pid}
+
+
+@router.post("/image-prompts/test", response_model=ImagePromptTestResult)
+async def test_image_prompt(
+    project_id: str,
+    payload: ImagePromptTestRequest,
+    user: dict = Depends(require_plan_action_for_project(PlanAction.TEST_IMAGE_PROMPT, consume=False)),
+) -> ImagePromptTestResult:
+    """Run a real, one-off test generation for an image prompt -- draft or saved,
+    the caller's current textarea content either way (this project's own prompt
+    editor is the only caller). Nothing here touches `image_prompts` on the
+    project; the result is only ever stored in the small `image_prompt_tests`
+    history so the editor can show past attempts, never persisted as a real
+    featured image."""
+    st = get_legacy_storage_module()
+    proj = _require_project_access(st=st, user=user, project_id=project_id)
+    text = payload.text.strip()[:100_000]
+    validate_image_prompt(text)
+
+    plan, plan_key, role = _plan_for(user, st)
+    uid = (user.get("id") or "").strip()
+    if role != "admin" and hasattr(st, "consume_image_prompt_test_usage"):
+        ok, msg = st.consume_image_prompt_test_usage(uid, month_limit=plan.get("max_image_prompt_tests_per_month"))
+        if not ok:
+            raise HTTPException(status_code=403, detail={"code": "quota_exceeded", "message": msg or "Monthly image prompt test limit reached for your plan."})
+
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
+
+    try:
+        async with user_generation_slot(uid):
+            async with generation_slot():
+                gen = await generate_featured_image_only(
+                    title=_TEST_TITLE,
+                    keywords=[],
+                    focus_keyphrase=(proj.get("niche_identifier") or "").strip() or _TEST_FOCUS_KEYPHRASE,
+                    brand_identity=(proj.get("brand_identity") or ""),
+                    niche_identifier=(proj.get("niche_identifier") or ""),
+                    image_prompt_text=text,
+                )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    row = {
+        "id": str(uuid.uuid4()),
+        "project_id": project_id,
+        "image_prompt_id": payload.prompt_id.strip(),
+        "prompt_text": text,
+        "final_prompt": gen["image_prompt"],
+        "image_url": gen["image_url"],
+        "model": gen["model"],
+        "created_at": _now_iso(),
+    }
+    st.create_image_prompt_test(row)
+    return ImagePromptTestResult(**row)
+
+
+@router.get("/image-prompts/{prompt_id}/tests", response_model=ImagePromptTestHistoryResponse)
+async def list_image_prompt_tests(project_id: str, prompt_id: str, user: dict = Depends(get_current_user)) -> ImagePromptTestHistoryResponse:
+    st = get_legacy_storage_module()
+    _require_project_access(st=st, user=user, project_id=project_id)
+    items = st.load_recent_image_prompt_tests(project_id, (prompt_id or "").strip())
+    return ImagePromptTestHistoryResponse(items=[ImagePromptTestResult(**i) for i in items])
 

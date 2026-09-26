@@ -9,6 +9,7 @@ Each milestone fires once per user (tracked in subscription.trial_notified_miles
 from __future__ import annotations
 
 import logging
+import uuid
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
@@ -91,11 +92,17 @@ async def check_trial_milestones(st) -> None:
         if days_left is None:
             continue
 
-        notified: list[str] = sub.get("trial_notified_milestones") or []
-        if not isinstance(notified, list):
-            notified = []
+        # A copy, not an alias: `notified` gets mutated below as new milestones
+        # fire, and the end-of-loop `if notified != sub.get(...)` check needs an
+        # unmutated original on the right-hand side to compare against -- with a
+        # bare `sub.get(...) or []` alias, appending to `notified` mutated `sub`'s
+        # own list too, so the two sides were always equal and the updated
+        # milestone list was never actually persisted (silently re-firing the
+        # same "once per user" notification on every future hourly check).
+        existing_notified = sub.get("trial_notified_milestones")
+        notified: list[str] = list(existing_notified) if isinstance(existing_notified, list) else []
 
-        new_milestones: list[str] = []
+        new_milestones: list[tuple[str, str]] = []
 
         for key, threshold, msg in _MILESTONES:
             if key in notified:
@@ -116,11 +123,14 @@ async def check_trial_milestones(st) -> None:
                 await run_sync(
                     st.insert_notification,
                     {
+                        "id": str(uuid.uuid4()),
                         "user_id": uid,
                         "type": "trial_reminder",
                         "title": "Trial reminder",
-                        "message": msg,
+                        "body": msg,
+                        "data": {"milestone": key},
                         "read": False,
+                        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                     },
                 )
                 notified.append(key)

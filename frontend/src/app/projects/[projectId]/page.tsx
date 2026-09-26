@@ -38,15 +38,17 @@ import {
 } from "@/components/AiCitationResults";
 import { ScheduledArticlesCalendar } from "@/components/ScheduledArticlesCalendar";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { ConnectPlatformModal } from "@/components/ConnectPlatformModal";
 import {
   SeoAuditIssuesList,
   SeoAuditUrlExplorer,
   SeoAuditHistoryList,
-  SeoAuditRunProgress,
-  SeoAuditCompactCrawlStatus,
+  SeoAuditLiveProgressBar,
   SeoAuditPreviewIssuesTable,
   SeoAuditKpiStrip,
   SeoAuditIndexabilityDonut,
+  SeoAuditStatusCodeDonut,
+  SeoAuditLinksSplitDonut,
   SeoAuditIssuesTrendChart,
   SeoAuditCrawlStats,
   SeoAuditTopIssuesTable,
@@ -87,7 +89,7 @@ import { scheduleMinFromNowMs } from "@/lib/scheduleTiming";
 import { ProjectTabIcon, SidebarBackIcon, type ProjectTabKey } from "@/components/ProjectTabIcon";
 import { ShopifyProjectSettings } from "@/components/ShopifyProjectSettings";
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
-import { resolveProjectPlatform } from "@/lib/projectPlatform";
+import { isProjectConnected, resolveProjectPlatform } from "@/lib/projectPlatform";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
@@ -566,6 +568,7 @@ export default function ProjectPage() {
   }, [searchParams]);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settings, setSettings] = useState<import("@/lib/api").ProjectSettings | null>(null);
+  const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [projectMeta, setProjectMeta] = useState<import("@/lib/api").ProjectPublic | null>(null);
   // List of every project the user owns. Powers the in-sidebar project
   // switcher so users can hop between projects without bouncing through
@@ -1078,6 +1081,35 @@ export default function ProjectPage() {
   const [draftName, setDraftName] = useState("");
   const [draftText, setDraftText] = useState("");
   const [draftSetDefault, setDraftSetDefault] = useState(false);
+  // Image Prompt Playground -- test-generation state, scoped to whichever image
+  // prompt is currently open in the editor modal; reset whenever the modal opens.
+  const [promptTestBusy, setPromptTestBusy] = useState(false);
+  const [promptTestPct, setPromptTestPct] = useState(0);
+  const [promptTestResult, setPromptTestResult] = useState<import("@/lib/api").ImagePromptTestResult | null>(null);
+  const [promptTestErr, setPromptTestErr] = useState<string | null>(null);
+  const [promptTestHistory, setPromptTestHistory] = useState<import("@/lib/api").ImagePromptTestResult[]>([]);
+
+  // Real image generation has no server-reported progress to display (a single
+  // blocking OpenAI call, not a streamed one) -- this climbs a percentage the
+  // same way upload/install progress bars fake it elsewhere (Gmail attachments,
+  // npm installs): fast at first, asymptotically slowing toward a cap it never
+  // quite reaches on its own, so it never lies by claiming "done" before the
+  // real result lands. runImagePromptTest snaps it to 100 the moment it does.
+  useEffect(() => {
+    if (!promptTestBusy) {
+      setPromptTestPct(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const TAU_MS = 16_000;
+    const CAP_PCT = 96;
+    const id = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      const pct = CAP_PCT * (1 - Math.exp(-elapsed / TAU_MS));
+      setPromptTestPct(Math.min(CAP_PCT, Math.round(pct)));
+    }, 200);
+    return () => clearInterval(id);
+  }, [promptTestBusy]);
   // Guided prompt builder state
   const [promptBuilderMode, setPromptBuilderMode] = useState<"manual" | "guided">("manual");
   const [builderBuilding, setBuilderBuilding] = useState(false);
@@ -2581,6 +2613,13 @@ export default function ProjectPage() {
   }
 
   // ---- Site Audit: SEO Audit (Riviso crawler) handlers --------------------
+  // "Finished" mirrors the backend's own status set (site_audit_seo.py's
+  // _IN_PROGRESS_STATUSES is the complement of this) -- a finished audit has
+  // real, displayable results; queued/running/analyzing don't yet.
+  function isSeoAuditFinished(status: string | undefined | null): boolean {
+    return status === "completed" || status === "partial" || status === "cancelled";
+  }
+
   async function reloadSeoAudit(opts: { silent?: boolean } = {}) {
     if (!projectId) return;
     if (!opts.silent) setSeoAuditBusy(true);
@@ -2637,13 +2676,17 @@ export default function ProjectPage() {
 
   async function pollSeoAuditUntilDone() {
     if (!projectId) return;
+    // The results dashboard is live the whole time this runs (it renders directly
+    // from seoAudit.audit, whatever its status), so a tighter interval than most
+    // other polls here means pages/KPIs/donuts visibly grow every few seconds
+    // instead of the crawl feeling like it's making progress "off-screen".
     // The backend's own crawl-time ceiling is 30min (seo_crawl_max_duration_seconds)
-    // plus post-crawl analysis on top for large sites -- 480 * 5s = 40min gives
+    // plus post-crawl analysis on top for large sites -- 800 * 3s = 40min gives
     // headroom above that so this doesn't report "stuck" while a large, healthy
     // crawl (up to the 20k-URL plan cap) is still legitimately in progress.
-    const maxAttempts = 480;
+    const maxAttempts = 800;
     for (let i = 0; i < maxAttempts; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 3000));
       try {
         const res = await api.getSeoAuditLatest(projectId);
         setSeoAudit(res);
@@ -4154,7 +4197,40 @@ export default function ProjectPage() {
     } else {
       setPromptBuilderMode("manual");
     }
+    setPromptTestBusy(false);
+    setPromptTestResult(null);
+    setPromptTestErr(null);
+    setPromptTestHistory([]);
+    if (kind === "image") {
+      void api
+        .getImagePromptTests(projectId, id)
+        .then((res) => setPromptTestHistory(res.items || []))
+        .catch(() => {});
+    }
     setShowPromptModal({ kind, id });
+  }
+
+  async function runImagePromptTest() {
+    if (!showPromptModal || showPromptModal.kind !== "image") return;
+    const text = draftText.trim();
+    if (!text) return;
+    setPromptTestBusy(true);
+    setPromptTestErr(null);
+    try {
+      const result = await api.testImagePrompt(projectId, { prompt_id: showPromptModal.id, text });
+      // Let the bar visibly hit 100% (matching real completion) before swapping
+      // the shimmer placeholder for the actual image, instead of jumping straight
+      // from "96%" to the finished result.
+      setPromptTestPct(100);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      setPromptTestResult(result);
+      setPromptTestHistory((prev) => [result, ...prev].slice(0, 5));
+      void refreshFeatureLimits();
+    } catch (e) {
+      setPromptTestErr(e instanceof Error ? e.message : "Could not generate a test image.");
+    } finally {
+      setPromptTestBusy(false);
+    }
   }
 
   function startAddPrompt(kind: "writing" | "image") {
@@ -5895,12 +5971,9 @@ export default function ProjectPage() {
   );
   const sidebarEmail = (profile?.email || "").trim();
   const sidebarPlan = (profile?.subscription_type || "beta").trim() || "beta";
-  const websiteConnected = isShopifyProject
-    ? (settings?.shopify_verified_status || "").trim().toLowerCase() === "connected" &&
-      !!(settings?.shopify_verified_at || "").trim()
-    : (settings?.wp_verified_status || "").trim().toLowerCase() === "connected" ||
-      wpCatsForSchedule.length > 0;
-  const showWebsiteRequiredOverlay = tab === "articles" && !loading && !websiteConnected;
+  const websiteConnected =
+    isProjectConnected(isShopifyProject ? "shopify" : "wordpress", settings) ||
+    (!isShopifyProject && wpCatsForSchedule.length > 0);
 
   function formatRenewalDate(raw?: string | null) {
     const v = (raw || "").trim();
@@ -6124,7 +6197,14 @@ export default function ProjectPage() {
           </aside>
 
           <section className={styles.contentCol}>
-            <div className={styles.intro} style={{ paddingTop: 0 }}>
+            {/* Site Audit skips this generic page-level title+lead entirely (rather than
+                just leaving its lead-paragraph case out below) -- each of its three
+                sub-tabs (Technical/SEO/AI Citations) already renders its own complete
+                title+description+actions header right at the top of its content, so
+                this would only ever add a redundant second header stacked above it
+                (and, for the "seo" sub-tab, one with the wrong description text --
+                it's written for Technical Audit's PageSpeed copy). */}
+            <div className={styles.intro} style={tab === "site_audit" ? { display: "none" } : { paddingTop: 0 }}>
               {tab === "overview" ? (
                 <>
                   <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
@@ -6537,6 +6617,30 @@ export default function ProjectPage() {
               </>
             ) : null}
 
+              {!loading && !websiteConnected ? (
+                <div
+                  className={`${styles.card} ${styles.cardWide}`}
+                  style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}
+                >
+                  <p style={{ margin: 0, fontSize: 13 }}>Connect your website to publish articles.</p>
+                  <button type="button" className={styles.btnSecondary} onClick={() => setConnectModalOpen(true)}>
+                    Connect Website
+                  </button>
+                </div>
+              ) : null}
+
+              {connectModalOpen ? (
+                <ConnectPlatformModal
+                  projectId={projectId}
+                  settings={settings}
+                  onClose={() => setConnectModalOpen(false)}
+                  onConnected={() => {
+                    setConnectModalOpen(false);
+                    void api.getProjectSettings(projectId, { fresh: true }).then(setSettings).catch(() => {});
+                  }}
+                />
+              ) : null}
+
               <div className={`${styles.card} ${styles.cardWide} ${styles.hideOnMobile} ${styles.articlesToolbar}`}>
 
                 <div className={styles.articlesToolbarMain}>
@@ -6819,34 +6923,6 @@ export default function ProjectPage() {
                       })
                     : null}
                 </div>
-                {showWebsiteRequiredOverlay ? (
-                  <div className={styles.articleConnectionOverlay} role="dialog" aria-modal="true" aria-label="Website connection required">
-                    <div className={styles.articleConnectionPopup}>
-                      <div className={styles.articleConnectionKicker}>Website not connected</div>
-                      <h3>Connect your WordPress website to continue</h3>
-                      <p>
-                        Article operations are locked until this project has a verified website connection.
-                        Connect the website to generate, schedule, publish, and manage articles safely.
-                      </p>
-                      <div className={styles.articleConnectionActions}>
-                        <button
-                          type="button"
-                          className={styles.button}
-                          onClick={() => router.push(`/projects/${projectId}?tab=project_settings`)}
-                        >
-                          Connect Website
-                        </button>
-                        <button
-                          type="button"
-                          className={styles.btnSecondary}
-                          onClick={() => router.push("/dashboard")}
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
               </div>
 
               <div className={styles.articlesPagination}>
@@ -10179,6 +10255,100 @@ export default function ProjectPage() {
                           when the image prompt is processed.
                         </div>
                       ) : null}
+
+                      {!isWriting ? (() => {
+                        const testCap = featureLimits?.image_prompt_tests;
+                        const testsExhausted = !!testCap && !testCap.unlimited && (testCap.month_remaining ?? 0) <= 0;
+                        return (
+                          <div style={{ borderTop: "1px solid var(--aa-hairline)", paddingTop: 14, marginTop: 2, display: "flex", flexDirection: "column", gap: 10 }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                              <div>
+                                <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Test this prompt</p>
+                                <p className={styles.muted} style={{ margin: "2px 0 0", fontSize: 11.5 }}>
+                                  Generates a real preview image using this text, your project&apos;s brand identity
+                                  and niche, and a generic sample topic — nothing here is saved as your prompt.
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                className={styles.btnSecondary}
+                                onClick={() => void runImagePromptTest()}
+                                disabled={!draftText.trim() || overLimit || promptTestBusy || testsExhausted}
+                                title={testsExhausted ? "Monthly image prompt test limit reached for your plan." : undefined}
+                              >
+                                {promptTestBusy ? (
+                                  <>
+                                    <span className={styles.siteAuditBtnSpinner} aria-hidden="true" />
+                                    Generating…
+                                  </>
+                                ) : (
+                                  "Run Test"
+                                )}
+                              </button>
+                            </div>
+
+                            {testCap && !testCap.unlimited && typeof testCap.month_limit === "number" ? (
+                              <p className={styles.muted} style={{ margin: 0, fontSize: 11 }}>
+                                {testCap.month_used} / {testCap.month_limit} tests used this month
+                                {testsExhausted ? " — resets next month." : ""}
+                              </p>
+                            ) : null}
+
+                            {promptTestErr ? (
+                              <p role="alert" style={{ margin: 0, fontSize: 12, color: "var(--aa-error)" }}>
+                                {promptTestErr}
+                              </p>
+                            ) : null}
+
+                            {promptTestBusy ? (
+                              <div className={styles.imagePromptTestBox} aria-live="polite" aria-label={`Generating test image, ${promptTestPct}% complete`}>
+                                <div className={styles.articleImageSkeleton} aria-hidden="true" />
+                                <span className={styles.imagePromptTestPct}>{promptTestPct}%</span>
+                              </div>
+                            ) : promptTestResult ? (
+                              <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={promptTestResult.image_url}
+                                  alt="Test generation preview"
+                                  style={{ width: 220, height: 220, objectFit: "cover", borderRadius: 10, border: "1px solid var(--aa-hairline)" }}
+                                />
+                                <details style={{ flex: 1, minWidth: 220 }}>
+                                  <summary className={styles.muted} style={{ fontSize: 11.5, cursor: "pointer" }}>
+                                    Full prompt sent to the image model
+                                  </summary>
+                                  <p className={styles.muted} style={{ margin: "6px 0 0", fontSize: 11.5, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
+                                    {promptTestResult.final_prompt}
+                                  </p>
+                                </details>
+                              </div>
+                            ) : null}
+
+                            {promptTestHistory.length > 1 ? (
+                              <div>
+                                <p className={styles.muted} style={{ margin: "0 0 6px", fontSize: 11 }}>
+                                  Previous tests
+                                </p>
+                                <div style={{ display: "flex", gap: 8 }}>
+                                  {promptTestHistory.slice(0, 4).map((t) => (
+                                    <button
+                                      key={t.id}
+                                      type="button"
+                                      onClick={() => setPromptTestResult(t)}
+                                      style={{ padding: 0, border: t.id === promptTestResult?.id ? "2px solid var(--aa-primary)" : "1px solid var(--aa-hairline)", borderRadius: 8, cursor: "pointer", background: "none" }}
+                                      title={formatSiteAuditTimestamp(t.created_at)}
+                                    >
+                                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                                      <img src={t.image_url} alt="" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 6, display: "block" }} />
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })() : null}
+
                       <label className={styles.checkboxRow}>
                         <input type="checkbox" checked={draftSetDefault} onChange={(e) => setDraftSetDefault(e.target.checked)} />
                         Set as default for this project
@@ -11157,40 +11327,15 @@ export default function ProjectPage() {
                   </div>
                 ) : null}
 
-                {seoAuditRunning ? (
-                  <div className={`${styles.card} ${styles.cardWide}`}>
-                    <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Crawling your site</p>
-                    <SeoAuditRunProgress counts={seoAudit?.audit?.counts} analysisProgress={seoAudit?.audit?.analysis_progress} styles={styles} />
-                    {seoAudit?.audit?.counts && (seoAudit.audit.counts.blocked || seoAudit.audit.counts.failed) ? (
-                      <p className={styles.muted} style={{ margin: 0, fontSize: 12 }}>
-                        {seoAudit.audit.counts.blocked ? `${seoAudit.audit.counts.blocked} blocked by robots.txt` : ""}
-                        {seoAudit.audit.counts.blocked && seoAudit.audit.counts.failed ? " · " : ""}
-                        {seoAudit.audit.counts.failed ? `${seoAudit.audit.counts.failed} failed` : ""}
-                      </p>
-                    ) : !seoAudit?.audit?.counts?.discovered ? (
-                      <p className={styles.muted} style={{ margin: 0, fontSize: 12 }}>
-                        This can take a few minutes depending on site size.
-                      </p>
-                    ) : null}
-                    {seoAudit?.audit?.id ? <SeoAuditCompactCrawlStatus projectId={projectId} auditId={seoAudit.audit.id} styles={styles} /> : null}
-                  </div>
-                ) : null}
-
-                {/* Overview numbers update in place from the same 5s poll while the crawl is
-                    still running -- Crawled/Internal/External/Broken/Redirects are all live-
-                    counted per page as it's fetched (see crawler.py's CrawlCounts); Issues stays
-                    "--" until analysis genuinely has a result, it isn't derivable mid-crawl. */}
-                {seoAuditRunning && seoAudit?.audit && seoAudit.audit.counts.fetched > 0 ? (
-                  <>
-                    <div className={`${styles.card} ${styles.cardWide}`}>
-                      <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>Overview (live)</p>
-                      <SeoAuditKpiStrip audit={seoAudit.audit} projectId={projectId} history={seoAuditHistory} styles={styles} />
-                    </div>
-                    <div className={styles.seoAuditOverviewGrid}>
-                      <SeoAuditPreviewIssuesTable projectId={projectId} auditId={seoAudit.audit.id} styles={styles} />
-                      <SeoAuditIndexabilityDonut breakdown={seoAudit.audit.counts.indexability_breakdown} styles={styles} />
-                    </div>
-                  </>
+                {/* The dashboard below always renders straight from seoAudit.audit, whatever
+                    its status -- the instant "Run/Update/Start Fresh" is clicked, the freshly
+                    queued audit doc (all-zero counts) is already in state, so the shell (KPI
+                    tiles, donuts, tabs, Page Explorer) mounts immediately instead of behind a
+                    blocking loading screen. This slim bar is the only extra thing shown while
+                    a crawl is in progress -- everything else below it is the one live dashboard
+                    climbing as real counts/URLs stream in from the 3s poll. */}
+                {seoAuditRunning && seoAudit?.audit ? (
+                  <SeoAuditLiveProgressBar counts={seoAudit.audit.counts} analysisProgress={seoAudit.audit.analysis_progress} styles={styles} />
                 ) : null}
 
                 {!seoAuditBusy && seoAudit && !seoAudit.audit && !seoAuditRunning ? (
@@ -11202,7 +11347,7 @@ export default function ProjectPage() {
                   </div>
                 ) : null}
 
-                {seoAudit?.audit && (seoAudit.audit.status === "completed" || seoAudit.audit.status === "partial" || seoAudit.audit.status === "cancelled")
+                {seoAudit?.audit
                   ? (() => {
                       const latest = seoAudit.audit!;
                       const selected = selectedSeoHistoricalRunId ? seoAuditHistory.find((r) => r.id === selectedSeoHistoricalRunId) || null : null;
@@ -11258,23 +11403,41 @@ export default function ProjectPage() {
                             <TabsContent value="overview">
                               <div className={styles.analyticsStack}>
                                 <SeoAuditKpiStrip audit={displayedRun} projectId={projectId} history={seoAuditHistory} styles={styles} />
+                                <div className={styles.seoAuditOverviewGrid}>
+                                  <SeoAuditIndexabilityDonut breakdown={displayedRun.counts.indexability_breakdown} styles={styles} />
+                                  <SeoAuditStatusCodeDonut breakdown={displayedRun.counts.status_breakdown} styles={styles} />
+                                  <SeoAuditLinksSplitDonut counts={displayedRun.counts} styles={styles} />
+                                </div>
                                 <SeoAuditIssuesTrendChart history={seoAuditHistory} styles={styles} />
-                                <SeoAuditTopIssuesTable
-                                  projectId={projectId}
-                                  auditId={displayedRun.id}
-                                  totalCrawled={displayedRun.counts.fetched}
-                                  onViewAll={() => setSeoAuditSecondaryTab("issues")}
-                                  styles={styles}
-                                />
+                                {isSeoAuditFinished(displayedRun.status) ? (
+                                  <SeoAuditTopIssuesTable
+                                    projectId={projectId}
+                                    auditId={displayedRun.id}
+                                    totalCrawled={displayedRun.counts.fetched}
+                                    onViewAll={() => setSeoAuditSecondaryTab("issues")}
+                                    styles={styles}
+                                  />
+                                ) : (
+                                  <SeoAuditPreviewIssuesTable projectId={projectId} auditId={displayedRun.id} styles={styles} />
+                                )}
                                 <SeoAuditCrawlStats audit={displayedRun} projectId={projectId} styles={styles} />
                               </div>
                             </TabsContent>
 
                             <TabsContent value="issues">
-                              <SeoAuditIssuesList projectId={projectId} auditId={displayedRun.id} totalCrawled={displayedRun.counts.fetched} styles={styles} />
+                              {/* The full 18-rule evaluator only runs once crawling+analysis
+                                  finishes (it needs the complete link graph for orphan/broken-link
+                                  detection) -- showing it mid-crawl would read as "0 issues found",
+                                  which is misleadingly reassuring. The same client-side preview
+                                  checks used on the overview tab stand in until then. */}
+                              {isSeoAuditFinished(displayedRun.status) ? (
+                                <SeoAuditIssuesList projectId={projectId} auditId={displayedRun.id} totalCrawled={displayedRun.counts.fetched} styles={styles} />
+                              ) : (
+                                <SeoAuditPreviewIssuesTable projectId={projectId} auditId={displayedRun.id} styles={styles} />
+                              )}
                             </TabsContent>
                             <TabsContent value="explorer">
-                              <SeoAuditUrlExplorer projectId={projectId} auditId={displayedRun.id} styles={styles} />
+                              <SeoAuditUrlExplorer projectId={projectId} auditId={displayedRun.id} refreshSignal={displayedRun.counts.fetched} styles={styles} />
                             </TabsContent>
                             <TabsContent value="history">
                               <SeoAuditHistoryList history={seoAuditHistory} selectedRunId={selectedSeoHistoricalRunId} onSelectRun={setSelectedSeoHistoricalRunId} styles={styles} />

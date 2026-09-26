@@ -648,6 +648,28 @@ export default function DashboardPage() {
     }
   }
 
+  // "Continue without connecting" -- same creation call as createProjectWithPlatform,
+  // just skipping the connect modal afterward so a first-time evaluator can try
+  // generating/editing articles before committing to a real website. Platform
+  // stays at its harmless default; ConnectPlatformModal always offers a
+  // WordPress/Shopify switcher later, so nothing here is a binding choice.
+  async function createProjectWithoutConnecting() {
+    setError(null);
+    setCreating(true);
+    try {
+      const p = await api.createProject(name, "wordpress", website);
+      setProjects((prev) => [p, ...prev]);
+      setName("");
+      setWebsite("");
+      closeAddProject();
+      router.push(`/projects/${p.id}?tab=articles`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create project");
+    } finally {
+      setCreating(false);
+    }
+  }
+
   function logout() {
     clearAuth();
     router.replace("/");
@@ -1640,6 +1662,15 @@ export default function DashboardPage() {
                     onClick={() => void createProjectWithPlatform("shopify")}
                   >
                     {creating ? "Creating…" : "Create Shopify project"}
+                  </button>
+                  <button
+                    className={styles.btnSecondary}
+                    type="button"
+                    disabled={creating}
+                    onClick={() => void createProjectWithoutConnecting()}
+                    title="You can write, generate, and edit articles right away -- connect a website later to publish them."
+                  >
+                    Continue without connecting
                   </button>
                 </>
               )}

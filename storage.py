@@ -1128,6 +1128,76 @@ def consume_ai_citation_usage(user_id: str, *, month_limit: int | None, amount: 
     )
 
 
+def consume_image_prompt_test_usage(user_id: str, *, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
+    return _consume_monthly_counter(
+        user_id,
+        month_field="usage_monthly_image_prompt_test_month",
+        count_field="usage_monthly_image_prompt_test_count",
+        month_limit=month_limit,
+        amount=amount,
+        limit_message="Monthly image prompt test limit reached for your plan.",
+    )
+
+
+_IMAGE_PROMPT_TEST_HISTORY_LIMIT = 5
+
+
+def create_image_prompt_test(row: dict[str, Any]) -> None:
+    """Insert one image-prompt test result, then trim that prompt's history down to
+    the most recent `_IMAGE_PROMPT_TEST_HISTORY_LIMIT` -- bounded storage without a
+    separate cleanup job, same reasoning as capping what a UI ever displays."""
+    r = dict(row or {})
+    pid = (r.get("project_id") or "").strip()
+    rid = (r.get("id") or "").strip()
+    ip_id = (r.get("image_prompt_id") or "").strip()
+    if not pid or not rid or not ip_id:
+        return
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = [x for x in _load_json_list("image_prompt_tests.json") if isinstance(x, dict)]
+            rows.append(r)
+            keep_ids = {
+                x.get("id")
+                for x in sorted(
+                    (x for x in rows if (x.get("image_prompt_id") or "").strip() == ip_id),
+                    key=lambda x: str(x.get("created_at") or ""),
+                    reverse=True,
+                )[:_IMAGE_PROMPT_TEST_HISTORY_LIMIT]
+            }
+            rows = [x for x in rows if (x.get("image_prompt_id") or "").strip() != ip_id or x.get("id") in keep_ids]
+            _save_json("image_prompt_tests.json", rows)
+        return
+    doc = dict(r)
+    doc["_id"] = rid
+    with _db_write_lock:
+        get_db().image_prompt_tests.insert_one(doc)
+        stale = list(
+            get_db()
+            .image_prompt_tests.find({"project_id": pid, "image_prompt_id": ip_id}, {"_id": 1})
+            .sort("created_at", -1)
+            .skip(_IMAGE_PROMPT_TEST_HISTORY_LIMIT)
+        )
+        if stale:
+            get_db().image_prompt_tests.delete_many({"_id": {"$in": [d["_id"] for d in stale]}})
+
+
+def load_recent_image_prompt_tests(project_id: str, image_prompt_id: str, limit: int = _IMAGE_PROMPT_TEST_HISTORY_LIMIT) -> list[dict[str, Any]]:
+    pid = (project_id or "").strip()
+    ip_id = (image_prompt_id or "").strip()
+    if not pid or not ip_id:
+        return []
+    lim = max(1, min(int(limit or _IMAGE_PROMPT_TEST_HISTORY_LIMIT), _IMAGE_PROMPT_TEST_HISTORY_LIMIT))
+    if _storage_mode != "mongo":
+        rows = [
+            x for x in _load_json_list("image_prompt_tests.json")
+            if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid and (x.get("image_prompt_id") or "").strip() == ip_id
+        ]
+        rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        return rows[:lim]
+    cur = get_db().image_prompt_tests.find({"project_id": pid, "image_prompt_id": ip_id}, {"_id": 0}).sort("created_at", -1).limit(lim)
+    return [dict(d) for d in cur]
+
+
 def check_llm_token_budget(user_id: str, estimated_tokens: int, month_limit: int | None) -> tuple[bool, str]:
     """
     Verify the user can afford ``estimated_tokens`` this month against ``month_limit``.

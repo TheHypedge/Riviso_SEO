@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { CartesianGrid, Cell, Line, LineChart, Pie, PieChart, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "@/lib/api";
 import type { SeoAuditCounts, SeoAuditIssue, SeoAuditIssueGroup, SeoAuditRun, SeoAuditUrlRow } from "@/lib/api";
@@ -122,15 +122,9 @@ const ANALYSIS_STAGE_LABELS: Record<string, string> = {
   evaluating_issues: "Evaluating issues",
 };
 
-export function SeoAuditRunProgress({
-  counts,
-  analysisProgress,
-  styles,
-}: {
-  counts?: SeoAuditCounts | null;
-  analysisProgress?: import("@/lib/api").SeoAuditAnalysisProgress | null;
-  styles: CssModule;
-}) {
+/** Shared by the full-panel checklist (first-ever crawl) and the slim live bar
+ * (every re-crawl after that) so the two never drift on what "stage 1" means. */
+function computeSeoAuditStage(counts?: SeoAuditCounts | null) {
   const discovered = counts?.discovered ?? 0;
   const fetched = counts?.fetched ?? 0;
   const queued = counts?.queued ?? 0;
@@ -144,90 +138,56 @@ export function SeoAuditRunProgress({
   // it settles once discovery outpaces fetching, same behavior any BFS crawler has.
   const pct = discovered > 0 ? Math.min(100, Math.round((fetched / discovered) * 100)) : 0;
 
-  return (
-    <div className={styles.siteAuditRunChecklist} role="status" aria-label="Running SEO Audit">
-      {stageIndex === 1 && discovered > 0 ? (
-        <div
-          className={styles.seoAuditProgressBar}
-          role="progressbar"
-          aria-valuenow={pct}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-label={`Crawled ${fetched} of ${discovered} discovered pages`}
-        >
-          <div className={styles.seoAuditProgressBarFill} style={{ width: `${pct}%` }} />
-        </div>
-      ) : null}
-      {SEO_RUN_STAGES.map((label, i) => {
-        const state = i < stageIndex ? "done" : i === stageIndex ? "active" : "pending";
-        return (
-          <div key={label} className={styles.siteAuditRunChecklistItem} data-state={state}>
-            <span className={styles.siteAuditRunChecklistMark} aria-hidden="true">
-              {state === "done" ? "✓" : state === "active" ? <span className={styles.siteAuditBtnSpinner} /> : "○"}
-            </span>
-            {label}
-            {i === 1 && discovered > 0 ? (
-              <span className={styles.muted} style={{ marginLeft: 8, fontSize: 12 }}>
-                {fetched}/{discovered} pages
-              </span>
-            ) : null}
-            {i === 2 && state === "active" && analysisProgress ? (
-              <span className={styles.muted} style={{ marginLeft: 8, fontSize: 12 }}>
-                {ANALYSIS_STAGE_LABELS[analysisProgress.stage] || analysisProgress.stage}
-                {analysisProgress.loaded !== null ? ` — ${analysisProgress.loaded.toLocaleString()}${analysisProgress.total ? `/${analysisProgress.total.toLocaleString()}` : ""}` : "…"}
-              </span>
-            ) : null}
-          </div>
-        );
-      })}
-    </div>
-  );
+  return { discovered, fetched, queued, stageIndex, pct };
 }
 
-/* ── Live crawl feed: pages appear one by one as the worker actually crawls them.
-   Polls the small, indexed "recently crawled" endpoint every 2s while running --
-   real backend state, not a simulated stream (§82: "do not display fake progress"
-   applies just as much to *which pages* as to the percentage). ────────────────── */
-
-/* ── Compact single-line "currently crawling" indicator: replaces the old
-   multi-row scrolling log. One line, cross-fades to the next URL as it lands --
-   still real backend state (polled, not simulated), just not a growing list
-   that eats the page. ───────────────────────────────────────────────────── */
-
-export function SeoAuditCompactCrawlStatus({ projectId, auditId, styles }: { projectId: string; auditId: string; styles: CssModule }) {
-  const [row, setRow] = useState<SeoAuditUrlRow | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    async function poll() {
-      try {
-        const res = await api.getSeoAuditRecentUrls(projectId, auditId, 1);
-        if (!cancelled) setRow(res.items?.[0] || null);
-      } catch {
-        // Transient poll failure -- keep trying rather than clearing what's shown.
-      }
-      if (!cancelled) timer = setTimeout(poll, 2000);
-    }
-    void poll();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [projectId, auditId]);
-
-  if (!row) return null;
-  const ok = typeof row.status_code === "number" && row.status_code < 400;
+/* ── Slim live progress bar: the only thing that changes on screen while a
+   crawl runs -- the results dashboard itself (KPI strip, donuts, Page Explorer,
+   tabs) renders unconditionally from whatever audit doc is current, live counts
+   and all, so there's no separate "running" panel to keep in sync with it. One
+   line + one thin bar, real counts, real stage. */
+export function SeoAuditLiveProgressBar({
+  counts,
+  analysisProgress,
+  styles,
+}: {
+  counts?: SeoAuditCounts | null;
+  analysisProgress?: import("@/lib/api").SeoAuditAnalysisProgress | null;
+  styles: CssModule;
+}) {
+  const { discovered, fetched, stageIndex, pct } = computeSeoAuditStage(counts);
+  const stageLabel = SEO_RUN_STAGES[stageIndex];
+  const subLabel =
+    stageIndex === 2 && analysisProgress
+      ? `${ANALYSIS_STAGE_LABELS[analysisProgress.stage] || analysisProgress.stage}${
+          analysisProgress.loaded !== null
+            ? ` — ${analysisProgress.loaded.toLocaleString()}${analysisProgress.total ? `/${analysisProgress.total.toLocaleString()}` : ""}`
+            : "…"
+        }`
+      : stageIndex === 1 && discovered > 0
+        ? `${fetched.toLocaleString()}/${discovered.toLocaleString()} pages`
+        : null;
 
   return (
-    <div key={row.id} className={styles.seoAuditCompactStatus} role="status" aria-live="polite">
-      <span className={styles.seoAuditCompactStatusDot} data-ok={ok ? "true" : "false"} aria-hidden="true" />
-      <span className={styles.seoAuditCompactStatusUrl}>{row.url}</span>
-      <span className={styles.seoAuditCompactStatusMeta}>
-        {row.status_code ?? "—"}
-        {row.response_time_ms ? ` · ${row.response_time_ms}ms` : ""}
-      </span>
+    <div className={styles.seoAuditLiveBar} role="status" aria-label="SEO Audit updating">
+      <div className={styles.seoAuditLiveBarHead}>
+        <span className={styles.siteAuditBtnSpinner} aria-hidden="true" />
+        <span className={styles.seoAuditLiveBarLabel}>
+          Updating SEO Audit — {stageLabel}
+        </span>
+        {subLabel ? <span className={styles.seoAuditLiveBarSub}>{subLabel}</span> : null}
+      </div>
+      <div
+        className={`${styles.seoAuditProgressBar} ${styles.seoAuditLiveBarTrack}`}
+        role="progressbar"
+        aria-valuenow={stageIndex === 1 ? pct : undefined}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={discovered > 0 ? `Crawled ${fetched} of ${discovered} discovered pages` : "Preparing crawl"}
+        data-indeterminate={stageIndex !== 1 ? "true" : "false"}
+      >
+        <div className={styles.seoAuditProgressBarFill} style={stageIndex === 1 ? { width: `${pct}%` } : undefined} />
+      </div>
     </div>
   );
 }
@@ -669,23 +629,52 @@ const DONUT_SEGMENTS: { key: "indexable" | "non_indexable" | "blocked" | "unknow
   { key: "unknown", label: "Unknown", color: "var(--aa-on-dark-soft, #a09d96)" },
 ];
 
-export function SeoAuditIndexabilityDonut({ breakdown, styles }: { breakdown?: SeoAuditRun["indexability_breakdown"]; styles: CssModule }) {
-  if (!breakdown) return null;
-  const total = breakdown.indexable + breakdown.non_indexable + breakdown.blocked + breakdown.unknown;
+const STATUS_CODE_SEGMENTS: { key: "2xx" | "3xx" | "4xx" | "5xx" | "failed"; label: string; color: string }[] = [
+  { key: "2xx", label: "2xx OK", color: "var(--aa-success, #5db872)" },
+  { key: "3xx", label: "3xx Redirect", color: "var(--aa-info, #4a90d9)" },
+  { key: "4xx", label: "4xx Client Error", color: "var(--aa-warning, #d4a017)" },
+  { key: "5xx", label: "5xx Server Error", color: "var(--aa-error, #c64545)" },
+  { key: "failed", label: "Failed to fetch", color: "var(--aa-on-dark-soft, #a09d96)" },
+];
+
+const LINK_SCOPE_SEGMENTS: { key: "internal" | "external"; label: string; color: string }[] = [
+  { key: "internal", label: "Internal", color: "var(--aa-success, #5db872)" },
+  { key: "external", label: "External", color: "var(--aa-info, #4a90d9)" },
+];
+
+/** Shared donut shell for any {key,label,color,value} breakdown -- used by
+ * indexability, status-code, and internal/external link charts below. Recharts'
+ * Pie animates its arc transitions by default (no `isAnimationActive={false}`
+ * here, unlike the trend Line above), so live polling updates during a running
+ * crawl redraw smoothly instead of popping to the new shape. */
+function BreakdownDonut({
+  title,
+  centerUnitLabel,
+  segments,
+  values,
+  styles,
+}: {
+  title: string;
+  centerUnitLabel: string;
+  segments: { key: string; label: string; color: string }[];
+  values: Record<string, number>;
+  styles: CssModule;
+}) {
+  const total = segments.reduce((sum, s) => sum + (values[s.key] || 0), 0);
   if (total === 0) return null;
 
-  const slices = DONUT_SEGMENTS.map((seg) => ({ ...seg, value: breakdown[seg.key] })).filter((s) => s.value > 0);
+  const slices = segments.map((seg) => ({ ...seg, value: values[seg.key] || 0 })).filter((s) => s.value > 0);
 
   return (
     <div className={`${styles.card} ${styles.seoAuditDonutCard}`}>
       <h3 className={styles.sectionTitle} style={{ fontSize: 15 }}>
-        Indexability Breakdown
+        {title}
       </h3>
       <div className={styles.seoAuditDonutWrap}>
         <div className="relative" style={{ width: 140, height: 140 }}>
           <ChartContainer height={140}>
             <PieChart>
-              <Pie data={slices} dataKey="value" nameKey="label" innerRadius={50} outerRadius={70} startAngle={90} endAngle={-270} stroke="none">
+              <Pie data={slices} dataKey="value" nameKey="label" innerRadius={50} outerRadius={70} startAngle={90} endAngle={-270} stroke="none" animationDuration={400}>
                 {slices.map((s) => (
                   <Cell key={s.key} fill={s.color} />
                 ))}
@@ -695,21 +684,35 @@ export function SeoAuditIndexabilityDonut({ breakdown, styles }: { breakdown?: S
           </ChartContainer>
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
             <span className="font-sans text-xl font-bold text-ink">{total.toLocaleString()}</span>
-            <span className="font-sans text-[11px] text-ink-tertiary">URLs</span>
+            <span className="font-sans text-[11px] text-ink-tertiary">{centerUnitLabel}</span>
           </div>
         </div>
         <ul className={styles.seoAuditDonutLegend}>
-          {DONUT_SEGMENTS.filter((s) => breakdown[s.key] > 0).map((s) => (
+          {segments.filter((s) => (values[s.key] || 0) > 0).map((s) => (
             <li key={s.key}>
               <span className={styles.seoAuditDonutDot} style={{ background: s.color }} aria-hidden="true" />
               <span className={styles.seoAuditDonutLegendLabel}>{s.label}</span>
-              <span className={styles.seoAuditDonutLegendValue}>{breakdown[s.key].toLocaleString()}</span>
+              <span className={styles.seoAuditDonutLegendValue}>{(values[s.key] || 0).toLocaleString()}</span>
             </li>
           ))}
         </ul>
       </div>
     </div>
   );
+}
+
+export function SeoAuditIndexabilityDonut({ breakdown, styles }: { breakdown?: SeoAuditRun["indexability_breakdown"]; styles: CssModule }) {
+  if (!breakdown) return null;
+  return <BreakdownDonut title="Indexability Breakdown" centerUnitLabel="URLs" segments={DONUT_SEGMENTS} values={breakdown} styles={styles} />;
+}
+
+export function SeoAuditStatusCodeDonut({ breakdown, styles }: { breakdown?: SeoAuditCounts["status_breakdown"]; styles: CssModule }) {
+  if (!breakdown) return null;
+  return <BreakdownDonut title="Response Codes" centerUnitLabel="Requests" segments={STATUS_CODE_SEGMENTS} values={breakdown} styles={styles} />;
+}
+
+export function SeoAuditLinksSplitDonut({ counts, styles }: { counts: Pick<SeoAuditCounts, "internal" | "external">; styles: CssModule }) {
+  return <BreakdownDonut title="Internal vs External Links" centerUnitLabel="Links" segments={LINK_SCOPE_SEGMENTS} values={counts} styles={styles} />;
 }
 
 /* ── Issues trend: critical + warning issue counts across the last 8 completed
@@ -1160,7 +1163,22 @@ export function SeoAuditIssuesList({
 
 /* ── URL Explorer: server-paginated, filterable table ───────────────────── */
 
-export function SeoAuditUrlExplorer({ projectId, auditId, styles }: { projectId: string; auditId: string; styles: CssModule }) {
+export function SeoAuditUrlExplorer({
+  projectId,
+  auditId,
+  styles,
+  refreshSignal,
+}: {
+  projectId: string;
+  auditId: string;
+  styles: CssModule;
+  /** Pass a value that changes as the crawl progresses (e.g. the live audit's
+   * counts.fetched) so newly-collected URLs appear here without the user having
+   * to touch a filter -- "get the URLs first" only means something if the table
+   * that shows them actually refreshes while more are still coming in. Static
+   * once the crawl finishes, so this costs nothing after that. */
+  refreshSignal?: unknown;
+}) {
   const [rows, setRows] = useState<SeoAuditUrlRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -1169,10 +1187,15 @@ export function SeoAuditUrlExplorer({ projectId, auditId, styles }: { projectId:
   const [loading, setLoading] = useState(true);
   const [selectedUrlId, setSelectedUrlId] = useState<string | null>(null);
   const perPage = 25;
+  const loadedOnce = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    // Only show the "Loading…" swap-out on the very first fetch -- a background
+    // refresh triggered by refreshSignal replaces the row data in place once it
+    // lands, so new URLs simply appear rather than the table flashing blank
+    // every few seconds while a crawl is still running.
+    if (!loadedOnce.current) setLoading(true);
     api
       .getSeoAuditUrls(projectId, auditId, { page, per_page: perPage, q: q || undefined, indexability: indexability || undefined })
       .then((res) => {
@@ -1187,13 +1210,16 @@ export function SeoAuditUrlExplorer({ projectId, auditId, styles }: { projectId:
         }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          loadedOnce.current = true;
+          setLoading(false);
+        }
       });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, auditId, page, indexability]);
+  }, [projectId, auditId, page, indexability, refreshSignal]);
 
   const totalPages = Math.max(1, Math.ceil(total / perPage));
 

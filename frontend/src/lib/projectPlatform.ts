@@ -47,3 +47,22 @@ export function isWordPressPlatformProject(
 ): boolean {
   return resolveProjectPlatform({ settings, meta }) === "wordpress";
 }
+
+/** Whether the given platform's connection has actually been verified --
+ * the same wp_verified_status / shopify_verified_status(+_at) check the
+ * articles list page and article editor each computed independently before.
+ * Callers with extra platform-specific fallback signals (e.g. the list
+ * page's "we already fetched WP categories, so it must be connected") OR
+ * this in on top rather than baking it in here. */
+export function isProjectConnected(
+  platform: ProjectPlatformKind,
+  settings?: Pick<ProjectSettings, "wp_verified_status" | "shopify_verified_status" | "shopify_verified_at"> | null,
+): boolean {
+  if (platform === "shopify") {
+    return (
+      (settings?.shopify_verified_status || "").trim().toLowerCase() === "connected" &&
+      !!(settings?.shopify_verified_at || "").trim()
+    );
+  }
+  return (settings?.wp_verified_status || "").trim().toLowerCase() === "connected";
+}

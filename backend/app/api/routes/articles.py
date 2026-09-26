@@ -1110,7 +1110,8 @@ async def create_article_from_source(
     """
     st = get_legacy_storage_module()
     proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
-    _require_verified_website(proj)
+    # Same reasoning as POST .../generate -- creating/generating an article
+    # doesn't require a connected website, only publishing it does.
 
     source_url = payload.source_url.strip()
     try:
@@ -2088,7 +2089,10 @@ async def generate_article_and_image(
     """
     st = get_legacy_storage_module()
     proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
-    _require_verified_website(proj)
+    # Generation itself doesn't need a connected website -- only publishing does
+    # (see publish_to_live_site / publish_to_shopify_blog, which still call
+    # _require_verified_website). This lets a project try the product before
+    # connecting anything; plan-limit quota above still applies as normal.
     row = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
     # Auto-create default prompts so projects created before prompts were
     # configured can still generate without a 400 "No writing prompt" error.

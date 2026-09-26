@@ -140,7 +140,7 @@ class Settings(BaseSettings):
         description="Fallback per-crawl URL cap when a plan has no explicit max_seo_audit_urls_per_crawl set.",
     )
     seo_crawl_concurrency_per_host: int = Field(
-        default=4,
+        default=8,
         validation_alias="SEO_CRAWL_CONCURRENCY_PER_HOST",
         description="Max simultaneous in-flight fetches against the crawled host (politeness, §12 of the spec).",
     )

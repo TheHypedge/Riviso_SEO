@@ -208,7 +208,16 @@ async def run_seo_audit(
                 detail={"code": "quota_exceeded", "feature": "seo_audit", "message": msg or "Monthly SEO Audit limit reached for your plan."},
             )
 
+    # An incremental re-crawl only re-fetches the homepage + genuinely new links --
+    # everything else carries forward inside incremental_crawl() itself, but that
+    # doesn't happen until the worker claims this doc and finishes robots/sitemap
+    # discovery. Until then, this response IS what the frontend renders (the
+    # dashboard shows seoAudit.audit directly, live), so seeding it from the
+    # previous audit's own last-known numbers instead of zero is what keeps
+    # "Update Audit" from visibly resetting the whole dashboard to zero before
+    # climbing back up to where it already was.
     now = _now_iso()
+    carry_from = existing if previous_audit_id and existing else None
     audit = {
         "id": secrets.token_hex(16),
         "project_id": project_id,
@@ -219,14 +228,15 @@ async def run_seo_audit(
         "queued_at": now,
         "started_at": now,  # provisional -- the worker overwrites this on actual claim
         "completed_at": None,
-        "counts": {"discovered": 0, "fetched": 0, "queued": 0, "blocked": 0, "failed": 0, "internal": 0, "external": 0},
-        "health_score": None,
-        "severity_counts": None,
-        "indexability_breakdown": None,
-        "depth_distribution": None,
-        "redirects_count": None,
-        "broken_links_count": None,
-        "avg_response_time_ms": None,
+        "counts": dict(carry_from["counts"]) if carry_from and carry_from.get("counts") else {"discovered": 0, "fetched": 0, "queued": 0, "blocked": 0, "failed": 0, "internal": 0, "external": 0},
+        "health_score": carry_from.get("health_score") if carry_from else None,
+        "severity_counts": carry_from.get("severity_counts") if carry_from else None,
+        "indexability_breakdown": carry_from.get("indexability_breakdown") if carry_from else None,
+        "depth_distribution": carry_from.get("depth_distribution") if carry_from else None,
+        "redirects_count": carry_from.get("redirects_count") if carry_from else None,
+        "broken_links_count": carry_from.get("broken_links_count") if carry_from else None,
+        "avg_response_time_ms": carry_from.get("avg_response_time_ms") if carry_from else None,
+        "orphan_count": carry_from.get("orphan_count") if carry_from else None,
         "analysis_progress": None,
         "cancel_requested": False,
         "previous_audit_id": previous_audit_id,

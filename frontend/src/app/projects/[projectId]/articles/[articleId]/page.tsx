@@ -36,7 +36,8 @@ import {
   shouldShowWordPressPublish,
   shouldShowWordPressUpdate,
 } from "@/lib/articleEditorWordpress";
-import { resolveProjectPlatform } from "@/lib/projectPlatform";
+import { isProjectConnected, resolveProjectPlatform } from "@/lib/projectPlatform";
+import { ConnectPlatformModal } from "@/components/ConnectPlatformModal";
 import { runWithArticlePipelineMonitor } from "@/lib/pipelineStream";
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
 import { WordPressPageMapPicker } from "@/components/wordpress/WordPressPageMapPicker";
@@ -474,6 +475,7 @@ export default function ArticleEditPage() {
   const [regenPromptId, setRegenPromptId] = useState("");
   const [regenCustomPrompt, setRegenCustomPrompt] = useState("");
   const [websiteConnectionModal, setWebsiteConnectionModal] = useState(false);
+  const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [imageRegenBusy, setImageRegenBusy] = useState(false);
   const [imageGenPhase, setImageGenPhase] = useState<"idle" | "generating" | "saving">("idle");
   const [wpPublishBusy, setWpPublishBusy] = useState(false);
@@ -491,10 +493,7 @@ export default function ArticleEditPage() {
   const isWordPressProject = projectPlatform === "wordpress";
   const shopifyProductAware = Boolean(projectSettings?.shopify_product_aware_enabled);
   const wpInternalLinkAware = Boolean(projectSettings?.wp_internal_link_aware_enabled);
-  const websiteConnected = isShopifyProject
-    ? (projectSettings?.shopify_verified_status || "").toLowerCase() === "connected" &&
-      !!(projectSettings?.shopify_verified_at || "").trim()
-    : (projectSettings?.wp_verified_status || "").trim().toLowerCase() === "connected";
+  const websiteConnected = isProjectConnected(projectPlatform ?? "wordpress", projectSettings);
 
   const [editorRevision, setEditorRevision] = useState(0);
   const [contextTab, setContextTab] = useState<ContextTab>("seo_score");
@@ -2054,13 +2053,34 @@ export default function ArticleEditPage() {
                 <h3 className={styles.modalTitle}>Website not connected</h3>
                 <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setWebsiteConnectionModal(false)}>×</button>
               </div>
-              <div className={styles.modalBody}>Website is not connected for this project. Connect and verify WordPress in Project Settings to generate or publish articles.</div>
+              <div className={styles.modalBody}>Website is not connected for this project. Connect a website to publish this article.</div>
               <div className={styles.modalFooter}>
-                <button className={styles.btnSecondary} type="button" onClick={() => router.push("/dashboard")}>Cancel</button>
-                <button className={styles.button} type="button" onClick={() => router.push(`/projects/${params.projectId}?tab=project_settings`)}>Connect Website</button>
+                <button className={styles.btnSecondary} type="button" onClick={() => setWebsiteConnectionModal(false)}>Cancel</button>
+                <button
+                  className={styles.button}
+                  type="button"
+                  onClick={() => {
+                    setWebsiteConnectionModal(false);
+                    setConnectModalOpen(true);
+                  }}
+                >
+                  Connect Website
+                </button>
               </div>
             </div>
           </div>
+        ) : null}
+
+        {connectModalOpen ? (
+          <ConnectPlatformModal
+            projectId={params.projectId}
+            settings={projectSettings}
+            onClose={() => setConnectModalOpen(false)}
+            onConnected={() => {
+              setConnectModalOpen(false);
+              void api.getProjectSettings(params.projectId, { fresh: true }).then(setProjectSettings).catch(() => {});
+            }}
+          />
         ) : null}
 
         {leaveConfirmOpen ? (
@@ -2172,13 +2192,21 @@ export default function ArticleEditPage() {
                     Save draft
                   </button>
                 ) : null}
-                {isShopifyProject ? (
+                {isShopifyProject && !websiteConnected ? (
+                  <button type="button" className={styles.button} onClick={() => setConnectModalOpen(true)}>
+                    Connect Website to Publish
+                  </button>
+                ) : isShopifyProject ? (
                   <button type="button" className={styles.button} onClick={() => void publishToShopify()} disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}>
                     {shopifyPublishBusy ? "Posting…" : article?.shopify_article_id ? "Update Shopify" : "Publish to Shopify"}
                   </button>
                 ) : showUpdateWordPress && hasPendingWpChanges ? (
                   <button type="button" className={styles.button} onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}>
                     {wpUpdateBusy ? "Updating…" : "Update article"}
+                  </button>
+                ) : showPublishWordPress && !websiteConnected ? (
+                  <button type="button" className={styles.button} onClick={() => setConnectModalOpen(true)}>
+                    Connect Website to Publish
                   </button>
                 ) : showPublishWordPress ? (
                   <button type="button" className={styles.button} onClick={publishToLiveSite} disabled={!canPublish || wpPushBusy}>
@@ -2566,15 +2594,21 @@ export default function ArticleEditPage() {
                   <div className={editorStyles.panelSection}>
                     <h3 className={editorStyles.panelSectionTitle}>{isShopifyProject ? "Shopify" : "WordPress"}</h3>
                     <p className={editorStyles.wpCardDesc}>
-                      {isShopifyProject
-                        ? shopifyLink ? "This article is on Shopify." : "Post directly to your Shopify blog."
-                        : isScheduledArticle ? "Scheduled. Update available after publish."
-                        : showUpdateWordPress ? "Push edits to your live post."
-                        : showPublishWordPress ? "Publish when ready."
-                        : "Connect WordPress to publish."}
+                      {!websiteConnected
+                        ? "Connect your website to publish."
+                        : isShopifyProject
+                          ? shopifyLink ? "This article is on Shopify." : "Post directly to your Shopify blog."
+                          : isScheduledArticle ? "Scheduled. Update available after publish."
+                          : showUpdateWordPress ? "Push edits to your live post."
+                          : showPublishWordPress ? "Publish when ready."
+                          : "Connect WordPress to publish."}
                     </p>
                     <div className={editorStyles.wpActions}>
-                      {isShopifyProject ? (
+                      {isShopifyProject && !websiteConnected ? (
+                        <button className={styles.button} type="button" onClick={() => setConnectModalOpen(true)}>
+                          Connect Website to Publish
+                        </button>
+                      ) : isShopifyProject ? (
                         <>
                           <button className={styles.button} type="button" onClick={() => void publishToShopify()} disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}>
                             {shopifyPublishBusy ? "Posting…" : shopifyPublishNow ? "Publish to Shopify" : "Save Shopify draft"}
@@ -2585,6 +2619,8 @@ export default function ArticleEditPage() {
                         <>
                           {showUpdateWordPress ? (
                             <button className={styles.button} type="button" onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}>{wpUpdateBusy ? "Updating…" : "Update article"}</button>
+                          ) : showPublishWordPress && !websiteConnected ? (
+                            <button className={styles.button} type="button" onClick={() => setConnectModalOpen(true)}>Connect Website to Publish</button>
                           ) : showPublishWordPress ? (
                             <button className={styles.button} type="button" onClick={publishToLiveSite} disabled={!canPublish || wpPushBusy}>{wpPublishBusy ? "Publishing…" : "Publish article"}</button>
                           ) : null}

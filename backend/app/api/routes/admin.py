@@ -367,6 +367,7 @@ def _plan_to_public(key: str, d: dict) -> PlanPublic:
         "max_ai_citation_keywords_per_run": base.get("max_ai_citation_keywords_per_run"),
         "max_context_links": base.get("max_context_links"),
         "max_article_image_regenerations": base.get("max_article_image_regenerations"),
+        "max_image_prompt_tests_per_month": base.get("max_image_prompt_tests_per_month"),
         "is_trial_plan": base.get("is_trial_plan"),
         "trial_period_days": base.get("trial_period_days"),
     }

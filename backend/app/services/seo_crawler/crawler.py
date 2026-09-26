@@ -94,6 +94,10 @@ class CrawlCounts:
     # already known the moment a page is fetched (_compute_indexability), so the
     # Indexability donut can update live instead of waiting for the whole pipeline.
     indexability_breakdown: dict[str, int] = field(default_factory=lambda: {"indexable": 0, "non_indexable": 0, "blocked": 0, "unknown": 0})
+    # Same live-during-crawl treatment, for the Response Codes chart -- bucketed by
+    # status class rather than exact code (a donut with one slice per exact code
+    # would be unreadable on a real site with a long tail of one-off statuses).
+    status_breakdown: dict[str, int] = field(default_factory=lambda: {"2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0, "failed": 0})
 
 
 def _compute_indexability(*, status_code: int | None, robots_blocked: bool, meta_robots: str | None, x_robots_tag: str | None, canonical: str | None, page_url: str, redirect_url: str | None) -> tuple[str, str]:
@@ -131,7 +135,7 @@ async def run_crawl(
     concurrency_per_host: int,
     max_duration_seconds: float,
     should_cancel: Callable[[], bool] | None = None,
-    flush_every: int = 25,
+    flush_every: int = 10,
     progress_every_seconds: float = 3.0,
 ) -> dict[str, Any]:
     """Crawl `seed_url`'s scope from scratch, writing results incrementally via
@@ -188,6 +192,18 @@ async def run_crawl(
                 )
                 frontier.append(_FrontierItem(url=target_norm, normalized_url=target_norm, discovered_from=None, discovery_type="sitemap", depth=1))
 
+        # Robots.txt + sitemap discovery has no progress of its own to report, so
+        # the audit doc still reads "0 discovered" (frontend shows "Validating
+        # website") for however long that took. Write the real frontier size the
+        # moment it's known, before the drain loop's own throttled writes kick in,
+        # so the UI advances to "Crawling pages" immediately instead of waiting
+        # out this function's real (now-parallelized) sitemap-fetch time on top of
+        # the drain loop's first ~3s progress interval.
+        try:
+            await _storage(st.update_seo_audit_fields, audit_id, {"counts": _counts_dict(counts)})
+        except Exception:
+            pass
+
         return await _drain_frontier(
             st,
             client=client,
@@ -222,7 +238,7 @@ async def resume_crawl(
     concurrency_per_host: int,
     max_duration_seconds: float,
     should_cancel: Callable[[], bool] | None = None,
-    flush_every: int = 25,
+    flush_every: int = 10,
     progress_every_seconds: float = 3.0,
 ) -> dict[str, Any]:
     """Continue a crawl that was interrupted mid-way (Mongo hiccup, process
@@ -258,6 +274,7 @@ async def resume_crawl(
     broken_links = 0
     redirects = 0
     indexability_breakdown = {"indexable": 0, "non_indexable": 0, "blocked": 0, "unknown": 0}
+    status_breakdown = {"2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0, "failed": 0}
     for u in existing_urls:
         norm = u.get("normalized_url")
         if norm:
@@ -277,6 +294,8 @@ async def resume_crawl(
         elif u.get("status_code") is None:
             failed += 1
         status_code = u.get("status_code")
+        if idx != "blocked":
+            status_breakdown[_status_bucket(status_code)] += 1
         if isinstance(status_code, int) and status_code >= 400:
             broken_links += 1
         if u.get("redirect_url"):
@@ -314,6 +333,7 @@ async def resume_crawl(
         broken_links=broken_links,
         redirects=redirects,
         indexability_breakdown=indexability_breakdown,
+        status_breakdown=status_breakdown,
     )
 
     async with build_http_client(user_agent=user_agent, timeout_seconds=timeout_seconds) as client:
@@ -355,7 +375,7 @@ async def incremental_crawl(
     concurrency_per_host: int,
     max_duration_seconds: float,
     should_cancel: Callable[[], bool] | None = None,
-    flush_every: int = 25,
+    flush_every: int = 10,
     progress_every_seconds: float = 3.0,
 ) -> dict[str, Any]:
     """Start a NEW audit (its own audit_id, its own Crawl History entry) that reuses
@@ -401,6 +421,7 @@ async def incremental_crawl(
     broken_links = 0
     redirects = 0
     indexability_breakdown = {"indexable": 0, "non_indexable": 0, "blocked": 0, "unknown": 0}
+    status_breakdown = {"2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0, "failed": 0}
     for u in previous_urls:
         norm = u.get("normalized_url")
         old_id = u.get("id")
@@ -426,6 +447,8 @@ async def incremental_crawl(
         elif doc.get("status_code") is None:
             failed += 1
         status_code = doc.get("status_code")
+        if idx != "blocked":
+            status_breakdown[_status_bucket(status_code)] += 1
         if isinstance(status_code, int) and status_code >= 400:
             broken_links += 1
         if doc.get("redirect_url"):
@@ -482,6 +505,7 @@ async def incremental_crawl(
         broken_links=broken_links,
         redirects=redirects,
         indexability_breakdown=indexability_breakdown,
+        status_breakdown=status_breakdown,
     )
     frontier.appendleft(_FrontierItem(url=seed_normalized, normalized_url=seed_normalized, discovered_from=None, discovery_type="seed", depth=0))
 
@@ -515,6 +539,15 @@ async def incremental_crawl(
                     }
                 )
                 frontier.append(_FrontierItem(url=target_norm, normalized_url=target_norm, discovered_from=None, discovery_type="sitemap", depth=1))
+
+        # See run_crawl's identical write for why this happens before the drain
+        # loop starts -- an incremental run's carried-forward counts are already
+        # non-zero, but the fresh sitemap discovery above still isn't reflected
+        # in the audit doc until this.
+        try:
+            await _storage(st.update_seo_audit_fields, audit_id, {"counts": _counts_dict(counts)})
+        except Exception:
+            pass
 
         return await _drain_frontier(
             st,
@@ -581,164 +614,219 @@ async def _drain_frontier(
         if link_batch is not None:
             await _storage(st.insert_seo_audit_links_bulk, link_batch)
 
-    semaphore = asyncio.Semaphore(max(1, concurrency_per_host))
     last_progress = time.monotonic()
+    queue: "asyncio.Queue[_FrontierItem]" = asyncio.Queue()
+    outstanding = 0
+    for item in frontier:
+        queue.put_nowait(item)
+        outstanding += 1
+    frontier.clear()
+    stop_requested = False
+
+    def _enqueue(item: _FrontierItem) -> None:
+        nonlocal outstanding
+        outstanding += 1
+        queue.put_nowait(item)
 
     async def _process_one(item: _FrontierItem) -> None:
         nonlocal last_progress
-        async with semaphore:
-            if respect_robots and rp is not None and not robots_mod.can_fetch(rp, user_agent, item.url):
-                counts.blocked += 1
-                counts.queued -= 1
-                counts.indexability_breakdown["blocked"] += 1
-                url_id = secrets.token_hex(12)
-                url_id_by_normalized[item.normalized_url] = url_id
-                pending_url_docs.append(
-                    {
-                        "id": url_id, "audit_id": audit_id, "fetched_at": _now_iso(), "url": item.url, "normalized_url": item.normalized_url,
-                        "encoded_url": item.normalized_url, "discovered_from": item.discovered_from,
-                        "discovery_type": item.discovery_type, "crawl_depth": item.depth, "folder_depth": folder_depth(item.url),
-                        "content_type": None, "status_code": None, "status_text": None,
-                        "indexability": "blocked", "indexability_reason": "Disallowed by robots.txt",
-                        "title": None, "title_length": None, "meta_description": None, "meta_description_length": None,
-                        "h1": None, "h1_count": 0, "h2": None, "h2_count": 0,
-                        "canonical": None, "robots_meta": None, "x_robots_tag": None,
-                        "word_count": None, "response_time_ms": None,
-                        "redirect_url": None, "redirect_type": None, "redirect_hop_count": 0,
-                    }
-                )
-                return
-
-            result = await fetch_url(client, item.url)
-            counts.fetched += 1
+        if respect_robots and rp is not None and not robots_mod.can_fetch(rp, user_agent, item.url):
+            counts.blocked += 1
             counts.queued -= 1
+            counts.indexability_breakdown["blocked"] += 1
             url_id = secrets.token_hex(12)
             url_id_by_normalized[item.normalized_url] = url_id
-
-            if result.error:
-                counts.failed += 1
-                counts.indexability_breakdown["unknown"] += 1
-                pending_url_docs.append(
-                    {
-                        "id": url_id, "audit_id": audit_id, "fetched_at": _now_iso(), "url": item.url, "normalized_url": item.normalized_url,
-                        "encoded_url": item.normalized_url, "discovered_from": item.discovered_from,
-                        "discovery_type": item.discovery_type, "crawl_depth": item.depth, "folder_depth": folder_depth(item.url),
-                        "content_type": None, "status_code": None, "status_text": result.error,
-                        "indexability": "unknown", "indexability_reason": result.error,
-                        "title": None, "title_length": None, "meta_description": None, "meta_description_length": None,
-                        "h1": None, "h1_count": 0, "h2": None, "h2_count": 0,
-                        "canonical": None, "robots_meta": None, "x_robots_tag": None,
-                        "word_count": None, "response_time_ms": None,
-                        "redirect_url": None, "redirect_type": None, "redirect_hop_count": 0,
-                    }
-                )
-                return
-
-            is_html = "html" in (result.content_type or "").lower()
-            # `result.final_url` is the actual destination after following the chain --
-            # `redirect_chain[-1].url` (the previous, now-fixed bug) is the *source* of the
-            # last hop, not where it landed, which meant every redirected page reported
-            # itself as its own "destination".
-            redirect_url = result.final_url if result.redirect_chain and result.final_url != item.url else None
-            redirect_type = str(result.redirect_chain[0].status_code) if result.redirect_chain else None
-            x_robots = result.headers.get("x-robots-tag")
-
-            parsed = parse_html(result.body, result.final_url) if (is_html and result.body) else None
-
-            indexability, reason = _compute_indexability(
-                status_code=result.status_code,
-                robots_blocked=False,
-                meta_robots=parsed.meta_robots if parsed else None,
-                x_robots_tag=x_robots,
-                canonical=parsed.canonical if parsed else None,
-                page_url=item.url,
-                redirect_url=redirect_url,
-            )
-
             pending_url_docs.append(
                 {
                     "id": url_id, "audit_id": audit_id, "fetched_at": _now_iso(), "url": item.url, "normalized_url": item.normalized_url,
                     "encoded_url": item.normalized_url, "discovered_from": item.discovered_from,
                     "discovery_type": item.discovery_type, "crawl_depth": item.depth, "folder_depth": folder_depth(item.url),
-                    "content_type": result.content_type, "status_code": result.status_code, "status_text": result.status_text,
-                    "indexability": indexability, "indexability_reason": reason,
-                    "title": parsed.title if parsed else None,
-                    "title_length": len(parsed.title) if (parsed and parsed.title) else None,
-                    "title_count": parsed.title_count if parsed else 0,
-                    "meta_description": parsed.meta_description if parsed else None,
-                    "meta_description_length": len(parsed.meta_description) if (parsed and parsed.meta_description) else None,
-                    "meta_description_count": parsed.meta_description_count if parsed else 0,
-                    "h1": parsed.h1 if parsed else None, "h1_count": parsed.h1_count if parsed else 0,
-                    "h2": parsed.h2 if parsed else None, "h2_count": parsed.h2_count if parsed else 0,
-                    "canonical": parsed.canonical if parsed else None,
-                    "robots_meta": parsed.meta_robots if parsed else None,
-                    "x_robots_tag": x_robots,
-                    "word_count": parsed.word_count if parsed else None,
-                    "response_time_ms": result.response_time_ms,
-                    "redirect_url": redirect_url, "redirect_type": redirect_type, "redirect_hop_count": len(result.redirect_chain),
+                    "content_type": None, "status_code": None, "status_text": None,
+                    "indexability": "blocked", "indexability_reason": "Disallowed by robots.txt",
+                    "title": None, "title_length": None, "meta_description": None, "meta_description_length": None,
+                    "h1": None, "h1_count": 0, "h2": None, "h2_count": 0,
+                    "canonical": None, "robots_meta": None, "x_robots_tag": None,
+                    "word_count": None, "response_time_ms": None,
+                    "redirect_url": None, "redirect_type": None, "redirect_hop_count": 0,
                 }
             )
-            if redirect_url:
-                counts.redirects += 1
-            if isinstance(result.status_code, int) and result.status_code >= 400:
-                counts.broken_links += 1
-            if indexability in counts.indexability_breakdown:
-                counts.indexability_breakdown[indexability] += 1
+            return
+
+        result = await fetch_url(client, item.url)
+        counts.fetched += 1
+        counts.queued -= 1
+        url_id = secrets.token_hex(12)
+        url_id_by_normalized[item.normalized_url] = url_id
+
+        if result.error:
+            counts.failed += 1
+            counts.indexability_breakdown["unknown"] += 1
+            counts.status_breakdown["failed"] += 1
+            pending_url_docs.append(
+                {
+                    "id": url_id, "audit_id": audit_id, "fetched_at": _now_iso(), "url": item.url, "normalized_url": item.normalized_url,
+                    "encoded_url": item.normalized_url, "discovered_from": item.discovered_from,
+                    "discovery_type": item.discovery_type, "crawl_depth": item.depth, "folder_depth": folder_depth(item.url),
+                    "content_type": None, "status_code": None, "status_text": result.error,
+                    "indexability": "unknown", "indexability_reason": result.error,
+                    "title": None, "title_length": None, "meta_description": None, "meta_description_length": None,
+                    "h1": None, "h1_count": 0, "h2": None, "h2_count": 0,
+                    "canonical": None, "robots_meta": None, "x_robots_tag": None,
+                    "word_count": None, "response_time_ms": None,
+                    "redirect_url": None, "redirect_type": None, "redirect_hop_count": 0,
+                }
+            )
+            return
+
+        is_html = "html" in (result.content_type or "").lower()
+        # `result.final_url` is the actual destination after following the chain --
+        # `redirect_chain[-1].url` (the previous, now-fixed bug) is the *source* of the
+        # last hop, not where it landed, which meant every redirected page reported
+        # itself as its own "destination".
+        redirect_url = result.final_url if result.redirect_chain and result.final_url != item.url else None
+        redirect_type = str(result.redirect_chain[0].status_code) if result.redirect_chain else None
+        x_robots = result.headers.get("x-robots-tag")
+
+        parsed = await run_sync(parse_html, result.body, result.final_url) if (is_html and result.body) else None
+
+        indexability, reason = _compute_indexability(
+            status_code=result.status_code,
+            robots_blocked=False,
+            meta_robots=parsed.meta_robots if parsed else None,
+            x_robots_tag=x_robots,
+            canonical=parsed.canonical if parsed else None,
+            page_url=item.url,
+            redirect_url=redirect_url,
+        )
+
+        pending_url_docs.append(
+            {
+                "id": url_id, "audit_id": audit_id, "fetched_at": _now_iso(), "url": item.url, "normalized_url": item.normalized_url,
+                "encoded_url": item.normalized_url, "discovered_from": item.discovered_from,
+                "discovery_type": item.discovery_type, "crawl_depth": item.depth, "folder_depth": folder_depth(item.url),
+                "content_type": result.content_type, "status_code": result.status_code, "status_text": result.status_text,
+                "indexability": indexability, "indexability_reason": reason,
+                "title": parsed.title if parsed else None,
+                "title_length": len(parsed.title) if (parsed and parsed.title) else None,
+                "title_count": parsed.title_count if parsed else 0,
+                "meta_description": parsed.meta_description if parsed else None,
+                "meta_description_length": len(parsed.meta_description) if (parsed and parsed.meta_description) else None,
+                "meta_description_count": parsed.meta_description_count if parsed else 0,
+                "h1": parsed.h1 if parsed else None, "h1_count": parsed.h1_count if parsed else 0,
+                "h2": parsed.h2 if parsed else None, "h2_count": parsed.h2_count if parsed else 0,
+                "canonical": parsed.canonical if parsed else None,
+                "robots_meta": parsed.meta_robots if parsed else None,
+                "x_robots_tag": x_robots,
+                "word_count": parsed.word_count if parsed else None,
+                "response_time_ms": result.response_time_ms,
+                "redirect_url": redirect_url, "redirect_type": redirect_type, "redirect_hop_count": len(result.redirect_chain),
+            }
+        )
+        if redirect_url:
+            counts.redirects += 1
+        if isinstance(result.status_code, int) and result.status_code >= 400:
+            counts.broken_links += 1
+        if indexability in counts.indexability_breakdown:
+            counts.indexability_breakdown[indexability] += 1
+        else:
+            counts.indexability_breakdown["unknown"] += 1
+        counts.status_breakdown[_status_bucket(result.status_code)] += 1
+
+        if not parsed:
+            return
+
+        for link in parsed.links:
+            target_norm = normalize_url(link.href)
+            if not target_norm:
+                continue
+            internal = same_scope(target_norm, seed_host or "")
+            if internal:
+                counts.internal += 1
             else:
-                counts.indexability_breakdown["unknown"] += 1
+                counts.external += 1
+            pending_link_docs.append(
+                {
+                    "audit_id": audit_id, "source_url_id": url_id, "target_url_id": None,
+                    "target_url": target_norm, "type": "anchor", "anchor_text": link.anchor_text[:300],
+                    "rel": link.rel, "followable": not link.nofollow, "discovered_in": "raw_html",
+                }
+            )
+            if not internal or target_norm in visited or _looks_non_html(target_norm):
+                continue
+            if counts.discovered >= max_urls:
+                continue
+            visited.add(target_norm)
+            counts.discovered += 1
+            counts.queued += 1
+            _enqueue(_FrontierItem(url=target_norm, normalized_url=target_norm, discovered_from=item.url, discovery_type="raw_html", depth=item.depth + 1))
 
-            if not parsed:
+        if len(pending_url_docs) >= flush_every or len(pending_link_docs) >= flush_every * 4:
+            await _flush()
+        now = time.monotonic()
+        if now - last_progress >= progress_every_seconds:
+            last_progress = now
+            try:
+                await _storage(st.update_seo_audit_fields, audit_id, {"counts": _counts_dict(counts)})
+            except Exception:
+                pass
+
+    async def _worker() -> None:
+        nonlocal outstanding
+        while not stop_requested:
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                if outstanding <= 0:
+                    return
+                await asyncio.sleep(0.02)
+                continue
+            try:
+                await _process_one(item)
+            finally:
+                outstanding -= 1
+
+    async def _watchdog() -> None:
+        nonlocal stop_requested
+        while not stop_requested:
+            if should_cancel and await _storage(should_cancel):
+                stop_requested = True
                 return
+            if time.monotonic() - started_at > max_duration_seconds:
+                stop_requested = True
+                return
+            await asyncio.sleep(1.0)
 
-            for link in parsed.links:
-                target_norm = normalize_url(link.href)
-                if not target_norm:
-                    continue
-                internal = same_scope(target_norm, seed_host or "")
-                if internal:
-                    counts.internal += 1
-                else:
-                    counts.external += 1
-                pending_link_docs.append(
-                    {
-                        "audit_id": audit_id, "source_url_id": url_id, "target_url_id": None,
-                        "target_url": target_norm, "type": "anchor", "anchor_text": link.anchor_text[:300],
-                        "rel": link.rel, "followable": not link.nofollow, "discovered_in": "raw_html",
-                    }
-                )
-                if not internal or target_norm in visited or _looks_non_html(target_norm):
-                    continue
-                if counts.discovered >= max_urls:
-                    continue
-                visited.add(target_norm)
-                counts.discovered += 1
-                counts.queued += 1
-                frontier.append(_FrontierItem(url=target_norm, normalized_url=target_norm, discovered_from=item.url, discovery_type="raw_html", depth=item.depth + 1))
-
-            if len(pending_url_docs) >= flush_every or len(pending_link_docs) >= flush_every * 4:
-                await _flush()
-            now = time.monotonic()
-            if now - last_progress >= progress_every_seconds:
-                last_progress = now
-                try:
-                    await _storage(st.update_seo_audit_fields, audit_id, {"counts": _counts_dict(counts)})
-                except Exception:
-                    pass
-
-    # Drain the frontier level-by-level: pull everything currently queued, run it
-    # concurrently (bounded by the semaphore), then re-check what got appended.
-    while frontier:
-        if should_cancel and await _storage(should_cancel):
-            break
-        if time.monotonic() - started_at > max_duration_seconds:
-            break
-        batch = []
-        while frontier:
-            batch.append(frontier.popleft())
-        await asyncio.gather(*(_process_one(item) for item in batch))
+    # Continuous worker pool: N workers pull from a shared queue as soon as they
+    # free up, instead of the old wave-synchronized `asyncio.gather` batching
+    # that stalled every worker on whichever page in the batch was slowest.
+    # Newly discovered links feed back into the same queue via `_enqueue`, so
+    # workers never idle waiting for a "round" to finish.
+    if outstanding > 0:
+        watchdog_task = asyncio.create_task(_watchdog())
+        workers = [asyncio.create_task(_worker()) for _ in range(max(1, concurrency_per_host))]
+        await asyncio.gather(*workers)
+        watchdog_task.cancel()
+        try:
+            await watchdog_task
+        except asyncio.CancelledError:
+            pass
 
     await _flush(force=True)
     return _counts_dict(counts)
+
+
+def _status_bucket(status_code: int | None) -> str:
+    if status_code is None:
+        return "failed"
+    if 200 <= status_code < 300:
+        return "2xx"
+    if 300 <= status_code < 400:
+        return "3xx"
+    if 400 <= status_code < 500:
+        return "4xx"
+    if 500 <= status_code < 600:
+        return "5xx"
+    return "failed"
 
 
 def _counts_dict(c: CrawlCounts) -> dict[str, Any]:
@@ -746,4 +834,5 @@ def _counts_dict(c: CrawlCounts) -> dict[str, Any]:
         "discovered": c.discovered, "fetched": c.fetched, "queued": max(0, c.queued), "blocked": c.blocked, "failed": c.failed,
         "internal": c.internal, "external": c.external, "broken_links": c.broken_links, "redirects": c.redirects,
         "indexability_breakdown": dict(c.indexability_breakdown),
+        "status_breakdown": dict(c.status_breakdown),
     }

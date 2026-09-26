@@ -2504,63 +2504,6 @@
   border-radius: var(--aa-r-lg);
 }
 
-.articleConnectionOverlay {
-  position: absolute;
-  inset: 0;
-  z-index: 12;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 18px;
-  background:
-    radial-gradient(circle at 50% 42%, rgba(217, 119, 87, 0.16), transparent 38%),
-    rgba(3, 3, 6, 0.78);
-  backdrop-filter: blur(3px);
-}
-
-.articleConnectionPopup {
-  width: min(440px, 100%);
-  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 42%);
-  border-radius: var(--aa-r-xl);
-  background:
-    linear-gradient(135deg, color-mix(in oklab, var(--aa-primary), transparent 88%), transparent 70%),
-    #101014;
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.46);
-  padding: 22px;
-  color: var(--aa-body-strong);
-  text-align: center;
-}
-
-.articleConnectionPopup h3 {
-  margin: 6px 0 10px;
-  color: var(--aa-ink);
-  font-size: 22px;
-  line-height: 1.15;
-}
-
-.articleConnectionPopup p {
-  margin: 0;
-  color: var(--aa-muted);
-  line-height: 1.55;
-  font-size: 13px;
-}
-
-.articleConnectionKicker {
-  color: color-mix(in oklab, var(--aa-primary), white 18%);
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
-
-.articleConnectionActions {
-  display: flex;
-  justify-content: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 18px;
-}
-
 .limitStatusStrip {
   display: flex;
   flex-wrap: wrap;
@@ -3525,6 +3468,44 @@
   }
   100% {
     background-position: -100% 0;
+  }
+}
+
+/* Image Prompt Playground's "generating" placeholder -- same shimmer as
+   articleImageSkeleton above (reused, not reinvented) with a percentage badge
+   overlaid, same footprint (220x220) as the real result image it's replaced by
+   once generation completes, so the swap doesn't reflow the modal. */
+.imagePromptTestBox {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--aa-hairline);
+}
+
+.imagePromptTestPct {
+  /* Fixed dark scrim + light text, deliberately NOT theme tokens -- like a photo
+     timestamp overlay, this badge needs to stay legible sitting on top of the
+     shimmer gradient regardless of which theme that gradient is currently
+     rendering in, not adapt alongside it. */
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.72);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .imagePromptTestBox .articleImageSkeleton {
+    animation: none;
   }
 }
 
@@ -5482,6 +5463,61 @@
 @media (prefers-reduced-motion: reduce) {
   .seoAuditProgressBarFill {
     transition: none;
+  }
+}
+
+/* Slim re-crawl indicator: sits above the still-visible results dashboard
+   instead of replacing it (see SeoAuditLiveProgressBar). Deliberately not a
+   `.card` -- lower visual weight than the sections it sits above, it's a status
+   strip, not another content block. */
+.seoAuditLiveBar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--aa-r-md, 8px);
+  background: color-mix(in oklab, var(--aa-primary), transparent 92%);
+  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 78%);
+}
+.seoAuditLiveBarHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  color: var(--aa-primary);
+}
+.seoAuditLiveBarLabel {
+  font-size: 13px;
+  font-weight: 600;
+}
+.seoAuditLiveBarSub {
+  font-size: 12px;
+  color: var(--aa-muted);
+}
+.seoAuditLiveBarTrack {
+  height: 4px;
+  margin: 0;
+  background: color-mix(in oklab, var(--aa-primary), transparent 85%);
+}
+.seoAuditLiveBarTrack[data-indeterminate="true"] .seoAuditProgressBarFill {
+  position: absolute;
+  width: 40% !important;
+  animation: seoAuditLiveBarIndeterminateKf 1.3s ease-in-out infinite;
+}
+@keyframes seoAuditLiveBarIndeterminateKf {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .seoAuditLiveBarTrack[data-indeterminate="true"] .seoAuditProgressBarFill {
+    animation: none;
+    left: 0;
+    width: 100% !important;
   }
 }
 
