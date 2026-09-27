@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Inter, Cormorant_Garamond, JetBrains_Mono, Manrope } from "next/font/google";
 import "./globals.css";
 import ExtensionCleanup from "@/components/ExtensionCleanup";
+import { CookieConsentBanner } from "@/components/CookieConsentBanner";
 import { AppProviders } from "@/components/AppProviders";
 import { GlobalLoadingProvider } from "@/components/GlobalLoadingProvider";
 import { THEME_INIT_SCRIPT } from "@/lib/theme";
@@ -115,6 +116,7 @@ export default function RootLayout({
         <GlobalLoadingProvider>
           <AppProviders>{children}</AppProviders>
         </GlobalLoadingProvider>
+        <CookieConsentBanner />
       </body>
     </html>
   );

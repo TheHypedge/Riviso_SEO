@@ -113,6 +113,7 @@ export default function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reactivationAvailable, setReactivationAvailable] = useState(false);
@@ -148,6 +149,7 @@ export default function AuthPage() {
       if (tab === "register") {
         if (!isStrongPassword) throw new Error("Please choose a stronger password.");
         if (password !== confirmPassword) throw new Error("Passwords do not match.");
+        if (!agreedToTerms) throw new Error("Please agree to the Terms & Conditions and Privacy Policy to continue.");
         const pending = await api.register(email, password);
         setAwaitingVerification(true);
         setInfo(pending.message || "Verification email sent. Enter the 6-digit code below.");
@@ -284,6 +286,7 @@ export default function AuthPage() {
                   startResendCooldown(0);
                   setTab("login");
                   setConfirmPassword("");
+                  setAgreedToTerms(false);
                 }}
               >
                 Log in
@@ -299,6 +302,7 @@ export default function AuthPage() {
                   setVerificationCode("");
                   startResendCooldown(0);
                   setTab("register");
+                  setAgreedToTerms(false);
                 }}
               >
                 Register
@@ -464,6 +468,37 @@ export default function AuthPage() {
                   </button>
                 </div>
               ) : null}
+              {tab === "register" && !awaitingVerification ? (
+                <label className={styles.authConsentRow}>
+                  <input
+                    type="checkbox"
+                    checked={agreedToTerms}
+                    onChange={(e) => setAgreedToTerms(e.target.checked)}
+                    required
+                  />
+                  <span>
+                    I agree to Riviso&apos;s{" "}
+                    <Link href="/terms" target="_blank" rel="noreferrer">
+                      Terms &amp; Conditions
+                    </Link>
+                    ,{" "}
+                    <Link href="/privacy-policy" target="_blank" rel="noreferrer">
+                      Privacy Policy
+                    </Link>
+                    , and{" "}
+                    <Link href="/data-privacy-policy" target="_blank" rel="noreferrer">
+                      Data Privacy Policy
+                    </Link>
+                    , and consent to the collection and processing of my data as described, including under
+                    India&apos;s Digital Personal Data Protection Act, 2023 and (where applicable) the GDPR and
+                    CCPA/CPRA. I also acknowledge the{" "}
+                    <Link href="/cookie-policy" target="_blank" rel="noreferrer">
+                      Cookie Policy
+                    </Link>
+                    .
+                  </span>
+                </label>
+              ) : null}
               <button
                 className={`${styles.button} ${styles.authButton}`}
                 type="submit"
@@ -473,7 +508,7 @@ export default function AuthPage() {
                   (awaitingVerification
                     ? verificationCode.trim().length < 4
                     : tab === "register"
-                      ? !isStrongPassword || password !== confirmPassword
+                      ? !isStrongPassword || password !== confirmPassword || !agreedToTerms
                       : false)
                 }
               >

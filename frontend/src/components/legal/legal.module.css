@@ -1,0 +1,158 @@
+.page {
+  min-height: 100vh;
+  background: var(--aa-canvas);
+  color: var(--aa-ink);
+  padding: 40px 16px 64px;
+}
+
+.shell {
+  width: min(860px, 100%);
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--aa-ink);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  font-size: 18px;
+}
+
+.homeLink {
+  color: var(--aa-muted);
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 13px;
+}
+.homeLink:hover {
+  color: var(--aa-ink);
+}
+
+.title {
+  margin: 0 0 8px;
+  font-size: 34px;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.meta {
+  color: var(--aa-muted);
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.summaryNote {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--aa-tw-accent-tint, var(--aa-surface-soft));
+  border: 1px solid var(--aa-tw-accent-tint-border, var(--aa-hairline));
+  border-radius: var(--aa-r-md, 8px);
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--aa-body);
+  margin: 18px 0 24px;
+}
+
+.body {
+  color: var(--aa-body);
+  line-height: 1.7;
+  font-size: 14.5px;
+}
+
+.body h2 {
+  margin: 30px 0 10px;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  color: var(--aa-ink);
+}
+
+.body h3 {
+  margin: 18px 0 6px;
+  font-size: 15.5px;
+  color: var(--aa-ink);
+}
+
+.body p {
+  margin: 0 0 12px;
+}
+
+.body ul,
+.body ol {
+  margin: 0 0 14px;
+  padding-left: 22px;
+}
+
+.body li {
+  margin-bottom: 6px;
+}
+
+.body a {
+  color: var(--aa-primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+.body a:hover {
+  text-decoration: underline;
+}
+
+.body strong {
+  color: var(--aa-ink);
+}
+
+.body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 18px;
+  font-size: 13px;
+}
+.body th,
+.body td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--aa-hairline);
+  vertical-align: top;
+}
+.body th {
+  color: var(--aa-muted);
+  font-weight: 700;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.crossNav {
+  margin-top: 44px;
+  padding-top: 20px;
+  border-top: 1px solid var(--aa-hairline);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.crossNav a {
+  color: var(--aa-muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+.crossNav a:hover {
+  color: var(--aa-primary);
+}
+
+.body em {
+  color: var(--aa-warning);
+  font-style: italic;
+}
