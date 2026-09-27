@@ -1588,6 +1588,12 @@ def _normalize_subscription(doc: dict[str, Any]) -> dict[str, Any]:
         "created_at": (doc.get("created_at") or _now_iso_seconds())[:64],
         "updated_at": (doc.get("updated_at") or _now_iso_seconds())[:64],
         "trial_notified_milestones": [m for m in (doc.get("trial_notified_milestones") or []) if isinstance(m, str)],
+        # Paid-plan entitlement window (Razorpay one-time-per-cycle billing). Unset for
+        # trial/free users -- assert_subscription_active() only checks these when present.
+        "current_period_start": (doc.get("current_period_start") or "").strip() or None,
+        "current_period_end": (doc.get("current_period_end") or "").strip() or None,
+        "last_payment_order_id": (doc.get("last_payment_order_id") or "").strip() or None,
+        "payment_notified_milestones": [m for m in (doc.get("payment_notified_milestones") or []) if isinstance(m, str)],
     }
 
 
@@ -5189,6 +5195,123 @@ def load_ai_citation_trend(project_id: str, weeks: int = 12) -> list[dict[str, A
     ]
     out.sort(key=lambda p: (p["week_start"], p["engine"]))
     return out
+
+
+def _load_json_list_dicts(filename: str) -> list[dict[str, Any]]:
+    return [x for x in _load_json_list(filename) if isinstance(x, dict)]
+
+
+# ----------------------------
+# Payments (Razorpay one-time-per-cycle billing)
+#
+# One collection, payments -- one doc per checkout attempt (order created -> paid/failed),
+# keyed by razorpay_order_id (used as _id in Mongo, giving uniqueness for free). This is the
+# transaction ledger, not the entitlement state -- see _normalize_subscription's
+# current_period_start/current_period_end above for what actually grants access.
+# ----------------------------
+
+
+def create_payment_order(doc: dict[str, Any]) -> None:
+    """Insert a new payment record (status="created") right after the Razorpay Order is
+    created server-side, before the user has even seen the checkout widget."""
+    order_id = (doc.get("razorpay_order_id") or "").strip()
+    if not order_id:
+        raise ValueError("razorpay_order_id is required")
+    row = dict(doc)
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list_dicts("payments.json")
+            rows.append(row)
+            _save_json("payments.json", rows[-200000:])
+        return
+    with _db_write_lock:
+        get_db().payments.insert_one({**row, "_id": order_id})
+
+
+def get_payment_by_order_id(order_id: str) -> dict[str, Any] | None:
+    oid = (order_id or "").strip()
+    if not oid:
+        return None
+    if _storage_mode != "mongo":
+        for r in reversed(_load_json_list_dicts("payments.json")):
+            if (r.get("razorpay_order_id") or "").strip() == oid:
+                return r
+        return None
+    doc = get_db().payments.find_one({"_id": oid}, {"_id": 0})
+    return doc if isinstance(doc, dict) else None
+
+
+def update_payment_fields(order_id: str, fields: dict[str, Any]) -> bool:
+    """`$set`-style patch (status transitions, razorpay_payment_id, failure_reason, ...)."""
+    oid = (order_id or "").strip()
+    if not oid or not fields:
+        return False
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list_dicts("payments.json")
+            for i, r in enumerate(rows):
+                if (r.get("razorpay_order_id") or "").strip() == oid:
+                    rows[i] = {**r, **fields}
+                    _save_json("payments.json", rows)
+                    return True
+        return False
+    res = get_db().payments.update_one({"_id": oid}, {"$set": dict(fields)})
+    return bool(res.matched_count)
+
+
+def load_payments_for_user(user_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    """Most-recent-first billing history for the profile page."""
+    uid = (user_id or "").strip()
+    if not uid:
+        return []
+    if _storage_mode != "mongo":
+        rows = [r for r in _load_json_list_dicts("payments.json") if (r.get("user_id") or "").strip() == uid]
+        rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        return rows[:limit]
+    cur = get_db().payments.find({"user_id": uid}, {"_id": 0}).sort("created_at", -1).limit(int(limit))
+    return [dict(d) for d in cur]
+
+
+def load_stale_pending_payments(older_than_minutes: int = 15) -> list[dict[str, Any]]:
+    """Payments still `created`/`attempted` past the cutoff -- candidates for the background
+    reconciliation sweep to resolve directly against Razorpay's own record (the safety net for
+    a dropped connection where neither the client callback nor the webhook arrived)."""
+    cutoff = (datetime.utcnow() - timedelta(minutes=older_than_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if _storage_mode != "mongo":
+        return [
+            r for r in _load_json_list_dicts("payments.json")
+            if (r.get("status") or "") in ("created", "attempted") and str(r.get("created_at") or "") < cutoff
+        ]
+    cur = get_db().payments.find(
+        {"status": {"$in": ["created", "attempted"]}, "created_at": {"$lt": cutoff}},
+        {"_id": 0},
+    )
+    return [dict(d) for d in cur]
+
+
+def mark_webhook_event_seen(event_id: str) -> bool:
+    """Insert-if-absent dedup marker for inbound webhook events. Returns True the first time
+    `event_id` is seen (caller should process it), False on any repeat delivery -- Razorpay
+    retries webhooks on a non-2xx response and can otherwise double-send."""
+    eid = (event_id or "").strip()
+    if not eid:
+        return True  # no event id to dedup on -- process it, can't do better than that
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list_dicts("webhook_events_seen.json")
+            if any((r.get("id") or "") == eid for r in rows):
+                return False
+            rows.append({"id": eid, "seen_at": _now_iso_seconds()})
+            _save_json("webhook_events_seen.json", rows[-50000:])
+            return True
+    from pymongo.errors import DuplicateKeyError
+
+    with _db_write_lock:
+        try:
+            get_db().webhook_events_seen.insert_one({"_id": eid, "seen_at": _now_iso_seconds()})
+            return True
+        except DuplicateKeyError:
+            return False
 
 
 def load_ai_citation_checked_keywords(project_id: str) -> set[str]:

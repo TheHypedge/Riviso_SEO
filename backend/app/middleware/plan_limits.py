@@ -9,7 +9,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from app.core.request_cache import cache_subscription, cache_user
 from app.core.security import decode_token
 from app.legacy.storage import get_legacy_storage_module
-from app.services.plan_gatekeeper import is_trial_expired
+from app.services.plan_gatekeeper import is_subscription_expired, is_trial_expired
 from app.services.to_thread import run_sync
 
 
@@ -27,6 +27,9 @@ _SKIP_PREFIXES = (
     "/api/auth/refresh",
     "/api/health",
     "/api/user/subscription-status",
+    # A locked-out user (trial or paid period expired) must still be able to pay to
+    # regain access -- never gate the checkout endpoints themselves on being unexpired.
+    "/api/payments/",
     "/docs",
     "/openapi.json",
     "/redoc",
@@ -107,6 +110,14 @@ class PlanLimitsMiddleware:
             response = JSONResponse(
                 status_code=403,
                 content={"error": "trial_expired", "message": "Your beta access has ended."},
+            )
+            await response(scope, receive, send)
+            return
+
+        if is_subscription_expired(subscription=subscription):
+            response = JSONResponse(
+                status_code=403,
+                content={"error": "subscription_expired", "message": "Your subscription has ended. Renew to keep using premium features."},
             )
             await response(scope, receive, send)
             return

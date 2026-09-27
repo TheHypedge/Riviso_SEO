@@ -141,6 +141,51 @@ def _plan_notification_html(plan_name: str) -> str:
     )
 
 
+def _format_inr(amount_paise: int) -> str:
+    return f"₹{(amount_paise or 0) / 100:,.2f}"
+
+
+def _format_date(iso: str | None) -> str:
+    s = (iso or "").strip()
+    if not s:
+        return "—"
+    try:
+        from datetime import datetime as _dt
+        d = _dt.fromisoformat(s.replace("Z", "+00:00"))
+        return d.strftime("%d %b %Y")
+    except Exception:
+        return s
+
+
+def _payment_receipt_html(*, order_id: str, amount_paise: int, plan_name: str, period_end: str) -> str:
+    return _layout(
+        "Riviso payment receipt",
+        f"""<h1 style="margin:0 0 12px;font-size:24px;color:{_BRAND_TEXT};">Payment received</h1>
+<p style="color:{_BRAND_MUTED};margin:0 0 20px;">Thanks for your payment — here's your receipt.</p>
+<table style="width:100%;border-collapse:collapse;margin:0 0 20px;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.08);">
+  <tr><td style="padding:12px 16px;background:rgba(255,255,255,0.04);color:{_BRAND_MUTED};font-size:13px;width:120px;">Plan</td>
+      <td style="padding:12px 16px;background:rgba(255,255,255,0.02);color:{_BRAND_TEXT};font-size:13px;font-weight:600;">{plan_name}</td></tr>
+  <tr><td style="padding:12px 16px;background:rgba(255,255,255,0.04);color:{_BRAND_MUTED};font-size:13px;">Amount</td>
+      <td style="padding:12px 16px;background:rgba(255,255,255,0.02);color:{_BRAND_TEXT};font-size:13px;font-weight:600;">{_format_inr(amount_paise)}</td></tr>
+  <tr><td style="padding:12px 16px;background:rgba(255,255,255,0.04);color:{_BRAND_MUTED};font-size:13px;">Order ID</td>
+      <td style="padding:12px 16px;background:rgba(255,255,255,0.02);color:{_BRAND_TEXT};font-size:13px;">{order_id}</td></tr>
+  <tr><td style="padding:12px 16px;background:rgba(255,255,255,0.04);color:{_BRAND_MUTED};font-size:13px;">Renews on</td>
+      <td style="padding:12px 16px;background:rgba(255,255,255,0.02);color:{_BRAND_TEXT};font-size:13px;">{_format_date(period_end)}</td></tr>
+</table>
+<p style="color:{_BRAND_MUTED};margin:0;font-size:13px;">Need a refund or have a billing question? See our Refund Policy or contact support.</p>""",
+    )
+
+
+def _payment_failed_html(*, plan_name: str, reason: str) -> str:
+    return _layout(
+        "Riviso payment failed",
+        f"""<h1 style="margin:0 0 12px;font-size:24px;color:{_BRAND_TEXT};">Payment didn't go through</h1>
+<p style="color:{_BRAND_MUTED};margin:0 0 12px;">Your payment for <strong style="color:{_BRAND_TEXT};">{plan_name}</strong> could not be completed.</p>
+<p style="color:{_BRAND_MUTED};margin:0 0 20px;font-size:13px;">Reason: {reason or "Not specified"}</p>
+<p style="color:{_BRAND_MUTED};margin:0;">No amount was charged. You can try again any time from your account page.</p>""",
+    )
+
+
 # ---------------------------------------------------------------------------
 # SMTP config helpers — read from Settings (loaded from backend/.env via
 # pydantic-settings) so the values are available regardless of whether
@@ -237,6 +282,18 @@ async def send_plan_notification_email(to: str, plan_name: str) -> None:
     import asyncio
     html = _plan_notification_html(plan_name)
     await asyncio.to_thread(_send_html_sync, to, f"Riviso plan update — {plan_name}", html)
+
+
+async def send_payment_receipt_email(to: str, *, order_id: str, amount_paise: int, plan_name: str, period_end: str) -> None:
+    import asyncio
+    html = _payment_receipt_html(order_id=order_id, amount_paise=amount_paise, plan_name=plan_name, period_end=period_end)
+    await asyncio.to_thread(_send_html_sync, to, "Riviso payment receipt", html)
+
+
+async def send_payment_failed_email(to: str, *, plan_name: str, reason: str) -> None:
+    import asyncio
+    html = _payment_failed_html(plan_name=plan_name, reason=reason)
+    await asyncio.to_thread(_send_html_sync, to, "Riviso payment failed", html)
 
 
 async def send_invitation_email(

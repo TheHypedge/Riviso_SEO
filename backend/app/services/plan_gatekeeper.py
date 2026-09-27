@@ -93,6 +93,41 @@ def assert_trial_active(*, user: dict, subscription: dict[str, Any] | None, st=N
         )
 
 
+def is_subscription_expired(*, subscription: dict[str, Any] | None) -> bool:
+    """True when a paid one-time-per-cycle subscription's billing period has ended.
+
+    Mirrors is_trial_expired()'s shape exactly: access is computed from a date at
+    check-time, never from a status flag flipped by a background job, so a reconciliation
+    job never has to race to "downgrade" anyone -- the moment current_period_end passes,
+    every subsequent check just starts returning True on its own.
+    """
+    if not subscription:
+        return False
+    end_raw = (subscription.get("current_period_end") or "").strip()
+    if not end_raw:
+        return False
+    end = _parse_iso_utc(end_raw)
+    if not end:
+        return False
+    return datetime.now(timezone.utc) > end
+
+
+def assert_subscription_active(*, user: dict, subscription: dict[str, Any] | None) -> None:
+    """Raise 403 once a paid plan's billing period has ended.
+
+    Only applies when current_period_end is actually set (i.e. the user has paid at least
+    once) -- trial users and never-paid free-plan users have no period to expire, and are
+    covered by assert_trial_active() instead.
+    """
+    if (user.get("role") or "").strip().lower() == "admin":
+        return
+    if is_subscription_expired(subscription=subscription):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "subscription_expired", "message": "Your subscription has ended. Renew to keep using premium features."},
+        )
+
+
 def check_plan_limits(*, st, user: dict, action: PlanAction, consume: bool = True, subscription: Any = _UNSET) -> None:
     """
     Central gatekeeper: trial expiry, feature flags, and quota consumption.
@@ -111,6 +146,7 @@ def check_plan_limits(*, st, user: dict, action: PlanAction, consume: bool = Tru
             subscription = st.get_subscription_by_user_id(uid)
 
     assert_trial_active(user=user, subscription=subscription, st=st)
+    assert_subscription_active(user=user, subscription=subscription)
 
     plan_key, plan = _plan_for_user(st, user)
 
@@ -300,13 +336,32 @@ def build_subscription_status(*, st, user: dict) -> dict[str, Any]:
     trial_start_raw = (subscription or {}).get("trial_start_date") or ""
     trial_plan_key = st.get_trial_plan_key() if hasattr(st, "get_trial_plan_key") else None
     is_trial = bool(trial_plan_key and plan_key == trial_plan_key)
-    # Only flag expired if the user is currently on the trial plan — upgraded users keep their
-    # old trial_end_date in the subscription doc but should not be treated as expired.
-    expired = is_trial and is_trial_expired(user=user, subscription=subscription)
-    status = "trial_expired" if expired else ("active" if (trial_end_raw and is_trial) else "no_trial")
+    period_start_raw = (subscription or {}).get("current_period_start") or ""
+    period_end_raw = (subscription or {}).get("current_period_end") or ""
+    is_paid_plan = bool(period_end_raw) and not is_trial
 
+    # Only flag trial-expired if the user is currently on the trial plan — upgraded users
+    # keep their old trial_end_date in the subscription doc but should not be treated as
+    # expired on that basis any more.
+    trial_over = is_trial and is_trial_expired(user=user, subscription=subscription)
+    subscription_over = is_paid_plan and is_subscription_expired(subscription=subscription)
+    expired = trial_over or subscription_over
+    if trial_over:
+        status = "trial_expired"
+    elif subscription_over:
+        status = "subscription_expired"
+    elif is_trial and trial_end_raw:
+        status = "active"
+    elif is_paid_plan:
+        status = "active"
+    else:
+        status = "no_trial"
+
+    # The same remaining_days/hours/minutes fields serve both a trial countdown and a
+    # paid-period countdown -- whichever date is actually relevant to this user.
+    relevant_end_raw = trial_end_raw if is_trial else (period_end_raw if is_paid_plan else "")
     remaining_days = remaining_hours = remaining_minutes = 0
-    end = _parse_iso_utc(trial_end_raw)
+    end = _parse_iso_utc(relevant_end_raw)
     if end and not expired:
         delta = end - datetime.now(timezone.utc)
         total_minutes = max(0, int(delta.total_seconds() // 60))
@@ -326,6 +381,9 @@ def build_subscription_status(*, st, user: dict) -> dict[str, Any]:
         "remaining_hours": remaining_hours,
         "remaining_minutes": remaining_minutes,
         "is_trial_plan": is_trial,
+        "is_paid_plan": is_paid_plan,
+        "current_period_start": period_start_raw or None,
+        "current_period_end": period_end_raw or None,
         "usage": {
             "articlesGeneratedToday": int(usage_raw.get("articlesGeneratedToday") or user.get("usage_daily_articles_count") or 0),
             "articlesGeneratedThisMonth": int(usage_raw.get("articlesGeneratedThisMonth") or user.get("usage_monthly_articles_count") or 0),

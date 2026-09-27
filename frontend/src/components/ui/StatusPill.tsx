@@ -1,6 +1,6 @@
 import { cn } from "./cn";
 
-export type PillStatus = "published" | "scheduled" | "draft" | "warning" | "danger";
+export type PillStatus = "published" | "scheduled" | "draft" | "warning" | "danger" | "success";
 
 const STATUS_CLASSES: Record<PillStatus, string> = {
   published: "bg-success-tint text-success-strong",
@@ -8,6 +8,7 @@ const STATUS_CLASSES: Record<PillStatus, string> = {
   draft: "bg-surface-sunken text-ink-secondary",
   warning: "bg-warning-tint text-warning",
   danger: "bg-danger-tint text-danger",
+  success: "bg-success-tint text-success-strong",
 };
 
 const DOT_CLASSES: Record<PillStatus, string> = {
@@ -16,6 +17,7 @@ const DOT_CLASSES: Record<PillStatus, string> = {
   draft: "bg-ink-tertiary",
   warning: "bg-warning",
   danger: "bg-danger",
+  success: "bg-success",
 };
 
 const DEFAULT_LABELS: Record<PillStatus, string> = {
@@ -24,6 +26,7 @@ const DEFAULT_LABELS: Record<PillStatus, string> = {
   draft: "Draft",
   warning: "Warning",
   danger: "Danger",
+  success: "Success",
 };
 
 export interface StatusPillProps {

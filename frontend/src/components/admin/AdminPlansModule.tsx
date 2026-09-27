@@ -66,7 +66,8 @@ function limitBadge(v: number | null | undefined): { text: string; badgeKind: "u
 
 function priceFmt(v: number | null | undefined): string {
   if (!v) return "Free";
-  return `$${v.toFixed(2)}/mo`;
+  // INR, not USD -- plans are billed in rupees via Razorpay.
+  return `₹${v.toLocaleString("en-IN")}/mo`;
 }
 
 function emptyDraft(): Partial<PlanPublic> & { key: string } {
@@ -384,7 +385,7 @@ function EditView({
                 {keyInvalid && <span className={s.fieldHint} style={{ color: "#fca5a5" }}>Only lowercase letters, numbers, underscore.</span>}
               </div>
               <div className={s.fieldLabel}>
-                <span className={s.fieldLabelText}>Monthly Price ($)</span>
+                <span className={s.fieldLabelText}>Monthly Price (₹)</span>
                 <input
                   className={s.fieldInput}
                   type="number"

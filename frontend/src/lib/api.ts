@@ -134,7 +134,7 @@ export type PlanPublic = {
 };
 
 export type SubscriptionStatusPublic = {
-  status: "active" | "trial_expired" | "no_trial" | string;
+  status: "active" | "trial_expired" | "subscription_expired" | "no_trial" | string;
   plan_key: string;
   plan_name?: string | null;
   trial_start_date?: string | null;
@@ -143,6 +143,9 @@ export type SubscriptionStatusPublic = {
   remaining_hours: number;
   remaining_minutes: number;
   is_trial_plan: boolean;
+  is_paid_plan?: boolean;
+  current_period_start?: string | null;
+  current_period_end?: string | null;
   usage: {
     articlesGeneratedToday: number;
     articlesGeneratedThisMonth: number;
@@ -159,6 +162,45 @@ export type SubscriptionStatusPublic = {
     allowBulkUpload: boolean;
     allowBulkExport: boolean;
   };
+};
+
+/* --- Razorpay payments (one-time-per-cycle billing) ---------------------- */
+
+export type PlanSummary = {
+  key: string;
+  name: string;
+  cost_monthly: number;
+  max_projects?: number | null;
+  max_articles_per_month?: number | null;
+  allow_scheduling: boolean;
+  allow_export: boolean;
+  allow_bulk_upload: boolean;
+};
+
+export type CreateRazorpayOrderResponse = {
+  order_id: string;
+  amount_paise: number;
+  currency: string;
+  key_id: string;
+  plan_key: string;
+  plan_name: string;
+};
+
+export type RazorpayPaymentStatus = {
+  order_id: string;
+  status: "created" | "attempted" | "paid" | "failed" | string;
+  plan_key: string;
+  failure_reason?: string | null;
+};
+
+export type PaymentHistoryItem = {
+  order_id: string;
+  plan_key: string;
+  amount_paise: number;
+  currency: string;
+  status: string;
+  created_at: string;
+  paid_at: string | null;
 };
 
 export type MonthlyFeatureLimit = {
@@ -2257,6 +2299,30 @@ export const api = {
       timeoutMs: META_API_TIMEOUT_MS,
       ...opts,
     });
+  },
+  async listAvailablePlans(opts?: ApiFetchOptions) {
+    return apiFetch<PlanSummary[]>("/api/plans/available", undefined, { skipGlobalLoading: true, ...opts });
+  },
+  async createRazorpayOrder(planKey: string) {
+    return apiFetch<CreateRazorpayOrderResponse>("/api/payments/razorpay/order", {
+      method: "POST",
+      body: JSON.stringify({ plan_key: planKey }),
+    });
+  },
+  async verifyRazorpayPayment(payload: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) {
+    return apiFetch<SubscriptionStatusPublic>("/api/payments/razorpay/verify", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  async getRazorpayPaymentStatus(orderId: string, opts?: ApiFetchOptions) {
+    return apiFetch<RazorpayPaymentStatus>(`/api/payments/razorpay/status/${orderId}`, undefined, {
+      skipGlobalLoading: true,
+      ...opts,
+    });
+  },
+  async getPaymentHistory(opts?: ApiFetchOptions) {
+    return apiFetch<PaymentHistoryItem[]>("/api/payments/history", undefined, { skipGlobalLoading: true, ...opts });
   },
   async updateProfileMe(patch: Partial<{ full_name: string; phone: string; timezone: string }>) {
     const result = await apiFetch<ProfilePublic>("/api/profile/me", { method: "PATCH", body: JSON.stringify(patch) });

@@ -3,12 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import s from "./trialCountdown.module.css";
 import type { SubscriptionStatusPublic } from "@/lib/api";
+import { CheckoutModal } from "@/components/billing/CheckoutModal";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const DISMISS_KEY = "rvs_trial_banner_dismiss";
 const WELCOME_KEY = "rvs_trial_welcome_seen";
-
-const UPGRADE_HREF = "mailto:support@riviso.com?subject=Riviso%20plan%20upgrade";
 
 const FEATURES = [
   "Unlimited Article Generation",
@@ -172,6 +171,7 @@ function WelcomeModal({
   progress,
   onClose,
   onExplore,
+  onUpgrade,
 }: {
   status: SubscriptionStatusPublic;
   days: number;
@@ -180,6 +180,7 @@ function WelcomeModal({
   progress: number;
   onClose: () => void;
   onExplore: () => void;
+  onUpgrade: () => void;
 }) {
   const totalDays = useMemo(() => {
     if (!status.trial_start_date || !status.trial_end_date) return 14;
@@ -218,9 +219,9 @@ function WelcomeModal({
           </div>
         </div>
         <div className={s.welcomeActions}>
-          <a href={UPGRADE_HREF} className={s.welcomeUpgradeBtn}>
+          <button type="button" className={s.welcomeUpgradeBtn} onClick={onUpgrade}>
             Upgrade Now
-          </a>
+          </button>
           <button type="button" className={s.welcomeFeatureBtn} onClick={onExplore}>
             Explore Features
           </button>
@@ -232,43 +233,47 @@ function WelcomeModal({
 
 // ── Upgrade Required modal (exported for context) ──────────────────────────────
 export function UpgradeRequiredModal({ onClose }: { onClose: () => void }) {
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
   return (
-    <div
-      className={s.upgradeOverlay}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="upgrade-required-title"
-      onClick={onClose}
-    >
-      <div className={s.upgradeCard} onClick={(e) => e.stopPropagation()}>
-        <button type="button" className={s.upgradeCloseBtn} onClick={onClose} aria-label="Close">
-          ✕
-        </button>
-        <p className={s.upgradeCardEyebrow}>Beta Trial Ended</p>
-        <h2 id="upgrade-required-title" className={s.upgradeCardTitle}>
-          Upgrade Required
-        </h2>
-        <p className={s.upgradeCardBody}>
-          Your Beta Trial has ended. Upgrade to continue using premium features.
-        </p>
-        <ul className={s.upgradeFeatureList} role="list">
-          {UPGRADE_FEATURES.map((f) => (
-            <li key={f} className={s.upgradeFeatureItem}>
-              <span className={s.upgradeFeatureCheck} aria-hidden="true">✓</span>
-              {f}
-            </li>
-          ))}
-        </ul>
-        <div className={s.upgradeCardActions}>
-          <a href={UPGRADE_HREF} className={s.upgradeCardPrimaryBtn}>
-            Upgrade Now
-          </a>
-          <button type="button" className={s.upgradeCardSecondaryBtn} onClick={onClose}>
-            Not now
+    <>
+      <div
+        className={s.upgradeOverlay}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="upgrade-required-title"
+        onClick={onClose}
+      >
+        <div className={s.upgradeCard} onClick={(e) => e.stopPropagation()}>
+          <button type="button" className={s.upgradeCloseBtn} onClick={onClose} aria-label="Close">
+            ✕
           </button>
+          <p className={s.upgradeCardEyebrow}>Beta Trial Ended</p>
+          <h2 id="upgrade-required-title" className={s.upgradeCardTitle}>
+            Upgrade Required
+          </h2>
+          <p className={s.upgradeCardBody}>
+            Your Beta Trial has ended. Upgrade to continue using premium features.
+          </p>
+          <ul className={s.upgradeFeatureList} role="list">
+            {UPGRADE_FEATURES.map((f) => (
+              <li key={f} className={s.upgradeFeatureItem}>
+                <span className={s.upgradeFeatureCheck} aria-hidden="true">✓</span>
+                {f}
+              </li>
+            ))}
+          </ul>
+          <div className={s.upgradeCardActions}>
+            <button type="button" className={s.upgradeCardPrimaryBtn} onClick={() => setCheckoutOpen(true)}>
+              Upgrade Now
+            </button>
+            <button type="button" className={s.upgradeCardSecondaryBtn} onClick={onClose}>
+              Not now
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+      <CheckoutModal open={checkoutOpen} onClose={() => setCheckoutOpen(false)} />
+    </>
   );
 }
 
@@ -278,6 +283,7 @@ export function TrialCountdownBanner({ status }: { status: SubscriptionStatusPub
   const [dismissed, setDismissed] = useState(false);
   const [showWelcome, setShowWelcome] = useState(false);
   const [showFeatures, setShowFeatures] = useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
 
   // Tick every minute
   useEffect(() => {
@@ -292,7 +298,9 @@ export function TrialCountdownBanner({ status }: { status: SubscriptionStatusPub
     }
   }, [status.is_trial_plan, status.status]);
 
-  const isExpired = status.status === "trial_expired";
+  const isTrialExpired = status.status === "trial_expired";
+  const isSubscriptionExpired = status.status === "subscription_expired";
+  const isExpired = isTrialExpired || isSubscriptionExpired;
 
   const remaining = useMemo(
     () => remainingFromEnd(status.trial_end_date),
@@ -310,7 +318,9 @@ export function TrialCountdownBanner({ status }: { status: SubscriptionStatusPub
   );
 
   const countdownText = fmtCountdown(days, hours, minutes, isExpired);
-  const msg = phaseMessage(days, isExpired);
+  const msg = isSubscriptionExpired
+    ? "Your subscription has ended. Renew now to regain access to your projects and content."
+    : phaseMessage(days, isExpired);
 
   // Non-trial, non-expired users: never render
   if (!status.is_trial_plan && !isExpired) return null;
@@ -349,6 +359,7 @@ export function TrialCountdownBanner({ status }: { status: SubscriptionStatusPub
           progress={progress}
           onClose={handleWelcomeClose}
           onExplore={handleExploreFromWelcome}
+          onUpgrade={() => setCheckoutOpen(true)}
         />
       )}
 
@@ -362,7 +373,7 @@ export function TrialCountdownBanner({ status }: { status: SubscriptionStatusPub
             <div className={s.bannerLeft}>
               <span className={s.bannerIcon} aria-hidden="true">{phaseIcon(phase)}</span>
               <span className={s.bannerLabel}>
-                {isExpired ? "Trial Expired" : "Beta Trial"}
+                {isSubscriptionExpired ? "Access Expired" : isExpired ? "Trial Expired" : "Beta Trial"}
               </span>
             </div>
 
@@ -385,9 +396,9 @@ export function TrialCountdownBanner({ status }: { status: SubscriptionStatusPub
                   Explore Features
                 </button>
               )}
-              <a href={UPGRADE_HREF} className={s.upgradeBtn}>
+              <button type="button" className={s.upgradeBtn} onClick={() => setCheckoutOpen(true)}>
                 {isExpired ? "Upgrade Now" : "Upgrade Plan"}
-              </a>
+              </button>
               {!isExpired && (
                 <button
                   type="button"
@@ -402,6 +413,8 @@ export function TrialCountdownBanner({ status }: { status: SubscriptionStatusPub
           </div>
         </div>
       )}
+
+      <CheckoutModal open={checkoutOpen} onClose={() => setCheckoutOpen(false)} />
     </>
   );
 }

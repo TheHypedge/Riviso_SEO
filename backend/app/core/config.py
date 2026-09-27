@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     shopify_api_key: str = Field(default="", validation_alias="SHOPIFY_API_KEY")
     shopify_api_secret: str = Field(default="", validation_alias="SHOPIFY_API_SECRET")
 
+    # Razorpay (payment gateway). key_id is safe to send to the browser; key_secret and
+    # webhook_secret must never leave the server.
+    razorpay_key_id: str = Field(default="", validation_alias="RAZORPAY_KEY_ID")
+    razorpay_key_secret: str = Field(default="", validation_alias="RAZORPAY_KEY_SECRET")
+    razorpay_webhook_secret: str = Field(default="", validation_alias="RAZORPAY_WEBHOOK_SECRET")
+
     # Google Indexing API (service account JSON; raw JSON or base64 JSON)
     google_indexing_service_account_json: str = Field(default="", validation_alias="GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON")
 
@@ -239,6 +245,9 @@ class Settings(BaseSettings):
         "google_pagespeed_api_key",
         "perplexity_api_key",
         "gemini_api_key",
+        "razorpay_key_id",
+        "razorpay_key_secret",
+        "razorpay_webhook_secret",
         mode="before",
     )
     @classmethod
@@ -264,6 +273,10 @@ class Settings(BaseSettings):
     @property
     def shopify_oauth_configured(self) -> bool:
         return bool((self.shopify_api_key or "").strip() and (self.shopify_api_secret or "").strip())
+
+    @property
+    def razorpay_configured(self) -> bool:
+        return bool((self.razorpay_key_id or "").strip() and (self.razorpay_key_secret or "").strip())
 
     @property
     def google_oauth_client_id_fingerprint(self) -> str:

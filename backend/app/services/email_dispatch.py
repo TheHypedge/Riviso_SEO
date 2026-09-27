@@ -168,6 +168,47 @@ async def _run_invitation_email(
         log.warning("SMTP not configured; invitation email not sent to=%s", to_clean)
 
 
+def dispatch_payment_receipt_email(*, to: str, order_id: str, amount_paise: int, plan_name: str, period_end: str) -> None:
+    asyncio.create_task(_run_payment_receipt_email(to, order_id, amount_paise, plan_name, period_end))
+
+
+async def _run_payment_receipt_email(to: str, order_id: str, amount_paise: int, plan_name: str, period_end: str) -> None:
+    # Multi-field payload, same shape as the invitation email above (doesn't fit
+    # _run_email's single-string-payload kind dispatch) -- best-effort, no retry: a
+    # receipt email failing must never be allowed to undo an already-successful payment.
+    to_clean = (to or "").strip()
+    if not to_clean:
+        return
+    if _smtp_configured():
+        from app.services.email_smtp import send_payment_receipt_email
+        try:
+            await send_payment_receipt_email(to_clean, order_id=order_id, amount_paise=amount_paise, plan_name=plan_name, period_end=period_end)
+            log.info("Payment receipt email sent to=%s order=%s", to_clean, order_id)
+        except Exception:
+            log.exception("Payment receipt email failed to=%s order=%s", to_clean, order_id)
+    else:
+        log.warning("SMTP not configured; payment receipt email not sent to=%s", to_clean)
+
+
+def dispatch_payment_failed_email(*, to: str, plan_name: str, reason: str) -> None:
+    asyncio.create_task(_run_payment_failed_email(to, plan_name, reason))
+
+
+async def _run_payment_failed_email(to: str, plan_name: str, reason: str) -> None:
+    to_clean = (to or "").strip()
+    if not to_clean:
+        return
+    if _smtp_configured():
+        from app.services.email_smtp import send_payment_failed_email
+        try:
+            await send_payment_failed_email(to_clean, plan_name=plan_name, reason=reason)
+            log.info("Payment failed email sent to=%s", to_clean)
+        except Exception:
+            log.exception("Payment failed email failed to=%s", to_clean)
+    else:
+        log.warning("SMTP not configured; payment failed email not sent to=%s", to_clean)
+
+
 async def notify_plan_event(*, email: str, plan_name: str, event: str) -> None:
     """Wrapper for admin/subscription managers. ``event`` reserved for future variants."""
     _ = event

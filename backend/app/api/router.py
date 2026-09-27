@@ -38,6 +38,7 @@ from app.api.routes import wordpress_sync
 from app.api.routes import site_audit_technical
 from app.api.routes import site_audit_seo
 from app.api.routes import ai_citation
+from app.api.routes import payments
 
 api_router = APIRouter()
 
@@ -72,4 +73,6 @@ api_router.include_router(wordpress_sync.router)
 api_router.include_router(site_audit_technical.router)
 api_router.include_router(site_audit_seo.router)
 api_router.include_router(ai_citation.router)
+api_router.include_router(payments.router)
+api_router.include_router(payments.plans_router)
 

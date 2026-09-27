@@ -105,6 +105,15 @@ def run_startup_checks(settings: Settings) -> None:
             "and must not be used in production. Unset it before starting."
         )
 
+    # Fatal: a payment gateway with keys configured but no webhook secret would accept
+    # payments with no way to verify Razorpay's own confirmation -- refuse to boot rather
+    # than run checkout with an unverifiable webhook.
+    if settings.razorpay_configured and not (settings.razorpay_webhook_secret or "").strip():
+        raise RuntimeError(
+            "PRODUCTION: RAZORPAY_KEY_ID/SECRET are set but RAZORPAY_WEBHOOK_SECRET is not. "
+            "Set the webhook secret from the Razorpay dashboard before starting in production."
+        )
+
     if not settings.cookie_secure:
         log.warning(
             "PRODUCTION: COOKIE_SECURE is false. Set COOKIE_SECURE=true when serving the API over HTTPS."
@@ -113,4 +122,9 @@ def run_startup_checks(settings: Settings) -> None:
     if not (settings.openai_api_key or "").strip():
         log.warning(
             "PRODUCTION: OPENAI_API_KEY is empty; article generation and related features will fail."
+        )
+
+    if not settings.razorpay_configured:
+        log.warning(
+            "PRODUCTION: Razorpay is not configured; payment/checkout features will be unavailable."
         )

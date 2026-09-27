@@ -22,7 +22,7 @@ class PlanFeaturesPublic(BaseModel):
 
 
 class SubscriptionStatusPublic(BaseModel):
-    status: str = Field(description="active | trial_expired | no_trial")
+    status: str = Field(description="active | trial_expired | subscription_expired | no_trial")
     plan_key: str
     plan_name: str | None = None
     trial_start_date: str | None = None
@@ -31,5 +31,8 @@ class SubscriptionStatusPublic(BaseModel):
     remaining_hours: int = 0
     remaining_minutes: int = 0
     is_trial_plan: bool = False
+    is_paid_plan: bool = False
+    current_period_start: str | None = None
+    current_period_end: str | None = None
     usage: SubscriptionUsagePublic = Field(default_factory=SubscriptionUsagePublic)
     features: PlanFeaturesPublic = Field(default_factory=PlanFeaturesPublic)

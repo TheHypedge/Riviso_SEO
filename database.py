@@ -265,7 +265,15 @@ def init_db() -> None:
     db.topic_clusters.create_index([("project_id", 1), ("status", 1)])
     db.subscriptions.create_index("user_id", unique=True)
     db.subscriptions.create_index("trial_end_date")
+    db.subscriptions.create_index("current_period_end")
     db.plans.create_index("is_trial_plan")
+
+    # Payments (Razorpay). razorpay_order_id is the Mongo _id (uniqueness for free);
+    # these two support billing-history lookup and the stale-pending reconciliation sweep.
+    db.payments.create_index([("user_id", 1), ("created_at", -1)])
+    db.payments.create_index([("status", 1), ("created_at", 1)])
+    # Webhook-event dedup markers only need to survive Razorpay's retry window.
+    db.webhook_events_seen.create_index("seen_at", expireAfterSeconds=60 * 60 * 24 * 30)
     # NOTE: TTL indexes on users.email_verification_expires_at and
     # users.password_reset_expires_at were removed because they caused MongoDB
     # to delete entire user documents after a password reset or unverified

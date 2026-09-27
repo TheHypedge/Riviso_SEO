@@ -1044,6 +1044,8 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
     import time as _time
     _TRIAL_REMINDER_INTERVAL = 3600.0  # check trial milestones once per hour
     _last_trial_reminder_check = 0.0
+    _SUBSCRIPTION_RECONCILE_INTERVAL = 900.0  # sweep stale payments + renewal reminders every 15 min
+    _last_subscription_reconcile_check = 0.0
 
     # When Mongo/storage is temporarily unavailable, avoid noisy tracebacks every poll.
     # Back off with a capped retry delay, and throttle logs.
@@ -1531,5 +1533,19 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                 await check_trial_milestones(_st)
             except Exception:
                 log.exception("trial_reminder: unhandled error")
+
+        # Razorpay payment reconciliation + renewal reminders — every 15 minutes
+        if now_mono - _last_subscription_reconcile_check >= _SUBSCRIPTION_RECONCILE_INTERVAL:
+            _last_subscription_reconcile_check = now_mono
+            try:
+                from app.services.subscription_reconcile_service import (
+                    check_renewal_milestones,
+                    reconcile_pending_payments,
+                )
+                _st = get_legacy_storage_module()
+                await reconcile_pending_payments(_st)
+                await check_renewal_milestones(_st)
+            except Exception:
+                log.exception("subscription_reconcile: unhandled error")
 
         await asyncio.sleep(poll_seconds)

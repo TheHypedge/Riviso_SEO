@@ -7,6 +7,8 @@ import { api } from "@/lib/api";
 import type { ProfilePublic } from "@/lib/api";
 import { useSubscription } from "@/components/subscription/SubscriptionProvider";
 import { useFocusTrap } from "@/lib/useFocusTrap";
+import { CheckoutModal } from "@/components/billing/CheckoutModal";
+import type { PaymentHistoryItem } from "@/lib/api";
 
 // ── Prefs (localStorage) ──────────────────────────────────────────────────────
 type Prefs = {
@@ -117,12 +119,12 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) =
   );
 }
 
-const UPGRADE_HREF = "mailto:support@riviso.com?subject=Riviso%20plan%20upgrade";
-
 // ── Main component ────────────────────────────────────────────────────────────
 export function UserProfileModule() {
-  const { status: subStatus, trialExpired, openUpgradeModal } = useSubscription();
+  const { status: subStatus, trialExpired, subscriptionExpired } = useSubscription();
   const router = useRouter();
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [paymentHistory, setPaymentHistory] = useState<PaymentHistoryItem[]>([]);
 
   // Profile state
   const [profile, setProfile] = useState<ProfilePublic | null>(null);
@@ -191,6 +193,12 @@ export function UserProfileModule() {
   }, [browserTimeZone]);
 
   useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    api.getPaymentHistory().then(setPaymentHistory).catch(() => {
+      /* silent -- billing history is a nice-to-have, not a blocking part of the page */
+    });
+  }, []);
 
   const draftChanged = useMemo(() => {
     if (!profile) return false;
@@ -273,7 +281,8 @@ export function UserProfileModule() {
   const planKey = (profile?.subscription_type || "").toLowerCase().trim() || "beta";
   const planName = subStatus?.plan_name || subStatus?.plan_key || planKey;
   const isTrial = subStatus?.is_trial_plan ?? false;
-  const isExpired = trialExpired;
+  const isPaidPlan = subStatus?.is_paid_plan ?? false;
+  const isExpired = trialExpired || subscriptionExpired;
   const remainingDays = subStatus?.remaining_days ?? 0;
   const remainingHours = subStatus?.remaining_hours ?? 0;
 
@@ -361,13 +370,9 @@ export function UserProfileModule() {
               <span className={`${s.planStatus} ${planStatusCls}`}>{planStatusLabel}</span>
             </div>
             {(isTrial || isExpired) && (
-              <a
-                href={UPGRADE_HREF}
-                className={s.upgradeBtn}
-                onClick={isExpired ? (e) => { e.preventDefault(); openUpgradeModal(); } : undefined}
-              >
-                Upgrade Plan
-              </a>
+              <button type="button" className={s.upgradeBtn} onClick={() => setCheckoutOpen(true)}>
+                {isExpired ? "Renew Plan" : "Upgrade Plan"}
+              </button>
             )}
           </div>
         </div>
@@ -508,6 +513,12 @@ export function UserProfileModule() {
                       <span className={s.subRowVal}>{fmtDate(subStatus?.trial_end_date)}</span>
                     </div>
                   )}
+                  {isPaidPlan && !isExpired && (
+                    <div className={s.subRow}>
+                      <span className={s.subRowLabel}>Renews on</span>
+                      <span className={s.subRowVal}>{fmtDate(subStatus?.current_period_end)}</span>
+                    </div>
+                  )}
                 </div>
 
                 {isTrial && !isExpired && (
@@ -525,24 +536,52 @@ export function UserProfileModule() {
 
               <div style={{ display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
                 {(isTrial || isExpired) && (
-                  <a
-                    href={UPGRADE_HREF}
+                  <button
+                    type="button"
                     className={s.upgradeBtn}
                     style={{ justifyContent: "center" }}
-                    onClick={isExpired ? (e) => { e.preventDefault(); openUpgradeModal(); } : undefined}
+                    onClick={() => setCheckoutOpen(true)}
                   >
                     {isExpired ? "Restore Access" : "Upgrade Plan"}
-                  </a>
+                  </button>
                 )}
               </div>
             </div>
 
+            {paymentHistory.length > 0 ? (
+              <div style={{ marginTop: 20 }}>
+                <p className={s.subRowLabel} style={{ marginBottom: 8 }}>Billing History</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {paymentHistory.map((p) => (
+                    <div key={p.order_id} className={s.subRow}>
+                      <span className={s.subRowLabel}>
+                        {fmtDate(p.created_at)} · {p.plan_key}
+                      </span>
+                      <span className={s.subRowVal}>
+                        ₹{(p.amount_paise / 100).toLocaleString("en-IN")}
+                        {" · "}
+                        {p.status === "paid" ? "Paid" : p.status === "failed" ? "Failed" : "Pending"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             {isExpired && (
               <p style={{ marginTop: 16, fontSize: 13, color: "#f08080", lineHeight: 1.5 }}>
-                Your trial has expired. Upgrade to regain access to premium features.
+                {subscriptionExpired
+                  ? "Your subscription has ended. Renew to regain access to premium features."
+                  : "Your trial has expired. Upgrade to regain access to premium features."}
               </p>
             )}
           </div>
+
+          <CheckoutModal
+            open={checkoutOpen}
+            onClose={() => setCheckoutOpen(false)}
+            prefillEmail={profile?.email || undefined}
+          />
 
         </div>
 
