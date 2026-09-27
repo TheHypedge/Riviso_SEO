@@ -441,6 +441,31 @@ def _change_pct(current: float, previous: float) -> float | None:
     return round((current - previous) / previous * 100, 1)
 
 
+def _to_int(v: object) -> int:
+    try:
+        return int(str(v).strip() or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _sum_submitted_pages(sitemaps: list[dict]) -> int | None:
+    """Total pages submitted via sitemap -- NOT an indexed-pages count (GSC's public
+    API has no reliable one; the Sitemaps API's own ``indexed`` field is frequently
+    stale/zero even for genuinely indexed sites).
+
+    Prefers a sitemap-index entry's own ``submitted_urls`` (it already aggregates
+    its children) over summing every entry, which would double-count once both an
+    index and its children are listed. Falls back to summing plain entries when no
+    index is present.
+    """
+    if not sitemaps:
+        return None
+    index_entries = [s for s in sitemaps if s.get("is_sitemaps_index")]
+    if index_entries:
+        return max(_to_int(s.get("submitted_urls")) for s in index_entries)
+    return sum(_to_int(s.get("submitted_urls")) for s in sitemaps)
+
+
 def _build_comparison_rows(
     current_rows: list[dict],
     prev_rows: list[dict],
@@ -488,7 +513,10 @@ async def insights(
     - ``pages``  — top pages by clicks with change vs previous period
     - ``queries`` — top search queries with change vs previous period
     - ``countries`` — clicks by country (current period)
+    - ``devices`` — clicks by device type (current period)
     - ``traffic_sources`` — web vs image vs video vs news search types
+    - ``submitted_pages`` — pages submitted via sitemap (NOT an indexed count; see
+      ``_sum_submitted_pages``)
     """
     from datetime import datetime, timedelta
     from app.services.google_console_service import GoogleConsoleService, _normalise_property_for_query
@@ -527,6 +555,7 @@ async def insights(
             prev_queries,
             cur_countries,
             image_rows,
+            cur_devices,
         ) = await asyncio.gather(
             svc.query_traffic_totals(start_date=start_iso, end_date=end_iso),
             svc.query_traffic_totals(start_date=prev_start, end_date=prev_end),
@@ -539,9 +568,21 @@ async def insights(
                 start_date=start_iso, end_date=end_iso, dimension="page",
                 limit=10, search_type="IMAGE"
             ),
+            svc.query_by_dimension(start_date=start_iso, end_date=end_iso, dimension="device", limit=10),
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e) or "Insights query failed") from e
+
+    # Sitemap-submitted page count -- best-effort, never fails the whole response
+    # (no sitemap submitted yet is a normal state, not an error).
+    submitted_pages = None
+    try:
+        from app.services.gsc_actions import list_sitemaps_for_project
+
+        sitemaps = await list_sitemaps_for_project(st=st, proj=proj)
+        submitted_pages = _sum_submitted_pages(sitemaps)
+    except Exception:
+        pass
 
     # Headline comparison
     headline = {
@@ -559,6 +600,24 @@ async def insights(
             "change_pct": _change_pct(
                 float(cur_series.get("impressions") or 0),
                 float(prev_series.get("impressions") or 0),
+            ),
+        },
+        "ctr": {
+            "value": float(cur_series.get("ctr") or 0.0),
+            "prev": float(prev_series.get("ctr") or 0.0),
+            "change_pct": _change_pct(
+                float(cur_series.get("ctr") or 0.0),
+                float(prev_series.get("ctr") or 0.0),
+            ),
+        },
+        # Lower is better for position -- callers should invert up/down coloring
+        # for this one field rather than treating a positive change_pct as good.
+        "position": {
+            "value": float(cur_series.get("position") or 0.0),
+            "prev": float(prev_series.get("position") or 0.0),
+            "change_pct": _change_pct(
+                float(cur_series.get("position") or 0.0),
+                float(prev_series.get("position") or 0.0),
             ),
         },
     }
@@ -587,6 +646,20 @@ async def insights(
     if image_clicks > 0:
         traffic_sources.append({"source": "Image search", "source_type": "image", "clicks": image_clicks})
 
+    # Devices — clicks by device type + share %
+    total_device_clicks = max(1, sum(int(r.get("clicks") or 0) for r in cur_devices))
+    devices = []
+    for r in cur_devices:
+        clicks = int(r.get("clicks") or 0)
+        devices.append({
+            "device": (r.get("device") or "").strip(),
+            "clicks": clicks,
+            "impressions": int(r.get("impressions") or 0),
+            "ctr": float(r.get("ctr") or 0.0),
+            "position": float(r.get("position") or 0.0),
+            "share_pct": round(clicks / total_device_clicks * 100, 1),
+        })
+
     return {
         "property_url": (proj.get("gsc_property_url") or "").strip() or None,
         "period": {"start_date": start_iso, "end_date": end_iso, "days": d},
@@ -595,5 +668,7 @@ async def insights(
         "pages": pages,
         "queries": queries,
         "countries": countries,
+        "devices": devices,
         "traffic_sources": traffic_sources,
+        "submitted_pages": submitted_pages,
     }

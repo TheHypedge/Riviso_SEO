@@ -32,7 +32,7 @@ from app.services.seo_guardrails import (
 log = logging.getLogger(__name__)
 
 # Bump when generation/token-estimate signatures change; surfaced on /api/health for deploy checks.
-GENERATION_REVISION = "2026-06-05-depth-faq-aeo-geo"
+GENERATION_REVISION = "2026-09-27-intro-para-single-h1"
 
 @lru_cache(maxsize=16)
 def _callable_param_names(fn: Callable[..., Any]) -> frozenset[str]:
@@ -253,6 +253,11 @@ def build_generation_messages(
         HUMAN_FIRST_SYSTEM_ANCHOR
         + human_guardrail
         + "\n\nCONTENT STRUCTURE REQUIREMENTS (non-negotiable — apply to every article):\n"
+        + "- Begin article_markdown with a 2-4 sentence introductory paragraph in plain text. "
+        "Do NOT start the article with a heading of any kind.\n"
+        "- Immediately after that opening paragraph, include exactly one # H1 heading stating the "
+        "article's core topic in your own words. This H1 must NOT be an exact or near-exact copy of "
+        "the article title given in the user message — reword it. Do not add a second H1 anywhere else.\n"
         + h2_requirement
         + "- Use ### H3 sub-headings when a section has 2 or more distinct sub-topics.\n"
         "- Use bullet points (- item) for any list of 3 or more parallel items, tips, or features.\n"

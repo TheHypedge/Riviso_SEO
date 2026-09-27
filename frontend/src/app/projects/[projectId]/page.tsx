@@ -725,6 +725,10 @@ export default function ProjectPage() {
   // default since no UI can change them) — left as-is rather than touching
   // that shared function for a cosmetic-only cleanup.
   const [analytics, setAnalytics] = useState<import("@/lib/api").GscAnalyticsResponse | null>(null);
+  // Overview tab's Search Performance section — headline ctr/position, trending
+  // pages/queries, country/device breakdowns. Fetched alongside `analytics` in
+  // the same tab-independent bootstrap effect below.
+  const [gscInsights, setGscInsights] = useState<import("@/lib/api").GscInsightsResponse | null>(null);
   const [analyticsBusy, setAnalyticsBusy] = useState<boolean>(false);
   const [analyticsErr, setAnalyticsErr] = useState<string | null>(null);
   const [analyticsRangePreset, setAnalyticsRangePreset] = useState<number | "custom">(28);
@@ -1564,6 +1568,12 @@ export default function ProjectPage() {
             if (!cancelled) setAnalytics(res);
           } catch {
             // Silent — the Performance tab simply won't appear until data is available.
+          }
+          try {
+            const insightsRes = await api.gscProjectInsights(projectId, { days: 28 });
+            if (!cancelled) setGscInsights(insightsRes);
+          } catch {
+            // Silent — Overview's Search Performance section just won't render until data is available.
           }
         }
       } catch (e) {
@@ -2949,10 +2959,14 @@ export default function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, siteAuditSubTab, token]);
 
-  // Load AI Citation Tracking when its Site Audit sub-tab is first opened for this
-  // project. Refreshing the browser must not trigger a new check run -- only /latest here.
+  // Load AI Citation Tracking when its Site Audit sub-tab is first opened, or when
+  // the Overview tab opens (its AI Generative Visibility section needs the same
+  // data). Refreshing the browser must not trigger a new check run -- only /latest here.
   useEffect(() => {
-    if (!token || tab !== "site_audit" || siteAuditSubTab !== "ai_citations") return;
+    if (!token) return;
+    const onOverview = tab === "overview";
+    const onAiCitationsSubTab = tab === "site_audit" && siteAuditSubTab === "ai_citations";
+    if (!onOverview && !onAiCitationsSubTab) return;
     if (!aiCitation) void reloadAiCitation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, siteAuditSubTab, token]);
@@ -6441,7 +6455,13 @@ export default function ProjectPage() {
             scheduledJobs={overviewScheduledJobs}
             titleByArticleId={articleTitlesById}
             selectedIds={selectedIds}
-            gscTotals={analytics?.totals ?? null}
+            gscConnected={Boolean(gscStatus?.connected && (gscStatus?.property_url || "").trim())}
+            gscInsights={gscInsights}
+            aiCitationChecks={aiCitation?.checks ?? []}
+            aiCitationEnginesConfigured={aiCitation?.engines_configured ?? []}
+            aiCitationTrend={aiCitationTrend}
+            aiCitationRunning={aiCitationRunning}
+            onRunAiCitationCheck={() => void runAiCitationCheckNow()}
             loading={overviewLoading}
             lastRefreshedAt={overviewRefreshedAt}
             onRefresh={() => setOverviewRefreshKey((k) => k + 1)}

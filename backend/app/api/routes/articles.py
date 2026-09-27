@@ -32,7 +32,7 @@ import hashlib
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import markdown as md
 from pydantic import BaseModel, Field, ValidationError
@@ -70,6 +70,7 @@ from app.services.article_metadata_suggestion import (
 )
 from app.services.article_selection_rewrite import rewrite_selected_text
 from app.services.article_media_storage import save_article_media
+from app.services.article_pdf_export import render_article_pdf, content_disposition_header
 from app.services.openai_client import OpenAIClient
 from app.services.url_content_extractor import fetch_and_extract_url
 from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
@@ -1796,6 +1797,25 @@ async def get_article_featured_image(
     if not raw:
         raise HTTPException(status_code=404, detail="No featured image for this article")
     return ArticleFeaturedImageResponse(image_url=raw)
+
+
+@router.get("/{article_id}/export/pdf")
+async def export_article_pdf(project_id: str, article_id: str, user: dict = Depends(get_current_user)) -> Response:
+    """One-off, professionally formatted PDF snapshot of a drafted/published
+    article -- title, SEO metadata, featured image, and body. Not plan-gated:
+    unlike the bulk XLSX export (PlanAction.BULK_EXPORT), this is a cheap local
+    render with no LLM/API cost, same cost profile as saving a draft."""
+    st = get_legacy_storage_module()
+    proj = await _require_project_access(st=st, user=user, project_id=project_id)
+    a = await run_sync(call_storage, _get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    if not (a.get("article") or "").strip():
+        raise HTTPException(status_code=400, detail="This article has no content to export yet.")
+    pdf_bytes = await render_article_pdf(project_name=proj.get("name") or "Project", article=a)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": content_disposition_header(proj.get("name"), a.get("title"))},
+    )
 
 
 @router.get("/{article_id}/generation-status", response_model=ArticleGenerationStatusResponse)

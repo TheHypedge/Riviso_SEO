@@ -538,6 +538,36 @@
   color: #9effa0;
 }
 
+/* Registration consent checkbox, shown just above the final submit button */
+.authConsentRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+}
+
+.authConsentRow input[type="checkbox"] {
+  margin-top: 2px;
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--aa-primary);
+  cursor: pointer;
+}
+
+.authConsentRow a {
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.authConsentRow a:hover {
+  color: var(--aa-primary);
+}
+
 /* Forgot-password inline text link below the password field */
 .authForgotRow {
   display: flex;
@@ -10807,6 +10837,65 @@ a.secondary {
   .articlesOverviewPanelsGrid {
     grid-template-columns: 1fr;
   }
+}
+
+.articlesOverviewTrendingGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+@media (max-width: 900px) {
+  .articlesOverviewTrendingGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.articlesOverviewTrendingList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.articlesOverviewTrendingItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.articlesOverviewTrendingItem + .articlesOverviewTrendingItem {
+  border-top: 1px solid var(--aa-hairline);
+}
+
+.articlesOverviewTrendingLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--aa-ink);
+}
+
+.articlesOverviewTrendingValue {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aa-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.articlesOverviewDonutRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.articlesOverviewDonutRow > * {
+  flex: 1;
+  min-width: 260px;
 }
 
 /* -------------------------------------------------------------------------

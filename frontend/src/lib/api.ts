@@ -712,6 +712,15 @@ export type GscInsightsTrafficSource = {
   clicks: number;
 };
 
+export type GscInsightsDevice = {
+  device: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+  share_pct: number;
+};
+
 export type GscInsightsResponse = {
   property_url?: string | null;
   period: { start_date: string; end_date: string; days: number };
@@ -719,11 +728,17 @@ export type GscInsightsResponse = {
   headline: {
     clicks: GscInsightsHeadlineStat;
     impressions: GscInsightsHeadlineStat;
+    ctr: GscInsightsHeadlineStat;
+    position: GscInsightsHeadlineStat;
   };
   pages: GscInsightsPage[];
   queries: GscInsightsQuery[];
   countries: GscInsightsCountry[];
+  devices: GscInsightsDevice[];
   traffic_sources: GscInsightsTrafficSource[];
+  /** Pages submitted via sitemap -- NOT an indexed-pages count (GSC's public API
+   * has no reliable one; see backend project_gsc.py::_sum_submitted_pages). */
+  submitted_pages: number | null;
 };
 
 /* --- Feature 2: Topic Cluster (foundations) ------------------------------ */
@@ -1547,12 +1562,16 @@ export async function downloadWordpressPlugin(downloadPath?: string): Promise<vo
     }
     throw new Error(detail);
   }
+  await _downloadBlobResponse(res, "riviso-content-operations.zip");
+}
+
+async function _downloadBlobResponse(res: Response, fallbackFilename: string): Promise<void> {
   const blob = await res.blob();
   if (!blob.size) {
-    throw new Error("Plugin download was empty. Check that the API server is running.");
+    throw new Error("Download was empty. Check that the API server is running.");
   }
   const cd = res.headers.get("content-disposition") || "";
-  let filename = "riviso-content-operations.zip";
+  let filename = fallbackFilename;
   const quoted = /filename="([^"]+)"/i.exec(cd);
   const plain = /filename=([^;\s]+)/i.exec(cd);
   if (quoted?.[1]) filename = quoted[1];
@@ -1566,6 +1585,28 @@ export async function downloadWordpressPlugin(downloadPath?: string): Promise<vo
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(objectUrl);
+}
+
+export async function downloadArticlePdf(projectId: string, articleId: string): Promise<void> {
+  if (typeof window === "undefined") {
+    throw new Error("PDF export is only available in the browser.");
+  }
+  const res = await fetch(apiUrl(`/api/projects/${projectId}/articles/${articleId}/export/pdf`), {
+    method: "GET",
+    cache: "no-store",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    let detail = `PDF export failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      if (body?.detail) detail = body.detail;
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(detail);
+  }
+  await _downloadBlobResponse(res, "article.pdf");
 }
 
 function apiUrl(path: string) {

@@ -13,6 +13,7 @@ import {
   ArticleDetail,
   ClusterLinkContext,
   clearAuth,
+  downloadArticlePdf,
   getAccessToken,
   invalidateArticleDetailCache,
   PromptListResponse,
@@ -39,6 +40,7 @@ import {
 import { isProjectConnected, resolveProjectPlatform } from "@/lib/projectPlatform";
 import { ConnectPlatformModal } from "@/components/ConnectPlatformModal";
 import { runWithArticlePipelineMonitor } from "@/lib/pipelineStream";
+import { ArticleGenerationProgress } from "@/components/ArticleGenerationProgress";
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
 import { WordPressPageMapPicker } from "@/components/wordpress/WordPressPageMapPicker";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
@@ -362,8 +364,14 @@ export default function ArticleEditPage() {
 
   const [contentLoading, setContentLoading] = useState(true);
   const [bodyLoading, setBodyLoading] = useState(true);
+  // True whenever this article's generation is running somewhere other than a
+  // button click in this tab -- opened mid-generation, or started elsewhere
+  // (Articles list, a scheduled job, another tab) while this tab sits open.
+  const [backgroundGenerating, setBackgroundGenerating] = useState(false);
+  const ownGenerationInFlightRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [errorCanRetry, setErrorCanRetry] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   type NoticeTone = "success" | "warning" | "danger";
   const [noticeState, setNoticeState] = useState<{ text: string; tone: NoticeTone } | null>(null);
@@ -494,6 +502,14 @@ export default function ArticleEditPage() {
   const shopifyProductAware = Boolean(projectSettings?.shopify_product_aware_enabled);
   const wpInternalLinkAware = Boolean(projectSettings?.wp_internal_link_aware_enabled);
   const websiteConnected = isProjectConnected(projectPlatform ?? "wordpress", projectSettings);
+  // Project settings load in parallel with the article shell/body, on a slower
+  // request (full project doc vs. the lean editor shell) -- so on a first cold
+  // page load, `projectSettings` is briefly null and `websiteConnected` false
+  // by default. Gate the "Connect Website to Publish" CTA on settings having
+  // actually loaded so an already-connected project never flashes it; the
+  // backend independently rejects publish/update on an unconnected site, so
+  // showing "Publish" optimistically during that brief window is safe.
+  const projectSettingsLoaded = projectSettings != null;
 
   const [editorRevision, setEditorRevision] = useState(0);
   const [contextTab, setContextTab] = useState<ContextTab>("seo_score");
@@ -889,6 +905,10 @@ export default function ArticleEditPage() {
         const shell = shellResult.value;
         hydrateEditorShell(shell);
         setContentLoading(false);
+        const shellGenStatus = (shell.status || "").trim().toLowerCase();
+        if (shellGenStatus === "queued" || shellGenStatus === "generating") {
+          setBackgroundGenerating(true);
+        }
 
         if (bodyResult.status === "fulfilled") {
           applyArticleBody(bodyResult.value.article || "", shell);
@@ -967,6 +987,42 @@ export default function ArticleEditPage() {
     loadAttempt,
     setNotice,
   ]);
+
+  function handleBackgroundGenerationComplete(refreshed: ArticleDetail) {
+    setArticle(refreshed);
+    hydrateEditorFromArticle(refreshed);
+    writeArticleEditorCache(params.projectId, params.articleId, refreshed);
+    setBackgroundGenerating(false);
+    setNotice("Article generation complete!");
+  }
+
+  function handleBackgroundGenerationError(message: string) {
+    setBackgroundGenerating(false);
+    setError(message);
+  }
+
+  // Notice generation that starts elsewhere (Articles list, a scheduled job,
+  // another tab) while this editor tab is already open and idle -- mirrors
+  // the Articles list page's own "hasGeneratingArticles" polling precedent
+  // (plain status check, paused while the tab isn't visible) rather than a
+  // new mechanism. Skipped while this tab's own doGenerate() is already
+  // driving a request, and stops once backgroundGenerating takes over.
+  useEffect(() => {
+    if (!token || !editorPath || backgroundGenerating) return;
+    const id = window.setInterval(() => {
+      if (document.hidden || ownGenerationInFlightRef.current || backgroundGenerating) return;
+      void api
+        .getArticleGenerationStatus(params.projectId, params.articleId, { skipGlobalLoading: true })
+        .then((status) => {
+          const s = (status.status || "").trim().toLowerCase();
+          if (s === "queued" || s === "generating") setBackgroundGenerating(true);
+        })
+        .catch(() => {
+          /* transient poll failure -- try again next tick */
+        });
+    }, 12_000);
+    return () => window.clearInterval(id);
+  }, [token, editorPath, backgroundGenerating, params.projectId, params.articleId]);
 
   // Keep publish status aligned with WordPress when editing a linked post.
   useEffect(() => {
@@ -1270,6 +1326,7 @@ export default function ArticleEditPage() {
     }
     setError(null);
     setNotice(null);
+    ownGenerationInFlightRef.current = true;
     try {
       await runWithArticlePipelineMonitor(
         params.projectId,
@@ -1359,6 +1416,8 @@ export default function ArticleEditPage() {
         connectionErrorMessage(e) ||
           (opts?.regenerate ? "Regenerate request failed" : "Generate request failed"),
       );
+    } finally {
+      ownGenerationInFlightRef.current = false;
     }
   }
 
@@ -1703,6 +1762,18 @@ export default function ArticleEditPage() {
     params.projectId,
     params.articleId,
   ]);
+
+  async function exportPdf() {
+    if (!body.trim() || exportingPdf) return;
+    setExportingPdf(true);
+    try {
+      await downloadArticlePdf(params.projectId, params.articleId);
+    } catch (e) {
+      setNotice(connectionErrorMessage(e), "danger");
+    } finally {
+      setExportingPdf(false);
+    }
+  }
 
   async function copyArticleMarkdown() {
     const md = (body || "").trim();
@@ -2187,12 +2258,15 @@ export default function ArticleEditPage() {
                 ) : null}
               </div>
               <div className={editorStyles.commandBarActions}>
+                <button type="button" className={styles.btnSecondary} onClick={exportPdf} disabled={!body.trim() || exportingPdf}>
+                  {exportingPdf ? "Exporting…" : "Export PDF"}
+                </button>
                 {isDirty ? (
                   <button type="button" className={styles.btnSecondary} onClick={save} disabled={editorLocked}>
                     Save draft
                   </button>
                 ) : null}
-                {isShopifyProject && !websiteConnected ? (
+                {isShopifyProject && !websiteConnected && projectSettingsLoaded ? (
                   <button type="button" className={styles.button} onClick={() => setConnectModalOpen(true)}>
                     Connect Website to Publish
                   </button>
@@ -2204,7 +2278,7 @@ export default function ArticleEditPage() {
                   <button type="button" className={styles.button} onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}>
                     {wpUpdateBusy ? "Updating…" : "Update article"}
                   </button>
-                ) : showPublishWordPress && !websiteConnected ? (
+                ) : showPublishWordPress && !websiteConnected && projectSettingsLoaded ? (
                   <button type="button" className={styles.button} onClick={() => setConnectModalOpen(true)}>
                     Connect Website to Publish
                   </button>
@@ -2278,14 +2352,23 @@ export default function ArticleEditPage() {
             <div className={editorStyles.editorColInner}>
               <div className={editorStyles.editorSurface}>
                 <div className={editorStyles.editorBody}>
-                  {bodyLoading ? (
+                  {backgroundGenerating ? (
+                    <ArticleGenerationProgress
+                      projectId={params.projectId}
+                      articleId={params.articleId}
+                      expectImage={!!article?.generate_image}
+                      previousGeneratedAt={article?.generated_at ?? null}
+                      onComplete={handleBackgroundGenerationComplete}
+                      onError={handleBackgroundGenerationError}
+                    />
+                  ) : bodyLoading ? (
                     <ArticleEditorSkeleton bodyOnly />
                   ) : editorLocked ? (
                     <ArticleReadonlyBody key={editorRevision} markdown={body} />
                   ) : (
                     <ArticleRichEditor key={editorRevision} contentRevision={editorRevision} value={body} onChange={setBody} onEditorReady={onEditorReady} />
                   )}
-                  {!editorLocked && !bodyLoading && tiptapEditor ? (
+                  {!editorLocked && !bodyLoading && !backgroundGenerating && tiptapEditor ? (
                     <SelectionAiRegenerate
                       editor={tiptapEditor}
                       projectId={params.projectId}
@@ -2594,7 +2677,7 @@ export default function ArticleEditPage() {
                   <div className={editorStyles.panelSection}>
                     <h3 className={editorStyles.panelSectionTitle}>{isShopifyProject ? "Shopify" : "WordPress"}</h3>
                     <p className={editorStyles.wpCardDesc}>
-                      {!websiteConnected
+                      {!websiteConnected && projectSettingsLoaded
                         ? "Connect your website to publish."
                         : isShopifyProject
                           ? shopifyLink ? "This article is on Shopify." : "Post directly to your Shopify blog."
@@ -2604,7 +2687,7 @@ export default function ArticleEditPage() {
                           : "Connect WordPress to publish."}
                     </p>
                     <div className={editorStyles.wpActions}>
-                      {isShopifyProject && !websiteConnected ? (
+                      {isShopifyProject && !websiteConnected && projectSettingsLoaded ? (
                         <button className={styles.button} type="button" onClick={() => setConnectModalOpen(true)}>
                           Connect Website to Publish
                         </button>
@@ -2619,7 +2702,7 @@ export default function ArticleEditPage() {
                         <>
                           {showUpdateWordPress ? (
                             <button className={styles.button} type="button" onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}>{wpUpdateBusy ? "Updating…" : "Update article"}</button>
-                          ) : showPublishWordPress && !websiteConnected ? (
+                          ) : showPublishWordPress && !websiteConnected && projectSettingsLoaded ? (
                             <button className={styles.button} type="button" onClick={() => setConnectModalOpen(true)}>Connect Website to Publish</button>
                           ) : showPublishWordPress ? (
                             <button className={styles.button} type="button" onClick={publishToLiveSite} disabled={!canPublish || wpPushBusy}>{wpPublishBusy ? "Publishing…" : "Publish article"}</button>

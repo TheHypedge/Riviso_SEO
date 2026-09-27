@@ -16,6 +16,8 @@ export type { GaugeProps, GaugeStatus } from "./Gauge";
 export { DonutChart } from "./DonutChart";
 export type { DonutChartProps, DonutSegment } from "./DonutChart";
 
+export { BreakdownDonut } from "./BreakdownDonut";
+
 export { BarRow } from "./BarRow";
 export type { BarRowProps } from "./BarRow";
 

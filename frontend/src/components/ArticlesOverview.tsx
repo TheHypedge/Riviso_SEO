@@ -3,10 +3,19 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { AiCitationSummary, AiCitationTrendChart } from "@/components/AiCitationResults";
 import { OverviewReadinessGate } from "@/components/OverviewReadinessGate";
 import { ProjectActivityChart } from "@/components/ProjectActivityChart";
 import { OverviewPageSkeleton } from "@/components/skeleton";
-import type { ArticlePublic, GscAnalyticsTotals, ScheduledJobPublic } from "@/lib/api";
+import { BreakdownDonut } from "@/components/ui";
+import type {
+  AiCitationCheck,
+  AiCitationEngine,
+  AiCitationTrendPoint,
+  ArticlePublic,
+  GscInsightsResponse,
+  ScheduledJobPublic,
+} from "@/lib/api";
 import { articleEditorPath } from "@/lib/articlePaths";
 import { evaluateProjectOverviewReadiness } from "@/lib/overviewReadiness";
 import {
@@ -27,6 +36,52 @@ const RANGE_OPTIONS: { days: ArticlesOverviewRange; label: string; ariaLabel: st
   { days: 28, label: "28D", ariaLabel: "Last 28 days" },
   { days: 90, label: "3M", ariaLabel: "Last 3 months" },
 ];
+
+// Data-viz palette for the country donut -- not semantic status colors, so plain
+// hex rather than the --aa-success/error tokens used elsewhere in this file.
+const COUNTRY_PALETTE = ["#e15a2c", "#4a90d9", "#5db872", "#d4a017", "#8a6fd1", "#a09d96"];
+
+const DEVICE_SEGMENTS: { key: string; label: string; color: string }[] = [
+  { key: "DESKTOP", label: "Desktop", color: "#4a90d9" },
+  { key: "MOBILE", label: "Mobile", color: "#e15a2c" },
+  { key: "TABLET", label: "Tablet", color: "#5db872" },
+];
+
+function formatCtr(v: number): string {
+  return `${(v * 100).toFixed(1)}%`;
+}
+
+function formatPosition(v: number): string {
+  return v.toFixed(1);
+}
+
+/** Shortens a GSC page URL to its path for compact display in a ranked list. */
+function formatPageLabel(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.pathname === "/" ? "/ (homepage)" : u.pathname;
+  } catch {
+    return url;
+  }
+}
+
+/** clicks/impressions/ctr: higher is better. position: lower is better -- callers
+ * pass `invert: true` so a decrease still renders as the "up"/good arrow. */
+function trendDirection(changePct: number | null, invert = false): "up" | "down" | "flat" {
+  if (changePct === null || changePct === 0) return "flat";
+  const positive = changePct > 0;
+  return (invert ? !positive : positive) ? "up" : "down";
+}
+
+function TrendChip({ styles, changePct, invert }: { styles: Record<string, string>; changePct: number | null; invert?: boolean }) {
+  if (changePct === null) return null;
+  const dir = trendDirection(changePct, invert);
+  return (
+    <span className={styles.articlesOverviewStatDelta} data-trend={dir}>
+      {dir === "up" ? "▲" : dir === "down" ? "▼" : "—"} {Math.abs(changePct)}%
+    </span>
+  );
+}
 
 function useLastUpdatedLabel(ts: number | null | undefined): string {
   const [label, setLabel] = useState("—");
@@ -144,7 +199,13 @@ type ArticlesOverviewProps = {
   scheduledJobs: ScheduledJobPublic[];
   titleByArticleId: Record<string, string>;
   selectedIds: string[];
-  gscTotals?: GscAnalyticsTotals | null;
+  gscConnected?: boolean;
+  gscInsights?: GscInsightsResponse | null;
+  aiCitationChecks?: AiCitationCheck[];
+  aiCitationEnginesConfigured?: AiCitationEngine[];
+  aiCitationTrend?: AiCitationTrendPoint[];
+  aiCitationRunning?: boolean;
+  onRunAiCitationCheck?: () => void;
   loading?: boolean;
   lastRefreshedAt?: number | null;
   onViewList: (status?: string) => void;
@@ -159,7 +220,13 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
     scheduledJobs,
     titleByArticleId,
     loading,
-    gscTotals,
+    gscConnected,
+    gscInsights,
+    aiCitationChecks = [],
+    aiCitationEnginesConfigured = [],
+    aiCitationTrend = [],
+    aiCitationRunning,
+    onRunAiCitationCheck,
     lastRefreshedAt,
     onViewList,
     onRefresh,
@@ -197,6 +264,29 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
   );
 
   const insights = useMemo(() => computeInsights(articles, chartRange), [articles, chartRange]);
+
+  const countryBreakdown = useMemo(() => {
+    const countries = gscInsights?.countries || [];
+    const top = countries.slice(0, 5);
+    const other = countries.slice(5).reduce((sum, c) => sum + c.clicks, 0);
+    const segments = top.map((c, i) => ({
+      key: c.country_code,
+      label: `${c.flag ? `${c.flag} ` : ""}${c.country_name}`,
+      color: COUNTRY_PALETTE[i % COUNTRY_PALETTE.length],
+    }));
+    const values: Record<string, number> = Object.fromEntries(top.map((c) => [c.country_code, c.clicks]));
+    if (other > 0) {
+      segments.push({ key: "other", label: "Other", color: COUNTRY_PALETTE[COUNTRY_PALETTE.length - 1] });
+      values.other = other;
+    }
+    return { segments, values };
+  }, [gscInsights]);
+
+  const deviceValues = useMemo(() => {
+    const values: Record<string, number> = {};
+    for (const d of gscInsights?.devices || []) values[d.device] = d.clicks;
+    return values;
+  }, [gscInsights]);
 
   const upcoming = useMemo(
     () => upcomingScheduledItems(scheduledJobs, titleByArticleId, 5),
@@ -281,8 +371,6 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
       />
     );
   }
-
-  const hasGsc = Boolean(gscTotals && (gscTotals.clicks > 0 || gscTotals.impressions > 0));
 
   return (
     <div className={styles.articlesOverviewShell}>
@@ -406,56 +494,145 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
           </div>
         </section>
 
-        {/* ── Project / integration summary ── */}
-        <section className={styles.articlesOverviewSection} aria-labelledby="overview-summary-label">
-          <div id="overview-summary-label" className={styles.articlesOverviewSectionLabel} aria-hidden="true">All time</div>
-          <div className={styles.articlesOverviewSummaryPanel}>
-            <div className={styles.articlesOverviewSummaryStats} role="list" aria-label="All-time project totals">
-              <div className={styles.articlesOverviewSummaryStat} role="listitem">
-                <span className={styles.articlesOverviewSummaryValue}>{stats.totalPublished.toLocaleString()}</span>
-                <span className={styles.articlesOverviewSummaryLabel}>Published</span>
+        {/* ── Search Performance (Google Search Console) ── */}
+        <section className={styles.articlesOverviewSection} aria-labelledby="overview-gsc-label">
+          <div id="overview-gsc-label" className={styles.articlesOverviewSectionLabel} aria-hidden="true">Search Performance</div>
+          {!gscConnected ? (
+            <div className={styles.articlesOverviewGscPrompt}>
+              <div className={styles.articlesOverviewGscPromptText}>
+                <span className={styles.articlesOverviewGscPromptTitle}>Search Console not connected</span>
+                <p className={styles.articlesOverviewGscPromptBody}>
+                  Connect Google Search Console to see clicks, impressions, and average position for this project.
+                </p>
               </div>
-              <div className={styles.articlesOverviewSummaryStat} role="listitem">
-                <span className={styles.articlesOverviewSummaryValue}>{stats.total.toLocaleString()}</span>
-                <span className={styles.articlesOverviewSummaryLabel}>Total articles</span>
-              </div>
-              {hasGsc ? (
-                <>
-                  <div className={styles.articlesOverviewSummaryStat} role="listitem">
-                    <span className={styles.articlesOverviewSummaryValue}>{(gscTotals!.clicks ?? 0).toLocaleString()}</span>
-                    <span className={styles.articlesOverviewSummaryLabel}>Clicks (28d)</span>
-                  </div>
-                  <div className={styles.articlesOverviewSummaryStat} role="listitem">
-                    <span className={styles.articlesOverviewSummaryValue}>{(gscTotals!.impressions ?? 0).toLocaleString()}</span>
-                    <span className={styles.articlesOverviewSummaryLabel}>Impressions (28d)</span>
-                  </div>
-                  <div className={styles.articlesOverviewSummaryStat} role="listitem">
-                    <span className={styles.articlesOverviewSummaryValue}>
-                      {gscTotals!.ctr != null ? `${(gscTotals!.ctr * 100).toFixed(1)}%` : "—"}
-                    </span>
-                    <span className={styles.articlesOverviewSummaryLabel}>Avg CTR (28d)</span>
-                  </div>
-                </>
-              ) : null}
+              <Link href={`/projects/${projectId}?tab=project_settings`} className={styles.articlesOverviewGscPromptLink}>
+                Connect Search Console
+              </Link>
             </div>
-
-            {!hasGsc ? (
-              <div className={styles.articlesOverviewGscPrompt}>
-                <div className={styles.articlesOverviewGscPromptText}>
-                  <span className={styles.articlesOverviewGscPromptTitle}>Search Console not connected</span>
-                  <p className={styles.articlesOverviewGscPromptBody}>
-                    Connect Google Search Console to see clicks, impressions, and average position for this project.
-                  </p>
+          ) : gscInsights ? (
+            <>
+              <div className={styles.articlesOverviewStatGrid} role="list" aria-label="Search performance, last 28 days">
+                <div className={styles.articlesOverviewStatCard} style={{ ["--stat-i" as string]: 0 }} role="listitem">
+                  <span className={styles.articlesOverviewStatValue}>{gscInsights.headline.clicks.value.toLocaleString()}</span>
+                  <span className={styles.articlesOverviewStatLabel}>Total clicks</span>
+                  <TrendChip styles={styles} changePct={gscInsights.headline.clicks.change_pct} />
                 </div>
-                <Link
-                  href={`/projects/${projectId}?tab=project_settings`}
-                  className={styles.articlesOverviewGscPromptLink}
-                >
-                  Connect Search Console
+                <div className={styles.articlesOverviewStatCard} style={{ ["--stat-i" as string]: 1 }} role="listitem">
+                  <span className={styles.articlesOverviewStatValue}>{gscInsights.headline.impressions.value.toLocaleString()}</span>
+                  <span className={styles.articlesOverviewStatLabel}>Impressions</span>
+                  <TrendChip styles={styles} changePct={gscInsights.headline.impressions.change_pct} />
+                </div>
+                <div className={styles.articlesOverviewStatCard} style={{ ["--stat-i" as string]: 2 }} role="listitem">
+                  <span className={styles.articlesOverviewStatValue}>{formatCtr(gscInsights.headline.ctr.value)}</span>
+                  <span className={styles.articlesOverviewStatLabel}>Avg CTR</span>
+                  <TrendChip styles={styles} changePct={gscInsights.headline.ctr.change_pct} />
+                </div>
+                <div className={styles.articlesOverviewStatCard} style={{ ["--stat-i" as string]: 3 }} role="listitem">
+                  <span className={styles.articlesOverviewStatValue}>{formatPosition(gscInsights.headline.position.value)}</span>
+                  <span className={styles.articlesOverviewStatLabel}>Avg position</span>
+                  <TrendChip styles={styles} changePct={gscInsights.headline.position.change_pct} invert />
+                </div>
+                {gscInsights.submitted_pages != null ? (
+                  <div className={styles.articlesOverviewStatCard} style={{ ["--stat-i" as string]: 4 }} role="listitem">
+                    <span className={styles.articlesOverviewStatValue}>{gscInsights.submitted_pages.toLocaleString()}</span>
+                    <span className={styles.articlesOverviewStatLabel}>Pages submitted</span>
+                    <span className={styles.articlesOverviewStatSub}>Via sitemap</span>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className={styles.articlesOverviewTrendingGrid}>
+                <div className={styles.articlesOverviewPanel}>
+                  <header className={styles.articlesOverviewPanelHead}>
+                    <h3 className={styles.articlesOverviewPanelTitle}>Trending pages</h3>
+                  </header>
+                  <ul className={styles.articlesOverviewTrendingList}>
+                    {gscInsights.pages.length === 0 ? (
+                      <li className={styles.articlesOverviewListEmpty}>No page clicks in this period.</li>
+                    ) : (
+                      gscInsights.pages.slice(0, 5).map((p) => (
+                        <li key={p.page} className={styles.articlesOverviewTrendingItem}>
+                          <span className={styles.articlesOverviewTrendingLabel} title={p.page}>{formatPageLabel(p.page)}</span>
+                          <span className={styles.articlesOverviewTrendingValue}>{p.clicks.toLocaleString()}</span>
+                          <TrendChip styles={styles} changePct={p.change_pct} />
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </div>
+                <div className={styles.articlesOverviewPanel}>
+                  <header className={styles.articlesOverviewPanelHead}>
+                    <h3 className={styles.articlesOverviewPanelTitle}>Trending queries</h3>
+                  </header>
+                  <ul className={styles.articlesOverviewTrendingList}>
+                    {gscInsights.queries.length === 0 ? (
+                      <li className={styles.articlesOverviewListEmpty}>No query clicks in this period.</li>
+                    ) : (
+                      gscInsights.queries.slice(0, 5).map((q) => (
+                        <li key={q.query} className={styles.articlesOverviewTrendingItem}>
+                          <span className={styles.articlesOverviewTrendingLabel} title={q.query}>{q.query}</span>
+                          <span className={styles.articlesOverviewTrendingValue}>{q.clicks.toLocaleString()}</span>
+                          <TrendChip styles={styles} changePct={q.change_pct} />
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </div>
+              </div>
+
+              <div className={styles.articlesOverviewDonutRow}>
+                <BreakdownDonut
+                  title="Clicks by Country"
+                  centerUnitLabel="Clicks"
+                  segments={countryBreakdown.segments}
+                  values={countryBreakdown.values}
+                  styles={styles}
+                />
+                <BreakdownDonut
+                  title="Clicks by Device"
+                  centerUnitLabel="Clicks"
+                  segments={DEVICE_SEGMENTS}
+                  values={deviceValues}
+                  styles={styles}
+                />
+              </div>
+            </>
+          ) : null}
+        </section>
+
+        {/* ── AI Generative Visibility (AI Citation tracking) ── */}
+        <section className={styles.articlesOverviewSection} aria-labelledby="overview-ai-citation-label">
+          <div id="overview-ai-citation-label" className={styles.articlesOverviewSectionLabel} aria-hidden="true">AI Generative Visibility</div>
+          {aiCitationEnginesConfigured.length === 0 ? (
+            <p className={styles.muted} style={{ fontSize: 13 }}>
+              AI citation checking isn&apos;t configured for this deployment yet.
+            </p>
+          ) : aiCitationChecks.length === 0 ? (
+            <div className={styles.articlesOverviewGscPrompt}>
+              <div className={styles.articlesOverviewGscPromptText}>
+                <span className={styles.articlesOverviewGscPromptTitle}>No AI citation checks yet</span>
+                <p className={styles.articlesOverviewGscPromptBody}>
+                  Check whether your brand gets cited by ChatGPT, Perplexity, Gemini, and Google AI Overview for your topics.
+                </p>
+              </div>
+              <button type="button" className={styles.button} onClick={onRunAiCitationCheck} disabled={aiCitationRunning}>
+                {aiCitationRunning ? "Checking…" : "Run AI Citation Check"}
+              </button>
+            </div>
+          ) : (
+            <>
+              <AiCitationSummary checks={aiCitationChecks} styles={styles} />
+              <AiCitationTrendChart points={aiCitationTrend} styles={styles} />
+              <div className={styles.row} style={{ marginTop: 12 }}>
+                <button type="button" className={styles.btnSecondary} onClick={onRunAiCitationCheck} disabled={aiCitationRunning}>
+                  {aiCitationRunning ? "Checking…" : "Run check again"}
+                </button>
+                <Link href={`/projects/${projectId}?tab=site_audit`} className={styles.articlesOverviewGscPromptLink}>
+                  View full AI Citation history →
                 </Link>
               </div>
-            ) : null}
-          </div>
+            </>
+          )}
         </section>
 
         {/* ── Publishing activity ── */}
