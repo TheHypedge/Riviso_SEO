@@ -518,10 +518,22 @@ async def check_article_sync(wp: WordpressClient, article: dict) -> dict:
     return updates
 
 
-def _build_wp_meta_payload(article: dict) -> dict:
+def build_wp_seo_meta_payload(article: dict) -> dict:
+    """Single, shared builder for the WordPress ``meta`` payload sent on every publish
+    path (immediate publish, scheduled publish, sync-repair) -- sets Yoast, Rank Math,
+    and AIOSEO's own meta keys directly so SEO data lands correctly regardless of which
+    plugin the target site runs, independent of the connector plugin's own translation
+    (which the RivisoSEO connector plugin, when installed, does too -- this is
+    defense-in-depth for the fallback core wp/v2 REST path used when it isn't).
+
+    Rank Math's real meta keys have no leading underscore (rank_math_title, etc.) --
+    unlike Yoast's; verified against Rank Math's own docs, see connector.php's matching
+    fix for the same historical bug.
+    """
     meta: dict = {}
     meta_title = (article.get("meta_title") or "").strip()
     meta_desc = (article.get("meta_description") or "").strip()
+    focus_kw = (article.get("focus_keyphrase") or "").strip()
     canonical = (article.get("wp_link") or "").strip()
     if meta_title:
         meta.update({
@@ -535,8 +547,16 @@ def _build_wp_meta_payload(article: dict) -> dict:
             "rank_math_description": meta_desc,
             "_aioseo_description": meta_desc,
         })
+    if focus_kw:
+        meta.update({
+            "_yoast_wpseo_focuskw": focus_kw,
+            "rank_math_focus_keyword": focus_kw,
+        })
     if canonical:
-        meta["_yoast_wpseo_canonical"] = canonical
+        meta.update({
+            "_yoast_wpseo_canonical": canonical,
+            "rank_math_canonical_url": canonical,
+        })
     return meta
 
 
@@ -565,7 +585,7 @@ async def repair_article_issue(wp: WordpressClient, article: dict, issue: str) -
 
     if issue == SYNC_MISSING:
         # Re-publish the article from scratch
-        meta = _build_wp_meta_payload(article)
+        meta = build_wp_seo_meta_payload(article)
         featured_media_id = await resolve_featured_media_id(wp, article, timeout=60.0)
         cat_ids = [int(x) for x in (article.get("wp_category_ids") or "").split(",") if x.strip().isdigit()]
         payload: dict = {
@@ -608,7 +628,7 @@ async def repair_article_issue(wp: WordpressClient, article: dict, issue: str) -
         return {"ok": True, "operation": "slug_restored"}
 
     if issue == SYNC_METADATA_MISMATCH:
-        meta = _build_wp_meta_payload(article)
+        meta = build_wp_seo_meta_payload(article)
         if not meta:
             return {"ok": True, "operation": "sync_metadata", "error": "No metadata to push"}
         await update_post_on_wordpress(

@@ -18,7 +18,8 @@ type TabKey =
   | "tools"
   | "site_audit"
   | "members"
-  | "project_settings";
+  | "project_settings"
+  | "social";
 
 const TAB_LABELS: Record<TabKey, string> = {
   overview: "Overview",
@@ -31,6 +32,7 @@ const TAB_LABELS: Record<TabKey, string> = {
   site_audit: "Site Audit",
   members: "Members",
   project_settings: "Project Settings",
+  social: "Social",
 };
 
 const DEFAULT_TAB_ORDER: TabKey[] = [
@@ -41,6 +43,7 @@ const DEFAULT_TAB_ORDER: TabKey[] = [
   "prompts",
   "context_links",
   "tools",
+  "social",
   "site_audit",
   "members",
   "project_settings",
@@ -51,7 +54,7 @@ const DEFAULT_TAB_ORDER: TabKey[] = [
  * (projects/[projectId]/page.tsx) -- this sidebar must stay in sync with that
  * one since Figma shows the identical left rail on every screen. */
 const NAV_GROUPS: { label: string; tabs: TabKey[] }[] = [
-  { label: "Content", tabs: ["overview", "articles", "research", "scheduled_articles", "prompts", "context_links"] },
+  { label: "Content", tabs: ["overview", "articles", "research", "scheduled_articles", "prompts", "context_links", "social"] },
   { label: "Workspace", tabs: ["tools", "site_audit", "members", "project_settings"] },
 ];
 

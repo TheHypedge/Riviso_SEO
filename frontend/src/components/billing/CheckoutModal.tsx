@@ -8,7 +8,7 @@ import { api, ApiError, type PlanSummary, type SubscriptionStatusPublic } from "
 import { connectionErrorMessage } from "@/lib/networkErrors";
 import { useSubscription } from "@/components/subscription/SubscriptionProvider";
 import { useRazorpayScript } from "@/lib/useRazorpayScript";
-import { PlanPicker } from "./PlanPicker";
+import { CheckIcon, PlanPicker } from "./PlanPicker";
 
 /** Remembered across a reload/tab-close so a background check can recover the outcome
  * of a payment whose client-side confirmation never arrived -- see SubscriptionProvider. */
@@ -165,6 +165,20 @@ export function CheckoutModal({
       setStep("failed");
     });
     rzp.open();
+    // Radix Dialog sets `pointer-events: none` on <body> while open, to force all
+    // interaction through its own portalled content. Razorpay's widget is injected as
+    // a sibling directly onto <body> by its own script (not inside our Dialog's
+    // portal), so it inherits that dead zone -- the widget renders on top and looks
+    // fine, but nothing in it is clickable. This is a documented Radix + third-party
+    // widget interaction (radix-ui/primitives#2122), not something Razorpay or our
+    // own dialog content is doing wrong. Our modal's own content stays interactive
+    // regardless (Radix scopes an explicit pointer-events:auto override onto its own
+    // portal), so restoring body-level pointer-events here only un-blocks Razorpay's
+    // sibling overlay -- it doesn't affect our modal's own click-outside-to-close
+    // semantics for the "confirm" step that already ran before this point.
+    window.requestAnimationFrame(() => {
+      document.body.style.pointerEvents = "auto";
+    });
   }, [selectedPlan, agreed, ensureLoaded, prefillEmail, refreshSubscription]);
 
   const retry = useCallback(() => {
@@ -175,6 +189,7 @@ export function CheckoutModal({
   return (
     <Dialog open={open} onOpenChange={(next) => !next && !locked && onClose()}>
       <DialogContent
+        size={step === "pick" ? "lg" : "md"}
         showClose={!locked}
         onEscapeKeyDown={(e) => locked && e.preventDefault()}
         onPointerDownOutside={(e) => locked && e.preventDefault()}
@@ -201,16 +216,34 @@ export function CheckoutModal({
               <p className="text-sm text-ink-secondary">Loading plan details…</p>
             ) : (
               <>
-                <div className="mb-4 font-sans text-2xl font-bold text-ink">
-                  {formatInr(selectedPlan.cost_monthly)}
-                  <span className="text-sm font-normal text-ink-secondary"> / month</span>
+                <div className="mb-4 rounded-md border border-border bg-surface-sunken p-4">
+                  <div className="font-sans text-3xl font-bold text-ink">
+                    {formatInr(selectedPlan.cost_monthly)}
+                    <span className="text-sm font-normal text-ink-secondary"> / month</span>
+                  </div>
+                  <ul className="mt-3 flex flex-col gap-1.5">
+                    <li className="flex items-start gap-2 font-sans text-sm text-ink-secondary">
+                      <CheckIcon />
+                      <span>{selectedPlan.max_projects ? `${selectedPlan.max_projects} projects` : "Unlimited projects"}</span>
+                    </li>
+                    <li className="flex items-start gap-2 font-sans text-sm text-ink-secondary">
+                      <CheckIcon />
+                      <span>{selectedPlan.max_articles_per_month ? `${selectedPlan.max_articles_per_month} articles / month` : "Unlimited articles"}</span>
+                    </li>
+                    {selectedPlan.allow_scheduling ? (
+                      <li className="flex items-start gap-2 font-sans text-sm text-ink-secondary">
+                        <CheckIcon />
+                        <span>Scheduled publishing</span>
+                      </li>
+                    ) : null}
+                    {selectedPlan.allow_export ? (
+                      <li className="flex items-start gap-2 font-sans text-sm text-ink-secondary">
+                        <CheckIcon />
+                        <span>Bulk export</span>
+                      </li>
+                    ) : null}
+                  </ul>
                 </div>
-                <ul className="mb-4 flex flex-col gap-1.5 font-sans text-sm text-ink-secondary">
-                  <li>✓ {selectedPlan.max_projects ? `${selectedPlan.max_projects} projects` : "Unlimited projects"}</li>
-                  <li>✓ {selectedPlan.max_articles_per_month ? `${selectedPlan.max_articles_per_month} articles / month` : "Unlimited articles"}</li>
-                  {selectedPlan.allow_scheduling ? <li>✓ Scheduling</li> : null}
-                  {selectedPlan.allow_export ? <li>✓ Bulk export</li> : null}
-                </ul>
                 <label className="mb-4 flex items-start gap-2 font-sans text-xs text-ink-secondary">
                   <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-0.5" required />
                   <span>

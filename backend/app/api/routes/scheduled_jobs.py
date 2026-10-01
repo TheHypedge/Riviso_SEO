@@ -233,6 +233,10 @@ def _to_public(row: dict) -> ScheduledJobPublic:
         updated_at=(row.get("updated_at") or "").strip() or None,
         wp_post_id=(str(row.get("wp_post_id") or "").strip() or None),
         wp_link=(row.get("wp_link") or "").strip() or None,
+        platform=(row.get("platform") or "wordpress").strip() or "wordpress",
+        linkedin_commentary=(row.get("linkedin_commentary") or "").strip() or None,
+        linkedin_post_urn=(row.get("linkedin_post_urn") or "").strip() or None,
+        linkedin_post_url=(row.get("linkedin_post_url") or "").strip() or None,
     )
 
 def _cleared_article_schedule_fields() -> dict:

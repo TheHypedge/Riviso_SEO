@@ -24,16 +24,28 @@ DialogOverlay.displayName = "DialogOverlay";
 
 export interface DialogContentProps extends ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
   showClose?: boolean;
+  /** "md" (default, max-w-md) is right for a single confirm/status step; "lg" (max-w-2xl)
+   * gives multi-card content (e.g. a plan picker) room to breathe. Kept as a fixed enum
+   * rather than a raw className override -- cn() here is plain concatenation with no
+   * tailwind-merge, so two conflicting max-w-* classes on the same element would silently
+   * race instead of one cleanly winning. */
+  size?: "md" | "lg";
 }
 
+const SIZE_CLASSES: Record<NonNullable<DialogContentProps["size"]>, string> = {
+  md: "max-w-md",
+  lg: "max-w-2xl",
+};
+
 export const DialogContent = forwardRef<ElementRef<typeof DialogPrimitive.Content>, DialogContentProps>(
-  ({ className, children, showClose = true, ...rest }, ref) => (
+  ({ className, children, showClose = true, size = "md", ...rest }, ref) => (
     <DialogPrimitive.Portal>
       <DialogOverlay />
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
-          "fixed left-1/2 top-1/2 z-[var(--z-modal)] w-full max-w-md -translate-x-1/2 -translate-y-1/2",
+          "fixed left-1/2 top-1/2 z-[var(--z-modal)] w-full -translate-x-1/2 -translate-y-1/2",
+          SIZE_CLASSES[size],
           "rounded-lg border border-border bg-surface p-5 shadow-md font-sans",
           "focus:outline-none",
           className,

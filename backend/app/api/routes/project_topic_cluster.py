@@ -185,6 +185,12 @@ class TopicClusterGenerateAllPayload(BaseModel):
     writing_prompt_id: str | None = Field(default=None, max_length=64)
     image_prompt_id: str | None = Field(default=None, max_length=64)
     topic_ids: list[str] | None = Field(default=None, max_length=20)
+    post_type: str | None = Field(
+        default=None, max_length=200, description="WordPress post type to store as each generated article's default."
+    )
+    wp_status: str | None = Field(
+        default=None, max_length=16, description="WordPress status (draft|publish) to store as each generated article's default."
+    )
     mapped_products: list[MappedShopifyProductInput] | None = Field(
         default=None,
         max_length=12,
@@ -208,11 +214,21 @@ async def generate_all(
     cid = (cluster_id or "").strip()
     uid = (user.get("id") or "").strip()
 
+    post_type_norm: str | None = None
+    wp_status_norm: str | None = None
+    if body.post_type or body.wp_status:
+        wp_status_norm = (body.wp_status or "draft").strip().lower()
+        if wp_status_norm not in {"draft", "publish"}:
+            raise HTTPException(status_code=400, detail="Invalid wp_status (draft|publish)")
+        post_type_norm = (body.post_type or "").strip() or (proj.get("default_wp_rest_base") or "").strip() or "posts"
+
     gen_payload = {
         "generate_image": bool(body.generate_image),
         "writing_prompt_id": (body.writing_prompt_id or "").strip() or None,
         "image_prompt_id": (body.image_prompt_id or "").strip() or None,
         "topic_ids": body.topic_ids,
+        "post_type": post_type_norm,
+        "wp_status": wp_status_norm,
         "mapped_products": [p.model_dump() for p in body.mapped_products] if body.mapped_products else None,
     }
 
@@ -244,6 +260,8 @@ async def generate_all(
             writing_prompt_id=(body.writing_prompt_id or "").strip() or None,
             image_prompt_id=(body.image_prompt_id or "").strip() or None,
             topic_ids=body.topic_ids,
+            post_type=post_type_norm,
+            wp_status=wp_status_norm,
             mapped_products=gen_payload["mapped_products"],
         )
     except HTTPException:

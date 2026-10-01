@@ -91,6 +91,7 @@ import { ShopifyProjectSettings } from "@/components/ShopifyProjectSettings";
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
 import { isProjectConnected, resolveProjectPlatform } from "@/lib/projectPlatform";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
+import { LinkedInPostPreview } from "@/components/LinkedInPostPreview";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 
@@ -104,7 +105,8 @@ type TabKey =
   | "tools"
   | "project_settings"
   | "members"
-  | "site_audit";
+  | "site_audit"
+  | "social";
 
 type ResearchSubTabKey = "cluster" | "curations";
 type SiteAuditSubTabKey = "technical" | "seo" | "ai_citations";
@@ -129,6 +131,7 @@ const TAB_KEYS: ReadonlySet<TabKey> = new Set<TabKey>([
   "project_settings",
   "members",
   "site_audit",
+  "social",
 ]);
 
 /** Sidebar section order — Overview appears directly above Articles. */
@@ -140,6 +143,7 @@ const SIDEBAR_TAB_ORDER: TabKey[] = [
   "prompts",
   "context_links",
   "tools",
+  "social",
   "members",
   "project_settings",
   "site_audit",
@@ -153,7 +157,7 @@ const SIDEBAR_TAB_ORDER: TabKey[] = [
  * own sidebar entry -- one "Site Audit" umbrella for all brand/site visibility
  * checks, not a growing list of top-level items. */
 const NAV_GROUPS: { label: string; tabs: TabKey[] }[] = [
-  { label: "Content", tabs: ["overview", "articles", "research", "scheduled_articles", "prompts", "context_links"] },
+  { label: "Content", tabs: ["overview", "articles", "research", "scheduled_articles", "prompts", "context_links", "social"] },
   { label: "Workspace", tabs: ["tools", "site_audit", "members", "project_settings"] },
 ];
 
@@ -707,6 +711,23 @@ export default function ProjectPage() {
   // backend wasn't restarted with the latest code. Surfaced with an actionable hint
   // so the user does not chase the (misleading) "OAuth not configured" message.
   const [gscApiUnavailable, setGscApiUnavailable] = useState(false);
+  // ---- Social Media module (LinkedIn + Quora) --------------------------------
+  const [linkedinStatus, setLinkedinStatus] = useState<import("@/lib/api").LinkedInStatus | null>(null);
+  const [linkedinLoading, setLinkedinLoading] = useState(false);
+  const [linkedinConnecting, setLinkedinConnecting] = useState(false);
+  const [linkedinDisconnecting, setLinkedinDisconnecting] = useState(false);
+  const [linkedinMsg, setLinkedinMsg] = useState<string | null>(null);
+  const [linkedinOpenedFromOAuth, setLinkedinOpenedFromOAuth] = useState(false);
+  const [socialPosts, setSocialPosts] = useState<import("@/lib/api").SocialPost[]>([]);
+  const [quoraKeywordsInput, setQuoraKeywordsInput] = useState("");
+  const [quoraQuestions, setQuoraQuestions] = useState<import("@/lib/api").QuoraQuestion[]>([]);
+  const [quoraLoading, setQuoraLoading] = useState(false);
+  const [quoraMsg, setQuoraMsg] = useState<string | null>(null);
+  // Keyed by question URL — which article the "Generate Answer" flow is scoped to.
+  const [quoraArticleChoice, setQuoraArticleChoice] = useState<Record<string, string>>({});
+  const [quoraAnswerBusy, setQuoraAnswerBusy] = useState<Record<string, boolean>>({});
+  const [quoraAnswerResult, setQuoraAnswerResult] = useState<Record<string, { id: string; text: string; question_url: string }>>({});
+  const [socialArticleOptions, setSocialArticleOptions] = useState<import("@/lib/api").ArticleListItem[]>([]);
   const [articleIndexBusy, setArticleIndexBusy] = useState<Record<string, "request" | "check" | undefined>>({});
   const [articleIndexMsg, setArticleIndexMsg] = useState<Record<string, string | null>>({});
   const [articleIndexStatus, setArticleIndexStatus] = useState<Record<string, import("@/lib/api").GscIndexingStatus | null>>({});
@@ -825,6 +846,8 @@ export default function ProjectPage() {
     pendingCount: number;
     writingPromptId: string;
     imagePromptId: string;
+    postType: string;
+    wpStatus: "draft" | "publish";
     mappedProducts: MappedShopifyProduct[];
     step: "prompts" | "products";
     busy: boolean;
@@ -833,6 +856,8 @@ export default function ProjectPage() {
     ideaIds: string[];
     writingPromptId: string;
     imagePromptId: string;
+    postType: string;
+    wpStatus: "draft" | "publish";
     mappedProducts: MappedShopifyProduct[];
     step: "prompts" | "products";
     busy: boolean;
@@ -1356,9 +1381,10 @@ export default function ProjectPage() {
           // positive before the user has visited the project_settings tab.
           setSName(ps.name || "");
           setSWpUser(ps.wp_username || "");
-          const initPass = ps.wp_app_password || "";
-          wpPassLoadedRef.current = normalizePasswordForDirtyCheck(initPass);
-          setSWpPass(initPass);
+          // The backend never returns the real WordPress app password (only
+          // wp_app_password_set); the field always started blank in practice already.
+          wpPassLoadedRef.current = normalizePasswordForDirtyCheck("");
+          setSWpPass("");
           setSWpDefaultPostType((ps.default_wp_rest_base || "posts") as string);
           setSWpDefaultStatus((ps.default_wp_status || "draft") as "draft" | "publish");
           setSWpDefaultCategoryIds((ps.default_wp_category_ids || []) as number[]);
@@ -2074,9 +2100,9 @@ export default function ProjectPage() {
       );
       setSWpUser(s.wp_username || "");
       {
-        const nextPass = s.wp_app_password || "";
-        wpPassLoadedRef.current = normalizePasswordForDirtyCheck(nextPass);
-        setSWpPass(nextPass);
+        // Same as above -- the backend never returns the real password.
+        wpPassLoadedRef.current = normalizePasswordForDirtyCheck("");
+        setSWpPass("");
       }
       setBrandVoice((pm?.brand_voice || "") as string);
       setBrandTones(((pm?.brand_tones || []) as string[]).slice());
@@ -2171,7 +2197,6 @@ export default function ProjectPage() {
             },
       );
       setSettings(saved);
-      if (saved.wp_app_password) setSWpPass(saved.wp_app_password);
       setToast({ message: "Saved", tone: "success" });
       // Keep the sidebar project switcher in sync with project renames
       // without forcing a refetch of the entire list.
@@ -2320,8 +2345,9 @@ export default function ProjectPage() {
         const fresh = await api.getProjectSettings(projectId);
         setSettings(fresh);
         // Clear the typed app-password field on success — the value is now
-        // stored server-side and the placeholder will switch to "•••••• (set)".
-        if (fresh.wp_app_password) setSWpPass(fresh.wp_app_password);
+        // stored server-side (the backend never echoes it back) and the
+        // placeholder will switch to "•••••• (set)".
+        setSWpPass("");
       } catch {
         // Settings refresh failure is non-fatal; the inline ``settingsVerify``
         // result still shows the immediate outcome.
@@ -2425,6 +2451,136 @@ export default function ProjectPage() {
       setGscConfirmDisconnect(false);
     }
   }
+
+  // ---- Social Media module: LinkedIn + Quora handlers ----------------------
+  async function reloadLinkedinForProject() {
+    if (!projectId) return;
+    setLinkedinLoading(true);
+    try {
+      const st = await api.linkedinStatus(projectId);
+      setLinkedinStatus(st);
+    } catch (e) {
+      setLinkedinMsg(e instanceof Error ? e.message : "Failed to load LinkedIn status");
+    } finally {
+      setLinkedinLoading(false);
+    }
+  }
+
+  async function reloadSocialPosts() {
+    if (!projectId) return;
+    try {
+      const res = await api.listProjectSocialPosts(projectId);
+      setSocialPosts(res.posts || []);
+    } catch {
+      setSocialPosts([]);
+    }
+  }
+
+  async function connectLinkedinForProject() {
+    setLinkedinMsg(null);
+    setLinkedinConnecting(true);
+    try {
+      const res = await api.linkedinConnectUrl(projectId);
+      if (res?.url) {
+        window.location.href = res.url;
+      } else {
+        throw new Error("No OAuth URL returned");
+      }
+    } catch (e) {
+      setLinkedinMsg(
+        e instanceof ApiError && e.status === 400
+          ? (e.message || "LinkedIn OAuth is not configured on the server.")
+          : e instanceof Error
+          ? e.message
+          : "Could not start LinkedIn connect",
+      );
+      setLinkedinConnecting(false);
+    }
+  }
+
+  async function disconnectLinkedinForProject() {
+    setLinkedinMsg(null);
+    setLinkedinDisconnecting(true);
+    try {
+      await api.linkedinDisconnect(projectId);
+      setLinkedinStatus((prev) => (prev ? { ...prev, connected: false, member_name: null, connected_at: null, organizations: [], selected_author_urn: null } : prev));
+      setLinkedinMsg("Disconnected LinkedIn for this project.");
+    } catch (e) {
+      setLinkedinMsg(e instanceof Error ? e.message : "Failed to disconnect LinkedIn");
+    } finally {
+      setLinkedinDisconnecting(false);
+    }
+  }
+
+  async function selectLinkedinAuthor(authorUrn: string) {
+    try {
+      await api.linkedinSelectAuthor(projectId, authorUrn);
+      setLinkedinStatus((prev) => (prev ? { ...prev, selected_author_urn: authorUrn } : prev));
+    } catch (e) {
+      setLinkedinMsg(e instanceof Error ? e.message : "Failed to switch posting identity");
+    }
+  }
+
+  async function discoverQuoraQuestionsForProject() {
+    setQuoraMsg(null);
+    setQuoraLoading(true);
+    try {
+      const keywords = tokenizeKeywordsInput(quoraKeywordsInput);
+      const res = await api.quoraDiscoverQuestions(projectId, keywords.length ? keywords : undefined);
+      setQuoraQuestions(res.questions || []);
+      if (!res.questions?.length) {
+        setQuoraMsg(
+          "No live Quora questions found for these keywords. This search shares Riviso's live Google lookup with Research/Keywords, so if that's also coming up empty right now, Google is likely rate-limiting or challenging our server's requests temporarily — try again shortly, or try a different keyword.",
+        );
+      }
+    } catch (e) {
+      setQuoraMsg(e instanceof Error ? e.message : "Failed to search Quora questions");
+    } finally {
+      setQuoraLoading(false);
+    }
+  }
+
+  async function generateQuoraAnswerFor(q: import("@/lib/api").QuoraQuestion) {
+    const articleId = (quoraArticleChoice[q.url] || "").trim();
+    if (!articleId) {
+      setQuoraMsg("Pick which article this answer should draw from first.");
+      return;
+    }
+    setQuoraAnswerBusy((prev) => ({ ...prev, [q.url]: true }));
+    try {
+      const res = await api.quoraGenerateAnswer(projectId, articleId, { question: q.question, question_url: q.url });
+      setQuoraAnswerResult((prev) => ({ ...prev, [q.url]: res }));
+      void reloadSocialPosts();
+    } catch (e) {
+      setQuoraMsg(e instanceof Error ? e.message : "Failed to generate an answer");
+    } finally {
+      setQuoraAnswerBusy((prev) => ({ ...prev, [q.url]: false }));
+    }
+  }
+
+  async function markQuoraAnswerPosted(postId: string) {
+    try {
+      await api.socialPostMarkPosted(postId);
+      void reloadSocialPosts();
+    } catch (e) {
+      setQuoraMsg(e instanceof Error ? e.message : "Failed to mark as posted");
+    }
+  }
+
+  useEffect(() => {
+    if (!token || !projectId || tab !== "social") return;
+    void reloadLinkedinForProject();
+    void reloadSocialPosts();
+    api
+      .listArticlesPage(projectId, { page: 1, per_page: 100, sort: "desc" })
+      .then((res) => setSocialArticleOptions(res.items || []))
+      .catch(() => setSocialArticleOptions([]));
+    if (!quoraKeywordsInput.trim()) {
+      const niche = (projectMeta?.niche_topic || projectMeta?.niche_identifier || "").trim();
+      if (niche) setQuoraKeywordsInput(niche);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, token, tab]);
 
   // ---- Feature 1: GSC ROI Dashboard handlers -------------------------------
   async function reloadAnalytics(opts: { silent?: boolean } = {}) {
@@ -3127,7 +3283,21 @@ export default function ProjectPage() {
       const flag = (hashParams.get("gsc") || "").trim();
       const msg = (hashParams.get("msg") || "").trim();
       const shopifyFlag = (hashParams.get("shopify") || "").trim();
-      if (shopifyFlag === "connected" || shopifyFlag === "error") {
+      const linkedinFlag = (hashParams.get("linkedin") || "").trim();
+      if (linkedinFlag === "connected" || linkedinFlag === "error") {
+        setTab("social");
+        if (linkedinFlag === "connected") {
+          setLinkedinOpenedFromOAuth(true);
+          setLinkedinMsg(null);
+          void reloadLinkedinForProject();
+        } else {
+          setLinkedinMsg(msg || "LinkedIn connect failed. Please try again.");
+        }
+        if (url.hash) {
+          url.hash = "";
+          window.history.replaceState({}, "", url.toString());
+        }
+      } else if (shopifyFlag === "connected" || shopifyFlag === "error") {
         setTab("project_settings");
         if (shopifyFlag === "error") {
           setError(msg || "Shopify connect failed. Please try again.");
@@ -4702,6 +4872,7 @@ export default function ProjectPage() {
     members: "Members",
     project_settings: "Project Settings",
     site_audit: "Site Audit",
+    social: "Social",
   };
 
   function goTab(next: TabKey) {
@@ -5108,6 +5279,8 @@ export default function ProjectPage() {
       topicIds?: string[] | null;
       writingPromptId?: string | null;
       imagePromptId?: string | null;
+      postType?: string | null;
+      wpStatus?: "draft" | "publish" | null;
       mappedProducts?: MappedShopifyProduct[] | null;
     },
   ) {
@@ -5179,6 +5352,8 @@ export default function ProjectPage() {
           writing_prompt_id: opts?.writingPromptId || null,
           image_prompt_id: opts?.imagePromptId || null,
           topic_ids: topicIds,
+          post_type: opts?.postType || null,
+          wp_status: opts?.wpStatus || null,
           mapped_products: mapped,
         },
         {
@@ -5235,6 +5410,8 @@ export default function ProjectPage() {
       pendingCount,
       writingPromptId: prompts.writingPrompts?.default_id || "",
       imagePromptId: prompts.imagePrompts?.default_id || "",
+      postType: wpDefaults?.post_type || "posts",
+      wpStatus: wpDefaults?.wp_status || "draft",
       mappedProducts: [],
       step: "prompts",
       busy: false,
@@ -5653,7 +5830,12 @@ export default function ProjectPage() {
         return;
       }
     } else if (action === "schedule") {
-      if (!(settings?.shopify_access_token || "").trim()) {
+      // shopify_access_token itself is never sent to the browser (the backend always
+      // returns null for it, by design -- see ProjectSettingsPublic); the real
+      // connection status is the _set boolean flag. Checking the raw token field here
+      // always evaluated to "not connected" for every Shopify project, silently
+      // blocking bulk-schedule-from-research for all Shopify users.
+      if (!settings?.shopify_access_token_set) {
         openWebsiteConnectionPopup(
           "Connect your Shopify store in Project Settings before scheduling articles.",
         );
@@ -5683,6 +5865,8 @@ export default function ProjectPage() {
       ideaIds: selected.map((r) => r.id),
       writingPromptId: prompts.writingPrompts?.default_id || "",
       imagePromptId: prompts.imagePrompts?.default_id || "",
+      postType: wpDefaults?.post_type || "posts",
+      wpStatus: wpDefaults?.wp_status || "draft",
       mappedProducts: [],
       step: "prompts",
       busy: false,
@@ -5722,6 +5906,8 @@ export default function ProjectPage() {
               writing_prompt_id: m.writingPromptId || null,
               image_prompt_id: m.imagePromptId || null,
               generate_image: true,
+              post_type: m.postType || null,
+              wp_status: m.wpStatus || null,
               mapped_products: mapped,
             },
             { skipGlobalLoading: true, noWait: true },
@@ -10976,6 +11162,216 @@ export default function ProjectPage() {
           </>
         ) : null}
 
+        {tab === "social" ? (
+          <>
+            <div className={`${styles.card} ${styles.cardWide}`}>
+              <h2 className={styles.clusterCardTitle} style={{ marginTop: 0 }}>LinkedIn</h2>
+              <p className={styles.clusterCardSubtitle}>
+                Connect a LinkedIn account to share published articles as posts. Note: links shared on
+                LinkedIn are marked &ldquo;nofollow&rdquo; by LinkedIn — this drives referral traffic and visibility,
+                not a direct SEO backlink.
+              </p>
+
+              {linkedinMsg ? <div className={styles.error} style={{ marginTop: 10 }}>{linkedinMsg}</div> : null}
+              {linkedinOpenedFromOAuth && linkedinStatus?.connected ? (
+                <div className={styles.muted} style={{ marginTop: 10, fontWeight: 700, color: "var(--aa-success, #16a34a)" }}>
+                  Connected{linkedinStatus?.member_name ? ` as ${linkedinStatus.member_name}` : ""}.
+                </div>
+              ) : null}
+
+              <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center" }}>
+                <div>
+                  <div style={{ fontWeight: 800 }}>
+                    {linkedinLoading
+                      ? "Loading…"
+                      : linkedinStatus?.connected
+                      ? `Connected${linkedinStatus.member_name ? ` (${linkedinStatus.member_name})` : ""}`
+                      : "Not connected"}
+                  </div>
+                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 4 }}>
+                    {linkedinStatus?.configured === false
+                      ? "LinkedIn OAuth client is not configured on the server. Set LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET in the backend env, then restart the FastAPI service."
+                      : linkedinStatus?.connected
+                      ? `Linked${linkedinStatus.connected_at ? ` on ${linkedinStatus.connected_at}` : ""}.${linkedinStatus.token_expires_at ? " You'll get a reminder before this expires." : ""}`
+                      : "Click Connect LinkedIn to authorize posting for this project."}
+                  </div>
+                </div>
+                <div className={styles.row} style={{ gap: 8 }}>
+                  {linkedinStatus?.connected ? (
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={disconnectLinkedinForProject}
+                      disabled={linkedinDisconnecting}
+                    >
+                      {linkedinDisconnecting ? "Disconnecting…" : "Disconnect"}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={styles.button}
+                    onClick={connectLinkedinForProject}
+                    disabled={linkedinConnecting || linkedinStatus?.configured === false}
+                  >
+                    {linkedinConnecting
+                      ? "Redirecting…"
+                      : linkedinStatus?.connected
+                      ? "Reconnect"
+                      : "Connect LinkedIn"}
+                  </button>
+                </div>
+              </div>
+
+              {linkedinStatus?.connected && linkedinStatus.organizations.length > 0 ? (
+                <div style={{ marginTop: 14 }}>
+                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 6 }}>Post as</div>
+                  <select
+                    className={styles.input}
+                    value={linkedinStatus.selected_author_urn || linkedinStatus.person_urn || ""}
+                    onChange={(e) => void selectLinkedinAuthor(e.target.value)}
+                  >
+                    {linkedinStatus.person_urn ? (
+                      <option value={linkedinStatus.person_urn}>
+                        {linkedinStatus.member_name || "You"} (personal profile)
+                      </option>
+                    ) : null}
+                    {linkedinStatus.organizations.map((org) => (
+                      <option key={org.urn} value={org.urn}>
+                        {org.name || org.urn}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+
+              {socialPosts.filter((p) => p.platform === "linkedin").length > 0 ? (
+                <div style={{ marginTop: 18 }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Recent LinkedIn posts</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    {socialPosts
+                      .filter((p) => p.platform === "linkedin")
+                      .slice(0, 10)
+                      .map((p) => (
+                        <a
+                          key={p.id}
+                          href={p.external_url}
+                          target="_blank"
+                          rel="noopener noreferrer nofollow"
+                          style={{ display: "block", textDecoration: "none", color: "inherit" }}
+                          title="Open this post on LinkedIn"
+                        >
+                          <LinkedInPostPreview
+                            authorName={linkedinStatus?.member_name || "You"}
+                            captionText={p.content_text}
+                            articleTitle={socialArticleOptions.find((a) => a.id === p.article_id)?.title || null}
+                          />
+                        </a>
+                      ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 16 }}>
+              <h2 className={styles.clusterCardTitle} style={{ marginTop: 0 }}>Quora</h2>
+              <p className={styles.clusterCardSubtitle}>
+                Quora has no public posting API, so this finds real, currently-indexed questions
+                matching your niche, drafts a genuinely helpful answer citing one of your articles, and
+                you paste it in yourself.
+              </p>
+
+              {quoraMsg ? <div className={styles.error} style={{ marginTop: 10 }}>{quoraMsg}</div> : null}
+
+              <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
+                <input
+                  className={styles.input}
+                  style={{ flex: 1 }}
+                  placeholder="Keywords, comma-separated (e.g. technical seo, crawl budget)"
+                  value={quoraKeywordsInput}
+                  onChange={(e) => setQuoraKeywordsInput(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className={styles.button}
+                  onClick={discoverQuoraQuestionsForProject}
+                  disabled={quoraLoading}
+                >
+                  {quoraLoading ? "Searching…" : "Find Questions"}
+                </button>
+              </div>
+
+              {quoraQuestions.length > 0 ? (
+                <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+                  {quoraQuestions.map((q) => {
+                    const answer = quoraAnswerResult[q.url];
+                    return (
+                      <div key={q.url} style={{ borderTop: "1px solid var(--aa-border, #e5e7eb)", paddingTop: 12 }}>
+                        <a href={q.url} target="_blank" rel="noopener noreferrer nofollow" style={{ fontWeight: 700 }}>
+                          {q.question}
+                        </a>
+                        <div className={styles.row} style={{ gap: 8, marginTop: 8, alignItems: "center" }}>
+                          <select
+                            className={styles.input}
+                            style={{ maxWidth: 280 }}
+                            value={quoraArticleChoice[q.url] || ""}
+                            onChange={(e) => setQuoraArticleChoice((prev) => ({ ...prev, [q.url]: e.target.value }))}
+                          >
+                            <option value="">Choose an article…</option>
+                            {socialArticleOptions.map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.title}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            className={styles.btnSecondary}
+                            onClick={() => generateQuoraAnswerFor(q)}
+                            disabled={Boolean(quoraAnswerBusy[q.url]) || !quoraArticleChoice[q.url]}
+                          >
+                            {quoraAnswerBusy[q.url] ? "Generating…" : "Generate Answer"}
+                          </button>
+                        </div>
+                        {answer ? (
+                          <div style={{ marginTop: 10 }}>
+                            <textarea
+                              className={styles.textarea}
+                              style={{ minHeight: 140 }}
+                              value={answer.text}
+                              onChange={(e) =>
+                                setQuoraAnswerResult((prev) => ({ ...prev, [q.url]: { ...answer, text: e.target.value } }))
+                              }
+                            />
+                            <div className={styles.row} style={{ gap: 8, marginTop: 8 }}>
+                              <button
+                                type="button"
+                                className={styles.btnSecondary}
+                                onClick={() => {
+                                  void navigator.clipboard.writeText(answer.text);
+                                  setToast({ message: "Answer copied — paste it on Quora.", tone: "success" });
+                                }}
+                              >
+                                Copy
+                              </button>
+                              <button
+                                type="button"
+                                className={styles.button}
+                                onClick={() => markQuoraAnswerPosted(answer.id)}
+                              >
+                                I posted this on Quora
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          </>
+        ) : null}
+
         {tab === "site_audit" ? (
           <div className={styles.analyticsStack}>
             {siteAuditSubTab === "technical" ? (
@@ -12866,6 +13262,39 @@ export default function ProjectPage() {
                         ))}
                       </select>
                     </label>
+                    <label className={styles.label}>
+                      WordPress post type
+                      <select
+                        className={styles.input}
+                        value={curationPromptModal.postType}
+                        onChange={(e) =>
+                          setCurationPromptModal((m) => (m ? { ...m, postType: e.target.value } : m))
+                        }
+                      >
+                        <option value="posts">Posts</option>
+                        <option value="pages">Pages</option>
+                        {wpTypesForSchedule
+                          .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
+                          .map((t) => (
+                            <option key={t.rest_base} value={t.rest_base}>{t.name || t.rest_base}</option>
+                          ))}
+                      </select>
+                    </label>
+                    <label className={styles.label}>
+                      WordPress status
+                      <select
+                        className={styles.input}
+                        value={curationPromptModal.wpStatus}
+                        onChange={(e) =>
+                          setCurationPromptModal((m) =>
+                            m ? { ...m, wpStatus: e.target.value as "draft" | "publish" } : m,
+                          )
+                        }
+                      >
+                        <option value="draft">Draft</option>
+                        <option value="publish">Publish</option>
+                      </select>
+                    </label>
                   </>
                 ) : (
                   <>
@@ -13010,6 +13439,39 @@ export default function ProjectPage() {
                         ))}
                       </select>
                     </label>
+                    <label className={styles.label}>
+                      WordPress post type
+                      <select
+                        className={styles.input}
+                        value={clusterGeneratePromptModal.postType}
+                        onChange={(e) =>
+                          setClusterGeneratePromptModal((m) => (m ? { ...m, postType: e.target.value } : m))
+                        }
+                      >
+                        <option value="posts">Posts</option>
+                        <option value="pages">Pages</option>
+                        {wpTypesForSchedule
+                          .filter((t) => t.rest_base && !["posts", "pages"].includes(t.rest_base))
+                          .map((t) => (
+                            <option key={t.rest_base} value={t.rest_base}>{t.name || t.rest_base}</option>
+                          ))}
+                      </select>
+                    </label>
+                    <label className={styles.label}>
+                      WordPress status
+                      <select
+                        className={styles.input}
+                        value={clusterGeneratePromptModal.wpStatus}
+                        onChange={(e) =>
+                          setClusterGeneratePromptModal((m) =>
+                            m ? { ...m, wpStatus: e.target.value as "draft" | "publish" } : m,
+                          )
+                        }
+                      >
+                        <option value="draft">Draft</option>
+                        <option value="publish">Publish</option>
+                      </select>
+                    </label>
                   </>
                 ) : (
                   <>
@@ -13067,6 +13529,8 @@ export default function ProjectPage() {
                           topicIds: m.topicIds,
                           writingPromptId: m.writingPromptId || null,
                           imagePromptId: m.imagePromptId || null,
+                          postType: m.postType || null,
+                          wpStatus: m.wpStatus || null,
                         });
                       }
                     }}
@@ -13087,6 +13551,8 @@ export default function ProjectPage() {
                           topicIds: m.topicIds,
                           writingPromptId: m.writingPromptId || null,
                           imagePromptId: m.imagePromptId || null,
+                          postType: m.postType || null,
+                          wpStatus: m.wpStatus || null,
                           mappedProducts: [],
                         });
                       }}
@@ -13105,6 +13571,8 @@ export default function ProjectPage() {
                           topicIds: m.topicIds,
                           writingPromptId: m.writingPromptId || null,
                           imagePromptId: m.imagePromptId || null,
+                          postType: m.postType || null,
+                          wpStatus: m.wpStatus || null,
                           mappedProducts: m.mappedProducts,
                         });
                       }}

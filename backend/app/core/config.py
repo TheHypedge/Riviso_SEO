@@ -100,6 +100,21 @@ class Settings(BaseSettings):
     razorpay_key_secret: str = Field(default="", validation_alias="RAZORPAY_KEY_SECRET")
     razorpay_webhook_secret: str = Field(default="", validation_alias="RAZORPAY_WEBHOOK_SECRET")
 
+    # LinkedIn (Social Media module) -- "Sign In with LinkedIn using OpenID Connect" +
+    # "Share on LinkedIn" products, both self-serve. w_organization_social (company Page
+    # posting) additionally requires LinkedIn Developer Program partner approval; until
+    # then the same app just posts as the connected member.
+    linkedin_client_id: str = Field(default="", validation_alias="LINKEDIN_CLIENT_ID")
+    linkedin_client_secret: str = Field(default="", validation_alias="LINKEDIN_CLIENT_SECRET")
+
+    # Cloudinary (media storage) -- optional. When unset, featured images and inline
+    # article media fall back to local-disk storage exactly as before this was added;
+    # there is no production-fatal check for this like FIELD_ENCRYPTION_KEY, since a
+    # missing config here means "keep using disk," not a security hole.
+    cloudinary_cloud_name: str = Field(default="", validation_alias="CLOUDINARY_CLOUD_NAME")
+    cloudinary_api_key: str = Field(default="", validation_alias="CLOUDINARY_API_KEY")
+    cloudinary_api_secret: str = Field(default="", validation_alias="CLOUDINARY_API_SECRET")
+
     # Google Indexing API (service account JSON; raw JSON or base64 JSON)
     google_indexing_service_account_json: str = Field(default="", validation_alias="GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON")
 
@@ -248,6 +263,11 @@ class Settings(BaseSettings):
         "razorpay_key_id",
         "razorpay_key_secret",
         "razorpay_webhook_secret",
+        "linkedin_client_id",
+        "linkedin_client_secret",
+        "cloudinary_cloud_name",
+        "cloudinary_api_key",
+        "cloudinary_api_secret",
         mode="before",
     )
     @classmethod
@@ -277,6 +297,10 @@ class Settings(BaseSettings):
     @property
     def razorpay_configured(self) -> bool:
         return bool((self.razorpay_key_id or "").strip() and (self.razorpay_key_secret or "").strip())
+
+    @property
+    def linkedin_oauth_configured(self) -> bool:
+        return bool((self.linkedin_client_id or "").strip() and (self.linkedin_client_secret or "").strip())
 
     @property
     def google_oauth_client_id_fingerprint(self) -> str:

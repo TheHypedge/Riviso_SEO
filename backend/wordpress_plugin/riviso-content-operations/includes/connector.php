@@ -19,7 +19,7 @@ final class RivisoContentOperationsConnector {
 	const LEGACY_REST_NAMESPACE = 'auto-articles/v1';
 	const OPTION_CONNECTOR_ID = 'riviso_content_ops_connector_id';
 	const LEGACY_OPTION_CONNECTOR_ID = 'auto_articles_connector_id';
-	const VERSION = '0.6.2';
+	const VERSION = '0.6.3';
 
 	/** @var bool */
 	private static $routes_registered = false;
@@ -148,9 +148,9 @@ final class RivisoContentOperationsConnector {
 			'meta_description',
 			'focus_keyphrase',
 			'focus_keyword',
-			'_rank_math_title',
-			'_rank_math_description',
-			'_rank_math_focus_keyword',
+			'rank_math_title',
+			'rank_math_description',
+			'rank_math_focus_keyword',
 			'_riviso_seo_title',
 			'_riviso_seo_description',
 			'_riviso_seo_focus_keyword',
@@ -164,9 +164,9 @@ final class RivisoContentOperationsConnector {
 	 * @return array{title:string,description:string,focus_keyword:string}
 	 */
 	private static function extract_seo_from_payload_meta( array $meta ) {
-		$title_keys = array( '_yoast_wpseo_title', 'meta_title', '_rank_math_title', '_riviso_seo_title' );
-		$desc_keys  = array( '_yoast_wpseo_metadesc', 'meta_description', '_rank_math_description', '_riviso_seo_description' );
-		$focus_keys = array( '_yoast_wpseo_focuskw', 'focus_keyphrase', 'focus_keyword', '_rank_math_focus_keyword', '_riviso_seo_focus_keyword' );
+		$title_keys = array( '_yoast_wpseo_title', 'meta_title', 'rank_math_title', '_riviso_seo_title' );
+		$desc_keys  = array( '_yoast_wpseo_metadesc', 'meta_description', 'rank_math_description', '_riviso_seo_description' );
+		$focus_keys = array( '_yoast_wpseo_focuskw', 'focus_keyphrase', 'focus_keyword', 'rank_math_focus_keyword', '_riviso_seo_focus_keyword' );
 
 		$pick = static function ( array $source, array $keys ) {
 			foreach ( $keys as $key ) {
@@ -197,13 +197,13 @@ final class RivisoContentOperationsConnector {
 		switch ( $platform ) {
 			case 'rank_math':
 				if ( $seo['title'] !== '' ) {
-					$mapped['_rank_math_title'] = $seo['title'];
+					$mapped['rank_math_title'] = $seo['title'];
 				}
 				if ( $seo['description'] !== '' ) {
-					$mapped['_rank_math_description'] = $seo['description'];
+					$mapped['rank_math_description'] = $seo['description'];
 				}
 				if ( $seo['focus_keyword'] !== '' ) {
-					$mapped['_rank_math_focus_keyword'] = $seo['focus_keyword'];
+					$mapped['rank_math_focus_keyword'] = $seo['focus_keyword'];
 				}
 				break;
 
@@ -267,9 +267,10 @@ final class RivisoContentOperationsConnector {
 					'_yoast_wpseo_opengraph-description',
 					'_yoast_wpseo_twitter-title',
 					'_yoast_wpseo_twitter-description',
-					'_rank_math_title',
-					'_rank_math_description',
-					'_rank_math_focus_keyword',
+					'rank_math_title',
+					'rank_math_description',
+					'rank_math_focus_keyword',
+					'rank_math_canonical_url',
 					'_riviso_seo_title',
 					'_riviso_seo_description',
 					'_riviso_seo_focus_keyword',
@@ -495,7 +496,7 @@ final class RivisoContentOperationsConnector {
 			if ( $platform === 'rank_math' && in_array( $key, $yoast_extras, true ) ) {
 				continue;
 			}
-			if ( $platform === 'yoast' && strpos( $key, '_rank_math_' ) === 0 ) {
+			if ( $platform === 'yoast' && strpos( $key, 'rank_math_' ) === 0 ) {
 				continue;
 			}
 			update_post_meta( $post_id, $key, sanitize_text_field( (string) $val ) );
@@ -509,9 +510,10 @@ final class RivisoContentOperationsConnector {
 		switch ( $platform ) {
 			case 'rank_math':
 				$fields = array(
-					'_rank_math_title',
-					'_rank_math_description',
-					'_rank_math_focus_keyword',
+					'rank_math_title',
+					'rank_math_description',
+					'rank_math_focus_keyword',
+					'rank_math_canonical_url',
 				);
 				break;
 			case 'yoast':

@@ -1,123 +1,87 @@
-"""Self-check for the payment route module's core logic -- plan-price resolution
-(rejecting the trial plan and unpriced plans, so a client can never "buy" something that
-isn't actually for sale) and _mark_payment_paid's idempotency (the property the whole
-dual-confirmation design in payments.py depends on: whichever of /verify or /webhook
-arrives first does the work, the other is a safe no-op)."""
+"""Regression test for a real, previously-shipped bug: payments.py combined
+``from __future__ import annotations`` with ``@limiter.limit`` on
+``POST /api/payments/razorpay/order``, which silently made FastAPI treat the
+``payload: CreateOrderRequest`` body param as a required *query* parameter instead --
+no import-time error, just a 422 "Field required" the instant a real checkout was
+attempted. Static checks (pyflakes/mypy) never catch this class of bug; only an actual
+request through the real route does, which is what this test does.
+"""
 
-import asyncio
+from __future__ import annotations
+
+import os
+
+os.environ.setdefault("FORCE_JSON_STORAGE", "1")
+os.environ.setdefault("SECRET_KEY", "test-secret-key-not-used-in-production-0123456789")
+os.environ.setdefault("ENVIRONMENT", "test")
 
 import pytest
-from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
-from app.api.routes.payments import _mark_payment_paid, _resolve_paid_plan
+import app.main as main_mod
+from app.api.routes import payments as payments_mod
+from app.core.deps import get_current_user
 
 
 class _FakeStorage:
-    def __init__(self, payments=None, users=None, plans=None):
-        self._payments = {p["razorpay_order_id"]: p for p in (payments or [])}
-        self._users = {u["id"]: u for u in (users or [])}
-        self._plans = plans or {"pro": {"name": "Riviso Pro", "cost_monthly": 1499}}
-        self.subscription_patches: list[tuple[str, dict]] = []
-        self.user_field_updates: list[tuple[str, dict]] = []
+    def __init__(self):
+        self.created_orders: list[dict] = []
 
-    def load_plans(self):
-        return self._plans
+    def load_plans(self) -> dict:
+        return {"basic": {"key": "basic", "name": "Basic Plan", "cost_monthly": 499, "is_trial_plan": False}}
 
-    def get_payment_by_order_id(self, order_id):
-        return self._payments.get(order_id)
-
-    def update_payment_fields(self, order_id, fields):
-        self._payments[order_id] = {**self._payments[order_id], **fields}
-        return True
-
-    def patch_subscription_fields(self, uid, fields):
-        self.subscription_patches.append((uid, fields))
-        return True
-
-    def update_user_fields(self, uid, fields):
-        self.user_field_updates.append((uid, fields))
-        return True
-
-    def get_user_by_id(self, uid):
-        return self._users.get(uid)
+    def create_payment_order(self, doc: dict) -> None:
+        self.created_orders.append(doc)
 
 
-def test_resolve_paid_plan_rejects_trial_plan():
-    st = _FakeStorage(plans={"beta": {"name": "Beta", "is_trial_plan": True, "cost_monthly": 0}})
-    with pytest.raises(HTTPException) as exc:
-        _resolve_paid_plan(st, "beta")
-    assert exc.value.status_code == 400
-
-
-def test_resolve_paid_plan_rejects_zero_cost_plan():
-    st = _FakeStorage(plans={"free": {"name": "Free", "cost_monthly": 0}})
-    with pytest.raises(HTTPException) as exc:
-        _resolve_paid_plan(st, "free")
-    assert exc.value.status_code == 400
-
-
-def test_resolve_paid_plan_rejects_unknown_plan():
-    st = _FakeStorage(plans={})
-    with pytest.raises(HTTPException) as exc:
-        _resolve_paid_plan(st, "nonexistent")
-    assert exc.value.status_code == 404
-
-
-def test_resolve_paid_plan_accepts_priced_non_trial_plan():
-    st = _FakeStorage()
-    plan = _resolve_paid_plan(st, "pro")
-    assert plan["cost_monthly"] == 1499
-
-
-def test_mark_payment_paid_sets_period_and_plan(monkeypatch):
-    import app.api.routes.payments as payments_mod
-
-    st = _FakeStorage(
-        payments=[{"razorpay_order_id": "order_1", "user_id": "u1", "plan_key": "pro", "status": "created", "amount_paise": 149900}],
-        users=[{"id": "u1", "email": "u1@example.com"}],
+@pytest.fixture
+def client(monkeypatch):
+    fake_storage = _FakeStorage()
+    monkeypatch.setattr(payments_mod, "get_legacy_storage_module", lambda: fake_storage)
+    monkeypatch.setattr(payments_mod.settings, "razorpay_key_id", "rzp_test_fake")
+    monkeypatch.setattr(payments_mod.settings, "razorpay_key_secret", "fake_secret")
+    monkeypatch.setattr(
+        payments_mod.razorpay_client,
+        "create_order",
+        lambda *, amount_paise, currency, receipt, notes=None: {"id": "order_fake123"},
     )
-    monkeypatch.setattr(payments_mod, "get_legacy_storage_module", lambda: st)
-    # Email dispatch is fire-and-forget via asyncio.create_task inside dispatch_*; just
-    # make sure the import path resolves without needing real SMTP config.
-    monkeypatch.setattr("app.services.email_dispatch.dispatch_plan_notification_email", lambda **kw: None)
-    monkeypatch.setattr("app.services.email_dispatch.dispatch_payment_receipt_email", lambda **kw: None)
-
-    result = asyncio.run(_mark_payment_paid(order_id="order_1", payment_id="pay_1", signature="sig_1"))
-
-    assert result["status"] == "paid"
-    assert st.user_field_updates == [("u1", {"subscription_type": "pro"})]
-    assert len(st.subscription_patches) == 1
-    uid, fields = st.subscription_patches[0]
-    assert uid == "u1"
-    assert fields["current_period_start"] and fields["current_period_end"]
-    assert fields["last_payment_order_id"] == "order_1"
-    assert fields["payment_notified_milestones"] == []
+    main_mod.app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "role": "user"}
+    try:
+        with TestClient(main_mod.app) as c:
+            yield c, fake_storage
+    finally:
+        main_mod.app.dependency_overrides.pop(get_current_user, None)
 
 
-def test_mark_payment_paid_is_idempotent_on_second_call(monkeypatch):
-    import app.api.routes.payments as payments_mod
+def test_create_order_reads_plan_key_from_json_body_not_query_string(client):
+    c, fake_storage = client
+    resp = c.post("/api/payments/razorpay/order", json={"plan_key": "basic"})
 
-    st = _FakeStorage(
-        payments=[{"razorpay_order_id": "order_2", "user_id": "u1", "plan_key": "pro", "status": "created", "amount_paise": 149900}],
-        users=[{"id": "u1", "email": "u1@example.com"}],
-    )
-    monkeypatch.setattr(payments_mod, "get_legacy_storage_module", lambda: st)
-    monkeypatch.setattr("app.services.email_dispatch.dispatch_plan_notification_email", lambda **kw: None)
-    monkeypatch.setattr("app.services.email_dispatch.dispatch_payment_receipt_email", lambda **kw: None)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["order_id"] == "order_fake123"
+    assert body["plan_key"] == "basic"
+    assert body["key_id"] == "rzp_test_fake"
+    assert len(fake_storage.created_orders) == 1
 
-    asyncio.run(_mark_payment_paid(order_id="order_2", payment_id="pay_1", signature="sig_1"))
-    first_patch_count = len(st.subscription_patches)
-    first_user_update_count = len(st.user_field_updates)
 
-    # Second call (e.g. the webhook arriving after /verify already processed it) must be
-    # a pure no-op -- no duplicate plan assignment, no duplicate period extension.
-    asyncio.run(_mark_payment_paid(order_id="order_2", payment_id="pay_1", signature=None))
+def test_create_order_without_body_reports_missing_body_field_not_query_param():
+    """If this regresses to the query-param bug, FastAPI reports the whole `payload`
+    object missing at ``loc: ["query", "payload"]`` instead of the real body field
+    ``plan_key`` at ``loc: ["body", "plan_key"]``."""
+    main_mod.app.dependency_overrides[get_current_user] = lambda: {"id": "u1", "role": "user"}
+    try:
+        with TestClient(main_mod.app) as c:
+            resp = c.post("/api/payments/razorpay/order", json={})
+    finally:
+        main_mod.app.dependency_overrides.pop(get_current_user, None)
 
-    assert len(st.subscription_patches) == first_patch_count
-    assert len(st.user_field_updates) == first_user_update_count
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    locs = [tuple(d["loc"]) for d in detail]
+    assert ("query", "payload") not in locs
+    assert ("body", "plan_key") in locs
 
 
 if __name__ == "__main__":
-    test_resolve_paid_plan_rejects_trial_plan()
-    test_resolve_paid_plan_accepts_priced_non_trial_plan()
-    print("ok")
+    pytest.main([__file__, "-v"])

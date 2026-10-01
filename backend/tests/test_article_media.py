@@ -15,12 +15,13 @@ def _cleanup(image_id: str) -> None:
 
 
 def test_save_and_load_article_media_round_trip():
-    image_id = save_article_media(
+    image_id, cloudinary_url = save_article_media(
         data=b"fake-png-bytes",
         content_type="image/png",
         project_id="proj-1",
         article_id="art-1",
     )
+    assert cloudinary_url is None  # Cloudinary unconfigured in tests -- falls back to disk
     try:
         loaded = load_article_media(image_id)
         assert loaded == (b"fake-png-bytes", "image/png")
@@ -47,7 +48,7 @@ class _FakeWordpressClient:
 
 
 def test_rewrite_inline_media_for_wordpress_rewrites_own_images_only():
-    image_id = save_article_media(
+    image_id, _cloudinary_url = save_article_media(
         data=b"fake-bytes",
         content_type="image/png",
         project_id="proj-1",

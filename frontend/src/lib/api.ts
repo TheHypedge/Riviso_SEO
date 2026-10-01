@@ -312,7 +312,6 @@ export type ProjectSettings = {
   shopify_client_id?: string | null;
   shopify_client_secret_set?: boolean;
   shopify_access_token_set?: boolean;
-  shopify_access_token?: string | null;
   shopify_verified_at?: string | null;
   shopify_verified_status?: string | null;
   shopify_verified_message?: string | null;
@@ -321,7 +320,6 @@ export type ProjectSettings = {
   wp_site_url?: string | null;
   wp_username?: string | null;
   wp_app_password_set: boolean;
-  wp_app_password?: string | null;
   /** Last-known WordPress verification snapshot (server-recorded). */
   wp_verified_at?: string | null;
   wp_verified_status?: string | null;
@@ -362,6 +360,42 @@ export type ProjectGscStatus = {
 export type GscSite = {
   siteUrl: string;
   permissionLevel?: string;
+};
+
+// Social Media module (v1: LinkedIn auto-post + Quora assisted-answer only)
+
+export type LinkedInOrganization = {
+  urn: string;
+  name?: string | null;
+};
+
+export type LinkedInStatus = {
+  configured: boolean;
+  connected: boolean;
+  member_name?: string | null;
+  person_urn?: string | null;
+  connected_at?: string | null;
+  token_expires_at?: string | null;
+  organizations: LinkedInOrganization[];
+  selected_author_urn?: string | null;
+};
+
+export type QuoraQuestion = {
+  question: string;
+  url: string;
+  matched_keyword: string;
+};
+
+export type SocialPost = {
+  id: string;
+  project_id: string;
+  article_id: string;
+  platform: "linkedin" | "quora";
+  status: "draft" | "posted";
+  content_text: string;
+  external_url: string;
+  created_at: string;
+  posted_at?: string | null;
 };
 
 /**
@@ -1020,6 +1054,10 @@ export type ScheduledJobPublic = {
   updated_at?: string | null;
   wp_post_id?: string | null;
   wp_link?: string | null;
+  platform?: "wordpress" | "shopify" | "linkedin";
+  linkedin_commentary?: string | null;
+  linkedin_post_urn?: string | null;
+  linkedin_post_url?: string | null;
 };
 
 export type WorkspaceOverviewStats = {
@@ -1120,6 +1158,7 @@ export type ArticlePublic = {
   wp_link?: string | null;
   wp_post_id?: number | string | null;
   wp_rest_base?: string | null;
+  wp_schedule_wp_status?: string | null;
   wp_last_wp_status?: string | null;
   wp_modified_at?: string | null;
   wp_synced_at?: string | null;
@@ -3448,6 +3487,10 @@ export const api = {
       image_prompt_id?: string | null;
       focus_keyphrase?: string | null;
       generate_image?: boolean;
+      /** Stored as this article's own WordPress post-type default for later scheduling/publishing. */
+      post_type?: string | null;
+      /** Stored as this article's own WordPress status (draft|publish) default for later scheduling/publishing. */
+      wp_status?: string | null;
       /** Shopify only: products to map into content and optional img2img reference. */
       mapped_products?: Array<{
         title: string;
@@ -3847,6 +3890,74 @@ export const api = {
     );
   },
 
+  // Social Media module — LinkedIn
+  async linkedinStatus(projectId: string) {
+    return apiFetch<LinkedInStatus>(`/api/projects/${projectId}/linkedin/status`);
+  },
+  async linkedinConnectUrl(projectId: string) {
+    return apiFetch<{ url: string }>(`/api/projects/${projectId}/linkedin/connect-url`);
+  },
+  async linkedinSelectAuthor(projectId: string, authorUrn: string) {
+    return apiFetch<{ ok: boolean; selected_author_urn: string }>(
+      `/api/projects/${projectId}/linkedin/select-author`,
+      { method: "POST", body: JSON.stringify({ author_urn: authorUrn }) },
+    );
+  },
+  async linkedinDisconnect(projectId: string) {
+    return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/linkedin/disconnect`, {
+      method: "POST",
+    });
+  },
+  async linkedinGenerateCaption(projectId: string, articleId: string) {
+    return apiFetch<{ text: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/linkedin/generate-caption`,
+      { method: "POST" },
+    );
+  },
+  async linkedinPost(projectId: string, articleId: string, commentary: string) {
+    return apiFetch<{ id: string; post_url: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/linkedin/post`,
+      { method: "POST", body: JSON.stringify({ commentary }) },
+    );
+  },
+  async linkedinSchedule(
+    projectId: string,
+    articleId: string,
+    payload: { run_at: string; commentary: string; user_timezone?: string },
+  ) {
+    return apiFetch<{ ok: boolean; id: string; status: string; run_at: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/linkedin/schedule`,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+  },
+
+  // Social Media module — Quora
+  async quoraDiscoverQuestions(projectId: string, keywords?: string[]) {
+    const qs = keywords && keywords.length ? `?keywords=${encodeURIComponent(keywords.join(","))}` : "";
+    return apiFetch<{ questions: QuoraQuestion[] }>(
+      `/api/projects/${projectId}/quora/discover-questions${qs}`,
+    );
+  },
+  async quoraGenerateAnswer(
+    projectId: string,
+    articleId: string,
+    payload: { question: string; question_url: string },
+  ) {
+    return apiFetch<{ id: string; text: string; question_url: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/quora/generate-answer`,
+      { method: "POST", body: JSON.stringify(payload) },
+    );
+  },
+  async socialPostMarkPosted(postId: string) {
+    return apiFetch<{ ok: boolean }>(`/api/social-posts/${postId}/mark-posted`, {
+      method: "POST",
+    });
+  },
+  async listProjectSocialPosts(projectId: string, platform?: "linkedin" | "quora") {
+    const qs = platform ? `?platform=${platform}` : "";
+    return apiFetch<{ posts: SocialPost[] }>(`/api/projects/${projectId}/social-posts${qs}`);
+  },
+
   // Feature 3 — Site Map (Internal Linking ingestion)
   async siteMapList(projectId: string) {
     return apiFetch<SiteMapListResponse>(`/api/projects/${projectId}/site-map`);
@@ -3952,6 +4063,10 @@ export const api = {
       image_prompt_id?: string | null;
       /** ``null``/omitted ⇒ generate every pending topic. */
       topic_ids?: string[] | null;
+      /** Stored as each generated article's own WordPress post-type default. */
+      post_type?: string | null;
+      /** Stored as each generated article's own WordPress status (draft|publish) default. */
+      wp_status?: string | null;
       mapped_products?: Array<{
         title: string;
         handle: string;

@@ -68,6 +68,7 @@ Note: requesting `--build` on one service still recreates its `depends_on` depen
 - Dashboard modals must use `useFocusTrap` (`frontend/src/lib/useFocusTrap.ts`) — never `window.confirm` / `window.alert`
 - Use semantic z-index tokens (`--z-dropdown` → `--z-tooltip`) — never hardcode `999` / `9999`
 - Any `dangerouslySetInnerHTML` of markdown-derived content must go through `markdownToArticleHtml()` (`frontend/src/lib/articleMarkdown.ts`), which sanitizes with DOMPurify — never call `marked.parse()` directly and inject the result
+- Never combine `from __future__ import annotations` (file-level) with `@limiter.limit` on a FastAPI route that takes a Pydantic request body — this silently breaks FastAPI's body-vs-query detection (the Pydantic body param gets misclassified as a required query param, no import-time error, just a wrong 422 "Field required" the first time the route is actually called). Confirmed live in `app/api/routes/payments.py`'s `/razorpay/order` route. If a route needs both rate limiting and a JSON body, drop the future-annotations import from that file (see `auth.py`'s `/login` for the proven-working pattern) rather than adding it to a file that also uses `@limiter.limit`.
 
 ---
 

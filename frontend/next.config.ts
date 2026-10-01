@@ -37,11 +37,19 @@ const isProduction = process.env.NODE_ENV === "production";
 // there's no reason to carry it since dev's CSP has no bearing on prod's.
 const cspDirectives = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isProduction ? "" : " 'unsafe-eval'"}`,
+  // Razorpay Checkout: checkout.razorpay.com/cdn.razorpay.com serve the widget script,
+  // checkout.razorpay.com/api.razorpay.com render the payment iframe (checkout-frame.js),
+  // and api.razorpay.com/lumberjack.razorpay.com are the payment + analytics API calls
+  // the widget makes once open. Without all three directives the script silently fails
+  // to load (browsers don't surface CSP violations as a catchable JS error, just a
+  // blocked network request), which is exactly the "couldn't load the payment provider"
+  // failure this was added to fix.
+  `script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://cdn.razorpay.com${isProduction ? "" : " 'unsafe-eval'"}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: https:",
   "font-src 'self' data:",
-  "connect-src 'self' https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.sentry.io https://bam.nr-data.net https://bam-cell.nr-data.net",
+  "connect-src 'self' https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.sentry.io https://bam.nr-data.net https://bam-cell.nr-data.net https://api.razorpay.com https://lumberjack.razorpay.com",
+  "frame-src https://checkout.razorpay.com https://api.razorpay.com",
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

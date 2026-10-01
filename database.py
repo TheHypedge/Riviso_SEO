@@ -274,6 +274,10 @@ def init_db() -> None:
     db.payments.create_index([("status", 1), ("created_at", 1)])
     # Webhook-event dedup markers only need to survive Razorpay's retry window.
     db.webhook_events_seen.create_index("seen_at", expireAfterSeconds=60 * 60 * 24 * 30)
+
+    # Social Media module
+    db.social_posts.create_index([("project_id", 1), ("created_at", -1)])
+    db.social_posts.create_index([("project_id", 1), ("platform", 1), ("created_at", -1)])
     # NOTE: TTL indexes on users.email_verification_expires_at and
     # users.password_reset_expires_at were removed because they caused MongoDB
     # to delete entire user documents after a password reset or unverified

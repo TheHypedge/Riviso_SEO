@@ -264,6 +264,8 @@ def _parse_riviso_ping_payload(raw: Any) -> dict[str, Any] | None:
         "version": str(raw.get("version") or "").strip(),
         "connector_id": connector_id,
         "yoast_active": bool(raw.get("yoast_active")),
+        "rank_math_active": bool(raw.get("rank_math_active")),
+        "seo_platform": str(raw.get("seo_platform") or "").strip(),
         "site_url": str(raw.get("site_url") or "").strip(),
     }
 
@@ -391,7 +393,11 @@ async def _probe_riviso_plugin(
             version = ping_hit.get("version") or ""
             head = ping_hit["plugin"] + (f" v{version}" if version else "")
             tail = f", connector {ping_hit['connector_id'][:8]}…"
-            yoast = "yes" if ping_hit.get("yoast_active") else "no"
+            seo_platform = (ping_hit.get("seo_platform") or "").strip().lower()
+            seo_label = {
+                "rank_math": "Rank Math",
+                "yoast": "Yoast",
+            }.get(seo_platform, "Yoast" if ping_hit.get("yoast_active") else "none detected")
 
             publish_state = "missing"
             for ns in dict.fromkeys((ping_ns, *_RIVISO_PLUGIN_NAMESPACES)):
@@ -411,7 +417,7 @@ async def _probe_riviso_plugin(
             if publish_state == "ok":
                 return (
                     "active",
-                    f"Plugin: active and verified ({head}, Yoast: {yoast}{tail}). "
+                    f"Plugin: active and verified ({head}, SEO plugin: {seo_label}{tail}). "
                     "Publish route is available.",
                 )
 
@@ -432,7 +438,7 @@ async def _probe_riviso_plugin(
 
             return (
                 "upgrade_required",
-                f"Plugin: detected ({head}, Yoast: {yoast}{tail}) but the publish route "
+                f"Plugin: detected ({head}, SEO plugin: {seo_label}{tail}) but the publish route "
                 "was not verified. Install the latest Riviso connector from Project Settings "
                 "→ Download plugin, activate it in WordPress → Plugins, then verify again.",
             )
@@ -599,7 +605,6 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
         shopify_client_id=shop_client_id if is_owner else None,
         shopify_client_secret_set=bool(shop_client_secret),
         shopify_access_token_set=bool(shop_token),
-        shopify_access_token=None,
         shopify_verified_at=(proj.get("shopify_verified_at") or "").strip() or None,
         shopify_verified_status=(proj.get("shopify_verified_status") or "").strip() or None,
         shopify_verified_message=(proj.get("shopify_verified_message") or "").strip() or None,

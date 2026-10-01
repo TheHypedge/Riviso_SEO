@@ -433,15 +433,13 @@ async def publish_article_to_wordpress(*, st=None, proj: dict, article: dict, po
     _loader = _build_image_loader(_st, article_id, project_id=article_project_id) if article_id else None
     featured_media_id = await resolve_featured_media_id(wp, article, timeout=90.0, load_image_url=_loader)
 
+    from app.services.wordpress_sync import build_wp_seo_meta_payload
+
     payload: dict = {
         "title": title[:500],
         "status": (wp_status or "draft").strip().lower(),
         "content": content_html,
-        "meta": {
-            "_yoast_wpseo_title": (article.get("meta_title") or "").strip()[:400],
-            "_yoast_wpseo_metadesc": (article.get("meta_description") or "").strip()[:600],
-            "_yoast_wpseo_focuskw": (article.get("focus_keyphrase") or "").strip()[:500],
-        },
+        "meta": build_wp_seo_meta_payload(article),
     }
     if featured_media_id is not None:
         payload["featured_media"] = featured_media_id
@@ -584,6 +582,95 @@ async def publish_article_to_shopify_scheduled(
         "shopify_link": link,
         "status": "published" if publish_now else "draft",
     }
+
+
+async def _publish_scheduled_job_to_linkedin(*, st, jid: str, proj: dict, art: dict, job: dict) -> None:
+    """Fully handles a `platform=="linkedin"` scheduled job: double-post guard, caption
+    (pre-generated at schedule time, or generated fresh here if missing), image upload,
+    the LinkedIn post itself, and persisting the result to both scheduled_jobs and the
+    article doc -- mirrors publish_article_to_wordpress/_shopify_scheduled's contract
+    (raise on failure, return normally on success) but never touches their code paths."""
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Double-post guard, same convention as the WordPress/Shopify branches above.
+    existing_urn = str(art.get("linkedin_post_urn") or job.get("linkedin_post_urn") or "").strip()
+    if existing_urn:
+        await run_sync(
+            st.update_scheduled_job_fields, jid,
+            {"state": "posted", "linkedin_post_urn": existing_urn,
+             "linkedin_post_url": str(art.get("linkedin_post_url") or job.get("linkedin_post_url") or ""),
+             "last_error": "", "updated_at": now_str},
+        )
+        return
+
+    try:
+        from app.services import linkedin_client
+        from app.services.social_caption_generator import generate_linkedin_caption
+
+        access_token = (proj.get("linkedin_access_token") or "").strip()
+        author_urn = (proj.get("linkedin_selected_author_urn") or proj.get("linkedin_person_urn") or "").strip()
+        if not access_token or not author_urn:
+            raise RuntimeError("LinkedIn is not connected for this project.")
+
+        commentary = (job.get("linkedin_commentary") or "").strip()
+        if not commentary:
+            commentary = await generate_linkedin_caption(art)
+        if not commentary:
+            raise RuntimeError("Could not generate a LinkedIn caption for this article.")
+
+        article_url = (art.get("wp_link") or art.get("shopify_link") or "").strip() or None
+        thumbnail_urn = await linkedin_client.upload_article_thumbnail(
+            st=st,
+            project_id=(job.get("project_id") or "").strip(),
+            article_id=(job.get("article_id") or "").strip(),
+            access_token=access_token,
+            owner_urn=author_urn,
+        )
+
+        result = await linkedin_client.create_post(
+            access_token=access_token,
+            author_urn=author_urn,
+            commentary=commentary,
+            article_url=article_url,
+            thumbnail_urn=thumbnail_urn,
+            title=(art.get("title") or "").strip() or None,
+            description=(art.get("meta_description") or "").strip() or None,
+        )
+    except Exception as e:
+        log.exception("Scheduled LinkedIn post failed jid=%s", jid)
+        await run_sync(
+            st.update_scheduled_job_fields, jid,
+            {"state": "failed", "last_error": str(e)[:2000], "updated_at": now_str},
+        )
+        return
+
+    await run_sync(
+        st.update_scheduled_job_fields, jid,
+        {"state": "posted", "linkedin_post_urn": result["post_urn"], "linkedin_post_url": result["post_url"],
+         "last_error": "", "updated_at": now_str},
+    )
+    if hasattr(st, "patch_article_fields"):
+        await run_sync(
+            st.patch_article_fields, (art.get("id") or "").strip(),
+            {"linkedin_post_urn": result["post_urn"], "linkedin_post_url": result["post_url"]},
+        )
+    if hasattr(st, "create_social_post"):
+        import uuid as _uuid
+
+        await run_sync(
+            st.create_social_post,
+            {
+                "id": str(_uuid.uuid4()),
+                "project_id": (job.get("project_id") or "").strip(),
+                "article_id": (job.get("article_id") or "").strip(),
+                "platform": "linkedin",
+                "status": "posted",
+                "content_text": commentary,
+                "external_url": result["post_url"],
+                "created_at": now_str,
+                "posted_at": now_str,
+            },
+        )
 
 
 def _parse_job_category_ids(job: dict) -> list[int]:
@@ -1046,6 +1133,8 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
     _last_trial_reminder_check = 0.0
     _SUBSCRIPTION_RECONCILE_INTERVAL = 900.0  # sweep stale payments + renewal reminders every 15 min
     _last_subscription_reconcile_check = 0.0
+    _LINKEDIN_RECONNECT_INTERVAL = 900.0  # check LinkedIn token-expiry reminders every 15 min
+    _last_linkedin_reconnect_check = 0.0
 
     # When Mongo/storage is temporarily unavailable, avoid noisy tracebacks every poll.
     # Back off with a capped retry delay, and throttle logs.
@@ -1229,6 +1318,17 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                         )
                     if not art:
                         raise RuntimeError("Article not found")
+
+                    # Social Media module: LinkedIn is an *additional* connection
+                    # alongside the project's one CMS, not a replacement for it -- so
+                    # this branch is keyed on the JOB's platform, not the project's, and
+                    # fully handles its own success/failure before `continue`ing, never
+                    # falling into the WordPress/Shopify-specific logic or its shared
+                    # exception-reconciliation handler below (which checks wp_post_id/
+                    # shopify_article_id, neither of which a LinkedIn job has).
+                    if (j.get("platform") or "wordpress") == "linkedin":
+                        await _publish_scheduled_job_to_linkedin(st=st, jid=jid, proj=proj, art=art, job=j)
+                        continue
 
                     _is_shopify_job = is_shopify_project(proj)
 
@@ -1547,5 +1647,15 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                 await check_renewal_milestones(_st)
             except Exception:
                 log.exception("subscription_reconcile: unhandled error")
+
+        # LinkedIn token-expiry reconnect reminders — every 15 minutes
+        if now_mono - _last_linkedin_reconnect_check >= _LINKEDIN_RECONNECT_INTERVAL:
+            _last_linkedin_reconnect_check = now_mono
+            try:
+                from app.services.linkedin_reconnect_service import check_linkedin_reconnect_reminders
+                _st = get_legacy_storage_module()
+                await check_linkedin_reconnect_reminders(_st)
+            except Exception:
+                log.exception("linkedin_reconnect: unhandled error")
 
         await asyncio.sleep(poll_seconds)

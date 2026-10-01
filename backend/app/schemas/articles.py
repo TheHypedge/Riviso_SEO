@@ -66,6 +66,10 @@ class ArticlePublic(BaseModel):
         default=None,
         description="WordPress REST collection used for this post (e.g. posts, pages).",
     )
+    wp_schedule_wp_status: str | None = Field(
+        default=None,
+        description="WordPress status (draft/publish) stored as this article's own default.",
+    )
     gsc_status: str | None = None
     gsc_inspection_requested_at: str | None = None
     gsc_inspection_last_attempt_at: str | None = None
@@ -330,6 +334,12 @@ class GenerateRequest(BaseModel):
     image_prompt_id: str | None = Field(default=None, max_length=100)
     focus_keyphrase: str | None = Field(default=None, max_length=500)
     generate_image: bool = True
+    post_type: str | None = Field(
+        default=None, max_length=200, description="WordPress post type to store as this article's default."
+    )
+    wp_status: str | None = Field(
+        default=None, max_length=16, description="WordPress status (draft|publish) to store as this article's default."
+    )
     mapped_products: list[MappedShopifyProductInput] | None = Field(
         default=None,
         max_length=12,

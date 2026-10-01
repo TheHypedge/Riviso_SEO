@@ -9132,7 +9132,13 @@
   top: 50%;
   transform: translate(-50%, -50%);
   width: min(640px, calc(100% - 24px));
-  background: var(--aa-surface-dark-elevated, var(--aa-surface-card));
+  /* Solid, not --aa-surface-card/--aa-surface-dark-elevated -- both are semi-transparent
+     in dark theme (rgba alpha < 1, a deliberate frosted-glass look for in-page cards),
+     which lets page content behind the modal bleed through. A modal's entire purpose is
+     to focus attention and block interaction with what's behind it, so it needs a fully
+     opaque background regardless of theme -- --aa-void-elevated is the one surface token
+     with no alpha channel in either theme. */
+  background: var(--aa-void-elevated);
   border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-lg);
   padding: 16px;

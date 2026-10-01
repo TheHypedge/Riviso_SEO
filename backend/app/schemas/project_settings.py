@@ -12,11 +12,15 @@ class ProjectSettingsPublic(BaseModel):
     shopify_connected: bool = False
     shopify_client_id: str | None = None
     shopify_client_secret_set: bool = False
+    # Only the presence flag is exposed; the token itself is never returned in API
+    # responses (matches wp_app_password_set's pattern below). The route that builds
+    # this response always passes shopify_access_token=None -- there used to be a raw
+    # `shopify_access_token: str | None` field here too, always null in practice but a
+    # live footgun: one frontend call site read it directly instead of the _set flag,
+    # so it silently believed every Shopify project was disconnected. Removed rather
+    # than left unused, since a field that looks like it should hold a real secret is
+    # exactly the kind of thing a future change accidentally populates for real.
     shopify_access_token_set: bool = False
-    shopify_access_token: str | None = Field(
-        default=None,
-        description="Resolved Admin API token (shpat_); refreshed via client credentials when expired.",
-    )
     shopify_verified_at: str | None = None
     shopify_verified_status: str | None = None
     shopify_verified_message: str | None = None

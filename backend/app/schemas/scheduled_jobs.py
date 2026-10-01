@@ -22,6 +22,12 @@ class ScheduledJobPublic(BaseModel):
     updated_at: str | None = None
     wp_post_id: str | None = None
     wp_link: str | None = None
+    # Social Media module: "wordpress"/"shopify" (default, implicit) or "linkedin" --
+    # an additional connection alongside the project's one CMS, never a replacement.
+    platform: str = "wordpress"
+    linkedin_commentary: str | None = None
+    linkedin_post_urn: str | None = None
+    linkedin_post_url: str | None = None
 
 
 class ScheduledJobUpdate(BaseModel):

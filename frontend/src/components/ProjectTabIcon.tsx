@@ -16,7 +16,8 @@ export type ProjectTabKey =
   | "performance"
   | "project_settings"
   | "members"
-  | "site_audit";
+  | "site_audit"
+  | "social";
 
 type IconProps = { className?: string };
 
@@ -130,6 +131,15 @@ export function ProjectTabIcon({ tab, className }: { tab: ProjectTabKey; classNa
         <Svg className={className}>
           <path d="M12 2l8 3.5v5.5c0 5-3.4 8.9-8 11-4.6-2.1-8-6-8-11V5.5L12 2z" {...S} />
           <path d="M9 12.5l2 2 4-4.5" {...S} />
+        </Svg>
+      );
+    case "social":
+      return (
+        <Svg className={className}>
+          <circle cx="18" cy="5" r="3" {...S} />
+          <circle cx="6" cy="12" r="3" {...S} />
+          <circle cx="18" cy="19" r="3" {...S} />
+          <path d="M8.6 10.5l6.8-4M8.6 13.5l6.8 4" {...S} />
         </Svg>
       );
     default:

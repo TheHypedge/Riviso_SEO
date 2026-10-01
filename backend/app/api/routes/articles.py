@@ -1310,14 +1310,14 @@ async def insert_article_media_from_url(
     if len(resp.content) > MAX_ARTICLE_MEDIA_BYTES:
         raise HTTPException(status_code=400, detail="That image is too large (max 8MB).")
 
-    image_id = await run_sync(
+    image_id, cloudinary_url = await run_sync(
         save_article_media,
         data=resp.content,
         content_type=content_type,
         project_id=project_id,
         article_id=article_id,
     )
-    return ArticleMediaResponse(id=image_id, url=_article_media_public_url(image_id))
+    return ArticleMediaResponse(id=image_id, url=cloudinary_url or _article_media_public_url(image_id))
 
 
 @router.post("/{article_id}/media/upload", response_model=ArticleMediaResponse)
@@ -1344,14 +1344,14 @@ async def insert_article_media_upload(
     if len(data) > MAX_ARTICLE_MEDIA_BYTES:
         raise HTTPException(status_code=400, detail="That image is too large (max 8MB).")
 
-    image_id = await run_sync(
+    image_id, cloudinary_url = await run_sync(
         save_article_media,
         data=data,
         content_type=content_type,
         project_id=project_id,
         article_id=article_id,
     )
-    return ArticleMediaResponse(id=image_id, url=_article_media_public_url(image_id))
+    return ArticleMediaResponse(id=image_id, url=cloudinary_url or _article_media_public_url(image_id))
 
 
 @router.post("/{article_id}/media/generate", response_model=ArticleMediaResponse)
@@ -1399,14 +1399,14 @@ async def insert_article_media_generate(
     if len(data) > MAX_ARTICLE_MEDIA_BYTES:
         raise HTTPException(status_code=400, detail="Generated image is too large (max 8MB).")
 
-    image_id = await run_sync(
+    image_id, cloudinary_url = await run_sync(
         save_article_media,
         data=data,
         content_type=content_type,
         project_id=project_id,
         article_id=article_id,
     )
-    return ArticleMediaResponse(id=image_id, url=_article_media_public_url(image_id))
+    return ArticleMediaResponse(id=image_id, url=cloudinary_url or _article_media_public_url(image_id))
 
 
 @router.post("/bulk", status_code=200)
@@ -2138,6 +2138,13 @@ async def generate_article_and_image(
             ]
 
     aid = (article_id or "").strip()
+    post_type_norm: str | None = None
+    wp_status_norm: str | None = None
+    if payload.post_type or payload.wp_status:
+        wp_status_norm = (payload.wp_status or "draft").strip().lower()
+        if wp_status_norm not in {"draft", "publish"}:
+            raise HTTPException(status_code=400, detail="Invalid wp_status (draft|publish)")
+        post_type_norm = (payload.post_type or "").strip() or (proj.get("default_wp_rest_base") or "").strip() or "posts"
     gen_payload = {
         "writing_prompt_id": wp_id,
         "image_prompt_id": ip_id,
@@ -2145,6 +2152,8 @@ async def generate_article_and_image(
         "focus_keyphrase": payload.focus_keyphrase,
         "mapped_products": mapped_products_payload,
         "mapped_pages": mapped_pages_payload,
+        "post_type": post_type_norm,
+        "wp_status": wp_status_norm,
     }
 
     if should_use_async_queue():
@@ -2178,7 +2187,7 @@ async def generate_article_and_image(
 
     async with user_generation_slot((user.get("id") or "").strip()):
         async with generation_slot():
-            return await execute_article_generation(
+            result = await execute_article_generation(
                 st=st,
                 user=user,
                 proj=proj,
@@ -2192,6 +2201,11 @@ async def generate_article_and_image(
                 mapped_products=mapped_products_payload,
                 mapped_pages=mapped_pages_payload,
             )
+            if post_type_norm or wp_status_norm:
+                await run_sync(st.patch_article_fields, aid, {
+                    "wp_rest_base": post_type_norm, "wp_schedule_wp_status": wp_status_norm,
+                })
+            return result
 
 
 @router.get("/{article_id}/events")
@@ -2952,16 +2966,15 @@ async def publish_to_live_site(
             load_image_url=_featured_image_url_loader(st, project_id, article_id),
         )
 
+    from app.services.wordpress_sync import build_wp_seo_meta_payload
+
     payload: dict = {
         "title": title[:500],
         "status": (wp_status or "draft").strip().lower(),
         "content": content_html,
-        "meta": {
-            # Yoast SEO meta keys (best-effort; requires Yoast + REST meta enabled)
-            "_yoast_wpseo_title": (a.get("meta_title") or "").strip()[:400],
-            "_yoast_wpseo_metadesc": (a.get("meta_description") or "").strip()[:600],
-            "_yoast_wpseo_focuskw": (a.get("focus_keyphrase") or "").strip()[:500],
-        },
+        # Yoast + Rank Math + AIOSEO meta keys, best-effort (requires the SEO plugin's
+        # fields to be REST-writable -- the Riviso connector plugin registers these).
+        "meta": build_wp_seo_meta_payload(a),
     }
     if featured_media_id is not None:
         payload["featured_media"] = featured_media_id
@@ -3431,15 +3444,13 @@ async def update_wordpress_post(
             "Ensure the WordPress user has upload_files permission and REST media uploads are allowed."
         )
 
+    from app.services.wordpress_sync import build_wp_seo_meta_payload
+
     payload: dict = {
         "title": title[:500],
         "status": status_in,
         "content": content_html,
-        "meta": {
-            "_yoast_wpseo_title": (a.get("meta_title") or "").strip()[:400],
-            "_yoast_wpseo_metadesc": (a.get("meta_description") or "").strip()[:600],
-            "_yoast_wpseo_focuskw": (a.get("focus_keyphrase") or "").strip()[:500],
-        },
+        "meta": build_wp_seo_meta_payload(a),
     }
     if featured_media_id is not None:
         payload["featured_media"] = featured_media_id

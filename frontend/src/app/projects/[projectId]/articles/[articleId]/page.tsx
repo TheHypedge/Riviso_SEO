@@ -48,6 +48,7 @@ import type { MappedWordPressPage } from "@/lib/wordpressPageMapping";
 import { resolveFeaturedImageFileForWordPress } from "@/lib/featuredImageFile";
 import { formatShopifyBlogOptionLabel, SHOPIFY_BLOG_CHANNEL_HELP } from "@/lib/shopifyBlogLabel";
 import { ProjectSidebar, ProjectSidebarStyles } from "@/components/ProjectSidebar";
+import { LinkedInPostPreview } from "@/components/LinkedInPostPreview";
 import type { ProfilePublic, ProjectPublic } from "@/lib/api";
 
 
@@ -484,6 +485,14 @@ export default function ArticleEditPage() {
   const [regenCustomPrompt, setRegenCustomPrompt] = useState("");
   const [websiteConnectionModal, setWebsiteConnectionModal] = useState(false);
   const [connectModalOpen, setConnectModalOpen] = useState(false);
+  const [linkedinShareModal, setLinkedinShareModal] = useState(false);
+  const [linkedinShareStatus, setLinkedinShareStatus] = useState<import("@/lib/api").LinkedInStatus | null>(null);
+  const [linkedinCaption, setLinkedinCaption] = useState("");
+  const [linkedinCaptionLoading, setLinkedinCaptionLoading] = useState(false);
+  const [linkedinShareBusy, setLinkedinShareBusy] = useState(false);
+  const [linkedinShareMsg, setLinkedinShareMsg] = useState<string | null>(null);
+  const [linkedinShareMode, setLinkedinShareMode] = useState<"now" | "schedule">("now");
+  const [linkedinScheduleAt, setLinkedinScheduleAt] = useState("");
   const [imageRegenBusy, setImageRegenBusy] = useState(false);
   const [imageGenPhase, setImageGenPhase] = useState<"idle" | "generating" | "saving">("idle");
   const [wpPublishBusy, setWpPublishBusy] = useState(false);
@@ -809,8 +818,8 @@ export default function ArticleEditPage() {
         setFeaturedImageLoadFailed(false);
       }
       // Disk-backed image: keep any already-loaded URL; dedicated effect fetches once.
-      // Post type is NOT synced from article.wp_rest_base here — ensureWpMetaLoaded
-      // always sets it from the project's current default_wp_rest_base.
+      // Post type IS synced from article.wp_rest_base — see ensureWpMetaLoaded, which
+      // prefers the article's own stored default over the project's current default.
     },
     [params.projectId, params.articleId],
   );
@@ -1150,12 +1159,12 @@ export default function ArticleEditPage() {
       }
       if (psRes.status === "fulfilled") {
         const ps = psRes.value;
-        // Always use the project's current post type — changes in Project Settings
-        // take effect immediately for all new publications regardless of what was
-        // stored on the article from a previous publish.
-        setWpPostType((ps.default_wp_rest_base || "posts") as string);
+        // Prefer this article's own stored default (set at generate time, or from a
+        // previous publish) over the project-wide default, which only applies when
+        // the article has never had its own value set.
+        setWpPostType((article?.wp_rest_base || ps.default_wp_rest_base || "posts") as string);
         if (!isLiveOnWordPress) {
-          setWpStatus(((ps.default_wp_status || "draft") as "draft" | "publish"));
+          setWpStatus(((article?.wp_schedule_wp_status || ps.default_wp_status || "draft") as "draft" | "publish"));
           const articleCats = (article?.wp_category_ids || "").split(",").map(Number).filter(n => Number.isFinite(n) && n > 0);
           setWpCategoryIds(articleCats.length ? articleCats : (ps.default_wp_category_ids || []) as number[]);
         }
@@ -1871,6 +1880,56 @@ export default function ArticleEditPage() {
     }
   }
 
+  async function openLinkedinShareModal() {
+    setLinkedinShareModal(true);
+    setLinkedinShareMsg(null);
+    setLinkedinShareMode("now");
+    setLinkedinScheduleAt("");
+    setLinkedinCaption("");
+    try {
+      const st = await api.linkedinStatus(params.projectId);
+      setLinkedinShareStatus(st);
+      if (!st.connected) return;
+      setLinkedinCaptionLoading(true);
+      const res = await api.linkedinGenerateCaption(params.projectId, params.articleId);
+      setLinkedinCaption(res.text);
+    } catch (e) {
+      setLinkedinShareMsg(e instanceof Error ? e.message : "Failed to load LinkedIn status");
+    } finally {
+      setLinkedinCaptionLoading(false);
+    }
+  }
+
+  async function submitLinkedinShare() {
+    const commentary = linkedinCaption.trim();
+    if (!commentary) {
+      setLinkedinShareMsg("Write or generate a caption first.");
+      return;
+    }
+    setLinkedinShareBusy(true);
+    setLinkedinShareMsg(null);
+    try {
+      if (linkedinShareMode === "schedule") {
+        if (!linkedinScheduleAt) {
+          setLinkedinShareMsg("Pick a date and time to schedule this post.");
+          return;
+        }
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        await api.linkedinSchedule(params.projectId, params.articleId, { run_at: linkedinScheduleAt, commentary, user_timezone: tz });
+        setLinkedinShareModal(false);
+        setNotice("LinkedIn post scheduled.");
+      } else {
+        const res = await api.linkedinPost(params.projectId, params.articleId, commentary);
+        setLinkedinShareModal(false);
+        setNotice(`Posted to LinkedIn.\n${res.post_url}`);
+      }
+    } catch (e) {
+      setLinkedinShareMsg(e instanceof Error ? e.message : "Failed to share to LinkedIn");
+    } finally {
+      setLinkedinShareBusy(false);
+    }
+  }
+
   const shopifyLink = (article?.shopify_link || "").trim();
   const shopifyCanPublish =
     websiteConnected &&
@@ -1881,6 +1940,16 @@ export default function ArticleEditPage() {
   const shopifyMissingPublishScopes = shopifyStatus?.missing_publish_scopes || [];
 
   const displayTitle = (title || article?.title || "Article").trim() || "Article";
+
+  const linkedinArticleUrl = (article?.wp_link || article?.shopify_link || "").trim();
+  let linkedinArticleDomain: string | null = null;
+  if (linkedinArticleUrl) {
+    try {
+      linkedinArticleDomain = new URL(linkedinArticleUrl).hostname;
+    } catch {
+      linkedinArticleDomain = null;
+    }
+  }
 
   if (!editorPath) {
     return (
@@ -2117,6 +2186,68 @@ export default function ArticleEditPage() {
           </div>
         ) : null}
 
+        {linkedinShareModal ? (
+          <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Share to LinkedIn">
+            <div className={styles.modalPanel} style={{ maxWidth: 640, maxHeight: "85vh", overflowY: "auto" }}>
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>Share to LinkedIn</h3>
+                <button type="button" className={styles.iconButton} aria-label="Close" disabled={linkedinShareBusy} onClick={() => setLinkedinShareModal(false)}>×</button>
+              </div>
+              <div className={styles.modalBody} style={{ display: "grid", gap: 14 }}>
+                {linkedinShareMsg ? <p className={styles.error} style={{ margin: 0 }}>{linkedinShareMsg}</p> : null}
+                {!linkedinShareStatus?.connected ? (
+                  <p className={styles.muted} style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>
+                    LinkedIn is not connected for this project yet. Go to the Social tab to connect a LinkedIn
+                    account, then come back here to share this article.
+                  </p>
+                ) : linkedinCaptionLoading ? (
+                  <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>Generating a caption…</p>
+                ) : (
+                  <>
+                    <div>
+                      <div className={styles.muted} style={{ fontSize: 12, marginBottom: 6 }}>
+                        This is exactly how your post will look on LinkedIn — edit the text directly below.
+                      </div>
+                      <LinkedInPostPreview
+                        authorName={linkedinShareStatus?.member_name || "You"}
+                        captionText={linkedinCaption}
+                        onCaptionChange={setLinkedinCaption}
+                        articleTitle={displayTitle}
+                        articleImageUrl={generatedImageUrl || article?.image_url || null}
+                        articleDomain={linkedinArticleDomain}
+                      />
+                    </div>
+                    <div style={{ display: "flex", gap: 16 }}>
+                      <label className={styles.label} style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
+                        <input type="radio" name="linkedin-share-mode" checked={linkedinShareMode === "now"} onChange={() => setLinkedinShareMode("now")} /> Post now
+                      </label>
+                      <label className={styles.label} style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
+                        <input type="radio" name="linkedin-share-mode" checked={linkedinShareMode === "schedule"} onChange={() => setLinkedinShareMode("schedule")} /> Schedule
+                      </label>
+                    </div>
+                    {linkedinShareMode === "schedule" ? (
+                      <input
+                        type="datetime-local"
+                        className={styles.input}
+                        value={linkedinScheduleAt}
+                        onChange={(e) => setLinkedinScheduleAt(e.target.value)}
+                      />
+                    ) : null}
+                  </>
+                )}
+              </div>
+              <div className={styles.modalFooter}>
+                <button className={styles.btnSecondary} type="button" disabled={linkedinShareBusy} onClick={() => setLinkedinShareModal(false)}>Cancel</button>
+                {linkedinShareStatus?.connected ? (
+                  <button className={styles.button} type="button" disabled={linkedinShareBusy || linkedinCaptionLoading || !linkedinCaption.trim()} onClick={() => void submitLinkedinShare()}>
+                    {linkedinShareBusy ? "Sharing…" : linkedinShareMode === "schedule" ? "Schedule" : "Post Now"}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {websiteConnectionModal ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Website not connected">
             <div className={styles.modalPanel}>
@@ -2260,6 +2391,9 @@ export default function ArticleEditPage() {
               <div className={editorStyles.commandBarActions}>
                 <button type="button" className={styles.btnSecondary} onClick={exportPdf} disabled={!body.trim() || exportingPdf}>
                   {exportingPdf ? "Exporting…" : "Export PDF"}
+                </button>
+                <button type="button" className={styles.btnSecondary} onClick={() => void openLinkedinShareModal()} disabled={!body.trim()}>
+                  Share to LinkedIn
                 </button>
                 {isDirty ? (
                   <button type="button" className={styles.btnSecondary} onClick={save} disabled={editorLocked}>

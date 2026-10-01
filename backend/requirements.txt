@@ -28,3 +28,4 @@ sentry-sdk==2.43.0
 newrelic==13.4.0
 playwright==1.63.0
 razorpay==2.0.1
+cloudinary==1.46.2

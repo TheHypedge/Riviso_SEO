@@ -12,9 +12,15 @@ Access enforcement is declarative, not driven by this module: a paid payment set
 ``current_period_start``/``current_period_end`` on the subscription doc, and
 ``plan_gatekeeper.assert_subscription_active()`` computes lockout from that date at
 check-time, exactly like today's trial expiry -- nothing here ever "downgrades" a user.
-"""
 
-from __future__ import annotations
+NOTE: deliberately NOT using ``from __future__ import annotations`` in this file. Combined
+with ``@limiter.limit`` on a route, it silently breaks FastAPI's body-vs-query detection for
+Pydantic body params (confirmed: ``create_razorpay_order``'s ``payload: CreateOrderRequest``
+was being resolved as a required *query* parameter instead of the JSON body, with no
+import-time error -- just a wrong-looking 422 "Field required" at request time). See
+``auth.py``'s ``/login`` route for the same ``@limiter.limit`` + Pydantic-body shape working
+correctly without the future import. Also noted in CLAUDE.md's Critical rules.
+"""
 
 import json
 import logging

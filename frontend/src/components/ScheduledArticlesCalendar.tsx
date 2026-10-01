@@ -180,10 +180,11 @@ export function ScheduledArticlesCalendar({
                         key={j.id}
                         type="button"
                         className={`${styles.scheduledCalendarBlock} ${blockStatusClass(styles, j.state)}`}
-                        title={`${time} · ${title} · ${jobStateLabel(j.state)}`}
+                        title={`${time} · ${title} · ${jobStateLabel(j.state)}${j.platform === "linkedin" ? " · LinkedIn" : ""}`}
                         onClick={() => onSelectJob(j)}
                       >
                         <span className={styles.scheduledCalendarBlockTime}>{time}</span>
+                        {j.platform === "linkedin" ? <span aria-hidden="true">in </span> : null}
                         <span className={styles.scheduledCalendarBlockTitle}>{title}</span>
                       </button>
                     );

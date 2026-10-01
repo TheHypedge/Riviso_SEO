@@ -210,6 +210,16 @@ async def _handle_article_generate(payload: dict) -> None:
                     mapped_pages=mapped_pages_list,
                     reference_source_content=payload.get("reference_source_content"),
                 )
+                post_type = payload.get("post_type")
+                wp_status = payload.get("wp_status")
+                if post_type or wp_status:
+                    try:
+                        if hasattr(st, "patch_article_fields"):
+                            await run_sync(st.patch_article_fields, aid, {
+                                "wp_rest_base": post_type, "wp_schedule_wp_status": wp_status,
+                            })
+                    except Exception:
+                        pass
     except Exception as exc:
         from fastapi import HTTPException as FastAPIHTTPException
 
@@ -331,6 +341,8 @@ async def _handle_cluster_generate_all(payload: dict) -> None:
             writing_prompt_id=(payload.get("writing_prompt_id") or "").strip() or None,
             image_prompt_id=(payload.get("image_prompt_id") or "").strip() or None,
             topic_ids=payload.get("topic_ids"),
+            post_type=payload.get("post_type"),
+            wp_status=payload.get("wp_status"),
             mapped_products=payload.get("mapped_products"),
         )
 

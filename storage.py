@@ -190,11 +190,49 @@ def _externalize_featured_image_in_updates(article_id: str, updates: dict[str, A
     that they remain available after the CDN URL expires (~1 hour for OpenAI).
     Without this, articles scheduled for later the same day or the next day would
     silently publish without a featured image because the CDN link had expired.
+
+    When Cloudinary is configured (see app.services.cloudinary_storage), this uploads
+    there instead and stores the real, permanent secure_url directly in image_url -- a
+    short URL string doesn't need "externalizing" out of Mongo the way a multi-MB base64
+    blob does, so it just flows through as a normal field. Falls through to the disk
+    logic below when Cloudinary isn't configured or the upload fails.
     """
     u2 = dict(updates or {})
     img = (u2.get("image_url") or "").strip()
     if not img:
         return u2
+
+    from app.services.cloudinary_storage import cloudinary_configured, upload_image_bytes
+
+    if cloudinary_configured():
+        image_bytes: bytes | None = None
+        if img.startswith("data:"):
+            m = re.match(r"^data:([^;]+);base64,(.+)$", img, flags=re.DOTALL)
+            if m:
+                try:
+                    image_bytes = base64.b64decode(m.group(2), validate=True)
+                except Exception:
+                    image_bytes = None
+        elif img.startswith("http://") or img.startswith("https://"):
+            try:
+                from app.services.url_guard import assert_public_http_url
+                import urllib.request as _req
+
+                assert_public_http_url(img)
+                with _req.urlopen(img, timeout=30) as resp:
+                    image_bytes = resp.read()
+            except Exception:
+                image_bytes = None
+        if image_bytes:
+            uploaded = upload_image_bytes(image_bytes, folder=f"riviso/articles/{article_id}", public_id="featured")
+            if uploaded:
+                u2["image_url"] = uploaded["secure_url"]
+                u2["featured_image_cloudinary_public_id"] = uploaded["public_id"]
+                u2["featured_image_storage"] = "cloudinary"
+                return u2
+        # Cloudinary configured but this particular upload failed (bad bytes, network
+        # error) -- fall through to the disk path below rather than losing the image.
+
     if img.startswith("http://") or img.startswith("https://"):
         # Download and persist to disk so the URL can't expire before publish.
         if _download_and_persist_image_url(article_id, img):
@@ -442,6 +480,17 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         "gsc_scope": (d.get("gsc_scope") or "").strip()[:2000],
         "gsc_email": (d.get("gsc_email") or "").strip()[:500],
         "gsc_connected_at": (d.get("gsc_connected_at") or "").strip()[:64],
+        # Social Media module: LinkedIn OAuth (member token; no refresh token in the
+        # standard flow -- linkedin_reconnect_notified tracks the idempotent
+        # "reconnect soon" reminder, same shape as trial_notified_milestones).
+        "linkedin_access_token": (d.get("linkedin_access_token") or "").strip()[:5000],
+        "linkedin_token_expires_at": str(d.get("linkedin_token_expires_at") or "").strip()[:32],
+        "linkedin_person_urn": (d.get("linkedin_person_urn") or "").strip()[:200],
+        "linkedin_member_name": (d.get("linkedin_member_name") or "").strip()[:200],
+        "linkedin_org_urns": list(d.get("linkedin_org_urns") or []),
+        "linkedin_selected_author_urn": (d.get("linkedin_selected_author_urn") or "").strip()[:200],
+        "linkedin_connected_at": (d.get("linkedin_connected_at") or "").strip()[:64],
+        "linkedin_reconnect_notified": bool(d.get("linkedin_reconnect_notified", False)),
         "default_wp_rest_base": (d.get("default_wp_rest_base") or "")[:200],
         "default_wp_status": (d.get("default_wp_status") or "")[:32],
         # WordPress verification snapshot. Populated by the verify route on
@@ -2477,6 +2526,7 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "featured_image_prompt_optimizer_error": d.get("featured_image_prompt_optimizer_error") or "",
         "featured_image_regeneration_count": int(d.get("featured_image_regeneration_count") or 0),
         "featured_image_storage": (d.get("featured_image_storage") or "")[:16],
+        "featured_image_cloudinary_public_id": (d.get("featured_image_cloudinary_public_id") or "")[:300],
         "wp_post_id": wp_id,
         "wp_link": (d.get("wp_link") or "")[:2048],
         "source_url": (d.get("source_url") or "")[:2048],
@@ -2511,6 +2561,10 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "shopify_published_at": (d.get("shopify_published_at") or "")[:64],
         "shopify_scheduled_at": (d.get("shopify_scheduled_at") or "")[:64],
         "shopify_schedule_error": d.get("shopify_schedule_error") or "",
+        # Social Media module -- set once this article has been posted to LinkedIn
+        # (double-post guard for the scheduler; also surfaced in the editor).
+        "linkedin_post_urn": (d.get("linkedin_post_urn") or "")[:200],
+        "linkedin_post_url": (d.get("linkedin_post_url") or "")[:2048],
         "topic_cluster_id": (d.get("topic_cluster_id") or "")[:64],
         "topic_slot_id": (d.get("topic_slot_id") or "")[:64],
         "topic_role": (d.get("topic_role") or "")[:16],
@@ -2559,6 +2613,13 @@ def _normalize_scheduled_job_dict(d: dict[str, Any]) -> dict[str, Any]:
         "wp_link": (d.get("wp_link") or "")[:2048],
         "shopify_article_id": str(d.get("shopify_article_id") or "")[:32],
         "shopify_link": (d.get("shopify_link") or "")[:2048],
+        # Social Media module: "wordpress"/"shopify" (the default, implicit today) or
+        # "linkedin" -- an *additional* connection alongside the project's one CMS, not
+        # a replacement, so this never touches the platform switch above.
+        "platform": (d.get("platform") or "wordpress")[:32],
+        "linkedin_commentary": (d.get("linkedin_commentary") or "")[:3000],
+        "linkedin_post_urn": (d.get("linkedin_post_urn") or "")[:200],
+        "linkedin_post_url": (d.get("linkedin_post_url") or "")[:2048],
     }
 
 
@@ -2612,6 +2673,14 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
             "gsc_scope",
             "gsc_email",
             "gsc_connected_at",
+            "linkedin_access_token",
+            "linkedin_token_expires_at",
+            "linkedin_person_urn",
+            "linkedin_member_name",
+            "linkedin_org_urns",
+            "linkedin_selected_author_urn",
+            "linkedin_connected_at",
+            "linkedin_reconnect_notified",
             "default_wp_rest_base",
             "default_wp_status",
             "created_at",
@@ -2685,6 +2754,7 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "featured_image_prompt_optimizer_error",
             "featured_image_regeneration_count",
             "featured_image_storage",
+            "featured_image_cloudinary_public_id",
             "wp_link",
             "source_url",
             "wp_rest_base",
@@ -2706,6 +2776,8 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "shopify_schedule_error",
             "shopify_mapped_products",
             "wp_mapped_pages",
+            "linkedin_post_urn",
+            "linkedin_post_url",
             "topic_cluster_id",
             "topic_slot_id",
             "topic_role",
@@ -2736,6 +2808,7 @@ _PROJECT_SECRET_FIELDS = (
     "gsc_refresh_token",
     "shopify_access_token",
     "shopify_client_secret",
+    "linkedin_access_token",
 )
 
 
@@ -2800,6 +2873,14 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "gsc_scope": d.get("gsc_scope") or "",
         "gsc_email": d.get("gsc_email") or "",
         "gsc_connected_at": d.get("gsc_connected_at") or "",
+        "linkedin_access_token": d.get("linkedin_access_token") or "",
+        "linkedin_token_expires_at": str(d.get("linkedin_token_expires_at") or ""),
+        "linkedin_person_urn": d.get("linkedin_person_urn") or "",
+        "linkedin_member_name": d.get("linkedin_member_name") or "",
+        "linkedin_org_urns": list(d.get("linkedin_org_urns") or []),
+        "linkedin_selected_author_urn": d.get("linkedin_selected_author_urn") or "",
+        "linkedin_connected_at": d.get("linkedin_connected_at") or "",
+        "linkedin_reconnect_notified": bool(d.get("linkedin_reconnect_notified", False)),
         "default_wp_rest_base": d.get("default_wp_rest_base") or "",
         "default_wp_status": d.get("default_wp_status") or "",
         "wp_verified_at": d.get("wp_verified_at") or "",
@@ -2892,6 +2973,18 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
         # Feature 3 — internal linking telemetry.
         "internal_links_applied_at": d.get("internal_links_applied_at") or "",
         "internal_links_count": int(d.get("internal_links_count") or 0),
+        "shopify_blog_id": d.get("shopify_blog_id"),
+        "shopify_article_id": d.get("shopify_article_id"),
+        "shopify_link": d.get("shopify_link") or "",
+        # Social Media module.
+        "linkedin_post_urn": d.get("linkedin_post_urn") or "",
+        "linkedin_post_url": d.get("linkedin_post_url") or "",
+        # Featured-image storage backend -- also missing from this explicit dict before
+        # now (pre-existing gap, same class as the shopify_link one fixed earlier this
+        # session); needed by _cleanup_article_media to know what to delete on article
+        # delete, and by get_article_image_url's callers more generally.
+        "featured_image_storage": d.get("featured_image_storage") or "",
+        "featured_image_cloudinary_public_id": d.get("featured_image_cloudinary_public_id") or "",
     }
 
 
@@ -3265,18 +3358,26 @@ def get_article_image_url(*, project_id: str, article_id: str) -> str | None:
     aid = (article_id or "").strip()
     if not pid or not aid:
         return None
+    # Check image_url first, disk second: a real URL (Cloudinary, or any other externally
+    # hosted image) is the article's *current* image. Checking disk first would let a
+    # stale local file left over from before Cloudinary was connected shadow a newer
+    # image_url forever, since regenerating an image never deletes the old disk file.
+    # A disk-backed article always has image_url == "" by construction (see
+    # _externalize_featured_image_in_updates), so this changes nothing for that case.
     if _storage_mode != "mongo":
         row = get_article(project_id=pid, article_id=aid)
         if not row:
             if featured_image_file_exists(aid):
                 return _load_featured_image_file_as_data_url(aid)
             return None
+        raw = (row.get("image_url") or "").strip()
+        if raw:
+            return raw
         if featured_image_file_exists(aid):
             loaded = _load_featured_image_file_as_data_url(aid)
             if loaded:
                 return loaded
-        raw = (row.get("image_url") or "").strip()
-        return raw or None
+        return None
 
     db = get_db()
     doc = _find_article_doc(
@@ -3285,14 +3386,14 @@ def get_article_image_url(*, project_id: str, article_id: str) -> str | None:
         aid,
         {"_id": 0, "image_url": 1, "featured_image_storage": 1},
     )
+    raw = (doc.get("image_url") or "").strip() if doc else ""
+    if raw:
+        return raw
     if featured_image_file_exists(aid):
         loaded = _load_featured_image_file_as_data_url(aid)
         if loaded:
             return loaded
-    if not doc:
-        return None
-    raw = (doc.get("image_url") or "").strip()
-    return raw or None
+    return None
 
 
 def get_article_generation_status(*, project_id: str, article_id: str) -> dict[str, Any] | None:
@@ -5314,6 +5415,87 @@ def mark_webhook_event_seen(event_id: str) -> bool:
             return False
 
 
+# ----------------------------
+# Social Media module (Social Posts ledger)
+#
+# One collection, social_posts -- one doc per LinkedIn post or Quora answer draft. This
+# is deliberately separate from scheduled_jobs: a Quora "post" is never scheduled or
+# auto-published (the user pastes it in manually), so folding it into scheduled_jobs'
+# state machine (scheduled->posting->posted) would misrepresent a self-reported manual
+# action as an automated one. LinkedIn posts made via the scheduler still get a row here
+# too, so "what have we posted/drafted, for which article" has one home regardless of
+# platform.
+# ----------------------------
+
+
+def create_social_post(doc: dict[str, Any]) -> None:
+    """Insert a new social_posts row (LinkedIn post or Quora answer draft)."""
+    pid = (doc.get("id") or "").strip()
+    if not pid:
+        raise ValueError("id is required")
+    row = dict(doc)
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list_dicts("social_posts.json")
+            rows.append(row)
+            _save_json("social_posts.json", rows[-200000:])
+        return
+    with _db_write_lock:
+        get_db().social_posts.insert_one({**row, "_id": pid})
+
+
+def get_social_post(post_id: str) -> dict[str, Any] | None:
+    pid = (post_id or "").strip()
+    if not pid:
+        return None
+    if _storage_mode != "mongo":
+        for r in reversed(_load_json_list_dicts("social_posts.json")):
+            if (r.get("id") or "").strip() == pid:
+                return r
+        return None
+    doc = get_db().social_posts.find_one({"_id": pid}, {"_id": 0})
+    return doc if isinstance(doc, dict) else None
+
+
+def update_social_post_fields(post_id: str, fields: dict[str, Any]) -> bool:
+    """`$set`-style patch (status transitions, external_url, ...)."""
+    pid = (post_id or "").strip()
+    if not pid or not fields:
+        return False
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            rows = _load_json_list_dicts("social_posts.json")
+            for i, r in enumerate(rows):
+                if (r.get("id") or "").strip() == pid:
+                    rows[i] = {**r, **fields}
+                    _save_json("social_posts.json", rows)
+                    return True
+        return False
+    res = get_db().social_posts.update_one({"_id": pid}, {"$set": dict(fields)})
+    return bool(res.matched_count)
+
+
+def load_social_posts_for_project(project_id: str, *, platform: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    """Most-recent-first, optionally filtered to one platform -- feeds the Social tab's
+    "Recent posts" list."""
+    pid = (project_id or "").strip()
+    if not pid:
+        return []
+    plat = (platform or "").strip().lower() or None
+    if _storage_mode != "mongo":
+        rows = [
+            r for r in _load_json_list_dicts("social_posts.json")
+            if (r.get("project_id") or "").strip() == pid and (plat is None or (r.get("platform") or "") == plat)
+        ]
+        rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        return rows[:limit]
+    query: dict[str, Any] = {"project_id": pid}
+    if plat:
+        query["platform"] = plat
+    cur = get_db().social_posts.find(query, {"_id": 0}).sort("created_at", -1).limit(int(limit))
+    return [dict(d) for d in cur]
+
+
 def load_ai_citation_checked_keywords(project_id: str) -> set[str]:
     """Casefolded set of every keyword this project has ever been checked for --
     lets a new run exclude them and cover new ground instead of re-checking the
@@ -5986,6 +6168,66 @@ def update_project_fields(project_id: str, updates: dict[str, Any]) -> bool:
     return ok
 
 
+def _delete_featured_image_file(article_id: str) -> None:
+    """Best-effort local-disk cleanup for one article's featured image (current +
+    legacy .bin filename) and its .meta.json sidecar. Never raises."""
+    aid = (article_id or "").strip()
+    if not aid:
+        return
+    paths = [
+        _article_image_file_path(aid),
+        _article_image_meta_path(aid),
+        os.path.join(_article_images_dir(), f"{re.sub(r'[^\\w\\-]', '', aid) or 'unknown'}.bin"),
+    ]
+    for p in paths:
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+        except OSError:
+            pass
+
+
+def _cleanup_article_media(articles: list[dict[str, Any]]) -> None:
+    """Delete every Cloudinary asset + local disk file linked to the given article rows
+    (featured image + inline body media) -- called right before the real article-row
+    deletion in delete_articles_by_ids / delete_project_and_resources below, so account
+    deletion (which routes through delete_project_and_resources once per owned project,
+    see purge_user_data) gets the exact same cleanup for free, with no separate code path
+    to keep in sync and no risk of running twice for the same article.
+
+    Best-effort throughout: a failed remote/disk delete is logged and skipped, never
+    raised -- media cleanup must never block the actual data deletion that triggered it.
+    """
+    if not articles:
+        return
+    from app.services.article_media_storage import delete_media_for_articles
+    from app.services.cloudinary_storage import delete_by_public_id
+
+    article_ids: list[str] = []
+    for a in articles:
+        if not isinstance(a, dict):
+            continue
+        aid = (a.get("id") or "").strip()
+        if not aid:
+            continue
+        article_ids.append(aid)
+        try:
+            public_id = (a.get("featured_image_cloudinary_public_id") or "").strip()
+            if public_id:
+                delete_by_public_id(public_id)
+        except Exception:
+            _log.warning("cleanup: featured-image Cloudinary delete failed for article=%s", aid, exc_info=True)
+        try:
+            _delete_featured_image_file(aid)
+        except Exception:
+            _log.warning("cleanup: featured-image disk delete failed for article=%s", aid, exc_info=True)
+
+    try:
+        delete_media_for_articles(article_ids)
+    except Exception:
+        _log.warning("cleanup: inline article-media delete failed for articles=%s", article_ids, exc_info=True)
+
+
 def delete_project_and_resources(project_id: str) -> bool:
     """
     Hard-delete a project and all resources that reference it.
@@ -6000,18 +6242,42 @@ def delete_project_and_resources(project_id: str) -> bool:
             _save_json_projects([p for p in projects if (p.get("id") or "") != project_id])
 
             articles = [_normalize_article_dict(dict(a)) for a in _load_json_list("articles.json")]
+            to_clean = [a for a in articles if (a.get("project_id") or "") == project_id]
             _save_json_articles([a for a in articles if (a.get("project_id") or "") != project_id])
 
             # Scheduled jobs are stored separately from the project row.
             jobs = [_normalize_scheduled_job_dict(dict(j)) for j in _load_json_list("scheduled_jobs.json")]
             _save_json_scheduled_jobs([j for j in jobs if (j.get("project_id") or "") != project_id])
         _invalidate_project_access_cache(project_id)
+        # Outside the lock -- Cloudinary deletes are network calls and must never hold
+        # the app-wide Mongo write lock. Runs after the JSON files are already saved
+        # (rows are gone either way), matching the Mongo branch's "media cleanup can't
+        # be undone by a later failure" intent as closely as the JSON path allows.
+        _cleanup_article_media(to_clean)
         return True
 
     with _db_write_lock:
         db = get_db()
         if db.projects.count_documents({"id": project_id}, limit=1) == 0:
             return False
+        to_clean = list(
+            db.articles.find(
+                {"project_id": project_id},
+                {"_id": 0, "id": 1, "featured_image_cloudinary_public_id": 1},
+            )
+        )
+
+    # Deliberately outside the lock: Cloudinary deletes are network calls and must
+    # never hold the app-wide Mongo write lock. Runs before the actual row deletion
+    # below (a second, short lock acquisition) so a failure partway through the delete
+    # itself never leaves media orphaned -- the one outcome this whole feature exists
+    # to prevent. The small window between the two lock acquisitions (another request
+    # could theoretically add a new article to this project in between) is an accepted
+    # tradeoff for a rare, deliberate, destructive admin action -- not a hot path.
+    _cleanup_article_media(to_clean)
+
+    with _db_write_lock:
+        db = get_db()
         db.articles.delete_many({"project_id": project_id})
         db.scheduled_jobs.delete_many({"project_id": project_id})
         db.projects.delete_one({"id": project_id})
@@ -6126,10 +6392,33 @@ def patch_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
 
 
 def delete_articles_by_ids(article_ids: list[str]) -> None:
-    if not article_ids:
+    ids = [str(a).strip() for a in (article_ids or []) if str(a).strip()]
+    if not ids:
         return
+
+    if _storage_mode != "mongo":
+        with _db_write_lock:
+            articles = [_normalize_article_dict(dict(a)) for a in _load_json_list("articles.json")]
+            id_set = set(ids)
+            to_clean = [a for a in articles if a.get("id") in id_set]
+            _save_json_articles([a for a in articles if a.get("id") not in id_set])
+        _cleanup_article_media(to_clean)  # outside the lock -- see delete_project_and_resources
+        return
+
     with _db_write_lock:
-        get_db().articles.delete_many({"id": {"$in": article_ids}})
+        to_clean = list(
+            get_db().articles.find(
+                {"id": {"$in": ids}},
+                {"_id": 0, "id": 1, "featured_image_cloudinary_public_id": 1},
+            )
+        )
+
+    # Outside the lock -- Cloudinary deletes are network calls; see the identical
+    # reasoning in delete_project_and_resources just above.
+    _cleanup_article_media(to_clean)
+
+    with _db_write_lock:
+        get_db().articles.delete_many({"id": {"$in": ids}})
 
 
 def bulk_update_articles(updates: list[tuple[str, dict[str, Any]]]) -> None:

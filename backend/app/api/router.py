@@ -39,6 +39,7 @@ from app.api.routes import site_audit_technical
 from app.api.routes import site_audit_seo
 from app.api.routes import ai_citation
 from app.api.routes import payments
+from app.api.routes import project_linkedin
 
 api_router = APIRouter()
 
@@ -75,4 +76,11 @@ api_router.include_router(site_audit_seo.router)
 api_router.include_router(ai_citation.router)
 api_router.include_router(payments.router)
 api_router.include_router(payments.plans_router)
+api_router.include_router(project_linkedin.router)
+api_router.include_router(project_linkedin.linkedin_oauth_router)
+api_router.include_router(project_linkedin.article_linkedin_router)
+api_router.include_router(project_linkedin.quora_router)
+api_router.include_router(project_linkedin.article_quora_router)
+api_router.include_router(project_linkedin.social_posts_router)
+api_router.include_router(project_linkedin.project_social_posts_router)
 
