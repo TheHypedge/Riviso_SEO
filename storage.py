@@ -502,6 +502,15 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         # capability, missing, unknown). Cleared on credential changes.
         "wp_plugin_status": (d.get("wp_plugin_status") or "")[:32],
         "wp_plugin_message": (d.get("wp_plugin_message") or "")[:1000],
+        # SEO plugin detected on the target WP site by the connector plugin's own
+        # /ping self-report (one of: yoast, rank_math, none, ""/unknown). Cached here
+        # so publish-time schema-markup code doesn't need a live re-probe.
+        "wp_seo_platform": (d.get("wp_seo_platform") or "")[:32],
+        # Schema markup (JSON-LD Article/BlogPosting + FAQPage) on publish/update.
+        "schema_markup_enabled": bool(d.get("schema_markup_enabled", True)),
+        # Whether the connected site's connector plugin version is new enough to
+        # actually print schema markup in <head> (_RIVISO_MIN_SCHEMA_VERSION).
+        "wp_schema_supported": bool(d.get("wp_schema_supported", False)),
         "platform": ((d.get("platform") or "wordpress").strip().lower() or "wordpress")[:32],
         "shopify_shop": (d.get("shopify_shop") or "").strip()[:2048],
         "shopify_access_token": (d.get("shopify_access_token") or "").strip()[:5000],
@@ -2690,6 +2699,9 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
             "wp_verified_message",
             "wp_plugin_status",
             "wp_plugin_message",
+            "wp_seo_platform",
+            "schema_markup_enabled",
+            "wp_schema_supported",
             "platform",
             "shopify_shop",
             "shopify_access_token",
@@ -2890,6 +2902,9 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "wp_verified_message": d.get("wp_verified_message") or "",
         "wp_plugin_status": d.get("wp_plugin_status") or "",
         "wp_plugin_message": d.get("wp_plugin_message") or "",
+        "wp_seo_platform": d.get("wp_seo_platform") or "",
+        "schema_markup_enabled": bool(d.get("schema_markup_enabled", True)),
+        "wp_schema_supported": bool(d.get("wp_schema_supported", False)),
         "platform": ((d.get("platform") or "wordpress").strip().lower() or "wordpress")[:32],
         "shopify_shop": (d.get("shopify_shop") or "").strip()[:2048],
         "shopify_access_token": (d.get("shopify_access_token") or "").strip()[:5000],

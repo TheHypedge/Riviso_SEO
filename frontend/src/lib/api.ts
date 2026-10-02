@@ -334,6 +334,12 @@ export type ProjectSettings = {
    */
   wp_plugin_status?: string | null;
   wp_plugin_message?: string | null;
+  /** SEO plugin detected by the connector's /ping self-report ("yoast", "rank_math", or null = none/unknown). */
+  wp_seo_platform?: string | null;
+  /** Whether the connected site's connector plugin version is new enough to print schema markup. */
+  wp_schema_supported?: boolean;
+  /** When true, publish/update sends Article/BlogPosting + FAQPage JSON-LD schema meta. */
+  schema_markup_enabled?: boolean;
   plugin_download_url: string;
   default_wp_rest_base?: string | null;
   default_wp_status?: string | null;
@@ -2719,6 +2725,7 @@ export const api = {
       gsc_index_on_publish: boolean;
       shopify_product_aware_enabled: boolean;
       wp_internal_link_aware_enabled: boolean;
+      schema_markup_enabled: boolean;
       shopify_shop: string;
       shopify_client_id: string;
       shopify_client_secret: string;
@@ -3937,9 +3944,14 @@ export const api = {
     );
   },
 
-  async gscProjectInsights(projectId: string, opts: { days?: number } = {}) {
+  async gscProjectInsights(projectId: string, opts: { days?: number; start?: string; end?: string } = {}) {
     const qs = new URLSearchParams();
-    qs.set("days", String(opts.days ?? 28));
+    if (opts.start && opts.end) {
+      qs.set("start_date", opts.start);
+      qs.set("end_date", opts.end);
+    } else {
+      qs.set("days", String(opts.days ?? 28));
+    }
     return apiFetch<GscInsightsResponse>(
       `/api/projects/${projectId}/gsc/insights?${qs.toString()}`,
     );

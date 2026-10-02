@@ -9883,6 +9883,21 @@ a.secondary {
   color: var(--aa-ink);
 }
 
+/* Two side-by-side chart containers (GSC trend + Content vs Search Performance) --
+ * stacks to one column below the same breakpoint the donut row and panels grid use. */
+.articlesOverviewChartsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+@media (max-width: 900px) {
+  .articlesOverviewChartsGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .articlesOverviewChartSub {
   margin: 4px 0 0;
   font-size: 12px;

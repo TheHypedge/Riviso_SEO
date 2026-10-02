@@ -59,6 +59,15 @@ class ProjectSettingsPublic(BaseModel):
     default_wp_category_ids: list[int] = Field(default_factory=list)
     gsc_property_url: str | None = None
     gsc_index_on_publish: bool = True
+    # SEO plugin detected by the connector's /ping self-report ("yoast", "rank_math",
+    # "" = none/unknown). Whether that connector version is new enough to print
+    # schema markup is `wp_schema_supported`.
+    wp_seo_platform: str | None = None
+    wp_schema_supported: bool = False
+    schema_markup_enabled: bool = Field(
+        default=True,
+        description="When true, publish/update sends Article/BlogPosting + FAQPage JSON-LD schema meta.",
+    )
 
 
 class ProjectSettingsUpdate(BaseModel):
@@ -74,6 +83,7 @@ class ProjectSettingsUpdate(BaseModel):
     gsc_index_on_publish: bool | None = None
     shopify_product_aware_enabled: bool | None = None
     wp_internal_link_aware_enabled: bool | None = None
+    schema_markup_enabled: bool | None = None
     shopify_shop: str | None = Field(default=None, max_length=2048)
     shopify_client_id: str | None = Field(default=None, max_length=256)
     shopify_client_secret: str | None = Field(default=None, max_length=5000)

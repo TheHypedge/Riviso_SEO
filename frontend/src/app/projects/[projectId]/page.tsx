@@ -20,6 +20,7 @@ import type { BulkScheduleSeedRow } from "@/components/bulkSchedule/useBulkSched
 import { connectionErrorMessage, isAuthError } from "@/lib/networkErrors";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { Tabs, TabsList, TabsTrigger, TabsContent, NavGroup, NavItem, SubNav } from "@/components/ui";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/DropdownMenu";
 import {
   TechnicalAuditResults,
   TechnicalAuditSummary,
@@ -456,6 +457,22 @@ const PB_EEAT_OPTIONS = ["Add Expert Opinions","Add Statistics","Add Research","
 const PB_SEO_OPTIONS = ["Generate Meta Title","Generate Meta Description","Generate FAQ Schema","Generate Article Schema","Generate Internal Linking","Optimize for Featured Snippet","Generate Social Snippets","Generate Image Alt Text"] as const;
 const PB_RESTRICTIONS = ["No competitor mentions","No pricing or cost claims","No medical, legal, or financial advice claims","No first-person voice ('I', 'we')","No emojis","No exclamation points","Avoid superlatives ('best', '#1', 'guaranteed')","No fabricated statistics, names, or citations"] as const;
 
+// ---------------------------------------------------------------------------
+// Overview tab: date-range filter (presets + custom) driving every Overview
+// component, including real GSC re-fetches for the selected window.
+// ---------------------------------------------------------------------------
+const OVERVIEW_RANGE_PRESETS: { days: 1 | 7 | 28 | 90; label: string }[] = [
+  { days: 1, label: "Last 24 hours" },
+  { days: 7, label: "Last 7 days" },
+  { days: 28, label: "Last 28 days" },
+  { days: 90, label: "Last 3 months" },
+];
+
+function overviewRangeTriggerLabel(range: import("@/lib/articlesOverview").OverviewRangeSelection): string {
+  if (range.kind === "custom") return `${range.start} → ${range.end}`;
+  return OVERVIEW_RANGE_PRESETS.find((p) => p.days === range.days)?.label ?? `Last ${range.days} days`;
+}
+
 export default function ProjectPage() {
   const router = useRouter();
   const params = useParams<{ projectId: string }>();
@@ -498,8 +515,17 @@ export default function ProjectPage() {
   const [overviewArticles, setOverviewArticles] = useState<ArticlePublic[]>([]);
   const [overviewScheduledJobs, setOverviewScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(false);
-  const [overviewRefreshKey, setOverviewRefreshKey] = useState(0);
-  const [overviewRefreshedAt, setOverviewRefreshedAt] = useState<number | null>(null);
+  // Date-range filter driving every Overview component (stat cards, charts, GSC
+  // fetches). Presets re-fetch GSC data for that exact window; "Custom…" opens a
+  // From/To modal (`showCustomRangeModal`) with its own draft inputs below.
+  const [overviewRange, setOverviewRange] = useState<import("@/lib/articlesOverview").OverviewRangeSelection>({
+    kind: "preset",
+    days: 28,
+  });
+  const [showCustomRangeModal, setShowCustomRangeModal] = useState(false);
+  const [customRangeFrom, setCustomRangeFrom] = useState("");
+  const [customRangeTo, setCustomRangeTo] = useState("");
+  const customRangeModalTrapRef = useFocusTrap(showCustomRangeModal);
 
   // Single helper that mutates ``window.location`` query params and asks the
   // App Router to replace the URL without scrolling. ``null``/empty values
@@ -673,6 +699,7 @@ export default function ProjectPage() {
   const [sUrl, setSUrl] = useState("");
   const [sShopifyProductAware, setSShopifyProductAware] = useState(false);
   const [sWpInternalLinkAware, setSWpInternalLinkAware] = useState(false);
+  const [sSchemaMarkupEnabled, setSSchemaMarkupEnabled] = useState(true);
   const [sWpUser, setSWpUser] = useState("");
   const [sWpPass, setSWpPass] = useState("");
   const [showWpAppPassword, setShowWpAppPassword] = useState(false);
@@ -931,7 +958,8 @@ export default function ProjectPage() {
       JSON.stringify((sWpDefaultCategoryIds || []).slice().sort((a, b) => a - b)) !==
         JSON.stringify(((settings.default_wp_category_ids || []) as number[]).slice().sort((a, b) => a - b)) ||
       normalizePasswordForDirtyCheck(sWpPass) !== wpPassLoadedRef.current ||
-      Boolean(sWpInternalLinkAware) !== Boolean(settings.wp_internal_link_aware_enabled)
+      Boolean(sWpInternalLinkAware) !== Boolean(settings.wp_internal_link_aware_enabled) ||
+      Boolean(sSchemaMarkupEnabled) !== Boolean(settings.schema_markup_enabled ?? true)
     );
   }, [
     sName,
@@ -939,6 +967,7 @@ export default function ProjectPage() {
     sShopifyClientId,
     sShopifyProductAware,
     sWpInternalLinkAware,
+    sSchemaMarkupEnabled,
     sWpUser,
     sWpPass,
     settings,
@@ -1389,6 +1418,7 @@ export default function ProjectPage() {
           setSWpDefaultStatus((ps.default_wp_status || "draft") as "draft" | "publish");
           setSWpDefaultCategoryIds((ps.default_wp_category_ids || []) as number[]);
           setSWpInternalLinkAware(Boolean(ps.wp_internal_link_aware_enabled));
+          setSSchemaMarkupEnabled(Boolean(ps.schema_markup_enabled ?? true));
           setSShopifyClientId(ps.shopify_client_id || "");
           setSShopifyProductAware(Boolean(ps.shopify_product_aware_enabled));
         }
@@ -1539,7 +1569,6 @@ export default function ProjectPage() {
         if (cancelled) return;
         setOverviewArticles(articles || []);
         setOverviewScheduledJobs(jobs || []);
-        setOverviewRefreshedAt(Date.now());
       } catch {
         if (!cancelled) {
           setOverviewArticles([]);
@@ -1552,7 +1581,7 @@ export default function ProjectPage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, token, tab, overviewRefreshKey]);
+  }, [projectId, token, tab]);
 
   // Load the user's full project list so the sidebar switcher can render
   // every project they own. Runs once per mount — projects rarely change
@@ -1579,9 +1608,15 @@ export default function ProjectPage() {
   // Bootstrap GSC status (and analytics, if a property is linked) once per project mount,
   // independent of the active tab — the Overview tab's ``gscTotals`` card depends on
   // ``analytics`` being populated without requiring the user to open Tools first.
+  // Reactive to ``overviewRange`` so the Overview filter actually re-fetches Search
+  // Console data for the selected window, not just re-slices a fixed 28-day fetch.
   useEffect(() => {
     if (!token || !projectId) return;
     let cancelled = false;
+    const callOpts =
+      overviewRange.kind === "custom"
+        ? { start: overviewRange.start, end: overviewRange.end }
+        : { days: overviewRange.days };
     (async () => {
       try {
         const gs = await api.gscProjectStatus(projectId);
@@ -1590,13 +1625,13 @@ export default function ProjectPage() {
         setGscApiUnavailable(false);
         if (gs?.connected && (gs?.property_url || "").trim()) {
           try {
-            const res = await api.gscProjectAnalytics(projectId, { days: 28 });
+            const res = await api.gscProjectAnalytics(projectId, callOpts);
             if (!cancelled) setAnalytics(res);
           } catch {
             // Silent — the Performance tab simply won't appear until data is available.
           }
           try {
-            const insightsRes = await api.gscProjectInsights(projectId, { days: 28 });
+            const insightsRes = await api.gscProjectInsights(projectId, callOpts);
             if (!cancelled) setGscInsights(insightsRes);
           } catch {
             // Silent — Overview's Search Performance section just won't render until data is available.
@@ -1612,7 +1647,7 @@ export default function ProjectPage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, token]);
+  }, [projectId, token, overviewRange]);
 
   async function ensureScheduleMetaLoaded(): Promise<{
     writingPrompts: PromptListResponse | null;
@@ -2079,6 +2114,7 @@ export default function ProjectPage() {
       setSShopifyClientId(s.shopify_client_id || "");
       setSShopifyProductAware(Boolean(s.shopify_product_aware_enabled));
       setSWpInternalLinkAware(Boolean(s.wp_internal_link_aware_enabled));
+      setSSchemaMarkupEnabled(Boolean(s.schema_markup_enabled ?? true));
       const plat = resolveProjectPlatform({
         settings: s,
         meta: pm,
@@ -2191,6 +2227,7 @@ export default function ProjectPage() {
               default_wp_status: sWpDefaultStatus,
               default_wp_category_ids: sWpDefaultCategoryIds,
               wp_internal_link_aware_enabled: Boolean(sWpInternalLinkAware),
+              schema_markup_enabled: Boolean(sSchemaMarkupEnabled),
               ...(sWpPass.replace(/\s+/g, "").trim()
                 ? { wp_app_password: sWpPass.replace(/\s+/g, "").trim() }
                 : {}),
@@ -6409,11 +6446,57 @@ export default function ProjectPage() {
                 <>
                   <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
                     <h1 style={{ margin: 0 }}>Overview</h1>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button type="button" className={styles.btnSecondary}>
+                          {overviewRangeTriggerLabel(overviewRange)} ▾
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {OVERVIEW_RANGE_PRESETS.map((p) => (
+                          <DropdownMenuItem key={p.days} onSelect={() => setOverviewRange({ kind: "preset", days: p.days })}>
+                            {p.label}
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            setCustomRangeFrom(overviewRange.kind === "custom" ? overviewRange.start : "");
+                            setCustomRangeTo(overviewRange.kind === "custom" ? overviewRange.end : "");
+                            setShowCustomRangeModal(true);
+                          }}
+                        >
+                          Custom…
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                   <div className={`${styles.mobileHeadRow} ${styles.showOnMobile}`}>
                     <h1 className={styles.mobileTitle} style={{ margin: 0 }}>
                       Overview
                     </h1>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button type="button" className={styles.btnSecondary}>
+                          {overviewRangeTriggerLabel(overviewRange)} ▾
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {OVERVIEW_RANGE_PRESETS.map((p) => (
+                          <DropdownMenuItem key={p.days} onSelect={() => setOverviewRange({ kind: "preset", days: p.days })}>
+                            {p.label}
+                          </DropdownMenuItem>
+                        ))}
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            setCustomRangeFrom(overviewRange.kind === "custom" ? overviewRange.start : "");
+                            setCustomRangeTo(overviewRange.kind === "custom" ? overviewRange.end : "");
+                            setShowCustomRangeModal(true);
+                          }}
+                        >
+                          Custom…
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </>
               ) : tab === "articles" ? (
@@ -6643,14 +6726,14 @@ export default function ProjectPage() {
             selectedIds={selectedIds}
             gscConnected={Boolean(gscStatus?.connected && (gscStatus?.property_url || "").trim())}
             gscInsights={gscInsights}
+            analytics={analytics}
             aiCitationChecks={aiCitation?.checks ?? []}
             aiCitationEnginesConfigured={aiCitation?.engines_configured ?? []}
             aiCitationTrend={aiCitationTrend}
             aiCitationRunning={aiCitationRunning}
             onRunAiCitationCheck={() => void runAiCitationCheckNow()}
             loading={overviewLoading}
-            lastRefreshedAt={overviewRefreshedAt}
-            onRefresh={() => setOverviewRefreshKey((k) => k + 1)}
+            range={overviewRange}
             onViewList={goToArticlesFromOverview}
           />
         ) : null}
@@ -8439,6 +8522,73 @@ export default function ProjectPage() {
                 </div>
               </>
             ) : null}
+          </>
+        ) : null}
+
+        {/* Overview tab's custom date-range modal -- rendered tab-independently (not
+            nested under `tab === "articles"`) since its trigger lives in the Overview
+            header and must stay reachable while that tab is active. */}
+        {showCustomRangeModal ? (
+          <>
+            <button
+              type="button"
+              className={styles.modalBackdrop}
+              aria-label="Close"
+              onClick={() => setShowCustomRangeModal(false)}
+            />
+            <div ref={customRangeModalTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Custom date range">
+              <div className={styles.modalHead}>
+                <h3 className={styles.modalTitle}>Custom date range</h3>
+                <button
+                  type="button"
+                  className={styles.iconButton}
+                  aria-label="Close"
+                  onClick={() => setShowCustomRangeModal(false)}
+                >
+                  <Icon.X className={styles.icon20} />
+                </button>
+              </div>
+              <div className={styles.modalBody}>
+                <div className={styles.articlesMobileFilterDates}>
+                  <label className={styles.label}>
+                    From
+                    <input
+                      className={styles.input}
+                      type="date"
+                      value={customRangeFrom}
+                      max={customRangeTo || undefined}
+                      onChange={(e) => setCustomRangeFrom(e.target.value)}
+                    />
+                  </label>
+                  <label className={styles.label}>
+                    To
+                    <input
+                      className={styles.input}
+                      type="date"
+                      value={customRangeTo}
+                      min={customRangeFrom || undefined}
+                      onChange={(e) => setCustomRangeTo(e.target.value)}
+                    />
+                  </label>
+                </div>
+              </div>
+              <div className={styles.modalFooter}>
+                <button type="button" className={styles.btnSecondary} onClick={() => setShowCustomRangeModal(false)}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={styles.button}
+                  disabled={!customRangeFrom || !customRangeTo || customRangeFrom > customRangeTo}
+                  onClick={() => {
+                    setOverviewRange({ kind: "custom", start: customRangeFrom, end: customRangeTo });
+                    setShowCustomRangeModal(false);
+                  }}
+                >
+                  Apply Filter
+                </button>
+              </div>
+            </div>
           </>
         ) : null}
 
@@ -12237,6 +12387,25 @@ export default function ProjectPage() {
                       </span>
                     );
                   })()}
+                </div>
+
+                <label
+                  className={styles.label}
+                  style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4, marginBottom: 0 }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={sSchemaMarkupEnabled}
+                    onChange={(e) => setSSchemaMarkupEnabled(e.target.checked)}
+                  />
+                  <span style={{ fontSize: 13 }}>Add schema markup (JSON-LD) when publishing</span>
+                </label>
+                <div className={styles.muted} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
+                  Adds Article + FAQ structured data to every published post, plugin-compatible
+                  with Yoast and Rank Math.{" "}
+                  {settings.wp_schema_supported
+                    ? "✓ Schema markup active on this site."
+                    : "Update the Riviso plugin (Download plugin above, then re-upload and activate it in WordPress → Plugins) to enable schema markup."}
                 </div>
 
                 <div className={styles.settingsFieldsGrid}>

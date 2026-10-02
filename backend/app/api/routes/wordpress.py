@@ -255,6 +255,7 @@ async def _verify_wp_rest_credentials(
 # still keep around for back-compat with sites that haven't upgraded yet.
 _RIVISO_PLUGIN_NAMESPACES: tuple[str, ...] = ("riviso/v1", "auto-articles/v1")
 _RIVISO_MIN_PUBLISH_VERSION = (0, 2, 0)
+_RIVISO_MIN_SCHEMA_VERSION = (0, 7, 0)
 
 
 def _parse_riviso_ping_payload(raw: Any) -> dict[str, Any] | None:
@@ -361,7 +362,7 @@ async def _discover_wp_namespaces(
 
 
 async def _probe_riviso_plugin(
-    *, wp_site_url: str, headers: dict[str, str]
+    *, wp_site_url: str, headers: dict[str, str], seo_info: dict[str, Any] | None = None
 ) -> tuple[str, str]:
     """Secure Riviso connector check: valid /ping signature + /publish when possible.
 
@@ -373,6 +374,11 @@ async def _probe_riviso_plugin(
     - ``installed``         – namespace registered only (not enough to claim active).
     - ``missing``           – no Riviso connector detected.
     - ``unknown``           – could not reach wp-json index.
+
+    When ``seo_info`` is passed, it's populated (best-effort) with ``seo_platform``
+    and ``schema_supported`` so callers can cache them on the project without a
+    second live probe — schema markup (§ wordpress.py min-version gate) needs a
+    connector version of at least ``_RIVISO_MIN_SCHEMA_VERSION``.
     """
     last_auth_block = False
     ping_hit: dict[str, Any] | None = None
@@ -414,6 +420,9 @@ async def _probe_riviso_plugin(
                 "rank_math": "Rank Math",
                 "yoast": "Yoast",
             }.get(seo_platform, "Yoast" if ping_hit.get("yoast_active") else "none detected")
+            if seo_info is not None:
+                seo_info["seo_platform"] = seo_platform
+                seo_info["schema_supported"] = bool(version) and _version_tuple(version) >= _RIVISO_MIN_SCHEMA_VERSION
 
             publish_state = "missing"
             for ns in dict.fromkeys((ping_ns, *_RIVISO_PLUGIN_NAMESPACES)):
@@ -640,6 +649,9 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
         # ("Plugin active" / "Plugin missing" / "Capability blocked").
         wp_plugin_status=(proj.get("wp_plugin_status") or "").strip() or None,
         wp_plugin_message=(proj.get("wp_plugin_message") or "").strip() or None,
+        wp_seo_platform=(proj.get("wp_seo_platform") or "").strip() or None,
+        wp_schema_supported=bool(proj.get("wp_schema_supported", False)),
+        schema_markup_enabled=bool(proj.get("schema_markup_enabled", True)),
         plugin_download_url="/api/wordpress/plugin/download",
         default_wp_rest_base=def_rest,
         default_wp_status=def_status,
@@ -731,6 +743,9 @@ async def update_project_settings(
 
     if payload.wp_internal_link_aware_enabled is not None:
         updates["wp_internal_link_aware_enabled"] = bool(payload.wp_internal_link_aware_enabled)
+
+    if payload.schema_markup_enabled is not None:
+        updates["schema_markup_enabled"] = bool(payload.schema_markup_enabled)
 
     if payload.shopify_shop is not None:
         raw_shop = (payload.shopify_shop or "").strip()[:2048]
@@ -827,6 +842,8 @@ async def verify_wordpress_connection(
         ok: bool,
         plugin_status: str | None = None,
         plugin_message: str | None = None,
+        seo_platform: str | None = None,
+        schema_supported: bool | None = None,
     ) -> None:
         """Snapshot the verification outcome onto the project so the Settings
         tab can render a "Verified · 2 minutes ago" pill on next load. We
@@ -844,6 +861,10 @@ async def verify_wordpress_connection(
                 patch["wp_plugin_status"] = plugin_status[:32]
             if plugin_message is not None:
                 patch["wp_plugin_message"] = plugin_message[:1000]
+            if seo_platform is not None:
+                patch["wp_seo_platform"] = seo_platform[:32]
+            if schema_supported is not None:
+                patch["wp_schema_supported"] = bool(schema_supported)
             st.update_project_fields(project_id, patch)
         except Exception:
             # Persistence is best-effort: even if it fails we still return
@@ -897,9 +918,10 @@ async def verify_wordpress_connection(
                 )
             except Exception:
                 pass
+            seo_info: dict[str, Any] = {}
             try:
                 plugin_status, plugin_msg = await _probe_riviso_plugin(
-                    wp_site_url=wp_site_url, headers=headers
+                    wp_site_url=wp_site_url, headers=headers, seo_info=seo_info
                 )
             except Exception:
                 plugin_status, plugin_msg = (
@@ -920,6 +942,8 @@ async def verify_wordpress_connection(
                 ok=True,
                 plugin_status=plugin_status,
                 plugin_message=plugin_msg,
+                seo_platform=seo_info.get("seo_platform"),
+                schema_supported=seo_info.get("schema_supported"),
             )
             return WordpressVerifyResponse(ok=True, status="connected", message=full_msg)
     except Exception as e:

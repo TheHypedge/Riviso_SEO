@@ -48,6 +48,30 @@ export function daysAgoUtc(days: number, from = new Date()): Date {
   return base;
 }
 
+/** Inclusive, UTC day-aligned date window driving every Overview component. */
+export type DateWindow = { start: Date; end: Date };
+
+export type OverviewRangeSelection =
+  | { kind: "preset"; days: ArticlesOverviewRange }
+  | { kind: "custom"; start: string; end: string };
+
+function isoToUtcDate(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+}
+
+export function resolveOverviewWindow(selection: OverviewRangeSelection): DateWindow {
+  if (selection.kind === "custom") {
+    return { start: isoToUtcDate(selection.start), end: isoToUtcDate(selection.end) };
+  }
+  const end = startOfUtcDay(new Date());
+  return { start: daysAgoUtc(selection.days - 1, end), end };
+}
+
+export function windowSpanDays(window: DateWindow): number {
+  return Math.round((window.end.getTime() - window.start.getTime()) / 86_400_000) + 1;
+}
+
 export function formatOverviewDate(raw?: string | null): string {
   const ms = parseMs(raw);
   if (!ms) return "—";
@@ -81,7 +105,16 @@ export function computeOverviewStats(
   scheduledJobs: ScheduledJobPublic[],
   rangeDays: ArticlesOverviewRange,
 ): ArticlesOverviewStats {
-  const since = daysAgoUtc(rangeDays - 1).getTime();
+  return computeOverviewStatsInWindow(articles, scheduledJobs, resolveOverviewWindow({ kind: "preset", days: rangeDays }));
+}
+
+export function computeOverviewStatsInWindow(
+  articles: ArticlePublic[],
+  scheduledJobs: ScheduledJobPublic[],
+  window: DateWindow,
+): ArticlesOverviewStats {
+  const since = window.start.getTime();
+  const until = window.end.getTime() + 86_400_000 - 1;
   let publishedInRange = 0;
   let pending = 0;
   let draft = 0;
@@ -94,7 +127,7 @@ export function computeOverviewStats(
     if (st === "scheduled") scheduledArticles += 1;
     if (st === "published") {
       const when = parseMs(a.posted_at || a.updated_at || a.created_at);
-      if (when >= since) publishedInRange += 1;
+      if (when >= since && when <= until) publishedInRange += 1;
     }
   }
 
@@ -124,10 +157,13 @@ export function computeInsights(
   articles: ArticlePublic[],
   rangeDays: ArticlesOverviewRange,
 ): OverviewInsights {
-  const rangeMs = rangeDays * 86_400_000;
-  const now = Date.now();
-  const currentStart = now - rangeMs;
-  const prevStart = now - 2 * rangeMs;
+  return computeInsightsInWindow(articles, resolveOverviewWindow({ kind: "preset", days: rangeDays }));
+}
+
+export function computeInsightsInWindow(articles: ArticlePublic[], window: DateWindow): OverviewInsights {
+  const currentStart = window.start.getTime();
+  const currentEnd = window.end.getTime() + 86_400_000 - 1;
+  const prevStart = currentStart - (currentEnd - currentStart + 1);
 
   let publishedCurrent = 0;
   let publishedPrev = 0;
@@ -137,8 +173,8 @@ export function computeInsights(
     if ((a.status || "").toLowerCase() !== "published") continue;
     const ms = parseMs(a.posted_at || a.updated_at || a.created_at);
     if (!ms) continue;
-    if (ms >= currentStart) publishedCurrent++;
-    else if (ms >= prevStart) publishedPrev++;
+    if (ms >= currentStart && ms <= currentEnd) publishedCurrent++;
+    else if (ms >= prevStart && ms < currentStart) publishedPrev++;
     const dow = new Date(ms).getUTCDay();
     dowCounts[dow] = (dowCounts[dow] || 0) + 1;
   }
@@ -178,11 +214,23 @@ export function buildArticleActivityBarSeries(
   scheduledJobs: ScheduledJobPublic[],
   rangeDays: ArticlesOverviewRange,
 ): ArticlesOverviewDayPoint[] {
-  const end = startOfUtcDay(new Date());
-  const start = daysAgoUtc(rangeDays - 1, end);
+  return buildArticleActivityBarSeriesInWindow(
+    articles,
+    scheduledJobs,
+    resolveOverviewWindow({ kind: "preset", days: rangeDays }),
+  );
+}
+
+export function buildArticleActivityBarSeriesInWindow(
+  articles: ArticlePublic[],
+  scheduledJobs: ScheduledJobPublic[],
+  window: DateWindow,
+): ArticlesOverviewDayPoint[] {
+  const start = window.start;
+  const dayCount = windowSpanDays(window);
   const buckets = new Map<string, ArticlesOverviewDayPoint>();
 
-  for (let i = 0; i < rangeDays; i++) {
+  for (let i = 0; i < dayCount; i++) {
     const d = new Date(start);
     d.setUTCDate(d.getUTCDate() + i);
     const key = d.toISOString().slice(0, 10);
@@ -283,6 +331,27 @@ export function buildGscActivitySeries(
   if (!series?.length) return [];
   const trimmed = series.slice(-rangeDays);
   return trimmed.map((p) => ({ date: p.date, count: p.clicks || 0 }));
+}
+
+/** Article count by lifecycle status, for the "Article Distribution by Status" donut --
+ * same 4 buckets as the Overview stat cards, semantic tokens (not the plain-hex data-viz
+ * palette used for the Country/Device donuts, since status *is* semantic here). */
+export function computeArticleStatusBreakdown(articles: ArticlePublic[]): {
+  segments: { key: string; label: string; color: string }[];
+  values: Record<string, number>;
+} {
+  const segments = [
+    { key: "published", label: "Published", color: "var(--aa-success)" },
+    { key: "scheduled", label: "Scheduled", color: "var(--aa-info)" },
+    { key: "pending", label: "Pending", color: "var(--aa-warning)" },
+    { key: "draft", label: "Draft", color: "var(--aa-muted)" },
+  ];
+  const values: Record<string, number> = { published: 0, scheduled: 0, pending: 0, draft: 0 };
+  for (const a of articles) {
+    const status = (a.status || "").toLowerCase();
+    if (status in values) values[status] += 1;
+  }
+  return { segments, values };
 }
 
 export function recentPublishedItems(articles: ArticlePublic[], limit = 5): OverviewListItem[] {

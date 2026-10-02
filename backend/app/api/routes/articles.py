@@ -3089,6 +3089,10 @@ async def publish_to_live_site(
         )
 
     from app.services.wordpress_sync import build_wp_seo_meta_payload
+    from app.services.schema_markup import build_schema_meta
+
+    meta = build_wp_seo_meta_payload(a)
+    meta.update(build_schema_meta(a, proj, proj.get("wp_seo_platform")))
 
     payload: dict = {
         "title": title[:500],
@@ -3096,7 +3100,7 @@ async def publish_to_live_site(
         "content": content_html,
         # Yoast + Rank Math + AIOSEO meta keys, best-effort (requires the SEO plugin's
         # fields to be REST-writable -- the Riviso connector plugin registers these).
-        "meta": build_wp_seo_meta_payload(a),
+        "meta": meta,
     }
     if featured_media_id is not None:
         payload["featured_media"] = featured_media_id
@@ -3575,12 +3579,16 @@ async def update_wordpress_post(
         )
 
     from app.services.wordpress_sync import build_wp_seo_meta_payload
+    from app.services.schema_markup import build_schema_meta
+
+    meta = build_wp_seo_meta_payload(a)
+    meta.update(build_schema_meta(a, proj, proj.get("wp_seo_platform")))
 
     payload: dict = {
         "title": title[:500],
         "status": status_in,
         "content": content_html,
-        "meta": build_wp_seo_meta_payload(a),
+        "meta": meta,
     }
     if featured_media_id is not None:
         payload["featured_media"] = featured_media_id

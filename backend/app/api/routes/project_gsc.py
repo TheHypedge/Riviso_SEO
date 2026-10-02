@@ -503,6 +503,8 @@ def _build_comparison_rows(
 async def insights(
     project_id: str,
     days: int = 28,
+    start_date: str | None = None,
+    end_date: str | None = None,
     user: dict = Depends(get_current_user),
 ) -> dict:
     """
@@ -517,6 +519,11 @@ async def insights(
     - ``traffic_sources`` — web vs image vs video vs news search types
     - ``submitted_pages`` — pages submitted via sitemap (NOT an indexed count; see
       ``_sum_submitted_pages``)
+
+    Same two ways to specify the window as ``/analytics``: preset ``days=N`` (7-365,
+    window ``[today - N, today]``), or custom ``start_date``/``end_date`` (both
+    required, ``start_date <= end_date``, capped at 16 months). Custom wins when both
+    are given and well-formed.
     """
     from datetime import datetime, timedelta
     from app.services.google_console_service import GoogleConsoleService, _normalise_property_for_query
@@ -536,12 +543,33 @@ async def insights(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e) or "Analytics service is not available") from e
 
-    d = max(7, min(int(days or 28), 365))
-    today = datetime.utcnow()
-    end_iso = today.strftime("%Y-%m-%d")
-    start_iso = (today - timedelta(days=d)).strftime("%Y-%m-%d")
-    prev_end = (today - timedelta(days=d + 1)).strftime("%Y-%m-%d")
-    prev_start = (today - timedelta(days=d * 2 + 1)).strftime("%Y-%m-%d")
+    # Resolve the effective window -- same custom-vs-preset logic as /analytics.
+    sd = _parse_iso_date_or_none(start_date)
+    ed = _parse_iso_date_or_none(end_date)
+    if (start_date or end_date) and not (sd and ed):
+        raise HTTPException(status_code=400, detail="start_date and end_date must both be YYYY-MM-DD")
+    if sd and ed:
+        if sd > ed:
+            raise HTTPException(status_code=400, detail="start_date cannot be after end_date")
+        try:
+            span = (datetime.strptime(ed, "%Y-%m-%d") - datetime.strptime(sd, "%Y-%m-%d")).days
+        except Exception:
+            span = 0
+        if span > 16 * 31:
+            raise HTTPException(status_code=400, detail="Custom range cannot exceed 16 months (Search Console retention limit)")
+        start_iso, end_iso = sd, ed
+        d = span + 1
+        prev_end_dt = datetime.strptime(sd, "%Y-%m-%d") - timedelta(days=1)
+        prev_start_dt = prev_end_dt - timedelta(days=d - 1)
+        prev_end = prev_end_dt.strftime("%Y-%m-%d")
+        prev_start = prev_start_dt.strftime("%Y-%m-%d")
+    else:
+        d = max(7, min(int(days or 28), 365))
+        today = datetime.utcnow()
+        end_iso = today.strftime("%Y-%m-%d")
+        start_iso = (today - timedelta(days=d)).strftime("%Y-%m-%d")
+        prev_end = (today - timedelta(days=d + 1)).strftime("%Y-%m-%d")
+        prev_start = (today - timedelta(days=d * 2 + 1)).strftime("%Y-%m-%d")
 
     try:
         # All queries fire concurrently via asyncio
