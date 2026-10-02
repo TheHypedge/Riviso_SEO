@@ -1035,6 +1035,10 @@ export type WordpressCategory = {
   name: string;
 };
 
+// Same {id, name} shape as WordpressCategory -- a distinct taxonomy, aliased rather
+// than duplicated.
+export type WordpressTag = WordpressCategory;
+
 export type ScheduledJobPublic = {
   id: string;
   project_id: string;
@@ -1172,6 +1176,7 @@ export type ArticlePublic = {
   shopify_article_id?: number | null;
   shopify_link?: string | null;
   wp_category_ids?: string | null;
+  wp_tag_ids?: string | null;
   source_url?: string | null;
 };
 
@@ -1941,6 +1946,7 @@ const _cacheWritingPrompts = new Map<string, CacheEntry<PromptListResponse>>();
 const _cacheImagePrompts = new Map<string, CacheEntry<PromptListResponse>>();
 const _cacheWpTypes = new Map<string, CacheEntry<WordpressPostType[]>>();
 const _cacheWpCats = new Map<string, CacheEntry<WordpressCategory[]>>();
+const _cacheWpTags = new Map<string, CacheEntry<WordpressTag[]>>();
 const _cacheProjectSettings = new Map<string, CacheEntry<ProjectSettings>>();
 const _cacheArticleDetail = new Map<string, CacheEntry<ArticleDetail>>();
 const _cacheArticleShell = new Map<string, CacheEntry<ArticleDetail>>();
@@ -1973,6 +1979,7 @@ export function invalidateProjectSettingsCache(projectId: string) {
   _cacheProjectSettings.delete(`${pid}:v2`);
   _cacheWpTypes.delete(pid);
   _cacheWpCats.delete(pid);
+  _cacheWpTags.delete(pid);
 }
 
 function createTimeoutSignal(ms: number): AbortSignal {
@@ -2765,6 +2772,25 @@ export const api = {
       throw e;
     }
   },
+  async wordpressTags(projectId: string, opts?: ApiFetchOptions) {
+    const key = projectId;
+    const cached = cacheGet(_cacheWpTags, key, 60_000);
+    if (cached && !opts) return await cached;
+    const p = apiFetch<WordpressTag[]>(
+      `/api/projects/${projectId}/wordpress/tags`,
+      undefined,
+      opts ?? { timeoutMs: META_API_TIMEOUT_MS },
+    );
+    if (!opts) cacheSetInflight(_cacheWpTags, key, p);
+    try {
+      const v = await p;
+      if (!opts) cacheSetValue(_cacheWpTags, key, v);
+      return v;
+    } catch (e) {
+      if (!opts) _cacheWpTags.delete(key);
+      throw e;
+    }
+  },
   async listScheduledJobs(projectId: string) {
     return apiFetch<ScheduledJobPublic[]>(`/api/projects/${projectId}/scheduled-jobs`);
   },
@@ -3197,6 +3223,10 @@ export const api = {
       article: string;
       meta_title: string;
       meta_description: string;
+      post_type: string;
+      wp_status: string;
+      category_ids: number[];
+      tag_ids: number[];
     }>,
     opts?: ApiFetchOptions,
   ) {
@@ -3621,6 +3651,29 @@ export const api = {
     return res;
   },
 
+  /** Manually upload/replace the featured image -- persists immediately (Cloudinary-or-disk,
+   * same as regenerate), independent of whether the article has ever been published. */
+  async uploadFeaturedImage(projectId: string, articleId: string, file: File, opts?: ApiFetchOptions) {
+    const fd = new FormData();
+    fd.set("file", file);
+    const v = await apiFetch<{ ok: boolean; image_url: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/featured-image/upload`,
+      { method: "POST", body: fd },
+      { timeoutMs: LONG_API_TIMEOUT_MS, ...opts },
+    ).finally(() => invalidateArticleDetailCache(projectId, articleId));
+    return v;
+  },
+
+  /** Clear the featured image and best-effort delete its Cloudinary/disk asset. */
+  async removeFeaturedImage(projectId: string, articleId: string, opts?: ApiFetchOptions) {
+    const v = await apiFetch<{ ok: boolean }>(
+      `/api/projects/${projectId}/articles/${articleId}/remove-featured-image`,
+      { method: "POST" },
+      { timeoutMs: LONG_API_TIMEOUT_MS, ...opts },
+    ).finally(() => invalidateArticleDetailCache(projectId, articleId));
+    return v;
+  },
+
   async scheduleArticle(
     projectId: string,
     articleId: string,
@@ -3667,7 +3720,7 @@ export const api = {
   async publishArticleToLiveSite(
     projectId: string,
     articleId: string,
-    payload: { image_file?: File | null; post_type: string; wp_status: "draft" | "publish"; category_ids: number[] },
+    payload: { image_file?: File | null; post_type: string; wp_status: "draft" | "publish"; category_ids: number[]; tag_ids?: number[] },
     opts?: ApiFetchOptions,
   ) {
     const fd = new FormData();
@@ -3675,6 +3728,7 @@ export const api = {
     fd.set("post_type", payload.post_type);
     fd.set("wp_status", payload.wp_status);
     fd.set("category_ids", payload.category_ids.join(","));
+    fd.set("tag_ids", (payload.tag_ids || []).join(","));
     const res = await apiFetchRaw(
       `/api/projects/${projectId}/articles/${articleId}/publish`,
       { method: "POST", body: fd },
@@ -3728,13 +3782,14 @@ export const api = {
   async updateArticleOnWordPress(
     projectId: string,
     articleId: string,
-    payload: { image_file?: File | null; post_type: string; wp_status: "draft" | "publish"; category_ids: number[] },
+    payload: { image_file?: File | null; post_type: string; wp_status: "draft" | "publish"; category_ids: number[]; tag_ids?: number[] },
   ) {
     const fd = new FormData();
     if (payload.image_file) fd.set("image_file", payload.image_file);
     fd.set("post_type", payload.post_type);
     fd.set("wp_status", payload.wp_status);
     fd.set("category_ids", payload.category_ids.join(","));
+    fd.set("tag_ids", (payload.tag_ids || []).join(","));
     const res = await apiFetchRaw(
       `/api/projects/${projectId}/articles/${articleId}/update-wordpress`,
       { method: "POST", body: fd },

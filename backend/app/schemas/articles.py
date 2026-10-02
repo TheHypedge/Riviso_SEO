@@ -92,6 +92,7 @@ class ArticlePublic(BaseModel):
     wp_modified_at: str | None = Field(default=None, description="Last modified timestamp from WordPress.")
     wp_synced_at: str | None = Field(default=None, description="When Riviso last pulled this post from WordPress.")
     wp_category_ids: str = Field(default="", description="Comma-separated WordPress category IDs assigned to this article.")
+    wp_tag_ids: str = Field(default="", description="Comma-separated WordPress tag IDs assigned to this article.")
     source_url: str | None = Field(default=None, description="Source URL this article was drafted from (Through Source tab), for provenance display only.")
 
 
@@ -286,6 +287,13 @@ class ArticleUpdateRequest(BaseModel):
     article: str | None = None
     meta_title: str | None = Field(default=None, max_length=400)
     meta_description: str | None = Field(default=None, max_length=600)
+    # WordPress publish defaults, settable before the article is ever live -- stored as
+    # this article's own default (same fields the generate-time Post Type/Status feature
+    # writes), picked up later by the editor's publish/schedule pre-fill.
+    post_type: str | None = Field(default=None, max_length=200)
+    wp_status: str | None = Field(default=None, max_length=16)
+    category_ids: list[int] | None = Field(default=None, max_length=100)
+    tag_ids: list[int] | None = Field(default=None, max_length=100)
 
 
 class MappedShopifyProductInput(BaseModel):

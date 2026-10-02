@@ -1929,6 +1929,17 @@ async def update_article(
         updates["meta_title"] = sanitize_meta_title(payload.meta_title, max_len=400)
     if payload.meta_description is not None:
         updates["meta_description"] = sanitize_meta_description(payload.meta_description, max_len=600)
+    if payload.post_type is not None:
+        updates["wp_rest_base"] = (payload.post_type or "").strip()[:200]
+    if payload.wp_status is not None:
+        wp_status_norm = (payload.wp_status or "").strip().lower()
+        if wp_status_norm and wp_status_norm not in {"draft", "publish"}:
+            raise HTTPException(status_code=400, detail="Invalid wp_status (draft|publish)")
+        updates["wp_schedule_wp_status"] = wp_status_norm
+    if payload.category_ids is not None:
+        updates["wp_category_ids"] = ",".join(str(i) for i in payload.category_ids)
+    if payload.tag_ids is not None:
+        updates["wp_tag_ids"] = ",".join(str(i) for i in payload.tag_ids)
 
     if updates:
         # $set instead of a full read-modify-replace -- none of this route's fields
@@ -2308,6 +2319,83 @@ async def regenerate_article_featured_image(
         raise
     except Exception as e:
         raise_storage_http(e)
+
+
+@router.post("/{article_id}/featured-image/upload", response_model=None)
+@limiter.limit("30/minute")
+async def upload_article_featured_image(
+    request: Request,
+    project_id: str,
+    article_id: str,
+    file: UploadFile = File(...),
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Manually upload/replace the featured image -- persists immediately (same as
+    regenerate), independent of whether the article has ever been published."""
+    st = get_legacy_storage_module()
+    await _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    aid = (article_id or "").strip()
+    await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=aid)
+
+    content_type = (file.content_type or "").strip().lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Please upload an image file.")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="That file is empty.")
+    if len(data) > MAX_ARTICLE_MEDIA_BYTES:
+        raise HTTPException(status_code=400, detail="That image is too large (max 8MB).")
+
+    # Route through the same data: URL + patch_article_fields choke point that
+    # regenerate/generate already use -- _externalize_featured_image_in_updates handles
+    # Cloudinary-or-disk persistence, no new storage.py logic needed.
+    b64 = base64.b64encode(data).decode("ascii")
+    data_url = f"data:{content_type};base64,{b64}"
+    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    await run_sync(call_storage, st.patch_article_fields, aid, {
+        "image_url": data_url,
+        "featured_image_source": "uploaded",
+        "featured_image_generated_at": now_str,
+    })
+    a2 = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=aid)
+    return {"ok": True, "image_url": a2.get("image_url") or ""}
+
+
+@router.post("/{article_id}/remove-featured-image", response_model=None)
+@limiter.limit("30/minute")
+async def remove_article_featured_image(
+    request: Request,
+    project_id: str,
+    article_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Clear the featured image and best-effort delete its Cloudinary/disk asset."""
+    st = get_legacy_storage_module()
+    await _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    aid = (article_id or "").strip()
+    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=aid)
+
+    public_id = (a.get("featured_image_cloudinary_public_id") or "").strip()
+    if public_id:
+        from app.services.cloudinary_storage import delete_by_public_id
+
+        try:
+            await run_sync(delete_by_public_id, public_id)
+        except Exception:
+            pass
+    try:
+        await run_sync(st._delete_featured_image_file, aid)  # noqa: SLF001 -- same reuse pattern as elsewhere
+    except Exception:
+        pass
+
+    await run_sync(call_storage, st.patch_article_fields, aid, {
+        "image_url": "",
+        "featured_image_storage": "",
+        "featured_image_cloudinary_public_id": "",
+        "featured_image_generated_at": "",
+        "featured_image_source": "",
+    })
+    return {"ok": True}
 
 
 class IntegrityMarkdownBody(BaseModel):
@@ -2725,6 +2813,35 @@ def _parse_wp_category_ids(category_ids: str) -> list[int]:
     return list(dict.fromkeys([x for x in cat_ids if x > 0]))[:50]
 
 
+def _parse_wp_tag_ids(tag_ids: str) -> list[int]:
+    out: list[int] = []
+    for part in (tag_ids or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.append(int(part))
+        except (TypeError, ValueError):
+            continue
+    return list(dict.fromkeys([x for x in out if x > 0]))[:50]
+
+
+def _apply_wp_tags_to_payload(payload: dict, *, tag_ids: list[int], keywords: list[str]) -> None:
+    """Mutates ``payload`` with either numeric WP tag IDs or free-text tag_names.
+
+    An explicit, user-selected Tags taxonomy picker always wins over the older
+    auto-tag-from-keywords fallback -- otherwise _plugin_payload's tag_names-before-tags
+    precedence would silently ignore the user's real selection whenever the article also
+    has keywords set. Shared by publish_to_live_site and update_wordpress_post.
+    """
+    if tag_ids:
+        payload["tags"] = tag_ids
+        return
+    kw = [str(x).strip() for x in (keywords or []) if str(x).strip()]
+    if kw:
+        payload["tag_names"] = kw[:15]
+
+
 def _wp_post_id_int(a: dict) -> int | None:
     raw = a.get("wp_post_id")
     if raw is None or raw == "":
@@ -2802,6 +2919,7 @@ async def publish_to_live_site(
     post_type: str = Form(default="posts"),
     wp_status: str = Form(default="draft"),
     category_ids: str = Form(default=""),
+    tag_ids: str = Form(default=""),
     user: dict = Depends(get_current_user),
 ) -> dict:
     """
@@ -2910,6 +3028,10 @@ async def publish_to_live_site(
     if not cat_ids:
         cat_ids = _parse_wp_category_ids((a.get("wp_category_ids") or "").strip())
 
+    tag_ids_list = _parse_wp_tag_ids(tag_ids)
+    if not tag_ids_list:
+        tag_ids_list = _parse_wp_tag_ids((a.get("wp_tag_ids") or "").strip())
+
     title = (a.get("title") or "").strip()
     article_md = (a.get("article") or "").strip()
     if not title or not article_md:
@@ -2980,11 +3102,7 @@ async def publish_to_live_site(
         payload["featured_media"] = featured_media_id
     if cat_ids:
         payload["categories"] = cat_ids
-
-    # WordPress tags from keywords — applied inside Riviso plugin (no REST tag API spam).
-    kw = [str(x).strip() for x in (a.get("keywords") or []) if str(x).strip()]
-    if kw:
-        payload["tag_names"] = kw[:15]
+    _apply_wp_tags_to_payload(payload, tag_ids=tag_ids_list, keywords=a.get("keywords") or [])
 
     await publish_pipeline_status(article_id, MSG_PUBLISH_DISPATCH, STAGE_PUBLISH_DISPATCH)
     try:
@@ -3008,6 +3126,12 @@ async def publish_to_live_site(
         if _wp_cats_back and isinstance(_wp_cats_back, list)
         else category_ids
     )
+    _wp_tags_back = created.get("tags") if isinstance(created, dict) else None
+    effective_tag_ids = (
+        ",".join(str(t) for t in _wp_tags_back if isinstance(t, int))
+        if _wp_tags_back and isinstance(_wp_tags_back, list)
+        else tag_ids
+    )
 
     now_str_pub = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     updates: dict = {
@@ -3023,6 +3147,7 @@ async def publish_to_live_site(
         "wp_schedule_error": "",
         # Persist the category WP actually assigned (including WP default when none were sent).
         "wp_category_ids": effective_category_ids,
+        "wp_tag_ids": effective_tag_ids,
     }
     # Cache the WP media ID so subsequent updates don't re-upload the same image.
     if featured_media_id is not None and featured_media_id > 0:
@@ -3339,6 +3464,7 @@ async def update_wordpress_post(
     post_type: str = Form(default=""),
     wp_status: str = Form(default=""),
     category_ids: str = Form(default=""),
+    tag_ids: str = Form(default=""),
     user: dict = Depends(get_current_user),
 ) -> dict:
     """Push the current article row to an existing WordPress post (no new post created)."""
@@ -3388,6 +3514,10 @@ async def update_wordpress_post(
     cat_ids = _parse_wp_category_ids(category_ids)
     if not cat_ids:
         cat_ids = _parse_wp_category_ids((a.get("wp_category_ids") or "").strip())
+
+    tag_ids_list = _parse_wp_tag_ids(tag_ids)
+    if not tag_ids_list:
+        tag_ids_list = _parse_wp_tag_ids((a.get("wp_tag_ids") or "").strip())
 
     title = (a.get("title") or "").strip()
     article_md = (a.get("article") or "").strip()
@@ -3456,10 +3586,7 @@ async def update_wordpress_post(
         payload["featured_media"] = featured_media_id
     if cat_ids:
         payload["categories"] = cat_ids
-
-    kw = [str(x).strip() for x in (a.get("keywords") or []) if str(x).strip()]
-    if kw:
-        payload["tag_names"] = kw[:15]
+    _apply_wp_tags_to_payload(payload, tag_ids=tag_ids_list, keywords=a.get("keywords") or [])
 
     from app.services.wordpress_publish import update_post_on_wordpress
 
@@ -3485,6 +3612,12 @@ async def update_wordpress_post(
         if _wp_cats_back_upd and isinstance(_wp_cats_back_upd, list)
         else category_ids
     )
+    _wp_tags_back_upd = updated.get("tags") if isinstance(updated, dict) else None
+    effective_tag_ids_upd = (
+        ",".join(str(t) for t in _wp_tags_back_upd if isinstance(t, int))
+        if _wp_tags_back_upd and isinstance(_wp_tags_back_upd, list)
+        else tag_ids
+    )
 
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     db_updates: dict = {
@@ -3497,6 +3630,7 @@ async def update_wordpress_post(
         "status": "published" if updated_wp_status == "publish" else (a.get("status") or "draft"),
         # Persist the category WP actually assigned (including WP default when none were sent).
         "wp_category_ids": effective_category_ids_upd,
+        "wp_tag_ids": effective_tag_ids_upd,
     }
     # Cache the WP media ID so subsequent updates don't re-upload the same image.
     if featured_media_id is not None and featured_media_id > 0:

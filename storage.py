@@ -2573,6 +2573,7 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "has_body": bool((d.get("article") or "").strip()),
         "listing_status": _derive_article_listing_status(d),
         "wp_category_ids": (d.get("wp_category_ids") or "")[:800],
+        "wp_tag_ids": (d.get("wp_tag_ids") or "")[:800],
         # WordPress Sync & Self-Healing
         "sync_status": (d.get("sync_status") or "unknown")[:32],
         "sync_issue_type": (d.get("sync_issue_type") or "")[:64],
@@ -2785,6 +2786,7 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "integrity_flagged_paragraphs",
             "integrity_last_audited_at",
             "wp_category_ids",
+            "wp_tag_ids",
             "sync_status",
             "sync_issue_type",
             "last_synced_at",
@@ -2985,6 +2987,11 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
         # delete, and by get_article_image_url's callers more generally.
         "featured_image_storage": d.get("featured_image_storage") or "",
         "featured_image_cloudinary_public_id": d.get("featured_image_cloudinary_public_id") or "",
+        # wp_category_ids was also missing from this explicit dict before now (same gap
+        # class) -- ensureWpMetaLoaded's article?.wp_category_ids pre-fill in the editor
+        # page silently never worked until this fix. wp_tag_ids is new (see plan).
+        "wp_category_ids": d.get("wp_category_ids") or "",
+        "wp_tag_ids": d.get("wp_tag_ids") or "",
     }
 
 

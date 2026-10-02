@@ -49,6 +49,7 @@ import { resolveFeaturedImageFileForWordPress } from "@/lib/featuredImageFile";
 import { formatShopifyBlogOptionLabel, SHOPIFY_BLOG_CHANNEL_HELP } from "@/lib/shopifyBlogLabel";
 import { ProjectSidebar, ProjectSidebarStyles } from "@/components/ProjectSidebar";
 import { LinkedInPostPreview } from "@/components/LinkedInPostPreview";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/DropdownMenu";
 import type { ProfilePublic, ProjectPublic } from "@/lib/api";
 
 
@@ -103,17 +104,17 @@ function statusDotClass(status: string): string {
   return editorStyles.statusDotNeutral;
 }
 
-// Tab set + order matches the Figma "Akhilesh" article editor handoff
-// (SEO Score / Meta / Keywords / Publish) literally. "AI" has no Figma
-// equivalent -- kept as a 5th tab anyway since it's the only place that
-// triggers article generation, not a decorative extra (see quirky-nibbling-owl.md).
-type ContextTab = "seo_score" | "meta" | "keywords" | "publish" | "ai";
+// Sidebar redesign: the former 5 tabs (SEO Score / Meta / Keywords / Publish / AI) are
+// collapsed into 2 -- "Article Info" (everything about this article's own metadata, in
+// one place, with one Update/Save button) and "SEO Checklist" (the former SEO Score tab,
+// unchanged). The old Publish tab's platform-publish buttons are dropped from the sidebar
+// since the sticky command bar above already duplicates every one of them; the AI tab's
+// copilot action grid is dropped (its buttons were placeholders, not a distinct working
+// feature) while its prompt selectors move into Article Info.
+type ContextTab = "article_info" | "seo_checklist";
 const CONTEXT_TABS: { key: ContextTab; label: string; icon: string }[] = [
-  { key: "seo_score", label: "SEO Score", icon: "⬡" },
-  { key: "meta", label: "Meta", icon: "▤" },
-  { key: "keywords", label: "Keywords", icon: "⌗" },
-  { key: "publish", label: "Publish", icon: "⬆" },
-  { key: "ai", label: "AI", icon: "✦" },
+  { key: "article_info", label: "Article Info", icon: "▤" },
+  { key: "seo_checklist", label: "SEO Checklist", icon: "⬡" },
 ];
 
 function computeSeoScore(metrics: {
@@ -354,6 +355,14 @@ function baselineFromArticle(a: ArticleDetail, imageUrl?: string): EditorBaselin
   });
 }
 
+/** Stable, order-independent key for comparing a WP category/tag id selection against
+ * a baseline snapshot -- ["7","3"] and ["3","7"] should count as unchanged. */
+function wpIdsKey(ids: number[]): string {
+  return [...ids].sort((a, b) => a - b).join(",");
+}
+
+type WpMetaBaseline = { postType: string; wpStatus: "draft" | "publish"; categoryIds: string; tagIds: string };
+
 export default function ArticleEditPage() {
   const params = useParams<{ projectId: string; articleId: string }>();
   const router = useRouter();
@@ -422,11 +431,12 @@ export default function ArticleEditPage() {
   const [writingPromptId, setWritingPromptId] = useState<string>("");
   const [imagePromptId, setImagePromptId] = useState<string>("");
   const [generateImage, setGenerateImage] = useState(true);
-  const [uploadedImageFile, setUploadedImageFile] = useState<File | null>(null);
-  const uploadedImagePreview = useMemo(() => {
-    if (!uploadedImageFile) return "";
-    return URL.createObjectURL(uploadedImageFile);
-  }, [uploadedImageFile]);
+  // Featured image box: pencil-icon dropdown actions (Upload/Regenerate/Remove) all
+  // persist immediately via their own API calls -- no staged File waiting for publish.
+  const [uploadImageBusy, setUploadImageBusy] = useState(false);
+  const [removeImageBusy, setRemoveImageBusy] = useState(false);
+  const [removeImageConfirming, setRemoveImageConfirming] = useState(false);
+  const featuredImageFileInputRef = useRef<HTMLInputElement>(null);
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string>("");
   const [featuredImageLoading, setFeaturedImageLoading] = useState(false);
   const [featuredImageLoadFailed, setFeaturedImageLoadFailed] = useState(false);
@@ -462,9 +472,15 @@ export default function ArticleEditPage() {
   // WordPress publish options
   const [wpPostTypes, setWpPostTypes] = useState<{ rest_base: string; name: string; taxonomies: string[] }[]>([]);
   const [wpCategories, setWpCategories] = useState<{ id: number; name: string }[]>([]);
+  const [wpTags, setWpTags] = useState<{ id: number; name: string }[]>([]);
   const [wpPostType, setWpPostType] = useState("posts");
   const [wpStatus, setWpStatus] = useState<"draft" | "publish">("draft");
   const [wpCategoryIds, setWpCategoryIds] = useState<number[]>([]);
+  const [wpTagIds, setWpTagIds] = useState<number[]>([]);
+  // Snapshot of wpPostType/wpStatus/wpCategoryIds/wpTagIds as last loaded/saved -- the
+  // Article Info tab's Update/Save button appears when any of these drift from it,
+  // same baseline-diff convention as editorBaseline/isDirty for the text fields.
+  const [wpMetaBaseline, setWpMetaBaseline] = useState<WpMetaBaseline | null>(null);
 
   const effectiveWpStatus = useMemo((): "draft" | "publish" => {
     if (showUpdateWordPress) {
@@ -521,7 +537,7 @@ export default function ArticleEditPage() {
   const projectSettingsLoaded = projectSettings != null;
 
   const [editorRevision, setEditorRevision] = useState(0);
-  const [contextTab, setContextTab] = useState<ContextTab>("seo_score");
+  const [contextTab, setContextTab] = useState<ContextTab>("article_info");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [commandBarVisible, setCommandBarVisible] = useState(false);
   const titleHeroRef = useRef<HTMLDivElement>(null);
@@ -628,8 +644,23 @@ export default function ArticleEditPage() {
     return (generatedImageUrl || "").trim() !== (editorBaseline.imageUrl || "").trim();
   }, [editorBaseline, generatedImageUrl]);
 
+  const isWpMetaDirty = useMemo(() => {
+    if (!wpMetaBaseline) return false;
+    return (
+      wpPostType !== wpMetaBaseline.postType ||
+      wpStatus !== wpMetaBaseline.wpStatus ||
+      wpIdsKey(wpCategoryIds) !== wpMetaBaseline.categoryIds ||
+      wpIdsKey(wpTagIds) !== wpMetaBaseline.tagIds
+    );
+  }, [wpMetaBaseline, wpPostType, wpStatus, wpCategoryIds, wpTagIds]);
+
   const hasPendingWpChanges = isDirty || isImageDirty;
-  const hasUnsavedChanges = hasPendingWpChanges || !!uploadedImageFile;
+  // Article Info tab's "right at the bottom" Update/Save button -- appears whenever
+  // anything in that tab changed (text fields, image, or WP post type/status/category/tags).
+  const isArticleInfoDirty = isDirty || isImageDirty || isWpMetaDirty;
+  // Navigation-guard/beforeunload should warn on any of the above, not just text/image --
+  // Post type/Status/Category/Tags now live in the same editable surface.
+  const hasUnsavedChanges = isArticleInfoDirty;
 
   const requestNavigation = useCallback(
     (href: string) => {
@@ -672,11 +703,6 @@ export default function ArticleEditPage() {
     }
     return false;
   }
-
-  useEffect(() => {
-    if (!uploadedImagePreview) return;
-    return () => URL.revokeObjectURL(uploadedImagePreview);
-  }, [uploadedImagePreview]);
 
   useEffect(() => {
     if (!token) return;
@@ -1033,14 +1059,19 @@ export default function ArticleEditPage() {
     return () => window.clearInterval(id);
   }, [token, editorPath, backgroundGenerating, params.projectId, params.articleId]);
 
-  // Keep publish status aligned with WordPress when editing a linked post.
+  // Keep publish status aligned with WordPress when editing a linked post. This is a
+  // system sync, not a user edit -- must also move wpMetaBaseline in lockstep, or
+  // isWpMetaDirty (and the "Leave without saving?" guard) would false-positive on
+  // every already-live article the moment this runs.
   useEffect(() => {
     if (!isLiveOnWordPress || !article?.id) return;
     const last = (article.wp_last_wp_status || "").trim().toLowerCase();
     if (last === "publish" || last === "draft") {
       setWpStatus(last);
+      setWpMetaBaseline((prev) => (prev ? { ...prev, wpStatus: last } : prev));
     } else if ((article.status || "").trim().toLowerCase() === "published") {
       setWpStatus("publish");
+      setWpMetaBaseline((prev) => (prev ? { ...prev, wpStatus: "publish" } : prev));
     }
   }, [article?.id, article?.status, article?.wp_last_wp_status, isLiveOnWordPress]);
 
@@ -1050,9 +1081,9 @@ export default function ArticleEditPage() {
   // not from the article's stale wp_rest_base. This ensures that changing Post Type in Project
   // Settings takes effect immediately for all new publications.
 
-  // Load WordPress post types + categories when Publish tab opens (lazy).
+  // Load WordPress post types + categories when Article Info tab opens (lazy).
   useEffect(() => {
-    if (contextTab !== "publish") return;
+    if (contextTab !== "article_info") return;
     if (!token || !needsWpMeta || !article?.id) return;
     if (wpPostTypes.length || wpCategories.length) return;
     void ensureWpMetaLoaded();
@@ -1146,9 +1177,10 @@ export default function ArticleEditPage() {
     setWpMetaError(null);
     const fetchOpts = { skipGlobalLoading: true, timeoutMs: 25_000 };
     try {
-      const [typesRes, catsRes, psRes] = await Promise.allSettled([
+      const [typesRes, catsRes, tagsRes, psRes] = await Promise.allSettled([
         api.wordpressPostTypes(params.projectId, fetchOpts),
         api.wordpressCategories(params.projectId, fetchOpts),
+        api.wordpressTags(params.projectId, fetchOpts),
         api.getProjectSettings(params.projectId, fetchOpts),
       ]);
       if (typesRes.status === "fulfilled") {
@@ -1157,18 +1189,37 @@ export default function ArticleEditPage() {
       if (catsRes.status === "fulfilled") {
         setWpCategories(catsRes.value);
       }
+      if (tagsRes.status === "fulfilled") {
+        setWpTags(tagsRes.value);
+      }
+      let resolvedPostType = wpPostType;
+      let resolvedStatus = wpStatus;
+      let resolvedCategoryIds = wpCategoryIds;
+      let resolvedTagIds = wpTagIds;
       if (psRes.status === "fulfilled") {
         const ps = psRes.value;
         // Prefer this article's own stored default (set at generate time, or from a
         // previous publish) over the project-wide default, which only applies when
         // the article has never had its own value set.
-        setWpPostType((article?.wp_rest_base || ps.default_wp_rest_base || "posts") as string);
+        resolvedPostType = (article?.wp_rest_base || ps.default_wp_rest_base || "posts") as string;
+        setWpPostType(resolvedPostType);
         if (!isLiveOnWordPress) {
-          setWpStatus(((article?.wp_schedule_wp_status || ps.default_wp_status || "draft") as "draft" | "publish"));
+          resolvedStatus = (article?.wp_schedule_wp_status || ps.default_wp_status || "draft") as "draft" | "publish";
+          setWpStatus(resolvedStatus);
           const articleCats = (article?.wp_category_ids || "").split(",").map(Number).filter(n => Number.isFinite(n) && n > 0);
-          setWpCategoryIds(articleCats.length ? articleCats : (ps.default_wp_category_ids || []) as number[]);
+          resolvedCategoryIds = articleCats.length ? articleCats : (ps.default_wp_category_ids || []) as number[];
+          setWpCategoryIds(resolvedCategoryIds);
+          const articleTags = (article?.wp_tag_ids || "").split(",").map(Number).filter(n => Number.isFinite(n) && n > 0);
+          resolvedTagIds = articleTags;
+          setWpTagIds(resolvedTagIds);
         }
       }
+      setWpMetaBaseline({
+        postType: resolvedPostType,
+        wpStatus: resolvedStatus,
+        categoryIds: wpIdsKey(resolvedCategoryIds),
+        tagIds: wpIdsKey(resolvedTagIds),
+      });
       if (typesRes.status === "rejected" && catsRes.status === "rejected") {
         setWpMetaError(
           "Could not load WordPress post types or categories (your host may block wp/v2). " +
@@ -1213,6 +1264,14 @@ export default function ArticleEditPage() {
     setError(null);
     setNotice(null);
     try {
+      // Post type/Status/Category/Tags are only pushed to the live WordPress post via
+      // updateWordPressPost(); before the article is ever live there's nothing to push,
+      // so this lightweight save just persists them as this article's own stored default
+      // (same wp_rest_base/wp_schedule_wp_status/wp_category_ids/wp_tag_ids fields the
+      // Generate-All feature already writes), picked up later by the publish/schedule UI.
+      const wpMetaPatch = !isLiveOnWordPress && isWpMetaDirty
+        ? { post_type: wpPostType, wp_status: wpStatus, category_ids: wpCategoryIds, tag_ids: wpTagIds }
+        : {};
       const updated = await api.updateArticle(params.projectId, params.articleId, {
         title,
         keywords: kwFromString(keywords),
@@ -1220,6 +1279,7 @@ export default function ArticleEditPage() {
         article: body,
         meta_title: metaTitle,
         meta_description: metaDesc,
+        ...wpMetaPatch,
       });
       setArticle(updated);
       setEditorBaseline(
@@ -1233,6 +1293,9 @@ export default function ArticleEditPage() {
           imageUrl: generatedImageUrl,
         }),
       );
+      if (!isLiveOnWordPress) {
+        setWpMetaBaseline({ postType: wpPostType, wpStatus, categoryIds: wpIdsKey(wpCategoryIds), tagIds: wpIdsKey(wpTagIds) });
+      }
       setNotice("Saved.");
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
@@ -1432,10 +1495,6 @@ export default function ArticleEditPage() {
 
   function openImageRegenModal() {
     setError(null);
-    if (!generateImage) {
-      setError('Enable "Generate image" (Yes) to create a featured image.');
-      return;
-    }
     if (!body.trim()) {
       setError("Generate article content first, then create the featured image.");
       return;
@@ -1460,10 +1519,6 @@ export default function ArticleEditPage() {
     const regenUnlimited = article?.featured_image_regeneration_unlimited ?? true;
     const regenRemaining = article?.featured_image_regeneration_remaining;
     const regenExhausted = !regenUnlimited && (regenRemaining ?? 0) <= 0;
-    if (!generateImage) {
-      setError('Enable "Generate image" (Yes) to create a featured image.');
-      return;
-    }
     if (!body.trim()) {
       setError("Generate article content first, then create the featured image.");
       return;
@@ -1560,12 +1615,48 @@ export default function ArticleEditPage() {
     }
   }
 
+  async function handleUploadFeaturedImageFile(file: File) {
+    setError(null);
+    setNotice(null);
+    setUploadImageBusy(true);
+    try {
+      const res = await api.uploadFeaturedImage(params.projectId, params.articleId, file);
+      setGeneratedImageUrl(res.image_url);
+      setEditorBaseline((prev) => (prev ? { ...prev, imageUrl: res.image_url } : prev));
+      const refreshed = await api.getArticle(params.projectId, params.articleId, { fresh: true, skipGlobalLoading: true });
+      setArticle(refreshed);
+      setNotice("Image uploaded.");
+    } catch (e) {
+      setError(connectionErrorMessage(e));
+    } finally {
+      setUploadImageBusy(false);
+    }
+  }
+
+  async function handleRemoveFeaturedImage() {
+    setError(null);
+    setNotice(null);
+    setRemoveImageBusy(true);
+    try {
+      await api.removeFeaturedImage(params.projectId, params.articleId);
+      setGeneratedImageUrl("");
+      setEditorBaseline((prev) => (prev ? { ...prev, imageUrl: "" } : prev));
+      const refreshed = await api.getArticle(params.projectId, params.articleId, { fresh: true, skipGlobalLoading: true });
+      setArticle(refreshed);
+      setNotice("Image removed.");
+    } catch (e) {
+      setError(connectionErrorMessage(e));
+    } finally {
+      setRemoveImageBusy(false);
+      setRemoveImageConfirming(false);
+    }
+  }
+
   const canPublish =
     showPublishWordPress &&
     !editorLocked &&
     !!title.trim() &&
-    !!body.trim() &&
-    (generateImage ? true : !!uploadedImageFile);
+    !!body.trim();
 
   const canUpdateWordPress = canPushWordPressUpdate({
     ctx: wpEditorCtx,
@@ -1585,14 +1676,8 @@ export default function ArticleEditPage() {
   const hasFeaturedImage = !!(generatedImageUrl || article?.has_featured_image);
   const showFeaturedImageSkeleton = imageRegenBusy || featuredImageLoading;
   const canFeaturedImageAction =
-    generateImage &&
     hasGeneratedContent &&
     (!imageRegenExhausted || !hasFeaturedImage);
-
-  function handleFeaturedImageButtonClick() {
-    if (!canFeaturedImageAction) return;
-    openImageRegenModal();
-  }
 
   async function publishToLiveSite() {
     if (!websiteConnected) {
@@ -1609,23 +1694,22 @@ export default function ArticleEditPage() {
         params.articleId,
         async () => {
           await persistEditorForWordPress({ skipGlobalLoading: true });
-          // Let the backend resolve the auto-generated image from its stored URL —
-          // avoids downloading a large file in the browser and 413-ing nginx.
-          const wpImageFile = uploadedImageFile ?? null;
+          // The featured image (AI-generated, regenerated, or manually uploaded) is
+          // always already persisted via image_url by this point -- the backend
+          // resolves it from there directly, no raw file upload needed here.
           const res = await api.publishArticleToLiveSite(params.projectId, params.articleId, {
-            image_file: wpImageFile,
+            image_file: null,
             post_type: wpPostType,
             wp_status: wpStatus,
             category_ids: wpCategoryIds,
+            tag_ids: wpTagIds,
           }, { skipGlobalLoading: true });
           const refreshed = await api.getArticle(params.projectId, params.articleId, { fresh: true, skipGlobalLoading: true });
           setArticle(refreshed);
           const syncedImageUrl = refreshed.image_url || generatedImageUrl;
           setGeneratedImageUrl(syncedImageUrl);
           setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
-          // The picked file has now been pushed to WordPress — clear it so
-          // hasUnsavedChanges doesn't stay stuck true for the rest of the session.
-          setUploadedImageFile(null);
+          setWpMetaBaseline({ postType: wpPostType, wpStatus, categoryIds: wpIdsKey(wpCategoryIds), tagIds: wpIdsKey(wpTagIds) });
           // Do NOT reset wpPostType from article.wp_rest_base — keep the project default
           // so the Post Type selector reflects the project setting, not the historical value.
           setNotice(`${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`);
@@ -1656,25 +1740,21 @@ export default function ArticleEditPage() {
     setWpUpdateBusy(true);
     try {
       await persistEditorForWordPress({ skipGlobalLoading: true });
-      // For auto-generated images, pass null so the backend resolves the image
-      // from its stored URL directly — avoids downloading a large file in the
-      // browser and re-uploading it through nginx (which would 413 on big images).
-      // Only send an image when the user explicitly uploaded one.
-      const wpImageFile = uploadedImageFile ?? null;
+      // The featured image is always already persisted via image_url by this point --
+      // the backend resolves it from there directly, no raw file upload needed here.
       const res = await api.updateArticleOnWordPress(params.projectId, params.articleId, {
-        image_file: wpImageFile,
+        image_file: null,
         post_type: wpPostType,
         wp_status: effectiveWpStatus,
         category_ids: wpCategoryIds,
+        tag_ids: wpTagIds,
       });
       const refreshed = await api.getArticle(params.projectId, params.articleId, { fresh: true });
       setArticle(refreshed);
       const syncedImageUrl = refreshed.image_url || generatedImageUrl;
       setGeneratedImageUrl(syncedImageUrl);
       setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
-      // The picked file has now been pushed to WordPress — clear it so
-      // hasUnsavedChanges doesn't stay stuck true for the rest of the session.
-      setUploadedImageFile(null);
+      setWpMetaBaseline({ postType: wpPostType, wpStatus: effectiveWpStatus, categoryIds: wpIdsKey(wpCategoryIds), tagIds: wpIdsKey(wpTagIds) });
       // Do NOT reset wpPostType from article.wp_rest_base — keep the project default.
       let noticeText = `${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`;
       if (res.featured_image_uploaded === false && hasFeaturedImage) {
@@ -2562,8 +2642,8 @@ export default function ArticleEditPage() {
 
             <div className={editorStyles.contextTabContent} role="tabpanel" id={`panel-${contextTab}`} aria-labelledby={`tab-${contextTab}`}>
 
-              {/* ── SEO tab ── */}
-              {contextTab === "seo_score" ? (
+              {/* ── SEO Checklist tab ── */}
+              {contextTab === "seo_checklist" ? (
                 contentLoading ? <ArticleEditorSkeleton /> : (
                   <>
                     {/* SEO Score ring */}
@@ -2620,16 +2700,18 @@ export default function ArticleEditPage() {
                 )
               ) : null}
 
-              {/* ── Meta tab ── */}
-              {contextTab === "meta" ? (
+              {/* ── Article Info tab ── */}
+              {contextTab === "article_info" ? (
                 contentLoading ? <ArticleEditorSkeleton /> : (
                   <>
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Article title</h3>
                       <input className={editorStyles.seoInput} value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
-                    </div>
-                    <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>Meta title</h3>
+
+                      <h3 className={editorStyles.panelSectionTitle} style={{ marginTop: 14 }}>Focus keyphrase</h3>
+                      <input className={editorStyles.seoInput} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. FM contract handover" disabled={editorLocked} />
+
+                      <h3 className={editorStyles.panelSectionTitle} style={{ marginTop: 14 }}>Meta title</h3>
                       <input className={editorStyles.seoInput} value={metaTitle} onChange={(e) => setMetaTitle(clampChars(e.target.value, META_TITLE_MAX))} disabled={editorLocked} />
                       <div className={editorStyles.seoCharCounter}>
                         <span>{metaTitle.length} / {META_TITLE_MAX}</span>
@@ -2637,9 +2719,8 @@ export default function ArticleEditPage() {
                           {seoMeter(metaTitle.length, META_TITLE_MAX).state === "excellent" ? "✓" : "⚠"} {seoMeter(metaTitle.length, META_TITLE_MAX).label}
                         </span>
                       </div>
-                    </div>
-                    <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>Meta description</h3>
+
+                      <h3 className={editorStyles.panelSectionTitle} style={{ marginTop: 14 }}>Meta description</h3>
                       <textarea className={editorStyles.seoTextarea} value={metaDesc} onChange={(e) => setMetaDesc(clampChars(e.target.value, META_DESC_MAX))} disabled={editorLocked} rows={3} />
                       <div className={editorStyles.seoCharCounter}>
                         <span>{metaDesc.length} / {META_DESC_MAX}</span>
@@ -2647,21 +2728,21 @@ export default function ArticleEditPage() {
                           {seoMeter(metaDesc.length, META_DESC_MAX).state === "excellent" ? "✓" : "⚠"} {seoMeter(metaDesc.length, META_DESC_MAX).label}
                         </span>
                       </div>
-                    </div>
-                  </>
-                )
-              ) : null}
 
-              {/* ── Keywords tab ── */}
-              {contextTab === "keywords" ? (
-                contentLoading ? <ArticleEditorSkeleton /> : (
-                  <>
-                    <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>Focus keyphrase</h3>
-                      <input className={editorStyles.seoInput} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. FM contract handover" disabled={editorLocked} />
-                    </div>
-                    <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>Targeting keywords</h3>
+                      {isWordPressProject ? (
+                        <>
+                          <h3 className={editorStyles.panelSectionTitle} style={{ marginTop: 14 }}>Tags</h3>
+                          <CategoryPillPicker
+                            categories={wpTags}
+                            selectedIds={wpTagIds}
+                            onChange={setWpTagIds}
+                            placeholder="Type to search tags…"
+                            disabled={editorLocked}
+                          />
+                        </>
+                      ) : null}
+
+                      <h3 className={editorStyles.panelSectionTitle} style={{ marginTop: 14 }}>Supporting Keywords</h3>
                       <div className={editorStyles.kwChipWrap}>
                         {kwChipsFromString(keywords).map((kw, i) => (
                           <span key={`${kw}-${i}`} className={editorStyles.kwChip}>
@@ -2725,223 +2806,191 @@ export default function ArticleEditPage() {
                         </span>
                       </div>
                     </div>
-                  </>
-                )
-              ) : null}
 
-              {/* ── Media tab (folded into Publish, kept behind the same condition removed below) ── */}
-              {contextTab === "publish" ? (
-                <>
-                  <div className={editorStyles.panelSection}>
-                    <h3 className={editorStyles.panelSectionTitle}>Featured image</h3>
-                    <div className={styles.articleImageFrame}>
-                      {showFeaturedImageSkeleton ? (
-                        <div className={editorStyles.imageSkeleton} aria-live="polite" aria-busy="true">
-                          <div className={editorStyles.imageSkeletonShimmer} aria-hidden="true" />
-                          <div className={editorStyles.imageSkeletonPulse} aria-hidden="true" />
-                          <div className={editorStyles.imageSkeletonBars} aria-hidden="true"><span /><span /><span /></div>
-                          <div className={editorStyles.imageSkeletonContent}>
-                            <div className={editorStyles.imageSpinner} aria-hidden="true" />
-                            <div className={editorStyles.imageGeneratingTitle}>{imageRegenBusy ? (imageGenPhase === "saving" ? "Saving…" : "Generating…") : "Loading…"}</div>
-                            <div className={editorStyles.imageGeneratingHint}>{imageRegenBusy ? (imageGenPhase === "saving" ? "Writing to storage." : "30-90 seconds.") : "Retrieving from storage."}</div>
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Featured image</h3>
+                      <div className={styles.articleImageFrame} style={{ position: "relative" }}>
+                        {showFeaturedImageSkeleton ? (
+                          <div className={editorStyles.imageSkeleton} aria-live="polite" aria-busy="true">
+                            <div className={editorStyles.imageSkeletonShimmer} aria-hidden="true" />
+                            <div className={editorStyles.imageSkeletonPulse} aria-hidden="true" />
+                            <div className={editorStyles.imageSkeletonBars} aria-hidden="true"><span /><span /><span /></div>
+                            <div className={editorStyles.imageSkeletonContent}>
+                              <div className={editorStyles.imageSpinner} aria-hidden="true" />
+                              <div className={editorStyles.imageGeneratingTitle}>{imageRegenBusy ? (imageGenPhase === "saving" ? "Saving…" : "Generating…") : "Loading…"}</div>
+                              <div className={editorStyles.imageGeneratingHint}>{imageRegenBusy ? (imageGenPhase === "saving" ? "Writing to storage." : "30-90 seconds.") : "Retrieving from storage."}</div>
+                            </div>
+                          </div>
+                        ) : uploadImageBusy ? (
+                          <div className={editorStyles.imagePlaceholder}>Uploading…</div>
+                        ) : generatedImageUrl ? (
+                          <LazyArticleImage src={generatedImageUrl} alt="Featured image" className={styles.articleImage} />
+                        ) : featuredImageLoadFailed ? (
+                          <div className={editorStyles.imagePlaceholder}>Could not load saved image. Use the menu to upload or regenerate.</div>
+                        ) : (
+                          <div className={editorStyles.imagePlaceholder}>No featured image yet. Use the menu to upload or generate one.</div>
+                        )}
+                        {!editorLocked ? (
+                          <div style={{ position: "absolute", top: 8, right: 8, zIndex: 2 }}>
+                            <DropdownMenu modal={false} onOpenChange={(open) => { if (!open) setRemoveImageConfirming(false); }}>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  aria-label="Edit featured image"
+                                  style={{
+                                    background: "rgba(0,0,0,0.55)", color: "#fff", border: "none", borderRadius: "50%",
+                                    width: 28, height: 28, display: "flex", alignItems: "center", justifyContent: "center",
+                                    cursor: "pointer", fontSize: 14,
+                                  }}
+                                >
+                                  ✎
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  onSelect={(e) => { e.preventDefault(); featuredImageFileInputRef.current?.click(); }}
+                                  disabled={uploadImageBusy}
+                                >
+                                  Upload and replace image
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onSelect={() => { if (canFeaturedImageAction) openImageRegenModal(); }}
+                                  disabled={imageRegenBusy || !canFeaturedImageAction}
+                                >
+                                  Regenerate image
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  danger
+                                  onSelect={(e) => {
+                                    if (!removeImageConfirming) {
+                                      e.preventDefault();
+                                      setRemoveImageConfirming(true);
+                                      return;
+                                    }
+                                    void handleRemoveFeaturedImage();
+                                  }}
+                                  disabled={removeImageBusy || !hasFeaturedImage}
+                                >
+                                  {removeImageConfirming ? "Confirm remove?" : "Remove image"}
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        ) : null}
+                      </div>
+                      <input
+                        ref={featuredImageFileInputRef}
+                        type="file"
+                        accept="image/*"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0] || null;
+                          e.target.value = "";
+                          if (f) void handleUploadFeaturedImageFile(f);
+                        }}
+                      />
+                      <div className={editorStyles.imageMeta} style={{ marginTop: 8 }}>Regenerations: {imageRegenUsed}{imageRegenUnlimited ? " / unlimited" : ` / ${imageRegenLimit}`}</div>
+                      {imageRegenExhausted ? <div className={styles.error} style={{ fontSize: 11 }}>Regeneration limit reached.</div> : null}
+                    </div>
+
+                    <div className={editorStyles.panelSection}>
+                      {isLiveOnWordPress && wpLink ? (
+                        <div className={`${editorStyles.liveUrlBar} ${isWpTrashed ? editorStyles.liveUrlBarTrashed : ""}`} style={{ marginBottom: 12 }}>
+                          <span className={editorStyles.liveUrlBarLabel}>{isWpTrashed ? "Trashed" : "Live"}</span>
+                          <a href={wpLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlBarHref} title={wpLink}>{wpLink}</a>
+                          <div className={editorStyles.liveUrlBarActions}>
+                            <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void copyLiveUrl()}>{liveUrlCopied ? "Copied" : "Copy"}</button>
+                            <a href={wpLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlBarBtn}>Open ↗</a>
+                            <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void syncFromWordPress()} disabled={wpSyncBusy || !websiteConnected}>
+                              {wpSyncBusy ? "Syncing…" : "Sync"}
+                            </button>
                           </div>
                         </div>
-                      ) : generateImage ? (
-                        generatedImageUrl ? (
-                          <LazyArticleImage src={generatedImageUrl} alt="Generated preview" className={styles.articleImage} />
-                        ) : featuredImageLoadFailed ? (
-                          <div className={editorStyles.imagePlaceholder}>Could not load saved image. Regenerate to create a new one.</div>
-                        ) : (
-                          <div className={editorStyles.imagePlaceholder}>Image will be generated with your selected prompt.</div>
-                        )
-                      ) : uploadedImagePreview ? (
-                        <LazyArticleImage src={uploadedImagePreview} alt="Uploaded preview" className={styles.articleImage} />
-                      ) : (
-                        <div className={editorStyles.imagePlaceholder}>No image selected.</div>
-                      )}
-                    </div>
-                  </div>
-                  <div className={editorStyles.panelSection}>
-                    <h3 className={editorStyles.panelSectionTitle}>Image options</h3>
-                    <label className={styles.label}>
-                      Generate image
-                      <select className={styles.input} value={generateImage ? "yes" : "no"} onChange={(e) => setGenerateImage(e.target.value === "yes")} disabled={editorLocked}>
-                        <option value="yes">Yes</option>
-                        <option value="no">No</option>
-                      </select>
-                    </label>
-                    {!generateImage ? (
-                      <label className={styles.label} style={{ marginTop: 8 }}>
-                        Upload image
-                        <input className={styles.input} type="file" accept="image/*" disabled={editorLocked} onChange={(e) => setUploadedImageFile(e.target.files?.[0] || null)} />
-                      </label>
-                    ) : null}
-                    {generateImage ? (
-                      <div style={{ marginTop: 10, display: "grid", gap: 6 }}>
-                        <div className={editorStyles.imageMeta}>Regenerations: {imageRegenUsed}{imageRegenUnlimited ? " / unlimited" : ` / ${imageRegenLimit}`}</div>
-                        <button className={styles.btnSecondary} type="button" onClick={handleFeaturedImageButtonClick} disabled={imageRegenBusy || !canFeaturedImageAction}>
-                          {imageRegenBusy ? (hasFeaturedImage ? "Regenerating…" : "Generating…") : (hasFeaturedImage ? "Regenerate image" : "Generate image")}
-                        </button>
-                        {imageRegenExhausted ? <div className={styles.error} style={{ fontSize: 11 }}>Regeneration limit reached.</div> : null}
-                      </div>
-                    ) : null}
-                  </div>
-                </>
-              ) : null}
-
-              {/* ── Publish tab ── */}
-              {contextTab === "publish" ? (
-                <>
-                  {isLiveOnWordPress && wpLink ? (
-                    <div className={editorStyles.panelSection}>
-                      <div className={`${editorStyles.liveUrlBar} ${isWpTrashed ? editorStyles.liveUrlBarTrashed : ""}`}>
-                        <span className={editorStyles.liveUrlBarLabel}>{isWpTrashed ? "Trashed" : "Live"}</span>
-                        <a href={wpLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlBarHref} title={wpLink}>{wpLink}</a>
-                        <div className={editorStyles.liveUrlBarActions}>
-                          <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void copyLiveUrl()}>{liveUrlCopied ? "Copied" : "Copy"}</button>
-                          <a href={wpLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlBarBtn}>Open ↗</a>
-                          <button type="button" className={editorStyles.liveUrlBarBtn} onClick={() => void syncFromWordPress()} disabled={wpSyncBusy || !websiteConnected}>
-                            {wpSyncBusy ? "Syncing…" : "Sync"}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-
-                  <div className={editorStyles.panelSection}>
-                    <h3 className={editorStyles.panelSectionTitle}>{isShopifyProject ? "Shopify" : "WordPress"}</h3>
-                    <p className={editorStyles.wpCardDesc}>
-                      {!websiteConnected && projectSettingsLoaded
-                        ? "Connect your website to publish."
-                        : isShopifyProject
-                          ? shopifyLink ? "This article is on Shopify." : "Post directly to your Shopify blog."
-                          : isScheduledArticle ? "Scheduled. Update available after publish."
-                          : showUpdateWordPress ? "Push edits to your live post."
-                          : showPublishWordPress ? "Publish when ready."
-                          : "Connect WordPress to publish."}
-                    </p>
-                    <div className={editorStyles.wpActions}>
-                      {isShopifyProject && !websiteConnected && projectSettingsLoaded ? (
-                        <button className={styles.button} type="button" onClick={() => setConnectModalOpen(true)}>
-                          Connect Website to Publish
-                        </button>
-                      ) : isShopifyProject ? (
-                        <>
-                          <button className={styles.button} type="button" onClick={() => void publishToShopify()} disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}>
-                            {shopifyPublishBusy ? "Posting…" : shopifyPublishNow ? "Publish to Shopify" : "Save Shopify draft"}
-                          </button>
-                          <button className={styles.btnSecondary} type="button" onClick={copyArticleMarkdown} disabled={!body.trim()}>Copy markdown</button>
-                        </>
-                      ) : (
-                        <>
-                          {showUpdateWordPress ? (
-                            <button className={styles.button} type="button" onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}>{wpUpdateBusy ? "Updating…" : "Update article"}</button>
-                          ) : showPublishWordPress && !websiteConnected && projectSettingsLoaded ? (
-                            <button className={styles.button} type="button" onClick={() => setConnectModalOpen(true)}>Connect Website to Publish</button>
-                          ) : showPublishWordPress ? (
-                            <button className={styles.button} type="button" onClick={publishToLiveSite} disabled={!canPublish || wpPushBusy}>{wpPublishBusy ? "Publishing…" : "Publish article"}</button>
-                          ) : null}
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  {isShopifyProject ? (
-                    <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>Shopify settings</h3>
-                      <div className={styles.muted} style={{ fontSize: 11, marginBottom: 8 }}>
-                        Store: <strong>{(projectSettings?.shopify_shop || shopifyStatus?.shop || "Not set").toString()}</strong> · <strong>{websiteConnected ? "Connected" : "Not connected"}</strong>
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                        <label className={styles.label}>
-                          Blog
-                          <select className={styles.input} value={shopifyBlogId == null ? "" : String(shopifyBlogId)} onChange={(e) => setShopifyBlogId(e.target.value ? Number(e.target.value) : null)} disabled={!shopifyBlogsAvailable}>
-                            <option value="">Select…</option>
-                            {(shopifyCatalog?.blogs || []).map((b) => (<option key={String(b?.id)} value={String(b?.id || "")}>{formatShopifyBlogOptionLabel(b)}</option>))}
-                          </select>
-                        </label>
-                        <label className={styles.label}>
-                          Status
-                          <select className={styles.input} value={shopifyPublishNow ? "publish" : "draft"} onChange={(e) => setShopifyPublishNow(e.target.value === "publish")}>
-                            <option value="draft">Draft</option>
-                            <option value="publish">Published</option>
-                          </select>
-                        </label>
-                      </div>
-                      {!shopifyBlogsAvailable ? (
-                        <button type="button" className={styles.btnSecondary} style={{ marginTop: 8 }} onClick={() => void syncShopifyCatalogFromEditor()} disabled={shopifyCatalogSyncing || !websiteConnected}>
-                          {shopifyCatalogSyncing ? "Syncing…" : "Sync blogs"}
-                        </button>
                       ) : null}
-                    </div>
-                  ) : (
-                    <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>WordPress settings</h3>
-                      {wpMetaLoading && !wpPostTypes.length && !wpCategories.length ? (
-                        <div className={editorStyles.wpMetaLoading}><div className={editorStyles.imageSpinner} aria-hidden="true" /><span>Loading…</span></div>
-                      ) : wpMetaError && !wpPostTypes.length && !wpCategories.length ? (
-                        <div style={{ display: "grid", gap: 6 }}>
-                          <div className={styles.error} style={{ fontSize: 11 }}>{wpMetaError}</div>
-                          <button className={styles.btnSecondary} type="button" onClick={() => void ensureWpMetaLoaded({ force: true })} disabled={wpMetaLoading}>Retry</button>
-                        </div>
-                      ) : wpPostTypes.length || wpCategories.length ? (
+
+                      {isShopifyProject ? (
                         <>
+                          {shopifyLink ? (
+                            <div className={editorStyles.liveUrlBar} style={{ marginBottom: 12 }}>
+                              <span className={editorStyles.liveUrlBarLabel}>Live</span>
+                              <a href={shopifyLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlBarHref} title={shopifyLink}>{shopifyLink}</a>
+                              <div className={editorStyles.liveUrlBarActions}>
+                                <a href={shopifyLink} target="_blank" rel="noopener noreferrer" className={editorStyles.liveUrlBarBtn}>Open ↗</a>
+                              </div>
+                            </div>
+                          ) : null}
+                          <h3 className={editorStyles.panelSectionTitle}>Shopify settings</h3>
+                          <div className={styles.muted} style={{ fontSize: 11, marginBottom: 8 }}>
+                            Store: <strong>{(projectSettings?.shopify_shop || shopifyStatus?.shop || "Not set").toString()}</strong> · <strong>{websiteConnected ? "Connected" : "Not connected"}</strong>
+                          </div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                             <label className={styles.label}>
-                              Post type
-                              <select className={styles.input} value={wpPostType} onChange={(e) => setWpPostType(e.target.value)} disabled={editorLocked}>
-                                <option value="posts">Posts</option>
-                                {wpPostTypes.filter((t) => t.rest_base && t.rest_base !== "posts").map((t) => (<option key={t.rest_base} value={t.rest_base}>{t.name || t.rest_base}</option>))}
+                              Blog
+                              <select className={styles.input} value={shopifyBlogId == null ? "" : String(shopifyBlogId)} onChange={(e) => setShopifyBlogId(e.target.value ? Number(e.target.value) : null)} disabled={!shopifyBlogsAvailable}>
+                                <option value="">Select…</option>
+                                {(shopifyCatalog?.blogs || []).map((b) => (<option key={String(b?.id)} value={String(b?.id || "")}>{formatShopifyBlogOptionLabel(b)}</option>))}
                               </select>
                             </label>
                             <label className={styles.label}>
                               Status
-                              <select className={styles.input} value={wpStatus} onChange={(e) => setWpStatus(e.target.value as "draft" | "publish")} disabled={editorLocked}>
+                              <select className={styles.input} value={shopifyPublishNow ? "publish" : "draft"} onChange={(e) => setShopifyPublishNow(e.target.value === "publish")}>
                                 <option value="draft">Draft</option>
-                                <option value="publish">Publish</option>
+                                <option value="publish">Published</option>
                               </select>
                             </label>
                           </div>
-                          <label className={styles.label} style={{ marginTop: 8 }}>
-                            Categories
-                            <CategoryPillPicker
-                              categories={wpCategories}
-                              selectedIds={wpCategoryIds}
-                              onChange={setWpCategoryIds}
-                              disabled={editorLocked}
-                            />
-                          </label>
+                          {!shopifyBlogsAvailable ? (
+                            <button type="button" className={styles.btnSecondary} style={{ marginTop: 8 }} onClick={() => void syncShopifyCatalogFromEditor()} disabled={shopifyCatalogSyncing || !websiteConnected}>
+                              {shopifyCatalogSyncing ? "Syncing…" : "Sync blogs"}
+                            </button>
+                          ) : null}
+                          <button className={styles.btnSecondary} type="button" style={{ marginTop: 8 }} onClick={copyArticleMarkdown} disabled={!body.trim()}>Copy markdown</button>
                         </>
                       ) : (
-                        <div className={styles.muted} style={{ fontSize: 11 }}>Using project defaults.</div>
+                        <>
+                          <h3 className={editorStyles.panelSectionTitle}>WordPress settings</h3>
+                          {wpMetaLoading && !wpPostTypes.length && !wpCategories.length ? (
+                            <div className={editorStyles.wpMetaLoading}><div className={editorStyles.imageSpinner} aria-hidden="true" /><span>Loading…</span></div>
+                          ) : wpMetaError && !wpPostTypes.length && !wpCategories.length ? (
+                            <div style={{ display: "grid", gap: 6 }}>
+                              <div className={styles.error} style={{ fontSize: 11 }}>{wpMetaError}</div>
+                              <button className={styles.btnSecondary} type="button" onClick={() => void ensureWpMetaLoaded({ force: true })} disabled={wpMetaLoading}>Retry</button>
+                            </div>
+                          ) : wpPostTypes.length || wpCategories.length ? (
+                            <>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                <label className={styles.label}>
+                                  Post type
+                                  <select className={styles.input} value={wpPostType} onChange={(e) => setWpPostType(e.target.value)} disabled={editorLocked}>
+                                    <option value="posts">Posts</option>
+                                    {wpPostTypes.filter((t) => t.rest_base && t.rest_base !== "posts").map((t) => (<option key={t.rest_base} value={t.rest_base}>{t.name || t.rest_base}</option>))}
+                                  </select>
+                                </label>
+                                <label className={styles.label}>
+                                  Article status
+                                  <select className={styles.input} value={wpStatus} onChange={(e) => setWpStatus(e.target.value as "draft" | "publish")} disabled={editorLocked}>
+                                    <option value="draft">Draft</option>
+                                    <option value="publish">Publish</option>
+                                  </select>
+                                </label>
+                              </div>
+                              <label className={styles.label} style={{ marginTop: 8 }}>
+                                Category
+                                <CategoryPillPicker
+                                  categories={wpCategories}
+                                  selectedIds={wpCategoryIds}
+                                  onChange={setWpCategoryIds}
+                                  disabled={editorLocked}
+                                />
+                              </label>
+                            </>
+                          ) : (
+                            <div className={styles.muted} style={{ fontSize: 11 }}>Using project defaults.</div>
+                          )}
+                        </>
                       )}
                     </div>
-                  )}
-                </>
-              ) : null}
 
-              {/* ── AI tab ── */}
-              {contextTab === "ai" ? (
-                contentLoading ? <ArticleEditorSkeleton /> : (
-                  <>
-                    <div className={editorStyles.panelSection}>
-                      <h3 className={editorStyles.panelSectionTitle}>AI copilot</h3>
-                      <div className={editorStyles.aiActionGrid}>
-                        {([
-                          { icon: "✦", label: "Generate article", action: () => void generate(), disabled: editorLocked },
-                          { icon: "↻", label: hasGeneratedContent ? "Regenerate" : "Generate", action: () => void generate(), disabled: editorLocked },
-                          { icon: "⊕", label: "Expand topic", action: () => void generate(), disabled: editorLocked || !hasGeneratedContent },
-                          { icon: "✎", label: "Rewrite heading", action: () => void generate(), disabled: editorLocked || !hasGeneratedContent },
-                          { icon: "☰", label: "Generate FAQ", action: () => void generate(), disabled: editorLocked || !hasGeneratedContent },
-                          { icon: "⟡", label: "Add examples", action: () => void generate(), disabled: editorLocked || !hasGeneratedContent },
-                        ]).map((cmd) => (
-                          <button key={cmd.label} type="button" className={editorStyles.aiActionBtn} onClick={cmd.action} disabled={cmd.disabled}>
-                            <span className={editorStyles.aiActionIcon}>{cmd.icon}</span>
-                            {cmd.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Prompt configuration</h3>
                       {!editorLocked && !writingPrompts && !imagePrompts ? (
@@ -2966,15 +3015,48 @@ export default function ArticleEditPage() {
                           </label>
                         </>
                       )}
-                    </div>
-                    <div className={editorStyles.panelSection}>
-                      <div className={editorStyles.fieldActions} style={{ borderTop: "none", paddingTop: 0, marginTop: 0 }}>
+                      <div className={editorStyles.fieldActions} style={{ borderTop: "none", paddingTop: 10, marginTop: 10 }}>
                         <button className={styles.button} type="button" onClick={() => void generate()} disabled={editorLocked}>
                           {hasGeneratedContent ? "Regenerate article" : "Generate article"}
                         </button>
-                        <button className={styles.btnSecondary} type="button" onClick={save} disabled={editorLocked}>Save</button>
                       </div>
                     </div>
+
+                    {isArticleInfoDirty ? (
+                      <div className={editorStyles.panelSection}>
+                        {isShopifyProject ? (
+                          <button
+                            className={styles.button}
+                            type="button"
+                            style={{ width: "100%" }}
+                            onClick={() => void publishToShopify()}
+                            disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}
+                          >
+                            {shopifyPublishBusy ? "Publishing…" : article?.shopify_article_id ? "Update Shopify" : "Publish to Shopify"}
+                          </button>
+                        ) : showUpdateWordPress ? (
+                          <button
+                            className={styles.button}
+                            type="button"
+                            style={{ width: "100%" }}
+                            onClick={() => void updateWordPressPost()}
+                            disabled={!canUpdateWordPress}
+                          >
+                            {wpUpdateBusy ? "Updating…" : "Update article"}
+                          </button>
+                        ) : (
+                          <button
+                            className={styles.button}
+                            type="button"
+                            style={{ width: "100%" }}
+                            onClick={() => void save()}
+                            disabled={editorLocked}
+                          >
+                            Save changes
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
                   </>
                 )
               ) : null}

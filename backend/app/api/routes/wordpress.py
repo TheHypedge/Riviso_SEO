@@ -34,6 +34,11 @@ _WP_REST_TIMEOUT_S = 45.0
 _CAT_CACHE: dict[str, tuple[float, list[WordpressCategory]]] = {}
 _CAT_CACHE_TTL_S: float = 300.0  # 5 minutes
 
+# Same cache shape for WP tags -- a distinct taxonomy from categories, same {id, name}
+# response shape, so WordpressCategory is reused as-is rather than adding a parallel model.
+_TAG_CACHE: dict[str, tuple[float, list[WordpressCategory]]] = {}
+_TAG_CACHE_TTL_S: float = 300.0  # 5 minutes
+
 _POST_TYPES_CACHE: dict[str, tuple[float, list[WordpressPostType]]] = {}
 _POST_TYPES_CACHE_TTL_S: float = 300.0  # 5 minutes
 
@@ -144,6 +149,17 @@ def _parse_wp_categories(data: Any) -> list[WordpressCategory]:
     for c in data:
         if isinstance(c, dict) and isinstance(c.get("id"), int):
             out.append(WordpressCategory(id=int(c["id"]), name=(c.get("name") or "").strip()))
+    out.sort(key=lambda x: x.name.lower())
+    return out
+
+
+def _parse_wp_tags(data: Any) -> list[WordpressCategory]:
+    out: list[WordpressCategory] = []
+    if not isinstance(data, list):
+        return out
+    for t in data:
+        if isinstance(t, dict) and isinstance(t.get("id"), int):
+            out.append(WordpressCategory(id=int(t["id"]), name=(t.get("name") or "").strip()))
     out.sort(key=lambda x: x.name.lower())
     return out
 
@@ -969,6 +985,33 @@ async def wordpress_categories(project_id: str, user: dict = Depends(get_current
     )
     result = _parse_wp_categories(data)
     _CAT_CACHE[project_id] = (time.time() + _CAT_CACHE_TTL_S, result)
+    return result
+
+
+@router.get("/projects/{project_id}/wordpress/tags", response_model=list[WordpressCategory])
+async def wordpress_tags(project_id: str, user: dict = Depends(get_current_user)) -> list[WordpressCategory]:
+    proj = await _require_project_access(user=user, project_id=project_id, allow_collaborators=True)
+    if _is_shopify_project(proj):
+        return []
+
+    cached = _TAG_CACHE.get(project_id)
+    if cached:
+        expires_at, tags = cached
+        if expires_at > time.time():
+            return tags
+        _TAG_CACHE.pop(project_id, None)
+
+    wp = _get_wp_client_for_project(proj)
+    data = await _wp_try_get_json(
+        wp,
+        (
+            "/wp-json/wp/v2/tags?per_page=100&context=view",
+            "/wp-json/wp/v2/tags?per_page=100&context=edit",
+            "/wp-json/wp/v2/tags?per_page=100",
+        ),
+    )
+    result = _parse_wp_tags(data)
+    _TAG_CACHE[project_id] = (time.time() + _TAG_CACHE_TTL_S, result)
     return result
 
 
