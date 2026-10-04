@@ -414,6 +414,10 @@ class BulkScheduleRequest(BaseModel):
     image_prompt_id: str | None = Field(default=None, max_length=100)
     generate_image: bool = True
     user_timezone: str | None = Field(default=None, max_length=64)
+    # Batch-level category override. None (field omitted) means "no override" --
+    # preserves the existing per-article/project-default behavior. An empty list is
+    # treated the same as None, never as "strip all categories".
+    category_ids: list[int] | None = Field(default=None, max_length=50)
 
 
 class BulkScheduleFailure(BaseModel):

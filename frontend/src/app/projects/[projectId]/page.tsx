@@ -1010,7 +1010,10 @@ export default function ProjectPage() {
   const [listTotal, setListTotal] = useState(0);
   const [articlesListLoading, setArticlesListLoading] = useState(false);
   const [articleTitlesById, setArticleTitlesById] = useState<Record<string, string>>({});
-  const [selectedMeta, setSelectedMeta] = useState<Record<string, { title: string }>>({});
+  // `status` is the row's derived listing status at selection time (captured here,
+  // not re-looked-up later, so it still resolves correctly even if the row's page is
+  // no longer loaded -- see bulkSchedule()'s published/scheduled exclusion).
+  const [selectedMeta, setSelectedMeta] = useState<Record<string, { title: string; status?: string }>>({});
   const [debouncedQ, setDebouncedQ] = useState("");
   const [scheduledJobs, setScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [scheduledLoading, setScheduledLoading] = useState(false);
@@ -1139,6 +1142,28 @@ export default function ProjectPage() {
   const [draftName, setDraftName] = useState("");
   const [draftText, setDraftText] = useState("");
   const [draftSetDefault, setDraftSetDefault] = useState(false);
+  // True once a prompt has actually been added, removed, or edited (drafts/defaults
+  // diverge from the last-loaded-or-saved baseline) -- drives the dynamic Save changes
+  // button in the Prompts tab's title row (hidden otherwise, not shown unconditionally).
+  const promptsDirty = useMemo(() => {
+    if (!writingPrompts || !imagePrompts) return false;
+    if (wpDeleted.size > 0 || ipDeleted.size > 0) return true;
+    if ((wpDefault || "") !== (writingPrompts.default_id || "")) return true;
+    if ((ipDefault || "") !== (imagePrompts.default_id || "")) return true;
+    const baselineWp = new Map((writingPrompts.items || []).map((p) => [p.id, p]));
+    for (const d of wpDrafts) {
+      if (d.isNew || d.id.startsWith("new_")) return true;
+      const base = baselineWp.get(d.id);
+      if (!base || base.name !== d.name || base.text !== d.text) return true;
+    }
+    const baselineIp = new Map((imagePrompts.items || []).map((p) => [p.id, p]));
+    for (const d of ipDrafts) {
+      if (d.isNew || d.id.startsWith("new_")) return true;
+      const base = baselineIp.get(d.id);
+      if (!base || base.name !== d.name || base.text !== d.text) return true;
+    }
+    return false;
+  }, [writingPrompts, imagePrompts, wpDrafts, ipDrafts, wpDefault, ipDefault, wpDeleted, ipDeleted]);
   // Image Prompt Playground -- test-generation state, scoped to whichever image
   // prompt is currently open in the editor modal; reset whenever the modal opens.
   const [promptTestBusy, setPromptTestBusy] = useState(false);
@@ -1194,6 +1219,9 @@ export default function ProjectPage() {
   const [linksSaving, setLinksSaving] = useState(false);
   const [linkDrafts, setLinkDrafts] = useState<LinkDraft[]>([]);
   const [linkDeleted, setLinkDeleted] = useState<Set<string>>(new Set());
+  // Last-loaded-or-saved snapshot of linkDrafts -- diffed against the live drafts to
+  // decide whether a real CRUD change happened (see contextLinksDirty below).
+  const [linkBaseline, setLinkBaseline] = useState<LinkDraft[]>([]);
   const [showLinkModal, setShowLinkModal] = useState<null | { id: string; isNew: boolean }>(null);
   const linkModalTrapRef = useFocusTrap(!!showLinkModal);
   const promptModalTrapRef = useFocusTrap(!!showPromptModal);
@@ -1204,6 +1232,19 @@ export default function ProjectPage() {
   const [linkPage, setLinkPage] = useState(1);
   const [linkDuplicateConflicts, setLinkDuplicateConflicts] = useState<Array<{ phrase: string; conflict: LinkDraft }>>([]);
   const [linkSaveAttempted, setLinkSaveAttempted] = useState(false);
+  // True once a link has actually been added, removed, or edited (drafts diverge from
+  // linkBaseline) -- drives the dynamic Save changes button in the title row.
+  const contextLinksDirty = useMemo(() => {
+    if (linkDeleted.size > 0) return true;
+    if (linkDrafts.length !== linkBaseline.length) return true;
+    const baseline = new Map(linkBaseline.map((x) => [x.id, x]));
+    for (const d of linkDrafts) {
+      if (d.isNew || d.id.startsWith("new_")) return true;
+      const base = baseline.get(d.id);
+      if (!base || base.label !== d.label || base.url !== d.url) return true;
+    }
+    return false;
+  }, [linkDrafts, linkBaseline, linkDeleted]);
 
   // Toolbar
   const [q, setQ] = useState("");
@@ -3094,7 +3135,9 @@ export default function ProjectPage() {
       setLinksLoading(true);
       try {
         const items = await api.listContextLinks(projectId);
-        setLinkDrafts(items.map((x) => ({ id: x.id, label: x.label, url: x.url })));
+        const loaded = items.map((x) => ({ id: x.id, label: x.label, url: x.url }));
+        setLinkDrafts(loaded);
+        setLinkBaseline(loaded);
         setLinkDeleted(new Set());
         setLinkSearch("");
         setLinkPage(1);
@@ -3833,7 +3876,7 @@ export default function ProjectPage() {
     for (const a of pageItems) {
       next[a.id] = value;
       if (value) {
-        nextMeta[a.id] = { title: a.title || "(Untitled)" };
+        nextMeta[a.id] = { title: a.title || "(Untitled)", status: a.status };
       } else {
         delete nextMeta[a.id];
       }
@@ -3851,7 +3894,7 @@ export default function ProjectPage() {
         const { [id]: _, ...rest } = prev;
         return rest;
       }
-      return { ...prev, [id]: { title: row?.title || articleTitlesById[id] || "(Untitled)" } };
+      return { ...prev, [id]: { title: row?.title || articleTitlesById[id] || "(Untitled)", status: row?.status } };
     });
   }
 
@@ -4229,11 +4272,36 @@ export default function ProjectPage() {
   function bulkSchedule() {
     if (!selectedIds.length) return;
     if (!requireWebsiteConnectedForAction("Website is not connected for this project. Connect and verify WordPress before scheduling articles.")) return;
-    void ensureScheduleMetaLoaded();
-    setBulkScheduleSeedRows(
-      selectedIds.map((id) => ({ id, title: articleTitleFor(id) })),
-    );
-    setBulkMode("schedule");
+    // Only pending/draft articles can be scheduled -- already-published or
+    // already-scheduled rows are silently excluded here (backend re-validates the
+    // same way, see bulk_schedule_articles) rather than opening a form full of rows
+    // that would just fail on submit.
+    const eligibleIds = selectedIds.filter((id) => {
+      const st = (selectedMeta[id]?.status || "").toLowerCase();
+      return st === "pending" || st === "draft";
+    });
+    const excludedCount = selectedIds.length - eligibleIds.length;
+    if (!eligibleIds.length) {
+      setError("All selected articles are already published or scheduled — nothing to schedule.");
+      return;
+    }
+    const proceed = () => {
+      void ensureScheduleMetaLoaded();
+      setBulkScheduleSeedRows(
+        eligibleIds.map((id) => ({ id, title: articleTitleFor(id) })),
+      );
+      setBulkMode("schedule");
+    };
+    if (excludedCount > 0) {
+      askConfirm({
+        title: "Some articles will be skipped",
+        body: `${excludedCount} of ${selectedIds.length} selected article(s) are already published or scheduled and will be skipped. Continue scheduling the remaining ${eligibleIds.length}?`,
+        confirmLabel: "Continue",
+        onConfirm: proceed,
+      });
+      return;
+    }
+    proceed();
   }
 
   async function bulkScheduleSubmit(values: BulkScheduleFormValues) {
@@ -4256,6 +4324,7 @@ export default function ProjectPage() {
         image_prompt_id: values.imagePromptId || null,
         generate_image: values.generateImage,
         user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
+        category_ids: values.categoryIds.length ? values.categoryIds : undefined,
       };
 
       const res = await api.bulkScheduleArticles(projectId, schedulePayload);
@@ -4354,6 +4423,7 @@ export default function ProjectPage() {
         image_prompt_id: values.imagePromptId || null,
         generate_image: values.generateImage,
         user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
+        category_ids: values.categoryIds.length ? values.categoryIds : undefined,
       });
       if (res.failed?.length) {
         const first = res.failed[0];
@@ -4683,7 +4753,9 @@ export default function ProjectPage() {
         }
       }
       const items = await api.listContextLinks(projectId);
-      setLinkDrafts(items.map((x) => ({ id: x.id, label: x.label, url: x.url })));
+      const saved = items.map((x) => ({ id: x.id, label: x.label, url: x.url }));
+      setLinkDrafts(saved);
+      setLinkBaseline(saved);
       setLinkDeleted(new Set());
       setLinkPage(1);
       void refreshFeatureLimits();
@@ -6645,11 +6717,17 @@ export default function ProjectPage() {
               ) : tab === "context_links" ? (
                 <>
                   <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
-                    <div>
-                      <h1 style={{ margin: 0 }}>Context Links</h1>
-                      <p className={styles.scheduledPageLead}>
-                        Add exact phrases with target URLs, auto-linked when articles publish.
-                      </p>
+                    <h1 style={{ margin: 0 }}>Context Links</h1>
+                    <div className={styles.headSearchWrap} aria-label="Live search">
+                      <input
+                        className={`${styles.input} ${styles.headSearchInput}`}
+                        placeholder="Search exact phrase or link…"
+                        value={linkSearch}
+                        onChange={(e) => {
+                          setLinkSearch(e.target.value);
+                          setLinkPage(1);
+                        }}
+                      />
                     </div>
                     <div className={styles.row} style={{ justifyContent: "flex-end" }}>
                       <button
@@ -6661,15 +6739,28 @@ export default function ProjectPage() {
                       >
                         + Add link
                       </button>
-                      <button className={styles.button} type="button" onClick={saveContextLinks} disabled={linksLoading || linksSaving}>
-                        {linksSaving ? "Saving…" : "Save changes"}
-                      </button>
+                      {contextLinksDirty ? (
+                        <button className={styles.button} type="button" onClick={saveContextLinks} disabled={linksLoading || linksSaving}>
+                          {linksSaving ? "Saving…" : "Save changes"}
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                   <div className={`${styles.mobileHeadRow} ${styles.showOnMobile}`}>
                     <h1 className={styles.mobileTitle} style={{ margin: 0 }}>
                       Context Links
                     </h1>
+                  </div>
+                  <div className={styles.showOnMobile} style={{ width: "100%" }}>
+                    <input
+                      className={`${styles.input} ${styles.headSearchInputMobile}`}
+                      placeholder="Search exact phrase or link…"
+                      value={linkSearch}
+                      onChange={(e) => {
+                        setLinkSearch(e.target.value);
+                        setLinkPage(1);
+                      }}
+                    />
                   </div>
                   <div className={`${styles.mobileActionChips} ${styles.showOnMobile}`}>
                     <button
@@ -6680,10 +6771,52 @@ export default function ProjectPage() {
                     >
                       + Add link
                     </button>
-                    <button className={`${styles.chipButton} ${styles.chipButtonPrimary}`} type="button" onClick={saveContextLinks} disabled={linksLoading || linksSaving}>
-                      {linksSaving ? "Saving…" : "Save changes"}
-                    </button>
+                    {contextLinksDirty ? (
+                      <button className={`${styles.chipButton} ${styles.chipButtonPrimary}`} type="button" onClick={saveContextLinks} disabled={linksLoading || linksSaving}>
+                        {linksSaving ? "Saving…" : "Save changes"}
+                      </button>
+                    ) : null}
                   </div>
+                </>
+              ) : tab === "prompts" ? (
+                <>
+                  <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
+                    <div>
+                      <h1 style={{ margin: 0 }}>Prompts</h1>
+                      <p className={styles.promptsPageLead}>
+                        Manage writing and image prompts for generation and scheduling.
+                      </p>
+                    </div>
+                    {promptsDirty ? (
+                      <div className={styles.row} style={{ justifyContent: "flex-end" }}>
+                        <button
+                          className={styles.button}
+                          type="button"
+                          onClick={() => { setPromptsSaveSuccess(false); void savePrompts(); }}
+                          disabled={promptsSaving || promptsLoading}
+                        >
+                          {promptsSaving ? "Saving…" : "Save changes"}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className={`${styles.mobileHeadRow} ${styles.showOnMobile}`}>
+                    <h1 className={styles.mobileTitle} style={{ margin: 0 }}>
+                      Prompts
+                    </h1>
+                  </div>
+                  {promptsDirty ? (
+                    <div className={`${styles.mobileActionChips} ${styles.showOnMobile}`}>
+                      <button
+                        className={`${styles.chipButton} ${styles.chipButtonPrimary}`}
+                        type="button"
+                        onClick={() => { setPromptsSaveSuccess(false); void savePrompts(); }}
+                        disabled={promptsSaving || promptsLoading}
+                      >
+                        {promptsSaving ? "Saving…" : "Save changes"}
+                      </button>
+                    </div>
+                  ) : null}
                 </>
               ) : (
                 <>
@@ -6698,11 +6831,6 @@ export default function ProjectPage() {
                       {isShopifyProject
                         ? "Connect your Shopify store, define how the AI writes, and sync your catalog for product-aware articles."
                         : "Connect WordPress, define how the AI writes, and set publishing defaults."}
-                    </p>
-                  ) : null}
-                  {tab === "prompts" ? (
-                    <p className={styles.promptsPageLead}>
-                      Manage writing and image prompts for generation and scheduling.
                     </p>
                   ) : null}
                   {tab === "site_audit" ? (
@@ -6892,6 +7020,7 @@ export default function ProjectPage() {
                       profileTz={profileTz}
                       defaults={wpDefaults}
                       wpTypesForSchedule={wpTypesForSchedule}
+                      wpCatsForSchedule={wpCatsForSchedule}
                       scheduleWritingPrompts={scheduleWritingPrompts}
                       scheduleImagePrompts={scheduleImagePrompts}
                       submitting={bulkScheduling}
@@ -10090,19 +10219,9 @@ export default function ProjectPage() {
         {tab === "prompts" ? (
           <>
           <div className={styles.promptsPage}>
-            <div className={styles.settingsActionBar}>
-              <p className={styles.settingsActionBarHint}>
-                Set defaults for article and image generation. Individual articles can override either prompt.
-              </p>
-              <button
-                className={styles.button}
-                type="button"
-                onClick={() => { setPromptsSaveSuccess(false); void savePrompts(); }}
-                disabled={promptsSaving || promptsLoading}
-              >
-                {promptsSaving ? "Saving…" : "Save changes"}
-              </button>
-            </div>
+            <p className={styles.muted} style={{ marginTop: 0 }}>
+              Set defaults for article and image generation. Individual articles can override either prompt.
+            </p>
             {promptsLoading ? <FormFieldsSkeleton fields={4} /> : null}
             {error ? <p className={styles.error}>{error}</p> : null}
 
@@ -10778,6 +10897,9 @@ export default function ProjectPage() {
 
         {tab === "context_links" ? (
           <>
+            <p className={styles.muted} style={{ marginTop: 0 }}>
+              Add exact phrases with target URLs, auto-linked when articles publish.
+            </p>
             {linksLoading ? (
               <div className={`${styles.card} ${styles.cardWide}`}>
                 <InlineListSkeleton rows={5} />
@@ -10802,94 +10924,76 @@ export default function ProjectPage() {
               return (
                 <>
                   <div className={`${styles.card} ${styles.cardWide}`}>
-                    <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
-                      <label className={styles.label} style={{ flex: 1, minWidth: 280 }}>
-                        Search
-                        <input
-                          className={styles.input}
-                          value={linkSearch}
-                          onChange={(e) => {
-                            setLinkSearch(e.target.value);
-                            setLinkPage(1);
-                          }}
-                          placeholder="Search exact phrase or link…"
-                        />
-                      </label>
-                      <div className={styles.muted} style={{ fontSize: 12, paddingBottom: 10 }}>
-                        {filtered.length} link(s)
-                      </div>
+                    <div className={styles.muted} style={{ fontSize: 12 }}>
+                      {filtered.length} link(s)
                     </div>
                   </div>
 
-                  <div className={`${styles.card} ${styles.cardWide}`}>
-                    <table className={styles.table}>
-                      <thead>
-                        <tr>
-                          <th className={styles.th}>Exact phrase</th>
-                          <th className={styles.th}>Link</th>
-                          <th className={styles.th}>Actions</th>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th className={styles.th}>Exact phrase</th>
+                        <th className={styles.th}>Link</th>
+                        <th className={styles.th}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pageItems.map((x) => (
+                        <tr key={x.id}>
+                          <td className={styles.td}>{x.label || "—"}</td>
+                          <td className={`${styles.td} ${styles.tdMuted}`}>{x.url}</td>
+                          <td className={styles.td}>
+                            <div className={styles.row}>
+                              <button
+                                className={styles.miniBtn}
+                                type="button"
+                                onClick={() => openLinkModal(x.id)}
+                                aria-label={`Edit context link “${x.label || x.url}”`}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                className={`${styles.miniBtn} ${styles.miniDanger}`}
+                                type="button"
+                                onClick={() => markDeleteLink(x.id)}
+                                aria-label={`Delete context link “${x.label || x.url}”`}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {pageItems.map((x) => (
-                          <tr key={x.id}>
-                            <td className={styles.td}>{x.label || "—"}</td>
-                            <td className={`${styles.td} ${styles.tdMuted}`}>{x.url}</td>
-                            <td className={styles.td}>
-                              <div className={styles.row}>
-                                <button
-                                  className={styles.miniBtn}
-                                  type="button"
-                                  onClick={() => openLinkModal(x.id)}
-                                  aria-label={`Edit context link “${x.label || x.url}”`}
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  className={`${styles.miniBtn} ${styles.miniDanger}`}
-                                  type="button"
-                                  onClick={() => markDeleteLink(x.id)}
-                                  aria-label={`Delete context link “${x.label || x.url}”`}
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                        {pageItems.length === 0 ? (
-                          <tr>
-                            <td className={styles.td} colSpan={3}>
-                              <span className={styles.muted}>No context links match your search.</span>
-                            </td>
-                          </tr>
-                        ) : null}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                      {pageItems.length === 0 ? (
+                        <tr>
+                          <td className={styles.td} colSpan={3}>
+                            <span className={styles.muted}>No context links match your search.</span>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
 
-                  <div className={`${styles.card} ${styles.cardWide}`}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <button
-                        className={styles.button}
-                        type="button"
-                        onClick={() => setLinkPage((p) => Math.max(1, p - 1))}
-                        disabled={pageClamped <= 1}
-                      >
-                        Prev
-                      </button>
-                      <span className={styles.muted} style={{ fontSize: 13 }}>
-                        Page {pageClamped} / {totalPages}
-                      </span>
-                      <button
-                        className={styles.button}
-                        type="button"
-                        onClick={() => setLinkPage((p) => Math.min(totalPages, p + 1))}
-                        disabled={pageClamped >= totalPages}
-                      >
-                        Next
-                      </button>
-                    </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <button
+                      className={styles.button}
+                      type="button"
+                      onClick={() => setLinkPage((p) => Math.max(1, p - 1))}
+                      disabled={pageClamped <= 1}
+                    >
+                      Prev
+                    </button>
+                    <span className={styles.muted} style={{ fontSize: 13 }}>
+                      Page {pageClamped} / {totalPages}
+                    </span>
+                    <button
+                      className={styles.button}
+                      type="button"
+                      onClick={() => setLinkPage((p) => Math.min(totalPages, p + 1))}
+                      disabled={pageClamped >= totalPages}
+                    >
+                      Next
+                    </button>
                   </div>
                 </>
               );
@@ -13766,6 +13870,7 @@ export default function ProjectPage() {
           profileTz={profileTz}
           defaults={wpDefaults}
           wpTypesForSchedule={wpTypesForSchedule}
+          wpCatsForSchedule={wpCatsForSchedule}
           scheduleWritingPrompts={scheduleWritingPrompts}
           scheduleImagePrompts={scheduleImagePrompts}
           submitting={researchScheduleBusy}

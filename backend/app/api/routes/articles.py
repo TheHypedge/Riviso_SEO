@@ -2510,14 +2510,25 @@ async def _persist_schedule_row(
     generate_image: bool,
     enqueue_preparation: bool = True,
     skip_article_update: bool = False,
+    category_ids_override: str | None = None,
 ) -> dict:
-    """Write article + scheduled-job rows; optionally queue background prep (non-blocking)."""
+    """Write article + scheduled-job rows; optionally queue background prep (non-blocking).
+
+    ``category_ids_override`` (comma-separated ints, pre-formatted by the caller) lets
+    a bulk-schedule request assign a category to the whole batch, taking priority over
+    the article's own/project-default category. ``None`` means no override -- falls
+    back to the original per-article/project-default behavior unchanged.
+    """
     # All MongoDB writes inside this function go through call_storage so stale
     # Atlas connections are retried and the client is reset before giving up.
     # Use patch_article_fields ($set-only, no read) instead of update_article_fields
     # (find+replace) to avoid holding _db_write_lock across a round-trip and
     # colliding with the scheduler's background writes.
-    cat_raw = (article.get("wp_category_ids") or "").strip() or (proj.get("wp_category_ids") or "").strip()
+    cat_raw = (
+        category_ids_override
+        if category_ids_override is not None
+        else (article.get("wp_category_ids") or "").strip() or (proj.get("wp_category_ids") or "").strip()
+    )
     _art_patch = getattr(st, "patch_article_fields", None) or st.update_article_fields
     if not skip_article_update:
         await run_sync(
@@ -2629,6 +2640,11 @@ async def bulk_schedule_articles(
     writing_prompt_id = (payload.writing_prompt_id or "").strip()
     image_prompt_id = (payload.image_prompt_id or "").strip()
     generate_image = bool(payload.generate_image)
+    category_ids_raw = (
+        ",".join(str(c) for c in payload.category_ids if isinstance(c, int) and c > 0)
+        if payload.category_ids
+        else None
+    )
 
     # Dedupe by article_id (last wins).
     by_aid: dict[str, str] = {}
@@ -2662,6 +2678,12 @@ async def bulk_schedule_articles(
     for aid, raw in by_aid.items():
         if aid not in articles_map:
             failed.append(BulkScheduleFailure(article_id=aid, error="Article not found"))
+            continue
+        derived_status = _derive_listing_status(articles_map[aid])
+        if derived_status in {"published", "scheduled"}:
+            failed.append(
+                BulkScheduleFailure(article_id=aid, error=f"Article is already {derived_status}; cannot schedule it.")
+            )
             continue
         try:
             dt_utc = _parse_schedule_time_utc(raw=raw, user=user, payload_timezone=payload.user_timezone)
@@ -2726,6 +2748,7 @@ async def bulk_schedule_articles(
             generate_image=generate_image,
             enqueue_preparation=False,
             skip_article_update=True,
+            category_ids_override=category_ids_raw,
         )
         if job_row:
             prep_rows.append((art, job_row))

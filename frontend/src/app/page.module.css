@@ -4925,7 +4925,14 @@
 
 .table {
   width: 100%;
-  border-collapse: collapse;
+  /* `collapse` + `border-radius`/`overflow:hidden` on a <table> is unreliable across
+     browsers -- the table's own outer border can fail to render on the sides/bottom
+     edges that aren't reinforced by a cell's own border (cells here only declare
+     border-bottom, so left/right/bottom silently disappeared). `separate` with zero
+     spacing keeps cells visually seamless while making the outer border render
+     correctly on all four sides. */
+  border-collapse: separate;
+  border-spacing: 0;
   border-radius: var(--aa-r-lg);
   overflow: hidden;
   border: 1px solid var(--aa-hairline);

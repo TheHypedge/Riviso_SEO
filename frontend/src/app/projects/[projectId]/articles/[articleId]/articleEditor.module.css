@@ -111,23 +111,49 @@
   text-wrap: balance;
 }
 
-.titleMeta {
+/* Export PDF/Share to LinkedIn sit at the opposite end of the metrics row
+   (Words/Characters/Read/Headings), not beside the title. */
+.titleHeroActions {
   display: flex;
   align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 /* ── Sticky command bar (appears on scroll) ── */
+
+/* Both sticky bars go fully solid black regardless of site theme (not just
+   darkened/translucent) -- so their own text/icons/borders need to be
+   re-pointed at light-on-dark values here too, since the global tokens they
+   read (--aa-ink, --aa-muted, --aa-hairline, --aa-surface-soft) are dark-on-
+   light in light mode and would be unreadable against pure black. CSS custom
+   properties cascade to descendants regardless of which stylesheet declared
+   the rule using them, so this also fixes contrast for the toolbar buttons/
+   select below even though those classes live in the shared page.module.css. */
+.commandBar,
+.editorToolbar {
+  --aa-ink: #fff;
+  --aa-muted: rgba(255, 255, 255, 0.65);
+  --aa-hairline: rgba(255, 255, 255, 0.14);
+  --aa-surface-soft: rgba(255, 255, 255, 0.08);
+}
 
 .commandBar {
   position: sticky;
   top: 0;
   z-index: var(--z-sticky);
-  background: color-mix(in oklab, var(--aa-surface-card), transparent 8%);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  /* Fully solid (no transparency, no blur) using the brand's own dark-theme
+     canvas color (--aa-canvas's dark value, same #0b0b0d used across the app
+     when [data-theme="dark"] is active) rather than flat #000 -- stays dark
+     and opaque regardless of site theme without looking like stark black.
+     Kept identical to .editorToolbar's background below so the two read as
+     one continuous sticky bar once both are stuck to the top. */
+  background: #0b0b0d;
   padding: 0 32px;
+  /* Height kept in sync with .editorToolbar's negative margin-top below -- this
+     bar still reserves its own box in normal flow even while hidden (opacity/
+     transform don't remove layout space), so without that offsetting margin its
+     reserved 48px shows up as a blank gap between the title and the toolbar. */
   height: 48px;
   display: flex;
   align-items: center;
@@ -154,7 +180,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  max-width: 360px;
+  max-width: 180px;
 }
 
 .commandBarCenter {
@@ -171,9 +197,48 @@
   flex-shrink: 0;
 }
 
-/* ── Sticky editor toolbar ── */
+/* Export PDF / Share to LinkedIn -- optional utility actions, deliberately
+   smaller and lower-contrast than the primary Publish/Update/Save buttons so
+   they read as "click if you need this" rather than competing for attention. */
+.commandBarUtilityBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  background: var(--aa-surface-soft);
+  color: var(--aa-muted);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
 
-.stickyToolbar {
+.commandBarUtilityBtn:hover:not(:disabled) {
+  color: var(--aa-on-primary);
+  background: var(--aa-primary);
+}
+
+.commandBarUtilityBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.commandBarUtilityIcon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* ── Editor toolbar — sticks to the top together with the command bar (stacked
+   right below it) once scrolled, so formatting tools stay reachable while
+   editing a long article. Sits in normal flow at rest (right after the title),
+   which is why it also needs the negative margin below to cancel the command
+   bar's reserved-but-invisible 48px box at rest. ── */
+
+.editorToolbar {
   position: sticky;
   top: 0;
   z-index: calc(var(--z-sticky) - 1);
@@ -182,14 +247,16 @@
   align-items: center;
   gap: 4px;
   padding: 6px 32px;
-  background: color-mix(in oklab, var(--aa-surface-card), transparent 6%);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: #0b0b0d;
   border-bottom: 1px solid var(--aa-hairline);
+  /* Cancels out .commandBar's reserved 48px (see its comment) -- the command bar
+     sits between the title and this toolbar but renders nothing visible until
+     scrolled, so without this the page shows a blank 48px gap here. */
+  margin-top: -48px;
   transition: top 0.2s ease;
 }
 
-.stickyToolbarShifted {
+.editorToolbarShifted {
   top: 48px;
 }
 
@@ -260,6 +327,24 @@
   max-width: 1100px;
   margin: 0 auto;
   padding: 24px 32px 48px;
+}
+
+/* Bottom fade -- same sticky + negative-margin technique as .editorToolbar's
+   gap fix above, just mirrored to the opposite edge: its natural flow position
+   is right after all the scrollable content, and the negative margin pulls it
+   up to overlay the last 72px of that content. While there's more content
+   below the visible area, "sticky bottom" pins it to the column's visible
+   bottom edge, fading whatever currently sits there into the page background
+   so new content appears to emerge smoothly rather than being cut off sharply.
+   Once the true end of the content scrolls into view, it settles back into its
+   natural (unstuck) position instead of masking the last few lines. */
+.bottomFade {
+  position: sticky;
+  bottom: 0;
+  height: 72px;
+  margin-top: -72px;
+  background: linear-gradient(to bottom, transparent, var(--aa-canvas));
+  pointer-events: none;
 }
 
 /* ── Editor surface (borderless, Notion-like) ── */
@@ -545,46 +630,32 @@
   flex-shrink: 0;
 }
 
-/* ── Metrics chips (below title, above toolbar) ── */
+/* ── Metrics row (below title, above toolbar) -- Words/Characters/Read/
+   Headings on the left, Export PDF/Share to LinkedIn pushed to the right
+   end of the same row ── */
 
-.metricsChips {
+.metricsRow {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   margin-top: 12px;
 }
 
-.metricsChip {
-  display: inline-flex;
+.metricsRowText {
+  display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-radius: 9999px;
-  font-size: 11px;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--aa-muted);
-  background: var(--aa-surface-soft);
-  border: 1px solid var(--aa-hairline);
-  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
-.metricsChipGood {
-  color: var(--aa-success);
-  background: rgba(93, 184, 114, 0.08);
-  border-color: rgba(93, 184, 114, 0.18);
-}
-
-.metricsChipWarn {
-  color: var(--aa-warning);
-  background: rgba(212, 160, 23, 0.08);
-  border-color: rgba(212, 160, 23, 0.18);
-}
-
-.metricsChipBad {
-  color: var(--aa-error);
-  background: rgba(198, 69, 69, 0.08);
-  border-color: rgba(198, 69, 69, 0.18);
+.metricsDivider {
+  color: var(--aa-hairline);
 }
 
 /* ── Context panel ── */
@@ -1783,14 +1854,8 @@
     padding: 0 16px;
   }
 
-  .stickyToolbar {
+  .editorToolbar {
     padding: 6px 16px;
-    position: sticky;
-    top: 0;
-  }
-
-  .stickyToolbarShifted {
-    top: 48px;
   }
 
   .banner {
@@ -1831,13 +1896,12 @@
     font-size: 10px;
   }
 
-  .metricsChips {
+  .metricsRow {
     gap: 4px;
   }
 
-  .metricsChip {
+  .metricsRowText {
     font-size: 10px;
-    padding: 3px 8px;
   }
 }
 
@@ -1851,6 +1915,10 @@
     font-size: 1.25rem;
   }
 
+  .titleHeroActions {
+    flex-wrap: wrap;
+  }
+
   .commandBar {
     padding: 0 12px;
   }
@@ -1859,7 +1927,7 @@
     gap: 4px;
   }
 
-  .stickyToolbar {
+  .editorToolbar {
     padding: 6px 8px;
     gap: 2px;
   }
@@ -1872,8 +1940,10 @@
     grid-template-columns: 1fr;
   }
 
-  .metricsChips {
-    gap: 4px;
+  .metricsRow {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
   }
 
   .kwChipWrap {
@@ -1886,7 +1956,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .commandBar,
-  .stickyToolbar {
+  .editorToolbar {
     transition: none;
   }
 

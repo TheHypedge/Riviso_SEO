@@ -8,7 +8,7 @@ import {
 } from "@/components/bulkSchedule/BulkScheduleForm";
 import { ScheduleModalIcons as Icon } from "@/components/bulkSchedule/scheduleModalIcons";
 import type { BulkScheduleDefaults } from "@/components/bulkSchedule/useBulkScheduleForm";
-import type { PromptListResponse, WordpressPostType } from "@/lib/api";
+import type { PromptListResponse, WordpressCategory, WordpressPostType } from "@/lib/api";
 
 export type { BulkScheduleFormValues, BulkScheduleSeedRow };
 
@@ -19,6 +19,7 @@ type BulkScheduleModalProps = {
   profileTz: string;
   defaults?: BulkScheduleDefaults | null;
   wpTypesForSchedule?: WordpressPostType[];
+  wpCatsForSchedule?: WordpressCategory[];
   scheduleWritingPrompts?: PromptListResponse | null;
   scheduleImagePrompts?: PromptListResponse | null;
   submitting: boolean;
@@ -35,6 +36,7 @@ export function BulkScheduleModal({
   profileTz,
   defaults,
   wpTypesForSchedule,
+  wpCatsForSchedule,
   scheduleWritingPrompts,
   scheduleImagePrompts,
   submitting,
@@ -87,6 +89,7 @@ export function BulkScheduleModal({
           profileTz={profileTz}
           defaults={defaults}
           wpTypesForSchedule={wpTypesForSchedule}
+          wpCatsForSchedule={wpCatsForSchedule}
           scheduleWritingPrompts={scheduleWritingPrompts}
           scheduleImagePrompts={scheduleImagePrompts}
           submitting={submitting}

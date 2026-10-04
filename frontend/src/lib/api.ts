@@ -3712,6 +3712,7 @@ export const api = {
       image_prompt_id?: string | null;
       generate_image?: boolean;
       user_timezone?: string;
+      category_ids?: number[];
     },
   ) {
     return apiFetch<{

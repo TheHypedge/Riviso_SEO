@@ -288,20 +288,6 @@ function slugFromTitle(t: string): string {
   return t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "untitled";
 }
 
-function timeAgo(dateStr: string | undefined | null): string {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return "";
-  const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (seconds < 10) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
 function noticeWithoutUrl(notice: string): string {
   return notice.replace(/\s*https?:\/\/\S+/g, "").trim();
 }
@@ -591,8 +577,6 @@ export default function ArticleEditPage() {
     headingCount: editorMetrics.headings, wordCount: editorMetrics.words,
     focusKeyphrase: focus, body,
   }), [metaTitle.length, metaDesc.length, editorMetrics.headings, editorMetrics.words, focus, body]);
-
-  const lastSavedLabel = useMemo(() => timeAgo(article?.updated_at), [article?.updated_at]);
 
   useEffect(() => {
     const hero = titleHeroRef.current;
@@ -2397,59 +2381,34 @@ export default function ArticleEditPage() {
                 ← Back to Articles
               </button>
               <h1 className={editorStyles.titleHeading}>{displayTitle}</h1>
-              <div className={editorStyles.titleMeta}>
-                <span className={editorStyles.statusDot}>
-                  <span className={`${editorStyles.statusDotIndicator} ${statusDotClass(article?.status || "")}`} />
-                  {article?.status ? article.status.charAt(0).toUpperCase() + article.status.slice(1) : "..."}
-                </span>
-                {isLiveOnWordPress ? (
-                  <span className={editorStyles.statusDot}>
-                    <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotSynced}`} />
-                    {isWpTrashed ? "Trashed" : "Synced"}
-                  </span>
-                ) : null}
-                {showUpdateWordPress && hasPendingWpChanges ? (
-                  <span className={editorStyles.statusDot}>
-                    <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotDraft}`} />
-                    Unsynced
-                  </span>
-                ) : null}
-                {seoScore.total > 0 ? (
-                  <span className={editorStyles.statusDot}>
-                    <span className={editorStyles.statusDotIndicator} style={{ background: seoScoreColor }} />
-                    SEO {seoScore.total}
-                  </span>
-                ) : null}
-                {lastSavedLabel ? (
-                  <span className={editorStyles.statusDot}>
-                    <span className={`${editorStyles.statusDotIndicator} ${editorStyles.statusDotNeutral}`} />
-                    {lastSavedLabel}
-                  </span>
-                ) : null}
-              </div>
 
-              {/* Metrics chips — directly below title */}
-              <div className={editorStyles.metricsChips}>
-                <span className={editorStyles.metricsChip}>
-                  {editorMetrics.words.toLocaleString()} Words
-                </span>
-                <span className={editorStyles.metricsChip}>
-                  {editorMetrics.chars.toLocaleString()} Characters
-                </span>
-                <span className={editorStyles.metricsChip}>
-                  {editorMetrics.readingTime} Read
-                </span>
-                <span className={editorStyles.metricsChip}>
-                  {editorMetrics.headings} Headings
-                </span>
-                {focus ? (
-                  <span className={editorStyles.metricsChip}>
-                    Focus: {focus}
-                  </span>
-                ) : null}
-                <span className={`${editorStyles.metricsChip} ${seoScore.total >= 70 ? editorStyles.metricsChipGood : seoScore.total >= 40 ? editorStyles.metricsChipWarn : editorStyles.metricsChipBad}`}>
-                  SEO Score: {seoScore.total}
-                </span>
+              {/* Metrics — directly below title, with Export PDF/Share to LinkedIn
+                  pushed to the opposite end of the same row */}
+              <div className={editorStyles.metricsRow}>
+                <div className={editorStyles.metricsRowText}>
+                  <span>{editorMetrics.words.toLocaleString()} Words</span>
+                  <span className={editorStyles.metricsDivider} aria-hidden="true">•</span>
+                  <span>{editorMetrics.chars.toLocaleString()} Characters</span>
+                  <span className={editorStyles.metricsDivider} aria-hidden="true">•</span>
+                  <span>{editorMetrics.readingTime} Read</span>
+                  <span className={editorStyles.metricsDivider} aria-hidden="true">•</span>
+                  <span>{editorMetrics.headings} Headings</span>
+                </div>
+                <div className={editorStyles.titleHeroActions}>
+                  <button type="button" className={editorStyles.commandBarUtilityBtn} onClick={exportPdf} disabled={!body.trim() || exportingPdf}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={editorStyles.commandBarUtilityIcon} aria-hidden="true">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" />
+                      <path d="M14 2v6h6" />
+                    </svg>
+                    {exportingPdf ? "Exporting…" : "Export PDF"}
+                  </button>
+                  <button type="button" className={editorStyles.commandBarUtilityBtn} onClick={() => void openLinkedinShareModal()} disabled={!body.trim()}>
+                    <svg viewBox="0 0 24 24" fill="currentColor" className={editorStyles.commandBarUtilityIcon} aria-hidden="true">
+                      <path d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.3V9h3.42v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.07 2.07 0 1 1 0-4.14 2.07 2.07 0 0 1 0 4.14zM7.12 20.45H3.56V9h3.56v11.45z" />
+                    </svg>
+                    Share to LinkedIn
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -2469,10 +2428,17 @@ export default function ArticleEditPage() {
                 ) : null}
               </div>
               <div className={editorStyles.commandBarActions}>
-                <button type="button" className={styles.btnSecondary} onClick={exportPdf} disabled={!body.trim() || exportingPdf}>
+                <button type="button" className={editorStyles.commandBarUtilityBtn} onClick={exportPdf} disabled={!body.trim() || exportingPdf}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={editorStyles.commandBarUtilityIcon} aria-hidden="true">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z" />
+                    <path d="M14 2v6h6" />
+                  </svg>
                   {exportingPdf ? "Exporting…" : "Export PDF"}
                 </button>
-                <button type="button" className={styles.btnSecondary} onClick={() => void openLinkedinShareModal()} disabled={!body.trim()}>
+                <button type="button" className={editorStyles.commandBarUtilityBtn} onClick={() => void openLinkedinShareModal()} disabled={!body.trim()}>
+                  <svg viewBox="0 0 24 24" fill="currentColor" className={editorStyles.commandBarUtilityIcon} aria-hidden="true">
+                    <path d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.3V9h3.42v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.07 2.07 0 1 1 0-4.14 2.07 2.07 0 0 1 0 4.14zM7.12 20.45H3.56V9h3.56v11.45z" />
+                  </svg>
                   Share to LinkedIn
                 </button>
                 {isDirty ? (
@@ -2488,10 +2454,6 @@ export default function ArticleEditPage() {
                   <button type="button" className={styles.button} onClick={() => void publishToShopify()} disabled={shopifyPublishBusy || !shopifyCanPublish || !shopifyBlogsAvailable}>
                     {shopifyPublishBusy ? "Posting…" : article?.shopify_article_id ? "Update Shopify" : "Publish to Shopify"}
                   </button>
-                ) : showUpdateWordPress && hasPendingWpChanges ? (
-                  <button type="button" className={styles.button} onClick={() => void updateWordPressPost()} disabled={!canUpdateWordPress}>
-                    {wpUpdateBusy ? "Updating…" : "Update article"}
-                  </button>
                 ) : showPublishWordPress && !websiteConnected && projectSettingsLoaded ? (
                   <button type="button" className={styles.button} onClick={() => setConnectModalOpen(true)}>
                     Connect Website to Publish
@@ -2506,7 +2468,7 @@ export default function ArticleEditPage() {
 
             {/* Sticky editor toolbar — always visible during editing */}
             {!editorLocked && !bodyLoading && tiptapEditor ? (
-              <div className={`${editorStyles.stickyToolbar} ${commandBarVisible ? editorStyles.stickyToolbarShifted : ""}`} role="toolbar" aria-label="Formatting">
+              <div className={`${editorStyles.editorToolbar} ${commandBarVisible ? editorStyles.editorToolbarShifted : ""}`} role="toolbar" aria-label="Formatting">
                 <label className={styles.articleRichFormatLabel}>
                   <span className={styles.srOnly}>Text style</span>
                   <select
@@ -2601,14 +2563,18 @@ export default function ArticleEditPage() {
                   open={showInsertMedia}
                   onClose={() => setShowInsertMedia(false)}
                 />
-                {showUpdateWordPress && hasPendingWpChanges ? (
+                {showUpdateWordPress && isDirty ? (
                   <div className={editorStyles.contentHint}>
                     <span className={editorStyles.contentHintDot} />
-                    {isDirty ? "Unsaved text changes. Update pushes everything live." : "Featured image changed. Update to push."}
+                    Unsaved text changes. Update pushes everything live.
                   </div>
                 ) : null}
               </div>
             </div>
+
+            {/* Bottom fade — content scrolling up into view emerges smoothly
+                instead of being cut off sharply at the column's bottom edge. */}
+            <div className={editorStyles.bottomFade} aria-hidden="true" />
           </div>
 
           {/* Context panel */}

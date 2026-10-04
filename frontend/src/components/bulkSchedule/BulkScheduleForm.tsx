@@ -9,7 +9,7 @@ import {
   type BulkScheduleFormValues,
   type BulkScheduleSeedRow,
 } from "@/components/bulkSchedule/useBulkScheduleForm";
-import type { PromptListResponse, WordpressPostType } from "@/lib/api";
+import type { PromptListResponse, WordpressCategory, WordpressPostType } from "@/lib/api";
 
 export type { BulkScheduleFormValues, BulkScheduleSeedRow };
 
@@ -19,6 +19,7 @@ type BulkScheduleFormProps = {
   profileTz: string;
   defaults?: BulkScheduleDefaults | null;
   wpTypesForSchedule?: WordpressPostType[];
+  wpCatsForSchedule?: WordpressCategory[];
   scheduleWritingPrompts?: PromptListResponse | null;
   scheduleImagePrompts?: PromptListResponse | null;
   submitting: boolean;
@@ -35,6 +36,7 @@ export function BulkScheduleForm({
   profileTz,
   defaults,
   wpTypesForSchedule,
+  wpCatsForSchedule,
   scheduleWritingPrompts,
   scheduleImagePrompts,
   submitting,
@@ -49,6 +51,7 @@ export function BulkScheduleForm({
     profileTz,
     defaults,
     wpTypesForSchedule,
+    wpCatsForSchedule,
     scheduleWritingPrompts,
     scheduleImagePrompts,
     active,
@@ -77,6 +80,9 @@ export function BulkScheduleForm({
     setWritingPromptId,
     imagePromptId,
     setImagePromptId,
+    categoryIds,
+    setCategoryIds,
+    wpCatsForSchedule: cats,
     setManualWhen,
     validate,
     getValues,
@@ -146,6 +152,58 @@ export function BulkScheduleForm({
                   <option value="draft">Draft</option>
                   <option value="publish">Publish</option>
                 </select>
+              </label>
+            </div>
+            <div className={styles.bulkScheduleFieldRow} style={{ gridColumn: "1 / -1" }}>
+              <span className={styles.bulkScheduleFieldIcon} aria-hidden="true">
+                <Icon.Layers className={styles.icon18} />
+              </span>
+              <label className={styles.bulkScheduleFieldControl}>
+                <span className={styles.bulkScheduleFieldLabel}>Category</span>
+                <select
+                  className={styles.bulkScheduleInput}
+                  value=""
+                  disabled={submitting || !(cats || []).some((c) => !categoryIds.includes(c.id))}
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    if (Number.isFinite(id) && id > 0) {
+                      setCategoryIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+                    }
+                  }}
+                >
+                  <option value="">+ Add a category…</option>
+                  {(cats || [])
+                    .filter((c) => !categoryIds.includes(c.id))
+                    .map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                </select>
+                {categoryIds.length ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                    {categoryIds.map((id) => {
+                      const cat = (cats || []).find((c) => c.id === id);
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          className={styles.chipOption}
+                          data-selected="true"
+                          data-removable="true"
+                          disabled={submitting}
+                          aria-label={`Remove category “${cat?.name || id}”`}
+                          onClick={() => setCategoryIds((prev) => prev.filter((x) => x !== id))}
+                        >
+                          {cat?.name || `#${id}`}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                <span className={styles.bulkScheduleFieldHint}>
+                  Leave empty to keep each article&apos;s existing category.
+                </span>
               </label>
             </div>
             <div className={styles.bulkScheduleFieldRow}>

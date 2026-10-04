@@ -17,6 +17,7 @@ import { buildScheduleMinDatetimeLocal, formatBulkScheduleWhenDisplay } from "@/
 import { SCHEDULE_BUFFER_MINUTES, SCHEDULE_PREP_MINUTES } from "@/lib/scheduleTiming";
 import type { PromptListResponse } from "@/lib/api";
 import type { WordpressPostType } from "@/lib/api";
+import type { WordpressCategory } from "@/lib/api";
 
 export type BulkScheduleSeedRow = { id: string; title: string };
 
@@ -35,6 +36,7 @@ export type BulkScheduleFormValues = {
   writingPromptId: string;
   imagePromptId: string;
   generateImage: boolean;
+  categoryIds: number[];
 };
 
 type UseBulkScheduleFormArgs = {
@@ -42,6 +44,7 @@ type UseBulkScheduleFormArgs = {
   profileTz: string;
   defaults?: BulkScheduleDefaults | null;
   wpTypesForSchedule?: WordpressPostType[];
+  wpCatsForSchedule?: WordpressCategory[];
   scheduleWritingPrompts?: PromptListResponse | null;
   scheduleImagePrompts?: PromptListResponse | null;
   active: boolean;
@@ -52,6 +55,7 @@ export function useBulkScheduleForm({
   profileTz,
   defaults,
   wpTypesForSchedule = [],
+  wpCatsForSchedule = [],
   scheduleWritingPrompts,
   scheduleImagePrompts,
   active,
@@ -72,6 +76,7 @@ export function useBulkScheduleForm({
   const [postType, setPostType] = useState("posts");
   const [writingPromptId, setWritingPromptId] = useState("");
   const [imagePromptId, setImagePromptId] = useState("");
+  const [categoryIds, setCategoryIds] = useState<number[]>([]);
 
   const initFromSeeds = useCallback(
     (rows: BulkScheduleSeedRow[]) => {
@@ -89,6 +94,10 @@ export function useBulkScheduleForm({
         defaults?.writing_prompt_id || scheduleWritingPrompts?.default_id || "",
       );
       setImagePromptId(defaults?.image_prompt_id || scheduleImagePrompts?.default_id || "");
+      // No project-level "default category" to prefill from (unlike wpStatus/postType)
+      // -- start empty every time the form opens with a fresh batch, requiring an
+      // explicit choice rather than silently carrying over a previous batch's picks.
+      setCategoryIds([]);
       const whenInit: Record<string, string> = {};
       for (const r of rows) {
         whenInit[r.id] = minStr;
@@ -222,8 +231,9 @@ export function useBulkScheduleForm({
       writingPromptId,
       imagePromptId,
       generateImage: true,
+      categoryIds,
     };
-  }, [rows, mode, wpStatus, postType, writingPromptId, imagePromptId]);
+  }, [rows, mode, wpStatus, postType, writingPromptId, imagePromptId, categoryIds]);
 
   return {
     rows,
@@ -248,8 +258,11 @@ export function useBulkScheduleForm({
     setWritingPromptId,
     imagePromptId,
     setImagePromptId,
+    categoryIds,
+    setCategoryIds,
     setManualWhen,
     wpTypesForSchedule,
+    wpCatsForSchedule,
     scheduleWritingPrompts,
     scheduleImagePrompts,
     validate,
