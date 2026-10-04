@@ -2968,6 +2968,7 @@ export const api = {
       context_after?: string;
       focus_keyphrase?: string;
       keywords?: string[];
+      custom_instruction?: string;
     },
   ) {
     return apiFetch<{ rewritten: string }>(

@@ -39,6 +39,19 @@ _SYSTEM_PROMPT = (
     "Return ONLY JSON: {\"rewritten\": string}. No commentary, no markdown code fences."
 )
 
+# Appended (not substituted) when the caller supplies a custom instruction --
+# takes priority over the fidelity rules above for *how* the text changes
+# (length/tone/detail), while still keeping the rewrite grounded in the
+# selection's own topic and facts rather than going off on a tangent.
+_CUSTOM_INSTRUCTION_BLOCK = (
+    "\n\nThe user has given a specific instruction for how to rewrite this "
+    "selection -- follow it exactly, even where it conflicts with the general "
+    "rules above (e.g. if it asks to shorten, lengthen, change tone, or add "
+    "detail, do that). Still keep the rewrite grounded in the selected text's "
+    "own topic and any facts it already states -- don't invent an unrelated "
+    "tangent.\nInstruction: {instruction}"
+)
+
 
 def _build_selection_rewrite_messages(
     *,
@@ -47,7 +60,12 @@ def _build_selection_rewrite_messages(
     context_after: str,
     focus_keyphrase: str,
     keywords: list[str],
+    custom_instruction: str | None = None,
 ) -> tuple[str, str]:
+    system = _SYSTEM_PROMPT
+    instruction = (custom_instruction or "").strip()
+    if instruction:
+        system += _CUSTOM_INSTRUCTION_BLOCK.format(instruction=instruction)
     user = json.dumps(
         {
             "selected_text": selected_text,
@@ -58,7 +76,7 @@ def _build_selection_rewrite_messages(
         },
         ensure_ascii=False,
     )
-    return _SYSTEM_PROMPT, user
+    return system, user
 
 
 async def rewrite_selected_text(
@@ -68,15 +86,19 @@ async def rewrite_selected_text(
     context_after: str,
     focus_keyphrase: str,
     keywords: list[str],
+    custom_instruction: str | None = None,
 ) -> str:
-    """Reword `selected_text` in place, preserving its facts/meaning. Returns the
-    replacement text (plain prose, paragraph breaks as blank lines)."""
+    """Reword `selected_text` in place. With no `custom_instruction`, preserves
+    its facts/meaning exactly (only wording changes). With one, follows it as
+    the primary guide for how the text should change. Returns the replacement
+    text (plain prose, paragraph breaks as blank lines)."""
     system, user = _build_selection_rewrite_messages(
         selected_text=selected_text,
         context_before=context_before,
         context_after=context_after,
         focus_keyphrase=focus_keyphrase,
         keywords=keywords,
+        custom_instruction=custom_instruction,
     )
     client = OpenAIClient()
     obj: dict[str, Any] = await client.chat_json(model=settings.openai_text_model, system=system, user=user)

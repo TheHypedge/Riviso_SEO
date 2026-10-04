@@ -926,27 +926,83 @@ export default function DashboardPage() {
             {section === "projects" ? (
               <>
                 <div className={styles.intro}>
-                  <h1>Projects</h1>
-                  <p>Create and manage projects from your workspace.</p>
-                </div>
-
-                {!loading && projects.length > 0 ? (
-                  <div className="mb-6 grid grid-cols-2 gap-4 md:grid-cols-4">
-                    <StatCard value={projects.length} label="Total" hero />
-                    <StatCard
-                      value={projects.length - projects.filter((p) => normalizePlatform(p) === "shopify" && !p.shopify_connected).length}
-                      label="Connected"
-                    />
-                    <StatCard
-                      value={projects.filter((p) => normalizePlatform(p) === "shopify" && !p.shopify_connected).length}
-                      label="Needs attention"
-                    />
-                    <StatCard
-                      value={lastSyncedAt && !dataMayBeStale ? new Date(lastSyncedAt).toLocaleTimeString() : "—"}
-                      label="Last synced"
+                  <div className={`${styles.desktopHeadRow} ${styles.hideOnMobile}`}>
+                    <h1 style={{ margin: 0 }}>Projects</h1>
+                    <div className={styles.headSearchWrap} aria-label="Live search">
+                      <input
+                        type="search"
+                        className={`${styles.input} ${styles.headSearchInput}`}
+                        value={projectSearch}
+                        onChange={(e) => setProjectSearch(e.target.value)}
+                        placeholder="Search projects…"
+                        aria-label="Search projects"
+                      />
+                    </div>
+                    <div className={dashStyles.cardHeaderRight}>
+                      <NotificationBell />
+                      <button
+                        type="button"
+                        className={styles.iconButton}
+                        disabled={loading || refreshing}
+                        onClick={() => void reloadProjects({ fresh: true })}
+                        aria-label={loading || refreshing ? "Refreshing projects" : "Refresh projects"}
+                        title="Fetch latest projects from the server"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 18, height: 18 }}>
+                          <path d="M21 12a9 9 0 1 1-2.64-6.36M21 4v5h-5" />
+                        </svg>
+                      </button>
+                      <button
+                        className={styles.button}
+                        type="button"
+                        onClick={() => {
+                          setError(null);
+                          openAddProject();
+                        }}
+                      >
+                        + Add project
+                      </button>
+                    </div>
+                  </div>
+                  <div className={`${styles.mobileHeadRow} ${styles.showOnMobile}`}>
+                    <h1 className={styles.mobileTitle} style={{ margin: 0 }}>Projects</h1>
+                  </div>
+                  <div className={styles.showOnMobile} style={{ width: "100%" }}>
+                    <input
+                      type="search"
+                      className={`${styles.input} ${styles.headSearchInputMobile}`}
+                      value={projectSearch}
+                      onChange={(e) => setProjectSearch(e.target.value)}
+                      placeholder="Search projects…"
+                      aria-label="Search projects"
                     />
                   </div>
-                ) : null}
+                  <div className={`${styles.mobileActionChips} ${styles.showOnMobile}`}>
+                    <NotificationBell />
+                    <button
+                      type="button"
+                      className={styles.chipButton}
+                      disabled={loading || refreshing}
+                      onClick={() => void reloadProjects({ fresh: true })}
+                      aria-label={loading || refreshing ? "Refreshing projects" : "Refresh projects"}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ width: 16, height: 16 }}>
+                        <path d="M21 12a9 9 0 1 1-2.64-6.36M21 4v5h-5" />
+                      </svg>
+                    </button>
+                    <button
+                      className={`${styles.chipButton} ${styles.chipButtonPrimary}`}
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        openAddProject();
+                      }}
+                    >
+                      + Add project
+                    </button>
+                  </div>
+                  <p>Create and manage projects from your workspace.</p>
+                </div>
 
                 <div className={`${styles.card} ${styles.cardWide}`}>
                   <div className={dashStyles.cardHeaderRow}>
@@ -961,37 +1017,6 @@ export default function DashboardPage() {
                                 : ""
                             }`}
                       </div>
-                    </div>
-                    <div className={dashStyles.cardHeaderRight}>
-                      <input
-                        type="search"
-                        className={styles.input}
-                        style={{ width: 220 }}
-                        value={projectSearch}
-                        onChange={(e) => setProjectSearch(e.target.value)}
-                        placeholder="Search projects…"
-                        aria-label="Search projects"
-                      />
-                      <NotificationBell />
-                      <button
-                        type="button"
-                        className={styles.btnSecondary}
-                        disabled={loading || refreshing}
-                        onClick={() => void reloadProjects({ fresh: true })}
-                        title="Fetch latest projects from the server"
-                      >
-                        {loading || refreshing ? "Refreshing…" : "Refresh"}
-                      </button>
-                      <button
-                        className={styles.button}
-                        type="button"
-                        onClick={() => {
-                          setError(null);
-                          openAddProject();
-                        }}
-                      >
-                        + Add project
-                      </button>
                     </div>
                   </div>
 

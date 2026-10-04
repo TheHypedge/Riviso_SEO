@@ -402,26 +402,26 @@
   position: absolute;
   display: inline-flex;
   align-items: center;
-  gap: 0;
+  gap: 6px;
   height: 28px;
-  padding: 0 7px;
-  border: 1px solid var(--aa-hairline);
+  padding: 0 12px 0 8px;
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: var(--aa-surface-card);
-  color: var(--aa-primary);
+  /* Solid brand orange, not the (translucent-in-dark-mode) surface-card tint
+     -- this needs to read as a clearly visible, high-contrast call to action
+     over arbitrary article text, not blend into the page. */
+  background: var(--aa-primary);
+  color: var(--aa-on-primary);
   box-shadow: var(--aa-shadow-xs, 0 1px 3px rgba(0, 0, 0, 0.12));
   cursor: pointer;
   pointer-events: auto;
   overflow: hidden;
-  transition: padding 0.18s ease, gap 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+  transition: background 0.15s ease;
 }
 
 .selectionAiPill:hover,
 .selectionAiPill:focus-visible {
-  gap: 6px;
-  padding: 0 12px 0 8px;
-  border-color: color-mix(in oklab, var(--aa-primary), transparent 55%);
-  background: color-mix(in oklab, var(--aa-primary), var(--aa-surface-card) 90%);
+  background: var(--aa-primary-hover);
   outline: none;
 }
 
@@ -429,23 +429,118 @@
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
-  max-width: 0;
-  opacity: 0;
+}
+
+/* ── Selection AI regenerate: Automatic/Custom dialog ───────────────────── */
+
+.selectionAiDialog {
+  position: absolute;
+  pointer-events: auto;
+  width: 280px;
+  border: 1px solid var(--aa-hairline);
+  border-radius: 10px;
+  /* Solid, not var(--aa-surface-card) -- that token is translucent in dark
+     mode (rgba(18,18,20,0.72)), which let whatever's scrolled behind the
+     dialog show through and hurt readability. */
+  background: var(--aa-canvas);
+  box-shadow: var(--aa-shadow-md, 0 6px 20px rgba(0, 0, 0, 0.16));
   overflow: hidden;
-  transition: max-width 0.18s ease, opacity 0.15s ease 0.03s;
 }
 
-.selectionAiPill:hover .selectionAiPillLabel,
-.selectionAiPill:focus-visible .selectionAiPillLabel {
-  max-width: 120px;
-  opacity: 1;
+.selectionAiDialogTabs {
+  display: flex;
+  border-bottom: 1px solid var(--aa-hairline);
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .selectionAiPill,
-  .selectionAiPillLabel {
-    transition: none;
-  }
+.selectionAiDialogTab {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--aa-muted);
+  padding: 9px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.selectionAiDialogTab:hover {
+  color: var(--aa-ink);
+}
+
+.selectionAiDialogTabActive {
+  color: var(--aa-primary);
+  border-bottom-color: var(--aa-primary);
+}
+
+.selectionAiDialogPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.selectionAiDialogHint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--aa-muted);
+}
+
+.selectionAiDialogTextarea {
+  width: 100%;
+  resize: none;
+  border: 1px solid var(--aa-hairline);
+  border-radius: 6px;
+  background: var(--aa-surface);
+  color: var(--aa-ink);
+  padding: 8px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+.selectionAiDialogTextarea:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
+}
+
+.selectionAiDialogCharCount {
+  margin-top: -4px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--aa-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.selectionAiDialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.selectionAiDialogBtn {
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
+  color: var(--aa-ink);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.selectionAiDialogBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.selectionAiDialogBtnPrimary {
+  border-color: transparent;
+  background: var(--aa-primary);
+  color: var(--aa-on-primary);
 }
 
 /* ── Inline article image (Insert Media): drag-resize + align NodeView ──── */

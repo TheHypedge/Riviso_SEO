@@ -1244,6 +1244,7 @@ async def regenerate_article_selection(
         context_after=payload.context_after.strip(),
         focus_keyphrase=(payload.focus_keyphrase or "").strip(),
         keywords=payload.keywords,
+        custom_instruction=(payload.custom_instruction or "").strip() or None,
     )
     rewritten = sanitize_article_body(rewritten).strip()
     if not rewritten:

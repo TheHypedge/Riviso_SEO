@@ -132,6 +132,9 @@ class RegenerateSelectionRequest(BaseModel):
     context_after: str = Field(default="", max_length=1000)
     focus_keyphrase: str | None = Field(default=None, max_length=500)
     keywords: list[str] = Field(default_factory=list, max_length=10)
+    # When set, the rewrite follows this instruction instead of the default
+    # fidelity-only reword (see article_selection_rewrite.py).
+    custom_instruction: str | None = Field(default=None, max_length=100)
 
 
 class RegenerateSelectionResponse(BaseModel):

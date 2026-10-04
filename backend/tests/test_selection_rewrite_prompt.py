@@ -28,3 +28,47 @@ def test_user_message_carries_all_context_fields():
     assert "After this sentence." in user
     assert "widgets guide" in user
     assert "gadgets" in user
+
+
+def test_no_custom_instruction_leaves_prompt_unchanged():
+    baseline, _ = _build_selection_rewrite_messages(
+        selected_text="Widgets are useful.",
+        context_before="",
+        context_after="",
+        focus_keyphrase="widgets",
+        keywords=[],
+    )
+    with_none, _ = _build_selection_rewrite_messages(
+        selected_text="Widgets are useful.",
+        context_before="",
+        context_after="",
+        focus_keyphrase="widgets",
+        keywords=[],
+        custom_instruction=None,
+    )
+    with_blank, _ = _build_selection_rewrite_messages(
+        selected_text="Widgets are useful.",
+        context_before="",
+        context_after="",
+        focus_keyphrase="widgets",
+        keywords=[],
+        custom_instruction="   ",
+    )
+    assert with_none == baseline
+    assert with_blank == baseline
+
+
+def test_custom_instruction_appends_priority_block():
+    sys_prompt, _ = _build_selection_rewrite_messages(
+        selected_text="Widgets are useful.",
+        context_before="",
+        context_after="",
+        focus_keyphrase="widgets",
+        keywords=[],
+        custom_instruction="Make this punchier",
+    )
+    assert "Make this punchier" in sys_prompt
+    assert "follow it exactly" in sys_prompt.lower()
+    # The fidelity rules must still be present (the instruction only overrides
+    # them where it conflicts, it doesn't replace the base prompt).
+    assert "preserve every fact" in sys_prompt.lower()

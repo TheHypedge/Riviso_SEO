@@ -18,9 +18,11 @@ type Props = {
 
 type Anchor = { top: number; left: number; from: number; to: number };
 type Rect = { top: number; left: number; width: number; height: number };
+type Tab = "auto" | "custom";
 
 const MIN_SELECTION_CHARS = 12;
 const CONTEXT_CHARS = 600;
+const MAX_CUSTOM_PROMPT_CHARS = 100;
 
 function SparkleIcon() {
   return (
@@ -45,9 +47,15 @@ export function SelectionAiRegenerate({
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const [busy, setBusy] = useState(false);
   const [shimmerRects, setShimmerRects] = useState<Rect[]>([]);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>("auto");
+  const [customPrompt, setCustomPrompt] = useState("");
 
   const recomputeAnchor = useCallback(() => {
-    if (!editor || busyRef.current) return;
+    // Frozen while the dialog is open -- otherwise focus moving into the
+    // textarea (or any selection change the dialog itself doesn't cause)
+    // would reposition or clear the anchor out from under the open dialog.
+    if (!editor || busyRef.current || dialogOpen) return;
     const { from, to, empty } = editor.state.selection;
     if (empty) {
       setAnchor(null);
@@ -67,7 +75,7 @@ export function SelectionAiRegenerate({
       from,
       to,
     });
-  }, [editor]);
+  }, [editor, dialogOpen]);
 
   useEffect(() => {
     // Nothing to subscribe to when locked/unready — the component itself
@@ -84,7 +92,18 @@ export function SelectionAiRegenerate({
     };
   }, [editor, disabled, recomputeAnchor]);
 
-  async function handleClick() {
+  function openDialog() {
+    if (!anchor) return;
+    setActiveTab("auto");
+    setCustomPrompt("");
+    setDialogOpen(true);
+  }
+
+  function closeDialog() {
+    setDialogOpen(false);
+  }
+
+  async function runRegenerate(customInstruction?: string) {
     if (!editor || !anchor || busy) return;
     const { from, to } = anchor;
 
@@ -123,6 +142,7 @@ export function SelectionAiRegenerate({
         context_after: contextAfter,
         focus_keyphrase: focusKeyphrase,
         keywords,
+        ...(customInstruction ? { custom_instruction: customInstruction } : {}),
       });
       editor.chain().focus().insertContentAt({ from, to }, res.rewritten).run();
     } catch (e) {
@@ -132,10 +152,13 @@ export function SelectionAiRegenerate({
       setBusy(false);
       setShimmerRects([]);
       setAnchor(null);
+      setDialogOpen(false);
     }
   }
 
   if (disabled || !editor) return null;
+
+  const customPromptTrimmed = customPrompt.trim();
 
   return (
     <div ref={overlayRef} className={editorStyles.selectionAiLayer} aria-hidden={!anchor && shimmerRects.length === 0}>
@@ -146,17 +169,98 @@ export function SelectionAiRegenerate({
           style={{ top: r.top, left: r.left, width: r.width, height: r.height }}
         />
       ))}
-      {anchor && !busy ? (
+      {anchor && !busy && !dialogOpen ? (
         <button
           type="button"
           className={editorStyles.selectionAiPill}
           style={{ top: anchor.top - 34, left: anchor.left }}
-          onClick={handleClick}
+          onClick={openDialog}
           title="AI regenerate"
         >
           <SparkleIcon />
           <span className={editorStyles.selectionAiPillLabel}>AI regenerate</span>
         </button>
+      ) : null}
+      {anchor && dialogOpen ? (
+        <div
+          className={editorStyles.selectionAiDialog}
+          style={{ top: anchor.top - 34, left: anchor.left }}
+          role="dialog"
+          aria-label="Regenerate selection"
+        >
+          <div className={editorStyles.selectionAiDialogTabs} role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "auto"}
+              className={`${editorStyles.selectionAiDialogTab} ${activeTab === "auto" ? editorStyles.selectionAiDialogTabActive : ""}`}
+              onClick={() => setActiveTab("auto")}
+            >
+              Automatic regenerate
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "custom"}
+              className={`${editorStyles.selectionAiDialogTab} ${activeTab === "custom" ? editorStyles.selectionAiDialogTabActive : ""}`}
+              onClick={() => setActiveTab("custom")}
+            >
+              Custom
+            </button>
+          </div>
+
+          {activeTab === "auto" ? (
+            <div className={editorStyles.selectionAiDialogPanel}>
+              <p className={editorStyles.selectionAiDialogHint}>
+                Automatically regenerates the content using the context of the paragraph you selected.
+              </p>
+              <div className={editorStyles.selectionAiDialogFooter}>
+                <button type="button" className={editorStyles.selectionAiDialogBtn} onClick={closeDialog} disabled={busy}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={`${editorStyles.selectionAiDialogBtn} ${editorStyles.selectionAiDialogBtnPrimary}`}
+                  onClick={() => void runRegenerate()}
+                  disabled={busy}
+                >
+                  Regenerate
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className={editorStyles.selectionAiDialogPanel}>
+              <p className={editorStyles.selectionAiDialogHint}>
+                Write a custom prompt to regenerate with custom instructions.
+              </p>
+              <textarea
+                className={editorStyles.selectionAiDialogTextarea}
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value.slice(0, MAX_CUSTOM_PROMPT_CHARS))}
+                maxLength={MAX_CUSTOM_PROMPT_CHARS}
+                placeholder="e.g. Make this more concise"
+                disabled={busy}
+                rows={3}
+              />
+              <div className={editorStyles.selectionAiDialogCharCount}>
+                {customPrompt.length} / {MAX_CUSTOM_PROMPT_CHARS}
+              </div>
+              <div className={editorStyles.selectionAiDialogFooter}>
+                <button type="button" className={editorStyles.selectionAiDialogBtn} onClick={closeDialog} disabled={busy}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className={`${editorStyles.selectionAiDialogBtn} ${editorStyles.selectionAiDialogBtnPrimary}`}
+                  onClick={() => void runRegenerate(customPromptTrimmed)}
+                  disabled={busy || !customPromptTrimmed}
+                >
+                  Regenerate
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       ) : null}
     </div>
   );
