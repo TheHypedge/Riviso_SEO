@@ -137,6 +137,37 @@ def test_csrf_blocks_cookie_mutation_without_header(client):
     assert "X-Requested-With" in resp.json().get("detail", "")
 
 
+def test_unhandled_exception_returns_safe_json_500(client):
+    """Any exception type not caught by the RateLimitExceeded/PyMongoError handlers
+    must still get a generic JSON 500 (with CORS/request-id headers intact) instead of
+    Starlette's bare-text default -- never leaking the real exception message.
+
+    Temporarily flips the shared client's ``raise_server_exceptions`` (a plain mutable
+    attribute, restored in ``finally``) rather than constructing a second TestClient:
+    this app's lifespan starts background tasks (e.g. the generation worker loop), and
+    a second overlapping ``with TestClient(...)`` on the same app instance fights the
+    first one over those tasks' event loop.
+    """
+
+    async def _boom():
+        raise ValueError("some internal detail that must never reach the client")
+
+    main_mod.app.add_api_route("/__test_unhandled_error", _boom, methods=["GET"])
+    client.raise_server_exceptions = False
+    try:
+        resp = client.get("/__test_unhandled_error")
+    finally:
+        client.raise_server_exceptions = True
+        main_mod.app.router.routes = [
+            r for r in main_mod.app.router.routes if getattr(r, "path", None) != "/__test_unhandled_error"
+        ]
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body.get("detail") == "An unexpected error occurred. Please try again."
+    assert "some internal detail" not in resp.text
+    assert resp.headers.get("x-request-id")
+
+
 # --------------------------------------------------------------------------- #
 # Plan / trial / publish gating
 # --------------------------------------------------------------------------- #

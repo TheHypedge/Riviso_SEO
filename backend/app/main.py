@@ -289,8 +289,12 @@ def create_app() -> FastAPI:
                 await self.app(scope, receive, send)
                 return
 
+            started = False
+
             async def send_wrapper(message: Message) -> None:
+                nonlocal started
                 if message["type"] == "http.response.start":
+                    started = True
                     message.setdefault("headers", [])
                     headers = MutableHeaders(raw=message["headers"])
                     if "x-content-type-options" not in headers:
@@ -307,7 +311,37 @@ def create_app() -> FastAPI:
                         headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
                 await send(message)
 
-            await self.app(scope, receive, send_wrapper)
+            try:
+                await self.app(scope, receive, send_wrapper)
+            except Exception as exc:
+                # Catch-all for every exception type not already turned into a response
+                # by ExceptionMiddleware (RateLimitExceeded/PyMongoError/HTTPException/
+                # RequestValidationError handlers all run *below* this middleware, so
+                # this only ever sees truly unexpected exceptions -- ValueError, httpx
+                # errors from WordPress/Shopify/OpenAI calls, etc.). Deliberately placed
+                # here rather than via ``@app.exception_handler(Exception)``: a bare
+                # ``Exception`` handler is wired into Starlette's outermost
+                # ServerErrorMiddleware, *above* every middleware in this stack (CORS,
+                # request-id, these same security headers), so its response would skip
+                # all of them -- the exact "no CORS header on the 500 body" problem this
+                # class exists to avoid. Sending through ``send_wrapper`` from here keeps
+                # the response inside the normal stack so every outer middleware still
+                # decorates it. Never echoes exception details to the client -- only the
+                # generic message; the real exception is logged server-side with its
+                # traceback (and reaches Sentry via the logging integration).
+                if started:
+                    raise
+                _log.exception(
+                    "Unhandled exception on %s %s: %s",
+                    scope.get("method", ""),
+                    scope.get("path", ""),
+                    exc,
+                )
+                response = JSONResponse(
+                    status_code=500,
+                    content={"detail": "An unexpected error occurred. Please try again."},
+                )
+                await response(scope, receive, send_wrapper)
 
     app.add_middleware(SecurityHeadersASGIMiddleware)
 
