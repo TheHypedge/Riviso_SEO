@@ -435,7 +435,18 @@ export type TechnicalAuditCwvEntry = {
   display_value?: string | null;
   numeric_value?: number | null;
   status?: "good" | "needs_improvement" | "poor" | null;
-  source?: "field" | "lab" | null;
+  /** "field" = this page's real users, "field_origin" = whole-site real users, "lab" = Lighthouse run. */
+  source?: "field" | "field_origin" | "lab" | null;
+};
+
+/** One example of an affected resource, as reported by Lighthouse (strings capped ~200 chars). */
+export type TechnicalAuditSample = {
+  url?: string;
+  label?: string;
+  snippet?: string;
+  selector?: string;
+  wasted_bytes?: number;
+  wasted_ms?: number;
 };
 
 export type TechnicalAuditOpportunity = {
@@ -443,9 +454,14 @@ export type TechnicalAuditOpportunity = {
   title?: string | null;
   description?: string | null;
   display_value?: string | null;
+  score?: number | null;
   overall_savings_ms?: number | null;
   overall_savings_bytes?: number | null;
+  /** Google's per-metric estimated savings in ms, e.g. { LCP: 2500 } (Lighthouse 13 insights). */
+  metric_savings?: Record<string, number>;
   affected_resources?: number;
+  item_count?: number;
+  samples?: TechnicalAuditSample[];
 };
 
 export type TechnicalAuditFinding = {
@@ -454,6 +470,22 @@ export type TechnicalAuditFinding = {
   description?: string | null;
   display_value?: string | null;
   score?: number | null;
+  metric_savings?: Record<string, number>;
+  item_count?: number;
+  samples?: TechnicalAuditSample[];
+};
+
+export type TechnicalAuditFixFirstItem = {
+  id: string;
+  section: "opportunities" | "diagnostics" | "accessibility_failures" | "best_practices_failures" | "seo_failures";
+  title?: string | null;
+  display_value?: string | null;
+  score?: number | null;
+  overall_savings_ms?: number | null;
+  overall_savings_bytes?: number | null;
+  metric_savings?: Record<string, number>;
+  sample?: TechnicalAuditSample | null;
+  item_count?: number;
 };
 
 export type TechnicalAuditCategorySummary = { passed: number; warnings: number; failed: number };
@@ -472,6 +504,11 @@ export type TechnicalAuditStrategyResult = {
   best_practices_failures: TechnicalAuditFinding[];
   accessibility_summary?: TechnicalAuditCategorySummary | null;
   best_practices_summary?: TechnicalAuditCategorySummary | null;
+  /* Added 2026-10 (Phase 1); absent on older history rows. */
+  seo_failures?: TechnicalAuditFinding[];
+  seo_summary?: TechnicalAuditCategorySummary | null;
+  fix_first?: TechnicalAuditFixFirstItem[];
+  field_data_source?: "field" | "field_origin" | null;
   fetch_time?: string | null;
   final_url?: string | null;
 };

@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:unit": "npx --yes tsx --test src/lib/overviewReadiness.test.ts src/lib/articlePaths.test.ts src/lib/bulkScheduleDates.test.ts"
+    "test:unit": "npx --yes tsx --test src/lib/overviewReadiness.test.ts src/lib/articlePaths.test.ts src/lib/bulkScheduleDates.test.ts src/lib/technicalAudit.test.ts"
   },
   "dependencies": {
     "@newrelic/browser-agent": "^1.319.0",

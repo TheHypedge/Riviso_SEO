@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { TechnicalAuditRun, TechnicalAuditStrategyResult } from "@/lib/api";
+import type { TechnicalAuditCategorySummary, TechnicalAuditFinding, TechnicalAuditRun, TechnicalAuditStrategyResult } from "@/lib/api";
+import { FINDING_SECTION_LABELS, describeSample, formatSavings, withTechnicalResultDefaults } from "@/lib/technicalAudit";
 
 type CssModule = { [key: string]: string };
 type Strategy = "mobile" | "desktop";
@@ -276,10 +277,12 @@ export function TechnicalAuditSummary({
   strategy: Strategy;
   styles: CssModule;
 }) {
-  const result = strategy === "mobile" ? audit.mobile : audit.desktop;
+  const result = withTechnicalResultDefaults(strategy === "mobile" ? audit.mobile : audit.desktop);
+  const mobile = withTechnicalResultDefaults(audit.mobile);
+  const desktop = withTechnicalResultDefaults(audit.desktop);
   const health = technicalHealthScore(result);
   const status = scoreStatus(health);
-  const prevResult = previousAudit ? (strategy === "mobile" ? previousAudit.mobile : previousAudit.desktop) : null;
+  const prevResult = previousAudit ? withTechnicalResultDefaults(strategy === "mobile" ? previousAudit.mobile : previousAudit.desktop) : null;
   const prevHealth = technicalHealthScore(prevResult);
   const delta = health !== null && prevHealth !== null ? health - prevHealth : null;
 
@@ -325,6 +328,33 @@ export function TechnicalAuditSummary({
           );
         })}
       </div>
+      <table className={styles.siteAuditDeviceTable}>
+        <caption>Mobile vs Desktop (Lighthouse scores, out of 100)</caption>
+        <thead>
+          <tr>
+            <th scope="col">Category</th>
+            <th scope="col">Mobile</th>
+            <th scope="col">Desktop</th>
+          </tr>
+        </thead>
+        <tbody>
+          {scoreEntries.map((s) => {
+            const key = s.key as keyof TechnicalAuditStrategyResult["scores"];
+            return (
+              <tr key={s.key}>
+                <th scope="row">{s.label}</th>
+                {[mobile.scores[key], desktop.scores[key]].map((v, i) => (
+                  <td key={i}>
+                    <span className={styles.siteAuditBreakdownDot} data-status={scoreStatus(v) || "unknown"} aria-hidden="true" />
+                    {v === null ? "—" : v}
+                    {v !== null ? <span className={styles.srOnly}> ({statusLabel(scoreStatus(v))})</span> : null}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
       <div className={styles.siteAuditHealthMessage}>
         <p style={{ margin: 0, fontSize: 13 }}>{message}</p>
         <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 11 }}>
@@ -581,7 +611,126 @@ export function TechnicalAuditHistoryList({
   );
 }
 
-/* ── Detail: CWV, opportunities, diagnostics, accessibility for one run ── */
+/* ── Detail: Fix first, CWV, findings by category for one run ──────────── */
+
+/** "Passed / Warnings / Failed" counts -- text label on every chip, color is never the only signal. */
+function CategorySummaryChips({ summary, label, styles }: { summary: TechnicalAuditCategorySummary | null | undefined; label: string; styles: CssModule }) {
+  if (!summary) return null;
+  return (
+    <div className={styles.siteAuditSummaryChips} aria-label={`${label} check results`}>
+      <span className={styles.siteAuditSummaryChip} data-status="good">
+        <span className={styles.siteAuditBreakdownDot} data-status="good" aria-hidden="true" /> Passed {summary.passed}
+      </span>
+      <span className={styles.siteAuditSummaryChip} data-status="needs_improvement">
+        <span className={styles.siteAuditBreakdownDot} data-status="needs_improvement" aria-hidden="true" /> Warnings {summary.warnings}
+      </span>
+      <span className={styles.siteAuditSummaryChip} data-status="poor">
+        <span className={styles.siteAuditBreakdownDot} data-status="poor" aria-hidden="true" /> Failed {summary.failed}
+      </span>
+    </div>
+  );
+}
+
+/** Expandable finding: description, Google's savings figure, and up to 5 affected-resource samples. */
+function FindingRow({
+  finding,
+  expanded,
+  onToggle,
+  styles,
+}: {
+  finding: TechnicalAuditFinding & { overall_savings_ms?: number | null; overall_savings_bytes?: number | null; affected_resources?: number };
+  expanded: boolean;
+  onToggle: () => void;
+  styles: CssModule;
+}) {
+  const samples = finding.samples || [];
+  // Old rows only carry `affected_resources` (a count, no samples).
+  const total = finding.item_count ?? finding.affected_resources ?? 0;
+  const more = Math.max(0, total - samples.length);
+  const savings = formatSavings(finding.overall_savings_ms, finding.overall_savings_bytes, finding.metric_savings);
+  return (
+    <div className={styles.siteAuditFindingRowStatic}>
+      <button type="button" className={styles.siteAuditFindingToggle} onClick={onToggle} aria-expanded={expanded}>
+        <span className={styles.siteAuditFindingHead}>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>{finding.title}</span>
+          {finding.display_value ? (
+            <span className={styles.muted} style={{ fontSize: 12 }}>
+              {finding.display_value}
+            </span>
+          ) : null}
+        </span>
+      </button>
+      {expanded ? (
+        <div className={styles.siteAuditFindingBody}>
+          {finding.description ? <p style={{ margin: "6px 0 0", fontSize: 12 }}>{finding.description}</p> : null}
+          {savings ? (
+            <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 12 }}>
+              {savings} (Google estimate)
+            </p>
+          ) : null}
+          {samples.length > 0 ? (
+            <ul className={styles.siteAuditSampleList} aria-label="Affected resources">
+              {samples.map((s, i) => (
+                <li key={i}>
+                  <code>{describeSample(s)}</code>
+                </li>
+              ))}
+              {more > 0 ? <li className={styles.muted}>+{more} more</li> : null}
+            </ul>
+          ) : total > 0 ? (
+            <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 12 }}>
+              {total} affected resource{total === 1 ? "" : "s"}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function FindingList({
+  title,
+  findings,
+  summary,
+  emptyText,
+  cap,
+  styles,
+}: {
+  title: string;
+  findings: TechnicalAuditFinding[];
+  summary?: TechnicalAuditCategorySummary | null;
+  emptyText: string;
+  cap?: number;
+  styles: CssModule;
+}) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const visible = cap && !showAll ? findings.slice(0, cap) : findings;
+  return (
+    <div className={styles.card}>
+      <h3 className={styles.sectionTitle} style={{ fontSize: 15 }}>
+        {title}
+      </h3>
+      {summary ? <CategorySummaryChips summary={summary} label={title} styles={styles} /> : null}
+      {findings.length === 0 ? (
+        <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
+          {emptyText}
+        </p>
+      ) : (
+        <div className={styles.siteAuditFindingList}>
+          {visible.map((f, i) => (
+            <FindingRow key={`${f.id}-${i}`} finding={f} expanded={expanded === f.id} onToggle={() => setExpanded(expanded === f.id ? null : f.id)} styles={styles} />
+          ))}
+        </div>
+      )}
+      {cap && findings.length > cap ? (
+        <button type="button" className={styles.siteAuditViewAllBtn} onClick={() => setShowAll((v) => !v)}>
+          {showAll ? "Show fewer" : `View all ${findings.length}`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
 
 export function TechnicalAuditResults({
   audit,
@@ -594,17 +743,51 @@ export function TechnicalAuditResults({
   onStrategyChange: (s: Strategy) => void;
   styles: CssModule;
 }) {
-  const result: TechnicalAuditStrategyResult = strategy === "mobile" ? audit.mobile : audit.desktop;
-  const [expandedOpportunity, setExpandedOpportunity] = useState<string | null>(null);
-  const [expandedDiagnostic, setExpandedDiagnostic] = useState<string | null>(null);
-  const [showAllOpportunities, setShowAllOpportunities] = useState(false);
-  const [showAllDiagnostics, setShowAllDiagnostics] = useState(false);
-  const ACTION_CENTER_CAP = 5;
-  const visibleOpportunities = showAllOpportunities ? result.opportunities : result.opportunities.slice(0, ACTION_CENTER_CAP);
-  const visibleDiagnostics = showAllDiagnostics ? result.diagnostics : result.diagnostics.slice(0, ACTION_CENTER_CAP);
+  const result = withTechnicalResultDefaults(strategy === "mobile" ? audit.mobile : audit.desktop);
+  const fixFirst = result.fix_first || [];
+  const seoFailures = result.seo_failures || [];
+  const hasSeoSection = Boolean(result.seo_summary) || seoFailures.length > 0;
+  const hasA11ySection = result.accessibility_failures.length > 0 || result.best_practices_failures.length > 0 || result.accessibility_summary || result.best_practices_summary;
 
   return (
     <>
+      {fixFirst.length > 0 ? (
+        <div className={`${styles.card} ${styles.cardWide}`}>
+          <h3 className={styles.sectionTitle} style={{ fontSize: 15 }}>
+            Fix first
+          </h3>
+          <p className={styles.muted} style={{ margin: 0, fontSize: 12 }}>
+            Ranked by Google&rsquo;s largest estimated time saving, then data saving, then lowest audit score.
+          </p>
+          <ol className={styles.siteAuditFixFirstList}>
+            {fixFirst.map((f) => {
+              const savings = formatSavings(f.overall_savings_ms, f.overall_savings_bytes, f.metric_savings);
+              const sample = describeSample(f.sample);
+              const more = Math.max(0, (f.item_count || 0) - (f.sample ? 1 : 0));
+              return (
+                <li key={`${f.section}-${f.id}`}>
+                  <span className={styles.siteAuditFindingHead}>
+                    <span style={{ fontWeight: 600, fontSize: 13 }}>{f.title}</span>
+                    <span className={styles.siteAuditFixFirstTag}>{FINDING_SECTION_LABELS[f.section] || f.section}</span>
+                  </span>
+                  {savings || f.display_value ? (
+                    <span className={styles.muted} style={{ fontSize: 12 }}>
+                      {savings || f.display_value}
+                    </span>
+                  ) : null}
+                  {sample ? (
+                    <span className={styles.siteAuditFixFirstSample}>
+                      <code>{sample}</code>
+                      {more > 0 ? <span className={styles.muted}> +{more} more</span> : null}
+                    </span>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      ) : null}
+
       <div className={`${styles.card} ${styles.cardWide}`}>
         <div className={styles.analyticsHeaderRow}>
           <h3 className={styles.sectionTitle} style={{ fontSize: 15 }}>
@@ -618,6 +801,11 @@ export function TechnicalAuditResults({
             ))}
           </div>
         </div>
+        {result.field_data_source === "field_origin" ? (
+          <p className={styles.muted} style={{ margin: 0, fontSize: 12 }}>
+            This page doesn&rsquo;t have enough real-user data yet, so statuses use origin-level real-user data (your whole site), not this page alone.
+          </p>
+        ) : null}
         {Object.keys(result.core_web_vitals).length === 0 ? (
           <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
             PageSpeed Insights did not return Core Web Vitals data for this page.
@@ -634,6 +822,11 @@ export function TechnicalAuditResults({
                       {cwv.display_value || "—"}
                     </span>
                     <span className={statusPillClass(styles, cwv.status)}>{statusLabel(cwv.status)}</span>
+                    {cwv.source ? (
+                      <span className={styles.muted} style={{ fontSize: 11 }}>
+                        {cwv.source === "field" ? "Real users, this page" : cwv.source === "field_origin" ? "Real users, whole site" : "Lab test"}
+                      </span>
+                    ) : null}
                     <MetricThresholdBar metricKey={k} numericValue={cwv.numeric_value} styles={styles} />
                   </div>
                 );
@@ -661,124 +854,32 @@ export function TechnicalAuditResults({
       {result.opportunities.length > 0 || result.diagnostics.length > 0 ? (
         <div className={styles.siteAuditActionCenter}>
           {result.opportunities.length > 0 ? (
-            <div className={`${styles.card}`}>
-              <h3 className={styles.sectionTitle} style={{ fontSize: 15 }}>
-                Top Opportunities
-              </h3>
-              <div className={styles.siteAuditFindingList}>
-                {visibleOpportunities.map((o) => (
-                  <button
-                    key={o.id}
-                    type="button"
-                    className={styles.siteAuditFindingRow}
-                    onClick={() => setExpandedOpportunity(expandedOpportunity === o.id ? null : o.id)}
-                    aria-expanded={expandedOpportunity === o.id}
-                  >
-                    <div className={styles.siteAuditFindingHead}>
-                      <span style={{ fontWeight: 600, fontSize: 13 }}>{o.title}</span>
-                      {o.display_value ? (
-                        <span className={styles.muted} style={{ fontSize: 12 }}>
-                          {o.display_value}
-                        </span>
-                      ) : null}
-                    </div>
-                    {expandedOpportunity === o.id ? (
-                      <div className={styles.siteAuditFindingBody}>
-                        {o.description ? <p style={{ margin: "6px 0 0", fontSize: 12 }}>{o.description}</p> : null}
-                        {typeof o.affected_resources === "number" && o.affected_resources > 0 ? (
-                          <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 12 }}>
-                            {o.affected_resources} affected resource{o.affected_resources === 1 ? "" : "s"}
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </button>
-                ))}
-              </div>
-              {result.opportunities.length > ACTION_CENTER_CAP ? (
-                <button type="button" className={styles.siteAuditViewAllBtn} onClick={() => setShowAllOpportunities((v) => !v)}>
-                  {showAllOpportunities ? "Show fewer" : `View all ${result.opportunities.length}`}
-                </button>
-              ) : null}
-            </div>
+            <FindingList title="Top Opportunities" findings={result.opportunities} emptyText="" cap={5} styles={styles} />
           ) : null}
-
-          {result.diagnostics.length > 0 ? (
-            <div className={`${styles.card}`}>
-              <h3 className={styles.sectionTitle} style={{ fontSize: 15 }}>
-                Diagnostics
-              </h3>
-              <div className={styles.siteAuditFindingList}>
-                {visibleDiagnostics.map((d) => (
-                  <button
-                    key={d.id}
-                    type="button"
-                    className={styles.siteAuditFindingRow}
-                    onClick={() => setExpandedDiagnostic(expandedDiagnostic === d.id ? null : d.id)}
-                    aria-expanded={expandedDiagnostic === d.id}
-                  >
-                    <div className={styles.siteAuditFindingHead}>
-                      <span style={{ fontWeight: 600, fontSize: 13 }}>{d.title}</span>
-                      {d.display_value ? (
-                        <span className={styles.muted} style={{ fontSize: 12 }}>
-                          {d.display_value}
-                        </span>
-                      ) : null}
-                    </div>
-                    {expandedDiagnostic === d.id && d.description ? (
-                      <div className={styles.siteAuditFindingBody}>
-                        <p style={{ margin: "6px 0 0", fontSize: 12 }}>{d.description}</p>
-                      </div>
-                    ) : null}
-                  </button>
-                ))}
-              </div>
-              {result.diagnostics.length > ACTION_CENTER_CAP ? (
-                <button type="button" className={styles.siteAuditViewAllBtn} onClick={() => setShowAllDiagnostics((v) => !v)}>
-                  {showAllDiagnostics ? "Show fewer" : `View all ${result.diagnostics.length}`}
-                </button>
-              ) : null}
-            </div>
-          ) : null}
+          {result.diagnostics.length > 0 ? <FindingList title="Diagnostics" findings={result.diagnostics} emptyText="" cap={5} styles={styles} /> : null}
         </div>
       ) : null}
 
-      {result.accessibility_failures.length > 0 || result.best_practices_failures.length > 0 || result.accessibility_summary || result.best_practices_summary ? (
-        <div className={`${styles.card} ${styles.cardWide}`}>
-          <h3 className={styles.sectionTitle} style={{ fontSize: 15 }}>
-            Accessibility &amp; Best Practices
-          </h3>
-          {result.accessibility_summary ? (
-            <div className={styles.siteAuditSummaryChips} aria-label="Accessibility check results">
-              <span className={styles.siteAuditSummaryChip} data-status="good">
-                <span className={styles.siteAuditBreakdownDot} data-status="good" aria-hidden="true" /> Passed {result.accessibility_summary.passed}
-              </span>
-              <span className={styles.siteAuditSummaryChip} data-status="needs_improvement">
-                <span className={styles.siteAuditBreakdownDot} data-status="needs_improvement" aria-hidden="true" /> Warnings {result.accessibility_summary.warnings}
-              </span>
-              <span className={styles.siteAuditSummaryChip} data-status="poor">
-                <span className={styles.siteAuditBreakdownDot} data-status="poor" aria-hidden="true" /> Failed {result.accessibility_summary.failed}
-              </span>
-            </div>
+      {hasA11ySection || hasSeoSection ? (
+        <div className={styles.siteAuditActionCenter}>
+          {hasA11ySection ? (
+            <FindingList
+              title="Accessibility & Best Practices"
+              findings={[...result.accessibility_failures, ...result.best_practices_failures]}
+              summary={result.accessibility_summary}
+              emptyText="No additional diagnostics require attention."
+              styles={styles}
+            />
           ) : null}
-          {result.accessibility_failures.length === 0 && result.best_practices_failures.length === 0 ? (
-            <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
-              No additional diagnostics require attention.
-            </p>
-          ) : (
-            <div className={styles.siteAuditFindingList}>
-              {[...result.accessibility_failures, ...result.best_practices_failures].map((f) => (
-                <div key={f.id} className={styles.siteAuditFindingRowStatic}>
-                  <span style={{ fontWeight: 600, fontSize: 13 }}>{f.title}</span>
-                  {f.description ? (
-                    <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 12 }}>
-                      {f.description}
-                    </p>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          )}
+          {hasSeoSection ? (
+            <FindingList
+              title="SEO checks"
+              findings={seoFailures}
+              summary={result.seo_summary}
+              emptyText="All PageSpeed SEO checks passed."
+              styles={styles}
+            />
+          ) : null}
         </div>
       ) : null}
     </>

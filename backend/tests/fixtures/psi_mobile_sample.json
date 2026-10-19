@@ -1,0 +1,307 @@
+{
+ "id": "https://example.com/",
+ "loadingExperience": {
+  "metrics": {}
+ },
+ "originLoadingExperience": {
+  "metrics": {
+   "LARGEST_CONTENTFUL_PAINT_MS": {
+    "percentile": 3100,
+    "category": "AVERAGE"
+   },
+   "CUMULATIVE_LAYOUT_SHIFT_SCORE": {
+    "percentile": 2,
+    "category": "FAST"
+   }
+  }
+ },
+ "lighthouseResult": {
+  "finalUrl": "https://example.com/",
+  "fetchTime": "2026-10-20T10:00:00.000Z",
+  "categories": {
+   "performance": {
+    "score": 0.42,
+    "auditRefs": [
+     {
+      "id": "render-blocking-resources",
+      "group": "load-opportunities"
+     },
+     {
+      "id": "unused-javascript",
+      "group": "diagnostics"
+     },
+     {
+      "id": "cache-insight",
+      "group": "insights"
+     },
+     {
+      "id": "bootup-time",
+      "group": "diagnostics"
+     },
+     {
+      "id": "dom-size",
+      "group": "diagnostics"
+     },
+     {
+      "id": "largest-contentful-paint",
+      "group": "metrics"
+     },
+     {
+      "id": "interactive",
+      "group": "hidden"
+     }
+    ]
+   },
+   "accessibility": {
+    "score": 0.81,
+    "auditRefs": [
+     {
+      "id": "image-alt"
+     },
+     {
+      "id": "color-contrast"
+     }
+    ]
+   },
+   "best-practices": {
+    "score": 0.92,
+    "auditRefs": [
+     {
+      "id": "errors-in-console"
+     },
+     {
+      "id": "image-alt"
+     }
+    ]
+   },
+   "seo": {
+    "score": 0.75,
+    "auditRefs": [
+     {
+      "id": "meta-description"
+     },
+     {
+      "id": "document-title"
+     },
+     {
+      "id": "link-text"
+     }
+    ]
+   }
+  },
+  "audits": {
+   "largest-contentful-paint": {
+    "score": 0.3,
+    "scoreDisplayMode": "numeric",
+    "displayValue": "4.1 s",
+    "numericValue": 4100
+   },
+   "cumulative-layout-shift": {
+    "score": 0.95,
+    "scoreDisplayMode": "numeric",
+    "displayValue": "0.02",
+    "numericValue": 0.02
+   },
+   "render-blocking-resources": {
+    "title": "Eliminate render-blocking resources",
+    "description": "Resources are blocking the first paint.",
+    "score": 0.2,
+    "scoreDisplayMode": "metricSavings",
+    "displayValue": "Potential savings of 900 ms",
+    "details": {
+     "type": "opportunity",
+     "overallSavingsMs": 900,
+     "overallSavingsBytes": 0,
+     "items": [
+      {
+       "url": "https://example.com/style.css",
+       "wastedMs": 600,
+       "totalBytes": 30000
+      },
+      {
+       "url": "https://example.com/app.js",
+       "wastedMs": 300
+      }
+     ]
+    }
+   },
+   "unused-javascript": {
+    "title": "Reduce unused JavaScript",
+    "description": "Remove unused JS.",
+    "score": 0.4,
+    "scoreDisplayMode": "metricSavings",
+    "displayValue": "Potential savings of 120 KiB",
+    "details": {
+     "type": "opportunity",
+     "overallSavingsMs": 450,
+     "overallSavingsBytes": 122880,
+     "items": [
+      {
+       "url": "https://cdn.example.com/a.js",
+       "wastedBytes": 61440
+      },
+      {
+       "url": "https://cdn.example.com/b.js",
+       "wastedBytes": 30720
+      },
+      {
+       "url": "https://cdn.example.com/c.js",
+       "wastedBytes": 10240
+      },
+      {
+       "url": "https://cdn.example.com/d.js",
+       "wastedBytes": 10240
+      },
+      {
+       "url": "https://cdn.example.com/e.js",
+       "wastedBytes": 5120
+      },
+      {
+       "url": "https://cdn.example.com/f.js",
+       "wastedBytes": 5120
+      },
+      {
+       "url": "https://cdn.example.com/g.js",
+       "wastedBytes": 1024
+      }
+     ]
+    }
+   },
+   "bootup-time": {
+    "title": "Reduce JavaScript execution time",
+    "description": "Parse, compile and execute less JS.",
+    "score": 0.5,
+    "scoreDisplayMode": "numeric",
+    "displayValue": "2.4 s",
+    "details": {
+     "type": "table",
+     "items": [
+      {
+       "url": "https://cdn.example.com/a.js",
+       "total": 1200
+      }
+     ]
+    },
+    "metricSavings": {
+     "TBT": 350
+    }
+   },
+   "image-alt": {
+    "title": "Image elements do not have [alt] attributes",
+    "description": "Informative images need alt text.",
+    "score": 0,
+    "scoreDisplayMode": "binary",
+    "details": {
+     "type": "table",
+     "items": [
+      {
+       "node": {
+        "snippet": "<img src=\"data:image/png;base64,AAAA\">",
+        "selector": "body > img",
+        "nodeLabel": "PLACEHOLDER_LONG_LABEL"
+       }
+      }
+     ]
+    }
+   },
+   "color-contrast": {
+    "title": "Contrast is sufficient",
+    "score": 1,
+    "scoreDisplayMode": "binary"
+   },
+   "errors-in-console": {
+    "title": "Browser errors were logged to the console",
+    "description": "Errors indicate unresolved problems.",
+    "score": 0,
+    "scoreDisplayMode": "binary",
+    "details": {
+     "type": "table",
+     "items": [
+      {
+       "source": {
+        "url": "https://example.com/app.js"
+       },
+       "description": "TypeError"
+      }
+     ]
+    }
+   },
+   "meta-description": {
+    "title": "Document does not have a meta description",
+    "description": "Meta descriptions may be shown in search results.",
+    "score": 0,
+    "scoreDisplayMode": "binary"
+   },
+   "document-title": {
+    "title": "Document has a <title> element",
+    "score": 1,
+    "scoreDisplayMode": "binary"
+   },
+   "link-text": {
+    "title": "Links do not have descriptive text",
+    "description": "Descriptive link text helps search engines.",
+    "score": 0,
+    "scoreDisplayMode": "binary",
+    "details": {
+     "type": "table",
+     "items": [
+      {
+       "href": "https://example.com/x",
+       "text": "click here"
+      }
+     ]
+    }
+   },
+   "dom-size": {
+    "title": "Avoid an excessive DOM size",
+    "description": "A large DOM increases memory usage.",
+    "score": 0.6,
+    "scoreDisplayMode": "numeric",
+    "displayValue": "1,900 elements",
+    "details": {
+     "type": "list",
+     "items": [
+      {
+       "type": "table",
+       "items": [
+        {
+         "node": {
+          "selector": "div.wrap",
+          "snippet": "<div class=\"wrap\">"
+         }
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "cache-insight": {
+    "title": "Use efficient cache lifetimes",
+    "description": "A long cache lifetime can speed up repeat visits.",
+    "score": 0,
+    "scoreDisplayMode": "metricSavings",
+    "metricSavings": {
+     "LCP": 2500,
+     "FCP": 0
+    },
+    "details": {
+     "type": "table",
+     "items": [
+      {
+       "url": "https://example.com/hero.jpg",
+       "wastedBytes": 204800
+      }
+     ]
+    }
+   },
+   "interactive": {
+    "title": "Time to Interactive",
+    "score": 0.2,
+    "scoreDisplayMode": "numeric",
+    "displayValue": "9.0 s",
+    "numericValue": 9000
+   }
+  },
+  "lighthouseVersion": "13.5.0"
+ }
+}
