@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-10-20
+
+### Added — SEO Audit: pages that could not be crawled are now reported
+
+- Pages that timed out, refused the connection, or got stuck in a redirect loop now appear as issues ("Page timed out", "Page could not be fetched", "Redirect loop or too many redirects") instead of silently disappearing from the report. URLs that Riviso's own safety guard refuses to fetch are not reported as site problems.
+- New warning "Linked page blocked by robots.txt" when other pages link to a URL that robots.txt disallows.
+- The Issues table now shows each rule's name (with its category underneath), a short explanation, and the exact evidence for every affected URL. CSV export gains a Category column.
+
+### Added — Technical Audit: SEO checks, affected resources, Fix first
+
+- New "Fix first" list ranked by Google's own estimated savings, an "SEO checks" section, affected-resource samples on every finding, a Mobile vs Desktop score table, and labels showing whether Core Web Vitals come from this page's real users, the whole site's, or a lab test.
+
 ## 2026-06-08
 
 ### Fixed — Performance & Analysis tab (Overview + Insights)

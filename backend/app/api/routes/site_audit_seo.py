@@ -32,6 +32,7 @@ from app.core.deps import get_current_user
 from app.core.project_lookup import async_require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.services.plan_gatekeeper import PlanAction, require_plan_action_for_project
+from app.services.seo_crawler.rules import RULES
 from app.services.site_audit.website import resolve_project_website_url
 from app.services.to_thread import run_sync
 
@@ -158,7 +159,14 @@ async def get_seo_audit_issues(
         rows = await run_sync(st.load_seo_audit_issues, audit_id, severity=severity, rule_id=rule_id, limit=limit)
         return {"issues": rows}
     groups = await run_sync(st.aggregate_seo_audit_issue_groups, audit_id)
-    return {"groups": groups}
+    return {"groups": [_with_rule_copy(g) for g in groups or []]}
+
+
+def _with_rule_copy(group: dict[str, Any]) -> dict[str, Any]:
+    """Attach the rule's human name/explanation from the registry. Unknown rule ids (e.g.
+    a rule removed after the audit ran) fall back to the id itself, never an error."""
+    meta = RULES.get(group.get("rule_id") or "")
+    return {**group, "name": meta.name if meta else group.get("rule_id"), "explanation": meta.explanation if meta else None}
 
 
 @router.post("/run")

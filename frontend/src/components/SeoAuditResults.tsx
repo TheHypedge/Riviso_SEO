@@ -5,6 +5,7 @@ import { CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts"
 import { api } from "@/lib/api";
 import type { SeoAuditCounts, SeoAuditIssue, SeoAuditIssueGroup, SeoAuditRun, SeoAuditUrlRow } from "@/lib/api";
 import { ScoreGauge, formatSiteAuditTimestamp } from "@/components/TechnicalAuditResults";
+import { formatIssueEvidence, issueGroupLabel } from "@/lib/seoAuditIssues";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import {
   BreakdownDonut,
@@ -1048,7 +1049,7 @@ export function SeoAuditIssuesList({
   const qLower = q.trim().toLowerCase();
   const filtered = groups.filter((g) => {
     if (severityFilter && g.severity !== severityFilter) return false;
-    if (qLower && !g.category.toLowerCase().includes(qLower) && !g.rule_id.toLowerCase().includes(qLower)) return false;
+    if (qLower && ![issueGroupLabel(g), g.category, g.rule_id].some((t) => t.toLowerCase().includes(qLower))) return false;
     return true;
   });
   if (sort) {
@@ -1058,8 +1059,9 @@ export function SeoAuditIssuesList({
   }
 
   function exportCsv() {
-    const header = ["Issue", "Severity", "URLs", "% of Total", "Impact", "Effort"];
+    const header = ["Issue", "Category", "Severity", "URLs", "% of Total", "Impact", "Effort"];
     const rows = filtered.map((g) => [
+      issueGroupLabel(g),
       g.category,
       SEVERITY_LABELS[g.severity] || g.severity,
       String(g.affected_urls),
@@ -1126,9 +1128,14 @@ export function SeoAuditIssuesList({
                 >
                   <DataTableCell>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontWeight: 600 }}>{g.category}</span>
+                      <span style={{ fontWeight: 600 }}>{issueGroupLabel(g)}</span>
                       <span className={severityPillClass(styles, g.severity)}>{SEVERITY_LABELS[g.severity] || g.severity}</span>
                     </div>
+                    {g.name ? (
+                      <span className={styles.muted} style={{ fontSize: 11 }}>
+                        {g.category}
+                      </span>
+                    ) : null}
                   </DataTableCell>
                   <DataTableCell className="text-right tabular-nums">{g.affected_urls.toLocaleString()}</DataTableCell>
                   <DataTableCell className="text-right tabular-nums">{totalCrawled > 0 ? `${((g.affected_urls / totalCrawled) * 100).toFixed(2)}%` : "—"}</DataTableCell>
@@ -1142,11 +1149,20 @@ export function SeoAuditIssuesList({
                 {expanded === g.rule_id ? (
                   <DataTableRow key={`${g.rule_id}-detail`}>
                     <DataTableCell colSpan={5} style={{ background: "var(--aa-surface-soft)" }}>
-                      {(ruleIssues[g.rule_id] || []).slice(0, 20).map((iss) => (
-                        <div key={iss.id} style={{ padding: "3px 0", fontSize: 12, wordBreak: "break-all" }}>
-                          {iss.url}
-                        </div>
-                      ))}
+                      {g.explanation ? <p style={{ margin: "0 0 8px", fontSize: 12 }}>{g.explanation}</p> : null}
+                      {(ruleIssues[g.rule_id] || []).slice(0, 20).map((iss) => {
+                        const evidence = formatIssueEvidence(iss.evidence);
+                        return (
+                          <div key={iss.id} style={{ padding: "3px 0", fontSize: 12, wordBreak: "break-all" }}>
+                            {iss.url}
+                            {evidence ? (
+                              <span className={styles.muted} style={{ display: "block", fontSize: 11 }}>
+                                {evidence}
+                              </span>
+                            ) : null}
+                          </div>
+                        );
+                      })}
                       {(ruleIssues[g.rule_id] || []).length === 0 ? <p className={styles.muted} style={{ margin: 0, fontSize: 12 }}>Loading…</p> : null}
                       {(ruleIssues[g.rule_id] || [])[0]?.recommendation ? (
                         <p className={styles.muted} style={{ margin: "8px 0 0", fontSize: 12 }}>

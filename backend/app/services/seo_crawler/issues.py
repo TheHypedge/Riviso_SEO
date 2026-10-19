@@ -17,6 +17,28 @@ _TITLE_LEN_MAX = 60
 _TITLE_LEN_MIN = 30
 _META_LEN_MAX = 155
 
+# fetcher.fetch_url error strings -> fetch-failure class. "ssrf_blocked" is Riviso's own
+# SSRF guard refusing a private/loopback target (or a redirect to one): our policy, not a
+# problem with the user's site, so it never becomes an issue.
+_FETCH_ERROR_RULES = {"timeout": "crawl_timeout", "redirect_loop": "redirect_loop", "connection": "crawl_connection_error"}
+
+
+def classify_fetch_error(status_text: str | None) -> str | None:
+    """`timeout` | `redirect_loop` | `connection` | `ssrf_blocked`, or None when the
+    text isn't a fetcher error (e.g. an ordinary HTTP reason phrase like "OK")."""
+    s = (status_text or "").strip()
+    if not s:
+        return None
+    if s == "timeout":
+        return "timeout"
+    if s.startswith("blocked"):  # "blocked: ..." and "blocked_redirect: ..."
+        return "ssrf_blocked"
+    if s.startswith("request_failed:"):
+        # httpx raises TooManyRedirects once max_redirects (8, fetcher.build_http_client)
+        # is exceeded -- a loop or an over-long chain; both leave the page unreachable.
+        return "redirect_loop" if s.split(":", 1)[1].strip() == "TooManyRedirects" else "connection"
+    return None
+
 
 def _issue(audit_id: str, rule_id: str, url_doc: dict[str, Any], evidence: dict[str, Any]) -> dict[str, Any]:
     meta = RULES[rule_id]
@@ -60,6 +82,18 @@ def evaluate(audit_id: str, urls: list[dict[str, Any]], links: list[dict[str, An
 
         if u.get("indexability") == "non_indexable" and (u.get("indexability_reason") or "") == "noindex directive" and int(u.get("inlink_count") or 0) > 0:
             issues.append(_issue(audit_id, "noindex_indexable_target", u, {"inlink_count": u.get("inlink_count")}))
+
+        # Fetch failures and robots-blocked URLs are never "indexable", so these run
+        # before the gate below. Only a failed fetch has status_code None with text set.
+        if status is None:
+            error_class = classify_fetch_error(u.get("status_text"))
+            rule_id = _FETCH_ERROR_RULES.get(error_class or "")
+            if rule_id:
+                issues.append(_issue(audit_id, rule_id, u, {"error": u.get("status_text"), "discovered_from": u.get("discovered_from")}))
+
+        inlinks = u.get("inlink_count")
+        if u.get("indexability") == "blocked" and isinstance(inlinks, int) and inlinks > 0:
+            issues.append(_issue(audit_id, "blocked_by_robots_linked", u, {"inlink_count": inlinks, "reason": u.get("indexability_reason")}))
 
         if not indexable:
             continue  # on-page rules below only apply to pages meant to rank

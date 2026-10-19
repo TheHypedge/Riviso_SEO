@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-RULE_ENGINE_VERSION = "2026.08.1"
+RULE_ENGINE_VERSION = "2026.10.1"
 
 
 @dataclass(frozen=True)
@@ -222,6 +222,47 @@ RULES: dict[str, RuleMeta] = {
             effort="low",
             explanation="This page is marked noindex but other crawled pages still link to it, which is often unintentional.",
             recommendation="Confirm the noindex is intentional; if not, remove it, or update the internal links to point elsewhere.",
+        ),
+        # 2026.10.1 -- URLs the crawler could not fetch used to vanish from the report.
+        RuleMeta(
+            id="crawl_timeout",
+            category="Response Codes",
+            name="Page timed out",
+            severity="warning",
+            priority="medium",
+            effort="medium",
+            explanation="The server did not finish responding within the crawler's time limit. Search engine crawlers can also give up on slow URLs, so the page may be crawled less often or not at all.",
+            recommendation="Check the page's server response time and hosting load, then re-run the audit. If only some runs time out, look for slow database queries or plugins on this route.",
+        ),
+        RuleMeta(
+            id="crawl_connection_error",
+            category="Response Codes",
+            name="Page could not be fetched",
+            severity="warning",
+            priority="medium",
+            effort="medium",
+            explanation="The request failed before any HTTP status was returned (for example a refused or reset connection, a DNS failure, or a malformed response). Search engines see the same failure and cannot crawl the page.",
+            recommendation="Open the URL yourself and check the server, firewall/CDN and DNS settings for this host. The exact error is shown in the evidence.",
+        ),
+        RuleMeta(
+            id="redirect_loop",
+            category="Response Codes",
+            name="Redirect loop or too many redirects",
+            severity="issue",
+            priority="high",
+            effort="low",
+            explanation="Following this URL's redirects never reached a final page within 8 hops: it loops back on itself or chains through too many URLs. Browsers and search engines stop following and treat the page as unreachable.",
+            recommendation="Trace the redirect rules for this URL (server config, CMS or SEO plugin) and make it redirect once, directly to the final page.",
+        ),
+        RuleMeta(
+            id="blocked_by_robots_linked",
+            category="Directives",
+            name="Linked page blocked by robots.txt",
+            severity="warning",
+            priority="low",
+            effort="low",
+            explanation="Other crawled pages link to this URL, but robots.txt disallows crawling it. Search engines cannot read its content, though the URL can still appear in results without a description.",
+            recommendation="If the page should be found in search, remove the matching Disallow rule from robots.txt. If it should stay private, use noindex instead (which requires allowing the crawl) or stop linking to it.",
         ),
     ]
 }

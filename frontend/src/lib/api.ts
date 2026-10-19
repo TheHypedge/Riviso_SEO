@@ -740,6 +740,9 @@ export type SeoAuditIssue = {
 
 export type SeoAuditIssueGroup = {
   rule_id: string;
+  /** Rule name/explanation from the backend registry (absent on older API responses). */
+  name?: string | null;
+  explanation?: string | null;
   category: string;
   severity: "issue" | "warning" | "opportunity";
   priority: "high" | "medium" | "low"; // shown as "Impact" in the UI
