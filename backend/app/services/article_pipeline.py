@@ -97,6 +97,22 @@ def _resolve_image_prompt(*, proj: dict, image_prompt_id: str | None) -> dict | 
     raise HTTPException(status_code=404, detail="Image prompt not found")
 
 
+_TRANSIENT_STATUSES = {"queued", "generating"}
+
+
+def resting_status(row: dict) -> str:
+    """The article's real status, seeing through the transient ``queued``/``generating``
+    markers the queue writes while a job is pending. Without this, regenerating a
+    published article read back "generating" and demoted it to draft (or to pending on
+    failure) even though the post stayed live on the CMS."""
+    s = (row.get("status") or "pending").strip().lower()
+    if s not in _TRANSIENT_STATUSES:
+        return s
+    if (row.get("wp_last_wp_status") or "").strip().lower() == "publish" or (row.get("shopify_published_at") or "").strip():
+        return "published"
+    return "draft" if (row.get("article") or "").strip() else "pending"
+
+
 async def execute_article_generation(
     *,
     st: Any,
@@ -273,9 +289,7 @@ async def execute_article_generation(
         "generated_at": gen["generated_at"],
         # image_url is NOT set here by default — it is only written when a new
         # image was successfully generated so we never erase an existing image.
-        "status": "draft"
-        if ((row.get("status") or "pending").strip().lower() != "published")
-        else (row.get("status") or "published"),
+        "status": "published" if resting_status(row) == "published" else "draft",
     }
     if generate_image and image_url:
         # New image generated successfully — write it

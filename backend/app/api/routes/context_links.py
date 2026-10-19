@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.deps import get_current_user
 from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
+from app.services.context_links import is_safe_link_url
 
 router = APIRouter(prefix="/projects/{project_id}/context-links", tags=["context-links"])
 
@@ -16,14 +19,55 @@ class ContextLinkItem(BaseModel):
     url: str
 
 
+def _clean_label(v: str) -> str:
+    v = " ".join((v or "").split())
+    if not v:
+        raise ValueError("Phrase is required.")
+    return v
+
+
+def _clean_url(v: str) -> str:
+    v = (v or "").strip()
+    # These hrefs are injected into clients' live posts: http(s) with a host only.
+    if not is_safe_link_url(v):
+        raise ValueError("URL must be a full http:// or https:// address.")
+    return v
+
+
 class ContextLinkCreate(BaseModel):
-    label: str = Field(default="", max_length=200)
+    label: str = Field(max_length=200)
     url: str = Field(min_length=1, max_length=2048)
+
+    @field_validator("label")
+    @classmethod
+    def _label(cls, v: str) -> str:
+        return _clean_label(v)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, v: str) -> str:
+        return _clean_url(v)
 
 
 class ContextLinkUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=200)
     url: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("label")
+    @classmethod
+    def _label(cls, v: str | None) -> str | None:
+        return None if v is None else _clean_label(v)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, v: str | None) -> str | None:
+        return None if v is None else _clean_url(v)
+
+
+def _reject_duplicate_label(links: list[dict], label: str, *, except_id: str = "") -> None:
+    key = label.casefold()
+    if any((x.get("label") or "").casefold() == key and x.get("id") != except_id for x in links):
+        raise HTTPException(status_code=409, detail=f'The phrase "{label}" already has a context link.')
 
 
 def _require_project_access(*, st, user: dict, project_id: str) -> dict:
@@ -106,9 +150,8 @@ async def create_context_link(project_id: str, payload: ContextLinkCreate, user:
                     "remaining": 0,
                 },
             )
-    # id: simple deterministic-ish for now (safe)
-    new_id = f"cl_{len(links)+1}_{abs(hash(payload.url))%10_000_000}"
-    row = {"id": new_id, "label": payload.label.strip()[:200], "url": payload.url.strip()[:2048]}
+    _reject_duplicate_label(links, payload.label)
+    row = {"id": f"cl_{uuid.uuid4().hex[:16]}", "label": payload.label[:200], "url": payload.url[:2048]}
     links.append(row)
     st.update_project_fields(project_id, {"context_links": links})
     return ContextLinkItem(**row)
@@ -129,9 +172,10 @@ async def update_context_link(
     for x in links:
         if (x.get("id") or "").strip() == lid:
             if payload.label is not None:
-                x["label"] = payload.label.strip()[:200]
+                _reject_duplicate_label(links, payload.label, except_id=lid)
+                x["label"] = payload.label[:200]
             if payload.url is not None:
-                x["url"] = payload.url.strip()[:2048]
+                x["url"] = payload.url[:2048]
             found = x
             break
     if not found:

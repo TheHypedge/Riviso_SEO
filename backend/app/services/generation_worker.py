@@ -228,10 +228,13 @@ async def _handle_article_generate(payload: dict) -> None:
         else:
             err_msg = str(exc) or "Generation failed — check server logs."
         await _persist_article_generation_error(st, aid, err_msg)
-        # Return to pending so the article is actionable again (user can retry from editor).
+        # Restore the article's real status so it is actionable again (retry from the
+        # editor) without demoting an already-published article to pending.
         try:
             if hasattr(st, "patch_article_fields"):
-                await run_sync(st.patch_article_fields, aid, {"status": "pending"})
+                from app.services.article_pipeline import resting_status
+
+                await run_sync(st.patch_article_fields, aid, {"status": resting_status(row)})
         except Exception:
             pass
         raise
