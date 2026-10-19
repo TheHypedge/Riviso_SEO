@@ -14,6 +14,7 @@ class ScheduledJobPublic(BaseModel):
     writing_prompt_id: str | None = None
     image_prompt_id: str | None = None
     generate_image: bool = True
+    inner_image_count: int = 0
     state: str = "scheduled"  # scheduled|posting|posted|failed|cancelled
     last_error: str | None = None
     attempts: int = 0
@@ -38,6 +39,7 @@ class ScheduledJobUpdate(BaseModel):
     writing_prompt_id: str | None = Field(default=None, max_length=100)
     image_prompt_id: str | None = Field(default=None, max_length=100)
     generate_image: bool | None = None
+    inner_image_count: int | None = Field(default=None, ge=0, le=5)
     user_timezone: str | None = Field(default=None, max_length=64)
 
 

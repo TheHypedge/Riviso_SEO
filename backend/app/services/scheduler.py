@@ -226,7 +226,7 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
 
     try:
         if needs_content:
-            await execute_article_generation(
+            result = await execute_article_generation(
                 st=st,
                 user=user,
                 proj=proj,
@@ -240,6 +240,19 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
                 mapped_products=mapped_products if isinstance(mapped_products, list) else None,
                 mapped_pages=mapped_pages if isinstance(mapped_pages, list) else None,
             )
+            inner_count = int(job.get("inner_image_count") or 0)
+            if inner_count > 0:
+                from app.services.inner_images import add_inner_images
+
+                await add_inner_images(
+                    st=st,
+                    user=user,
+                    project_id=pid,
+                    article_id=aid,
+                    title=(art.get("title") or "").strip(),
+                    markdown=((result or {}).get("generated") or {}).get("article") or "",
+                    count=inner_count,
+                )
         elif generate_image and needs_image:
             await execute_featured_image_regeneration(
                 st=st,
@@ -1052,8 +1065,25 @@ async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_c
         raise RuntimeError(err) from e
 
 
+# Longest a prep job can legitimately run (generation with a slow reasoning model, image,
+# inner charts) before its "generating" state is treated as abandoned.
+_STALLED_PREP_MINUTES = 45
+
+
+def _prep_stalled(job: dict, now: datetime) -> bool:
+    try:
+        updated = datetime.strptime((job.get("updated_at") or "").strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return False
+    return now.astimezone(timezone.utc) - updated > timedelta(minutes=_STALLED_PREP_MINUTES)
+
+
 async def _heal_premature_generating_jobs(*, st, now: datetime) -> None:
-    """Reset far-future jobs stuck in generating state after legacy immediate bulk enqueue."""
+    """Return jobs stuck in a generating state to ``scheduled`` so they are picked up again:
+    far-future jobs left there by the legacy immediate bulk enqueue, and jobs whose prep
+    was abandoned (worker restarted mid-job, e.g. during a deploy). The due-job runner only
+    loads ``scheduled``/``ready_to_post``, so without this an abandoned prep for a job that
+    is already due stays stuck forever and the article never publishes."""
     from app.services.schedule_timing import is_within_scheduled_prep_window
 
     if not hasattr(st, "load_scheduled_jobs"):
@@ -1069,7 +1099,9 @@ async def _heal_premature_generating_jobs(*, st, now: datetime) -> None:
         if st_name not in {"content_generating", "image_generating"}:
             continue
         run_at = (j.get("run_at") or "").strip()
-        if not run_at or is_within_scheduled_prep_window(run_at, now=now):
+        if not run_at:
+            continue
+        if is_within_scheduled_prep_window(run_at, now=now) and not _prep_stalled(j, now):
             continue
         jid = (j.get("id") or "").strip()
         if not jid:

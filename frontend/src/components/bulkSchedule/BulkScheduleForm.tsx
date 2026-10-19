@@ -72,6 +72,8 @@ export function BulkScheduleForm({
     setPostsPerMonth,
     preferredTime,
     setPreferredTime,
+    startDate,
+    setStartDate,
     wpStatus,
     setWpStatus,
     postType,
@@ -80,6 +82,8 @@ export function BulkScheduleForm({
     setWritingPromptId,
     imagePromptId,
     setImagePromptId,
+    innerImageCount,
+    setInnerImageCount,
     categoryIds,
     setCategoryIds,
     wpCatsForSchedule: cats,
@@ -98,6 +102,24 @@ export function BulkScheduleForm({
     }
     await onSubmit(getValues());
   }
+
+  const minStartDate = bulkScheduleMin.slice(0, 10);
+  const startDateField = (
+    <label className={styles.label}>
+      Start date
+      <span className={styles.bulkScheduleFieldHint}>
+        First article publishes on the first posting day on or after this date.
+      </span>
+      <input
+        className={styles.input}
+        type="date"
+        value={startDate || minStartDate}
+        min={minStartDate || undefined}
+        disabled={submitting}
+        onChange={(e) => startTransition(() => setStartDate(e.target.value))}
+      />
+    </label>
+  );
 
   return (
     <>
@@ -248,6 +270,28 @@ export function BulkScheduleForm({
                 </select>
               </label>
             </div>
+            <div className={styles.bulkScheduleFieldRow}>
+              <span className={styles.bulkScheduleFieldIcon} aria-hidden="true">
+                <Icon.Image className={styles.icon18} />
+              </span>
+              <label className={styles.bulkScheduleFieldControl}>
+                <span className={styles.bulkScheduleFieldLabel}>No. of inner article image</span>
+                <input
+                  type="number"
+                  className={styles.bulkScheduleInput}
+                  min={0}
+                  max={5}
+                  step={1}
+                  value={innerImageCount}
+                  onChange={(e) => setInnerImageCount(Math.max(0, Math.min(5, Math.trunc(Number(e.target.value) || 0))))}
+                  disabled={submitting}
+                  aria-describedby="bulk-inner-image-hint"
+                />
+                <span id="bulk-inner-image-hint" className={styles.muted} style={{ fontSize: 11.5 }}>
+                  0–5. Data charts built from the numbers in each article, placed between sections. Sections without data are skipped, so an article may get fewer. Applies only to articles this schedule generates.
+                </span>
+              </label>
+            </div>
           </div>
         </section>
 
@@ -318,6 +362,7 @@ export function BulkScheduleForm({
                   </div>
                 </div>
                 <div className={styles.bulkScheduleCadenceFieldsRow}>
+                  {startDateField}
                   <label className={styles.label}>
                     Articles per week
                     <span className={styles.bulkScheduleFieldHint}>
@@ -383,6 +428,7 @@ export function BulkScheduleForm({
                   </div>
                 </div>
                 <div className={styles.bulkScheduleCadenceFieldsRow}>
+                  {startDateField}
                   <label className={styles.label}>
                     Total monthly articles
                     <span className={styles.bulkScheduleFieldHint}>

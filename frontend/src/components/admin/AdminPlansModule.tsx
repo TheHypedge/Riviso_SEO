@@ -24,6 +24,7 @@ const COMPARE_ROWS: { label: string; get: (p: PlanPublic) => { text: string; kin
   { label: "Writing Prompts", get: (p) => limitCell(p.max_writing_prompts) },
   { label: "Image Prompts", get: (p) => limitCell(p.max_image_prompts) },
   { label: "Image Regen / Article", get: (p) => limitCell(p.max_article_image_regenerations) },
+  { label: "Inner Article Images / Month", get: (p) => limitCell(p.max_inner_images_per_month) },
 ];
 
 // Card feature rows (subset shown on plan card)
@@ -94,6 +95,7 @@ function emptyDraft(): Partial<PlanPublic> & { key: string } {
     max_image_prompts: null,
     image_prompt_char_limit: null,
     max_article_image_regenerations: null,
+    max_inner_images_per_month: null,
     is_default: false,
     is_trial_plan: false,
     trial_period_days: 14,
@@ -586,6 +588,12 @@ function EditView({
                 hint="0 or Unlimited = no cap per article"
                 value={draft.max_article_image_regenerations}
                 onChange={(v) => setDraft({ max_article_image_regenerations: v })}
+              />
+              <UnlimitedField
+                label="Inner Article Images / Month"
+                hint="Images added inside scheduled articles. Unlimited = no cap"
+                value={draft.max_inner_images_per_month}
+                onChange={(v) => setDraft({ max_inner_images_per_month: v })}
               />
             </div>
           </AccordionSection>

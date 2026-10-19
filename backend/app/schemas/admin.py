@@ -111,6 +111,7 @@ class PlanPublic(BaseModel):
     max_context_links: int | None = None
     max_article_image_regenerations: int | None = None
     max_image_prompt_tests_per_month: int | None = None
+    max_inner_images_per_month: int | None = None
     is_trial_plan: bool | None = None
     trial_period_days: int | None = Field(default=None, description="Trial validity in days when is_trial_plan is true.")
     extra: dict[str, Any] | None = None
@@ -155,6 +156,7 @@ class PlanUpsert(BaseModel):
     max_context_links: int | None = None
     max_article_image_regenerations: int | None = None
     max_image_prompt_tests_per_month: int | None = None
+    max_inner_images_per_month: int | None = None
     is_trial_plan: bool | None = None
     trial_period_days: int | None = None
     extra: dict[str, Any] | None = None

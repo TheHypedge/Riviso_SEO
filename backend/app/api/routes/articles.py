@@ -2512,6 +2512,7 @@ async def _persist_schedule_row(
     enqueue_preparation: bool = True,
     skip_article_update: bool = False,
     category_ids_override: str | None = None,
+    inner_image_count: int = 0,
 ) -> dict:
     """Write article + scheduled-job rows; optionally queue background prep (non-blocking).
 
@@ -2575,6 +2576,7 @@ async def _persist_schedule_row(
             "writing_prompt_id": writing_prompt_id,
             "image_prompt_id": image_prompt_id,
             "generate_image": generate_image,
+            "inner_image_count": inner_image_count,
             "state": "scheduled",
             "attempts": 0,
             "last_attempt_at": "",
@@ -2750,6 +2752,7 @@ async def bulk_schedule_articles(
             enqueue_preparation=False,
             skip_article_update=True,
             category_ids_override=category_ids_raw,
+            inner_image_count=payload.inner_image_count,
         )
         if job_row:
             prep_rows.append((art, job_row))
@@ -2806,6 +2809,7 @@ async def schedule_article(
         image_prompt_id=(payload.image_prompt_id or "").strip(),
         generate_image=bool(payload.generate_image),
         enqueue_preparation=True,
+        inner_image_count=payload.inner_image_count,
     )
     return {
         "ok": True,

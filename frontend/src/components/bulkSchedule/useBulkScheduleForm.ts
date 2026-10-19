@@ -36,6 +36,7 @@ export type BulkScheduleFormValues = {
   writingPromptId: string;
   imagePromptId: string;
   generateImage: boolean;
+  innerImageCount: number;
   categoryIds: number[];
 };
 
@@ -67,7 +68,8 @@ export function useBulkScheduleForm({
   const [bulkScheduleMin, setBulkScheduleMin] = useState("");
   const [manualWhen, setManualWhen] = useState<Record<string, string>>({});
   const [mode, setMode] = useState<BulkScheduleMode>("manual");
-  const [startWhen, setStartWhen] = useState("");
+  /** YYYY-MM-DD in profile TZ; "" = earliest allowed. Weekly/monthly cadences start on or after it. */
+  const [startDate, setStartDate] = useState("");
   const [preferredTime, setPreferredTime] = useState("09:00");
   const [articlesPerWeek, setArticlesPerWeek] = useState(1);
   const [weekdays, setWeekdays] = useState<WeekdayIso[]>([1]);
@@ -76,13 +78,14 @@ export function useBulkScheduleForm({
   const [postType, setPostType] = useState("posts");
   const [writingPromptId, setWritingPromptId] = useState("");
   const [imagePromptId, setImagePromptId] = useState("");
+  const [innerImageCount, setInnerImageCount] = useState(0);
   const [categoryIds, setCategoryIds] = useState<number[]>([]);
 
   const initFromSeeds = useCallback(
     (rows: BulkScheduleSeedRow[]) => {
       const minStr = buildMinStr();
       setBulkScheduleMin(minStr);
-      setStartWhen(minStr);
+      setStartDate("");
       setPreferredTime(preferredTimeFromDatetimeLocal(minStr));
       setMode("manual");
       setArticlesPerWeek(1);
@@ -94,6 +97,7 @@ export function useBulkScheduleForm({
         defaults?.writing_prompt_id || scheduleWritingPrompts?.default_id || "",
       );
       setImagePromptId(defaults?.image_prompt_id || scheduleImagePrompts?.default_id || "");
+      setInnerImageCount(0);
       // No project-level "default category" to prefill from (unlike wpStatus/postType)
       // -- start empty every time the form opens with a fresh batch, requiring an
       // explicit choice rather than silently carrying over a previous batch's picks.
@@ -128,14 +132,14 @@ export function useBulkScheduleForm({
   const cadenceInputs = useMemo(
     () => ({
       mode,
-      startWhen,
+      startDate,
       preferredTime,
       articlesPerWeek,
       weekdays,
       postsPerMonth,
       min: bulkScheduleMin,
     }),
-    [mode, startWhen, preferredTime, articlesPerWeek, weekdays, postsPerMonth, bulkScheduleMin],
+    [mode, startDate, preferredTime, articlesPerWeek, weekdays, postsPerMonth, bulkScheduleMin],
   );
   const deferredCadence = useDeferredValue(cadenceInputs);
 
@@ -147,11 +151,14 @@ export function useBulkScheduleForm({
       when: manualWhen[r.id] || min,
     }));
     if (deferredCadence.mode === "manual" || base.length < 2) return base;
+    // Same format + same timezone, so string order is chronological order.
+    const startMin = deferredCadence.startDate ? `${deferredCadence.startDate}T00:00` : "";
+    const cadenceMin = startMin > min ? startMin : min;
     return applyBulkScheduleDates({
       mode: deferredCadence.mode,
       rows: base,
-      startWhen: deferredCadence.startWhen || min,
-      minWhen: min,
+      startWhen: cadenceMin,
+      minWhen: cadenceMin,
       timeZone: scheduleTimeZone,
       articlesPerWeek: deferredCadence.articlesPerWeek,
       weekdays: deferredCadence.weekdays,
@@ -231,9 +238,10 @@ export function useBulkScheduleForm({
       writingPromptId,
       imagePromptId,
       generateImage: true,
+      innerImageCount,
       categoryIds,
     };
-  }, [rows, mode, wpStatus, postType, writingPromptId, imagePromptId, categoryIds]);
+  }, [rows, mode, wpStatus, postType, writingPromptId, imagePromptId, innerImageCount, categoryIds]);
 
   return {
     rows,
@@ -250,6 +258,8 @@ export function useBulkScheduleForm({
     setPostsPerMonth,
     preferredTime,
     setPreferredTime,
+    startDate,
+    setStartDate,
     wpStatus,
     setWpStatus,
     postType,
@@ -258,6 +268,8 @@ export function useBulkScheduleForm({
     setWritingPromptId,
     imagePromptId,
     setImagePromptId,
+    innerImageCount,
+    setInnerImageCount,
     categoryIds,
     setCategoryIds,
     setManualWhen,

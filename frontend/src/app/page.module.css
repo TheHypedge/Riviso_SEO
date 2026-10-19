@@ -1309,7 +1309,8 @@
 
 .bulkScheduleCadenceFieldsRow {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
   gap: 16px 20px;
 }
 
@@ -5858,12 +5859,24 @@
   font-style: italic;
 }
 
+/* One card holding the three audit donuts side by side. */
 .seoAuditOverviewGrid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 20px;
   align-items: start;
   width: 100%;
+  max-width: none;
+}
+.seoAuditOverviewGrid:empty {
+  display: none;
+}
+.seoAuditOverviewGrid .seoAuditDonutCard {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 @media (max-width: 900px) {
   .seoAuditOverviewGrid {

@@ -393,6 +393,8 @@ class ScheduleRequest(BaseModel):
     writing_prompt_id: str | None = Field(default=None, max_length=100)
     image_prompt_id: str | None = Field(default=None, max_length=100)
     generate_image: bool = True
+    # Inner (in-body) images added when this schedule generates the article; 0 = none.
+    inner_image_count: int = Field(default=0, ge=0, le=5)
     # Client-supplied IANA timezone (e.g. "Asia/Kolkata"). When present, takes
     # precedence over the stored profile timezone so scheduling works correctly
     # even when the user has never explicitly saved their profile timezone.
@@ -416,6 +418,7 @@ class BulkScheduleRequest(BaseModel):
     writing_prompt_id: str | None = Field(default=None, max_length=100)
     image_prompt_id: str | None = Field(default=None, max_length=100)
     generate_image: bool = True
+    inner_image_count: int = Field(default=0, ge=0, le=5)
     user_timezone: str | None = Field(default=None, max_length=64)
     # Batch-level category override. None (field omitted) means "no override" --
     # preserves the existing per-article/project-default behavior. An empty list is

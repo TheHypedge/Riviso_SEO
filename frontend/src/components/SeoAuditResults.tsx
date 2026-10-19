@@ -778,6 +778,7 @@ export function SeoAuditTopIssuesTable({
   styles: CssModule;
 }) {
   const [groups, setGroups] = useState<SeoAuditIssueGroup[]>([]);
+  const [sort, setSort] = useState<{ key: TopIssuesSortKey; dir: "asc" | "desc" } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -801,14 +802,37 @@ export function SeoAuditTopIssuesTable({
 
   if (loading) return null;
 
-  const top5 = groups.slice(0, 5);
+  // Default (no sort) keeps the server's priority order.
+  const sorted = sort
+    ? [...groups].sort((x, y) => {
+        const diff =
+          sort.key === "urls"
+            ? x.affected_urls - y.affected_urls
+            : (LEVEL_RANK[x[sort.key] || ""] || 0) - (LEVEL_RANK[y[sort.key] || ""] || 0);
+        return sort.dir === "asc" ? diff : -diff;
+      })
+    : groups;
+  const top5 = sorted.slice(0, 5);
+  const toggleSort = (key: TopIssuesSortKey) =>
+    setSort((prev) => (prev?.key === key ? { key, dir: prev.dir === "desc" ? "asc" : "desc" } : { key, dir: "desc" }));
+  const sortHeader = (key: TopIssuesSortKey, label: string) => (
+    <SortHeaderButton label={label} active={sort?.key === key} dir={sort?.key === key ? sort.dir : null} onClick={() => toggleSort(key)} />
+  );
+  const ariaSort = (key: TopIssuesSortKey) => (sort?.key === key ? (sort.dir === "asc" ? "ascending" : "descending") : undefined);
 
   return (
     <div className={`${styles.card} ${styles.cardWide}`}>
       <div className={styles.analyticsHeaderRow}>
-        <h3 className={styles.sectionTitle} style={{ fontSize: 15 }}>
-          Top Issues
-        </h3>
+        <div>
+          <h3 className={styles.sectionTitle} style={{ fontSize: 15 }}>
+            Top Issues
+          </h3>
+          {groups.length > 0 ? (
+            <p className={styles.muted} style={{ margin: "2px 0 0", fontSize: 12 }}>
+              Showing {top5.length} of {groups.length} issue type{groups.length === 1 ? "" : "s"}
+            </p>
+          ) : null}
+        </div>
         {groups.length > 0 ? (
           <button type="button" className={styles.siteAuditViewAllBtn} onClick={onViewAll}>
             View all issues →
@@ -824,35 +848,73 @@ export function SeoAuditTopIssuesTable({
           <DataTableHead>
             <DataTableRow>
               <DataTableHeaderCell>Issue</DataTableHeaderCell>
-              <DataTableHeaderCell>URLs</DataTableHeaderCell>
-              <DataTableHeaderCell>% of Total</DataTableHeaderCell>
-              <DataTableHeaderCell>Impact</DataTableHeaderCell>
-              <DataTableHeaderCell>Effort</DataTableHeaderCell>
+              <DataTableHeaderCell>Severity</DataTableHeaderCell>
+              <DataTableHeaderCell className="text-right" aria-sort={ariaSort("urls")}>
+                {sortHeader("urls", "URLs")}
+              </DataTableHeaderCell>
+              <DataTableHeaderCell className="text-right">% of Total</DataTableHeaderCell>
+              <DataTableHeaderCell aria-sort={ariaSort("priority")}>{sortHeader("priority", "Impact")}</DataTableHeaderCell>
+              <DataTableHeaderCell aria-sort={ariaSort("effort")}>{sortHeader("effort", "Effort")}</DataTableHeaderCell>
             </DataTableRow>
           </DataTableHead>
           <DataTableBody>
-            {top5.map((g) => (
-              <DataTableRow key={g.rule_id}>
-                <DataTableCell>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontWeight: 600 }}>{g.category}</span>
+            {top5.map((g) => {
+              const pct = totalCrawled > 0 ? Math.min(100, (g.affected_urls / totalCrawled) * 100) : null;
+              return (
+                <DataTableRow key={g.rule_id}>
+                  <DataTableCell className="max-w-[320px] truncate font-semibold" title={g.category}>
+                    {g.category}
+                  </DataTableCell>
+                  <DataTableCell className="whitespace-nowrap">
                     <span className={severityPillClass(styles, g.severity)}>{SEVERITY_LABELS[g.severity] || g.severity}</span>
-                  </div>
-                </DataTableCell>
-                <DataTableCell>{g.affected_urls.toLocaleString()}</DataTableCell>
-                <DataTableCell>{totalCrawled > 0 ? `${((g.affected_urls / totalCrawled) * 100).toFixed(2)}%` : "—"}</DataTableCell>
-                <DataTableCell>
-                  <span style={{ color: levelColor(g.priority), fontWeight: 600 }}>{LEVEL_LABELS[g.priority] || g.priority}</span>
-                </DataTableCell>
-                <DataTableCell>
-                  <span style={{ color: levelColor(g.effort), fontWeight: 600 }}>{g.effort ? LEVEL_LABELS[g.effort] || g.effort : "—"}</span>
-                </DataTableCell>
-              </DataTableRow>
-            ))}
+                  </DataTableCell>
+                  <DataTableCell className="text-right tabular-nums">{g.affected_urls.toLocaleString()}</DataTableCell>
+                  <DataTableCell className="text-right tabular-nums">
+                    {pct == null ? (
+                      "—"
+                    ) : (
+                      <span className="inline-flex items-center justify-end gap-2">
+                        <span className="h-1.5 w-16 overflow-hidden rounded-full bg-surface-sunken" aria-hidden="true">
+                          <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: SEVERITY_BAR_COLORS[g.severity] }} />
+                        </span>
+                        <span className="w-12">{pct.toFixed(1)}%</span>
+                      </span>
+                    )}
+                  </DataTableCell>
+                  <DataTableCell>
+                    <LevelChip level={g.priority} />
+                  </DataTableCell>
+                  <DataTableCell>
+                    <LevelChip level={g.effort} />
+                  </DataTableCell>
+                </DataTableRow>
+              );
+            })}
           </DataTableBody>
         </DataTable>
       )}
     </div>
+  );
+}
+
+type TopIssuesSortKey = "urls" | "priority" | "effort";
+
+const LEVEL_RANK: Record<string, number> = { low: 1, medium: 2, high: 3 };
+
+const SEVERITY_BAR_COLORS: Record<string, string> = {
+  issue: "var(--aa-error, #c64545)",
+  warning: "var(--aa-warning, #d4a017)",
+  opportunity: "var(--aa-info, #4a90d9)",
+};
+
+/** Dot + label so the level never relies on colour alone. */
+function LevelChip({ level }: { level?: string }) {
+  if (!level) return <span className="text-ink-tertiary">—</span>;
+  return (
+    <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-medium">
+      <span className="h-2 w-2 rounded-full" style={{ background: levelColor(level) }} aria-hidden="true" />
+      {LEVEL_LABELS[level] || level}
+    </span>
   );
 }
 

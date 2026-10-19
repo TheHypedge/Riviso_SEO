@@ -225,6 +225,7 @@ def _to_public(row: dict) -> ScheduledJobPublic:
         writing_prompt_id=((row.get("writing_prompt_id") or "").strip() or None),
         image_prompt_id=((row.get("image_prompt_id") or "").strip() or None),
         generate_image=bool(row.get("generate_image", True)),
+        inner_image_count=max(0, min(5, int(row.get("inner_image_count") or 0))),
         state=(row.get("state") or "scheduled").strip(),
         last_error=(row.get("last_error") or "").strip() or None,
         attempts=int(row.get("attempts") or 0),
@@ -421,6 +422,8 @@ async def update_scheduled_job(
         updates["image_prompt_id"] = (payload.image_prompt_id or "").strip()[:100]
     if payload.generate_image is not None:
         updates["generate_image"] = bool(payload.generate_image)
+    if payload.inner_image_count is not None:
+        updates["inner_image_count"] = payload.inner_image_count
 
     # Rescheduling always returns the job to the queue (including failed / stuck generating).
     if prev_state in {"failed", "content_generating", "image_generating", "posting", "ready_to_post"}:

@@ -1230,6 +1230,9 @@ export default function ProjectPage() {
   const [linkUrl, setLinkUrl] = useState("");
   const [linkSearch, setLinkSearch] = useState("");
   const [linkPage, setLinkPage] = useState(1);
+  const [internalLinkPage, setInternalLinkPage] = useState(1);
+  const [externalLinkPage, setExternalLinkPage] = useState(1);
+  const [groupedLinksPage, setGroupedLinksPage] = useState(1);
   const [linkDuplicateConflicts, setLinkDuplicateConflicts] = useState<Array<{ phrase: string; conflict: LinkDraft }>>([]);
   const [linkSaveAttempted, setLinkSaveAttempted] = useState(false);
   // True once a link has actually been added, removed, or edited (drafts diverge from
@@ -1310,6 +1313,7 @@ export default function ProjectPage() {
   const [scheduleImagePrompts, setScheduleImagePrompts] = useState<PromptListResponse | null>(null);
   const [scheduleWritingPromptId, setScheduleWritingPromptId] = useState<string>("");
   const [scheduleImagePromptId, setScheduleImagePromptId] = useState<string>("");
+  const [scheduleInnerImageCount, setScheduleInnerImageCount] = useState(0);
 
   const [editJob, setEditJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
   const [editJobWhen, setEditJobWhen] = useState("");
@@ -3945,6 +3949,7 @@ export default function ProjectPage() {
         writing_prompt_id: scheduleWritingPromptId || null,
         image_prompt_id: scheduleImagePromptId || null,
         generate_image: true,
+        inner_image_count: scheduleInnerImageCount,
         user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
       // Optimistic UI update: scheduling should not block on re-fetching large lists,
@@ -3972,6 +3977,7 @@ export default function ProjectPage() {
       setSchedulePostType("posts");
       setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
       setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
+      setScheduleInnerImageCount(0);
     } catch (e) {
       if (showWebsiteConnectionErrorIfNeeded(e)) return;
       setError(e instanceof Error ? e.message : "Schedule failed");
@@ -4323,6 +4329,7 @@ export default function ProjectPage() {
         writing_prompt_id: values.writingPromptId || null,
         image_prompt_id: values.imagePromptId || null,
         generate_image: values.generateImage,
+        inner_image_count: values.innerImageCount,
         user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
         category_ids: values.categoryIds.length ? values.categoryIds : undefined,
       };
@@ -4422,6 +4429,7 @@ export default function ProjectPage() {
         writing_prompt_id: values.writingPromptId || null,
         image_prompt_id: values.imagePromptId || null,
         generate_image: values.generateImage,
+        inner_image_count: values.innerImageCount,
         user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
         category_ids: values.categoryIds.length ? values.categoryIds : undefined,
       });
@@ -7468,6 +7476,25 @@ export default function ProjectPage() {
                           </strong>
                         </div>
                       ) : null}
+                    </label>
+
+                    <label className={styles.label}>
+                      No. of inner article image
+                      <input
+                        type="number"
+                        className={styles.input}
+                        min={0}
+                        max={5}
+                        step={1}
+                        value={scheduleInnerImageCount}
+                        onChange={(e) => setScheduleInnerImageCount(Math.max(0, Math.min(5, Math.trunc(Number(e.target.value) || 0))))}
+                      />
+                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
+                        0–5. Data charts built from the numbers in the article, placed between sections. Sections without data are skipped, so you may get fewer. Applies only if this schedule generates the article.
+                        {featureLimits?.inner_images && !featureLimits.inner_images.unlimited && typeof featureLimits.inner_images.month_limit === "number"
+                          ? ` ${Math.max(0, featureLimits.inner_images.month_remaining ?? 0)} left this month.`
+                          : ""}
+                      </div>
                     </label>
 
                     <label className={styles.label}>
@@ -10796,6 +10823,20 @@ export default function ProjectPage() {
                                     {promptTestResult.final_prompt}
                                   </p>
                                 </details>
+                                {promptTestResult.prompt_text !== draftText.trim() ? (
+                                  <div style={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                    <span className={styles.muted} style={{ fontSize: 11.5 }}>
+                                      This image came from an earlier version of your prompt.
+                                    </span>
+                                    <button
+                                      type="button"
+                                      className={styles.btnSecondary}
+                                      onClick={() => setDraftText(promptTestResult.prompt_text)}
+                                    >
+                                      Use this prompt
+                                    </button>
+                                  </div>
+                                ) : null}
                               </div>
                             ) : null}
 
@@ -10921,6 +10962,140 @@ export default function ProjectPage() {
               const pageClamped = Math.min(Math.max(1, linkPage), totalPages);
               const pageItems = filtered.slice((pageClamped - 1) * pageSize, pageClamped * pageSize);
 
+              // Split the same filtered list into internal vs external links so the two
+              // sub-tables below stay in sync with the main table's search box, with no
+              // separate data model -- internal means "same host as the project's site,
+              // or a relative path"; everything else is external.
+              const siteHost = (() => {
+                const raw = settings?.wp_site_url || settings?.website_url || projectMeta?.website_url || "";
+                try {
+                  return new URL(raw).hostname.replace(/^www\./i, "").toLowerCase();
+                } catch {
+                  return "";
+                }
+              })();
+              const isInternalLink = (url: string) => {
+                const u = (url || "").trim();
+                if (!u) return true;
+                if (!/^https?:\/\//i.test(u)) return true;
+                try {
+                  const host = new URL(u).hostname.replace(/^www\./i, "").toLowerCase();
+                  return !siteHost || host === siteHost;
+                } catch {
+                  return true;
+                }
+              };
+              const internalItems = filtered.filter((x) => isInternalLink(x.url));
+              const externalItems = filtered.filter((x) => !isInternalLink(x.url));
+
+              // One row per unique URL, every phrase that targets it grouped together --
+              // same `filtered` list as above, just grouped by url instead of listed flat.
+              const groupedByUrl = (() => {
+                const order: string[] = [];
+                const map = new Map<string, string[]>();
+                for (const x of filtered) {
+                  const url = (x.url || "").trim();
+                  if (!url) continue;
+                  const label = (x.label || "").trim();
+                  if (!map.has(url)) {
+                    order.push(url);
+                    map.set(url, []);
+                  }
+                  if (label && !map.get(url)!.includes(label)) {
+                    map.get(url)!.push(label);
+                  }
+                }
+                return order.map((url) => ({ url, labels: map.get(url) || [] }));
+              })();
+
+              const renderLinkRow = (x: LinkDraft) => (
+                <tr key={x.id}>
+                  <td className={styles.td}>{x.label || "—"}</td>
+                  <td className={`${styles.td} ${styles.tdMuted}`}>{x.url}</td>
+                  <td className={styles.td}>
+                    <div className={styles.row}>
+                      <button
+                        className={styles.miniBtn}
+                        type="button"
+                        onClick={() => openLinkModal(x.id)}
+                        aria-label={`Edit context link “${x.label || x.url}”`}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className={`${styles.miniBtn} ${styles.miniDanger}`}
+                        type="button"
+                        onClick={() => markDeleteLink(x.id)}
+                        aria-label={`Delete context link “${x.label || x.url}”`}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+
+              const renderLinkSubTable = (
+                title: string,
+                items: LinkDraft[],
+                page: number,
+                setPage: (fn: (p: number) => number) => void,
+                emptyLabel: string,
+              ) => {
+                const subTotalPages = Math.max(1, Math.ceil(items.length / pageSize));
+                const subPageClamped = Math.min(Math.max(1, page), subTotalPages);
+                const subPageItems = items.slice((subPageClamped - 1) * pageSize, subPageClamped * pageSize);
+                return (
+                  <div className={`${styles.card} ${styles.cardWide}`}>
+                    <div className={styles.muted} style={{ fontSize: 12, marginBottom: 8 }}>
+                      {title} — {items.length} link(s)
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className={styles.table}>
+                        <thead>
+                          <tr>
+                            <th className={styles.th}>Exact phrase</th>
+                            <th className={styles.th}>Link</th>
+                            <th className={styles.th}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {subPageItems.map(renderLinkRow)}
+                          {subPageItems.length === 0 ? (
+                            <tr>
+                              <td className={styles.td} colSpan={3}>
+                                <span className={styles.muted}>{emptyLabel}</span>
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+                      <button
+                        className={styles.button}
+                        type="button"
+                        onClick={() => setPage((p) => Math.max(1, p - 1))}
+                        disabled={subPageClamped <= 1}
+                      >
+                        Prev
+                      </button>
+                      <span className={styles.muted} style={{ fontSize: 13 }}>
+                        Page {subPageClamped} / {subTotalPages}
+                      </span>
+                      <button
+                        className={styles.button}
+                        type="button"
+                        onClick={() => setPage((p) => Math.min(subTotalPages, p + 1))}
+                        disabled={subPageClamped >= subTotalPages}
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                );
+              };
+
               return (
                 <>
                   <div className={`${styles.card} ${styles.cardWide}`}>
@@ -10938,32 +11113,7 @@ export default function ProjectPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {pageItems.map((x) => (
-                        <tr key={x.id}>
-                          <td className={styles.td}>{x.label || "—"}</td>
-                          <td className={`${styles.td} ${styles.tdMuted}`}>{x.url}</td>
-                          <td className={styles.td}>
-                            <div className={styles.row}>
-                              <button
-                                className={styles.miniBtn}
-                                type="button"
-                                onClick={() => openLinkModal(x.id)}
-                                aria-label={`Edit context link “${x.label || x.url}”`}
-                              >
-                                Edit
-                              </button>
-                              <button
-                                className={`${styles.miniBtn} ${styles.miniDanger}`}
-                                type="button"
-                                onClick={() => markDeleteLink(x.id)}
-                                aria-label={`Delete context link “${x.label || x.url}”`}
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
+                      {pageItems.map(renderLinkRow)}
                       {pageItems.length === 0 ? (
                         <tr>
                           <td className={styles.td} colSpan={3}>
@@ -10995,6 +11145,98 @@ export default function ProjectPage() {
                       Next
                     </button>
                   </div>
+
+                  <div className={styles.twoCol} style={{ marginTop: 20 }}>
+                    {renderLinkSubTable(
+                      "Internal links",
+                      internalItems,
+                      internalLinkPage,
+                      setInternalLinkPage,
+                      "No internal links yet.",
+                    )}
+                    {renderLinkSubTable(
+                      "External links",
+                      externalItems,
+                      externalLinkPage,
+                      setExternalLinkPage,
+                      "No external links yet.",
+                    )}
+                  </div>
+
+                  {(() => {
+                    const groupPageSize = 10;
+                    const groupTotalPages = Math.max(1, Math.ceil(groupedByUrl.length / groupPageSize));
+                    const groupPageClamped = Math.min(Math.max(1, groupedLinksPage), groupTotalPages);
+                    const groupPageItems = groupedByUrl.slice(
+                      (groupPageClamped - 1) * groupPageSize,
+                      groupPageClamped * groupPageSize,
+                    );
+                    return (
+                      <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 20 }}>
+                        <div className={styles.muted} style={{ fontSize: 12, marginBottom: 8 }}>
+                          Links grouped by keyword — {groupedByUrl.length} unique link(s)
+                        </div>
+                        <div style={{ overflowX: "auto" }}>
+                          <table className={styles.table}>
+                            <thead>
+                              <tr>
+                                <th className={styles.th}>Link</th>
+                                <th className={styles.th}>Keywords pointing to this link</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {groupPageItems.map((g) => (
+                                <tr key={g.url}>
+                                  <td className={`${styles.td} ${styles.tdMuted}`}>{g.url}</td>
+                                  <td className={styles.td}>
+                                    {g.labels.length ? (
+                                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                        {g.labels.map((l) => (
+                                          <span key={l} className={styles.pill}>
+                                            {l}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <span className={styles.muted}>—</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                              {groupPageItems.length === 0 ? (
+                                <tr>
+                                  <td className={styles.td} colSpan={2}>
+                                    <span className={styles.muted}>No links match your search.</span>
+                                  </td>
+                                </tr>
+                              ) : null}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+                          <button
+                            className={styles.button}
+                            type="button"
+                            onClick={() => setGroupedLinksPage((p) => Math.max(1, p - 1))}
+                            disabled={groupPageClamped <= 1}
+                          >
+                            Prev
+                          </button>
+                          <span className={styles.muted} style={{ fontSize: 13 }}>
+                            Page {groupPageClamped} / {groupTotalPages}
+                          </span>
+                          <button
+                            className={styles.button}
+                            type="button"
+                            onClick={() => setGroupedLinksPage((p) => Math.min(groupTotalPages, p + 1))}
+                            disabled={groupPageClamped >= groupTotalPages}
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </>
               );
             })()}
@@ -12073,7 +12315,7 @@ export default function ProjectPage() {
                             <TabsContent value="overview">
                               <div className={styles.analyticsStack}>
                                 <SeoAuditKpiStrip audit={displayedRun} projectId={projectId} history={seoAuditHistory} styles={styles} />
-                                <div className={styles.seoAuditOverviewGrid}>
+                                <div className={`${styles.card} ${styles.seoAuditOverviewGrid}`}>
                                   <SeoAuditIndexabilityDonut breakdown={displayedRun.counts.indexability_breakdown} styles={styles} />
                                   <SeoAuditStatusCodeDonut breakdown={displayedRun.counts.status_breakdown} styles={styles} />
                                   <SeoAuditLinksSplitDonut counts={displayedRun.counts} styles={styles} />

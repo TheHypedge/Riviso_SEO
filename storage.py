@@ -1197,6 +1197,17 @@ def consume_image_prompt_test_usage(user_id: str, *, month_limit: int | None, am
     )
 
 
+def consume_inner_image_usage(user_id: str, *, month_limit: int | None, amount: int = 1) -> tuple[bool, str]:
+    return _consume_monthly_counter(
+        user_id,
+        month_field="usage_monthly_inner_image_month",
+        count_field="usage_monthly_inner_image_count",
+        month_limit=month_limit,
+        amount=amount,
+        limit_message="Monthly inner article image limit reached for your plan.",
+    )
+
+
 _IMAGE_PROMPT_TEST_HISTORY_LIMIT = 5
 
 

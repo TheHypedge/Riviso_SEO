@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import logging
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -20,11 +24,13 @@ from app.schemas.prompts import (
     SetDefaultRequest,
 )
 from app.services.article_generation import generate_featured_image_only
+from app.services.cloudinary_storage import upload_image_bytes
 from app.services.generation_queue import generation_slot, user_generation_slot
 from app.services.plan_gatekeeper import PlanAction, require_plan_action_for_project
 from app.services.prompt_validation import validate_image_prompt
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["image-prompts"])
+_log = logging.getLogger(__name__)
 
 # Fixed, clearly-generic stand-in content for a prompt test -- there's no real
 # article to test against (per design: testing is content-agnostic, only the
@@ -264,17 +270,40 @@ async def test_image_prompt(
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
+    row_id = str(uuid.uuid4())
+    image_url = gen["image_url"]
+    # gpt-image-* returns base64, so image_url is a multi-MB data: URL. Writing that into
+    # a Mongo doc times out (surfaces as a 503 "Database temporarily unavailable") -- host
+    # it on Cloudinary like article media and store only the short URL.
+    m = re.match(r"^data:([^;]+);base64,(.+)$", image_url, flags=re.DOTALL)
+    if m:
+        uploaded = await asyncio.to_thread(
+            upload_image_bytes,
+            base64.b64decode(m.group(2)),
+            folder=f"riviso/image-prompt-tests/{project_id}",
+            public_id=row_id,
+        )
+        if uploaded:
+            image_url = uploaded["secure_url"]
+
     row = {
-        "id": str(uuid.uuid4()),
+        "id": row_id,
         "project_id": project_id,
         "image_prompt_id": payload.prompt_id.strip(),
         "prompt_text": text,
         "final_prompt": gen["image_prompt"],
-        "image_url": gen["image_url"],
+        "image_url": image_url,
         "model": gen["model"],
         "created_at": _now_iso(),
     }
-    st.create_image_prompt_test(row)
+    # History is best-effort: the image is already generated (and paid for), so a failed
+    # history write must not throw the preview away. A data: URL means Cloudinary was
+    # unavailable -- return it for the preview but never persist it.
+    if not image_url.startswith("data:"):
+        try:
+            await asyncio.to_thread(st.create_image_prompt_test, row)
+        except Exception:
+            _log.warning("image prompt test history write failed", exc_info=True)
     return ImagePromptTestResult(**row)
 
 

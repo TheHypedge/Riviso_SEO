@@ -129,6 +129,7 @@ export type PlanPublic = {
   max_seo_audit_urls_per_crawl?: number | null;
   max_context_links?: number | null;
   max_article_image_regenerations?: number | null;
+  max_inner_images_per_month?: number | null;
   is_trial_plan?: boolean | null;
   trial_period_days?: number | null;
 };
@@ -246,6 +247,7 @@ export type ProjectFeatureLimits = {
   seo_audit?: MonthlyFeatureLimit;
   ai_citations?: MonthlyFeatureLimit;
   image_prompt_tests?: MonthlyFeatureLimit;
+  inner_images?: MonthlyFeatureLimit;
   scheduled_articles?: MonthlyFeatureLimit;
   export_articles?: MonthlyFeatureLimit;
   context_links: CountFeatureLimit;
@@ -1056,6 +1058,7 @@ export type ScheduledJobPublic = {
   writing_prompt_id?: string | null;
   image_prompt_id?: string | null;
   generate_image?: boolean;
+  inner_image_count?: number;
   state: string;
   last_error?: string | null;
   attempts: number;
@@ -3692,6 +3695,7 @@ export const api = {
       writing_prompt_id?: string | null;
       image_prompt_id?: string | null;
       generate_image?: boolean;
+      inner_image_count?: number;
       user_timezone?: string;
     },
   ) {
@@ -3712,6 +3716,7 @@ export const api = {
       writing_prompt_id?: string | null;
       image_prompt_id?: string | null;
       generate_image?: boolean;
+      inner_image_count?: number;
       user_timezone?: string;
       category_ids?: number[];
     },
