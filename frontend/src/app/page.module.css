@@ -11537,13 +11537,6 @@ a.secondary {
   gap: var(--aa-s-md);
   flex-wrap: wrap;
 }
-.siteAuditWebsiteBar {
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--aa-s-sm);
-}
 .siteAuditWebsiteMeta {
   display: flex;
   align-items: center;

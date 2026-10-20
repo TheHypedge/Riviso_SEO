@@ -11872,9 +11872,31 @@ export default function ProjectPage() {
                 <div className={styles.siteAuditPageHeader}>
                   <div>
                     <h2 className={styles.sectionTitle}>Technical Audit</h2>
-                    <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 13 }}>
-                      Google PageSpeed Insights performance, Core Web Vitals, and accessibility for your site.
-                    </p>
+                    {(() => {
+                      const viewing = selectedHistoricalRunId ? technicalAuditHistory.find((r) => r.id === selectedHistoricalRunId) || null : null;
+                      if (technicalAudit && !technicalAudit.website?.connected) {
+                        return (
+                          <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 13 }}>
+                            Website not connected. Connect a website in Project Settings to run a Technical Audit.
+                          </p>
+                        );
+                      }
+                      return technicalAudit?.audit ? (
+                        <div className={styles.siteAuditWebsiteMeta} style={{ marginTop: 4 }}>
+                          <span className={styles.muted} style={{ fontSize: 13 }}>
+                            Last audited: {formatSiteAuditTimestamp(technicalAudit.audit.created_at)}
+                          </span>
+                          {viewing ? (
+                            <span className={styles.siteAuditViewingChip} role="status">
+                              Viewing audit from {formatSiteAuditTimestamp(viewing.created_at)}
+                              <button type="button" className={styles.btnSecondary} onClick={() => setSelectedHistoricalRunId(null)}>
+                                Back to latest
+                              </button>
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null;
+                    })()}
                   </div>
                   <div className={styles.analyticsHeaderActions}>
                     {!technicalAudit && technicalAuditBusy ? (
@@ -11910,52 +11932,6 @@ export default function ProjectPage() {
                       </button>
                     ) : null}
                   </div>
-                </div>
-
-                {/* B. Website bar */}
-                <div className={`${styles.card} ${styles.cardWide} ${styles.siteAuditWebsiteBar}`}>
-                  {technicalAudit?.website?.url ? (
-                    <div className={styles.analyticsPropertyTag}>
-                      {faviconUrlForSite(technicalAudit.website.url) ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={faviconUrlForSite(technicalAudit.website.url) as string}
-                          alt=""
-                          className={styles.siteAuditWebsiteFavicon}
-                          width={20}
-                          height={20}
-                        />
-                      ) : (
-                        <span className={styles.analyticsPropertyDot} aria-hidden="true" />
-                      )}
-                      <a href={technicalAudit.website.url} target="_blank" rel="noreferrer">
-                        <code className={styles.analyticsPropertyCode}>{technicalAudit.website.url}</code>
-                      </a>
-                    </div>
-                  ) : (
-                    <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
-                      {technicalAudit ? "Website not connected. Connect a website in Project Settings to run a Technical Audit." : "Loading…"}
-                    </p>
-                  )}
-                  {(() => {
-                    const viewing = selectedHistoricalRunId ? technicalAuditHistory.find((r) => r.id === selectedHistoricalRunId) || null : null;
-                    const shown = viewing || technicalAudit?.audit || null;
-                    return shown ? (
-                      <div className={styles.siteAuditWebsiteMeta}>
-                        <span className={styles.muted} style={{ fontSize: 12 }}>
-                          Last audited: {formatSiteAuditTimestamp(technicalAudit?.audit?.created_at)}
-                        </span>
-                        {viewing ? (
-                          <span className={styles.siteAuditViewingChip} role="status">
-                            Viewing audit from {formatSiteAuditTimestamp(viewing.created_at)}
-                            <button type="button" className={styles.btnSecondary} onClick={() => setSelectedHistoricalRunId(null)}>
-                              Back to latest
-                            </button>
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : null;
-                  })()}
                 </div>
 
                 {technicalAudit && !technicalAudit.pagespeed_configured ? (
