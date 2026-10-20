@@ -11526,3 +11526,449 @@ a.secondary {
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+
+/* ── Technical Audit screen layout (TECHNICAL_AUDIT_UI_SPEC §4) ──────────────
+ * Blocks: A header · B website bar · C score row · D/E main grid · F bottom grid.
+ * Tokens only; flat surfaces; status colour always paired with text. */
+.siteAuditPageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--aa-s-md);
+  flex-wrap: wrap;
+}
+.siteAuditWebsiteBar {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--aa-s-sm);
+}
+.siteAuditWebsiteMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--aa-s-sm);
+  flex-wrap: wrap;
+}
+.siteAuditViewingChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--aa-s-xs);
+  padding: 4px 4px 4px 12px;
+  border-radius: var(--aa-r-pill);
+  border: 1px solid var(--aa-hairline);
+  background: var(--aa-surface-soft);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-ink);
+}
+.siteAuditViewingChip .btnSecondary {
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  border-radius: var(--aa-r-pill);
+}
+
+/* C. Score row: wide health tile + 4 category tiles. */
+.siteAuditScoreRow {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.6fr) repeat(4, minmax(0, 1fr));
+  gap: var(--aa-s-sm);
+  width: 100%;
+}
+.siteAuditScoreCard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: var(--aa-s-md);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-lg);
+  background: var(--aa-surface-card);
+  min-width: 0;
+}
+.siteAuditScoreCardWide {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--aa-s-md);
+}
+.siteAuditScoreCardBody {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.siteAuditScoreCardLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aa-ink);
+}
+.siteAuditDelta {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-muted);
+}
+.siteAuditDelta[data-dir="up"] { color: var(--aa-success); }
+.siteAuditDelta[data-dir="down"] { color: var(--aa-error); }
+.siteAuditScorePair {
+  display: flex;
+  gap: var(--aa-s-md);
+}
+.siteAuditScorePairItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  opacity: 0.72;
+}
+.siteAuditScorePairItem[data-active] { opacity: 1; }
+.siteAuditScorePairValue {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--aa-ink);
+  font-variant-numeric: tabular-nums;
+}
+.siteAuditScorePairLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--aa-muted);
+}
+
+/* D/E main grid (8/4) and F bottom grid (3 columns). */
+.siteAuditMainGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--aa-s-sm);
+  align-items: start;
+  width: 100%;
+}
+.siteAuditMainLeft,
+.siteAuditMainRight,
+.siteAuditBottomStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aa-s-sm);
+  min-width: 0;
+}
+.siteAuditBottomGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--aa-s-sm);
+  align-items: start;
+  width: 100%;
+}
+.siteAuditBottomStack > section > .card { max-width: none; }
+
+.siteAuditPanel {
+  max-width: none;
+  min-width: 0;
+  padding: var(--aa-s-md);
+}
+.siteAuditPanelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--aa-s-xs);
+  flex-wrap: wrap;
+}
+.siteAuditPanelTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--aa-ink);
+}
+.siteAuditCount {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--aa-r-pill);
+  background: var(--aa-surface-soft);
+  border: 1px solid var(--aa-hairline);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--aa-muted);
+  font-variant-numeric: tabular-nums;
+}
+.siteAuditTextLink,
+.siteAuditTextButton {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aa-primary);
+  text-decoration: none;
+  background: none;
+  border: none;
+  padding: 4px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.siteAuditTextLink:hover,
+.siteAuditTextButton:hover { text-decoration: underline; }
+.siteAuditTextLink:focus-visible,
+.siteAuditTextButton:focus-visible,
+.siteAuditViewAllBtn:focus-visible,
+.siteAuditHistoryRow:focus-visible,
+.siteAuditTab:focus-visible,
+.siteAuditPanel:focus-visible {
+  outline: 2px solid var(--aa-primary);
+  outline-offset: 2px;
+}
+
+/* Tables (metric comparison + opportunities). */
+.siteAuditTableWrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md);
+}
+.siteAuditTable {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  color: var(--aa-ink);
+}
+.siteAuditTable thead th {
+  background: var(--aa-surface-soft);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--aa-muted);
+  text-align: left;
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+.siteAuditTable tbody th,
+.siteAuditTable td {
+  text-align: left;
+  padding: 10px 12px;
+  border-top: 1px solid var(--aa-hairline);
+  vertical-align: middle;
+  font-weight: 400;
+}
+.siteAuditTable tbody th { font-weight: 600; }
+.siteAuditTable tbody tr:hover > * { background: var(--aa-surface-soft); }
+.siteAuditTable [data-dim] { opacity: 0.6; }
+.siteAuditDetailRow > td { background: var(--aa-surface-soft); }
+.siteAuditMetricValue,
+.siteAuditStatusText {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.siteAuditMetricValue { font-weight: 600; }
+.siteAuditStatusText { font-size: 12px; color: var(--aa-ink); }
+.siteAuditInterpretation {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.siteAuditTarget {
+  display: block;
+  font-size: 11px;
+  color: var(--aa-muted);
+  margin-top: 2px;
+}
+.siteAuditMetricCards { display: none; }
+
+/* E1. Core Web Vitals cards. */
+.siteAuditCwvCards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aa-s-xs);
+}
+.siteAuditCwvCard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--aa-s-sm);
+  border: 1px solid var(--aa-hairline);
+  border-radius: var(--aa-r-md);
+  background: var(--aa-surface-soft);
+}
+.siteAuditCwvValue {
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--aa-ink);
+  font-variant-numeric: tabular-nums;
+}
+.siteAuditCwvMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--aa-s-xs);
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.siteAuditSourceTag {
+  font-size: 11px;
+  color: var(--aa-muted);
+}
+
+/* E2. Top Issues & Insights. */
+.siteAuditInsightList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.siteAuditInsightRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--aa-s-sm);
+  padding: 10px 0;
+  border-top: 1px solid var(--aa-hairline);
+}
+.siteAuditInsightRow:first-child { border-top: none; }
+.siteAuditInsightText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.siteAuditInsightTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aa-ink);
+}
+.siteAuditInsightDesc {
+  font-size: 12px;
+  color: var(--aa-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.siteAuditInsightRow .statusPill { white-space: nowrap; }
+
+/* F2. Diagnostics tabs. */
+.siteAuditTabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--aa-hairline);
+  overflow-x: auto;
+}
+.siteAuditTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  min-height: 36px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--aa-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.siteAuditTab:hover { color: var(--aa-ink); }
+.siteAuditTab[aria-selected="true"] {
+  color: var(--aa-ink);
+  border-bottom-color: var(--aa-primary);
+}
+.siteAuditTabPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--aa-s-xs);
+}
+.siteAuditEmptyInline {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--aa-s-xs);
+}
+.siteAuditDiagRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--aa-s-xs);
+  row-gap: 2px;
+  font-size: 12px;
+}
+.siteAuditDiagRow > :last-child { grid-column: 2; }
+.siteAuditDiagTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aa-ink);
+}
+
+/* F3. Audit history grid rows. */
+.siteAuditHistoryHead,
+.siteAuditHistoryList .siteAuditHistoryRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) repeat(3, minmax(48px, 0.6fr));
+  align-items: center;
+  gap: var(--aa-s-xs);
+}
+.siteAuditHistoryHead {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--aa-muted);
+  padding: 0 4px;
+}
+.siteAuditHistoryList .siteAuditHistoryRow {
+  min-height: 36px;
+  font-size: 13px;
+  color: var(--aa-ink);
+}
+.siteAuditHistoryRow[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--aa-primary), transparent 92%);
+}
+
+@media (max-width: 1099px) {
+  .siteAuditScoreRow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .siteAuditScoreCardWide { grid-column: 1 / -1; }
+  .siteAuditMainGrid,
+  .siteAuditBottomGrid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 639px) {
+  .siteAuditScoreRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .siteAuditMetricCards {
+    display: flex;
+    flex-direction: column;
+    gap: var(--aa-s-xs);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .siteAuditTableWrap:has(+ .siteAuditMetricCards) { display: none; }
+  .siteAuditMetricCard {
+    padding: var(--aa-s-sm);
+    border: 1px solid var(--aa-hairline);
+    border-radius: var(--aa-r-md);
+    background: var(--aa-surface-card);
+  }
+  .siteAuditMetricCardTitle {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--aa-ink);
+    margin-bottom: 6px;
+  }
+  .siteAuditMetricCard dl { margin: 0; display: grid; gap: 4px; }
+  .siteAuditMetricCard dl > div { display: flex; justify-content: space-between; gap: var(--aa-s-xs); font-size: 13px; }
+  .siteAuditMetricCard dl > div[data-dim] { opacity: 0.6; }
+  .siteAuditMetricCard dt { color: var(--aa-muted); }
+  .siteAuditMetricCard dd { margin: 0; text-align: right; }
+  /* Opportunities: each row becomes a stacked card with labelled cells. */
+  .siteAuditTableStack thead { display: none; }
+  .siteAuditTableStack tbody tr { display: block; border-top: 1px solid var(--aa-hairline); padding: 8px 0; }
+  .siteAuditTableStack tbody th,
+  .siteAuditTableStack td { display: flex; justify-content: space-between; gap: var(--aa-s-xs); border-top: none; padding: 4px 12px; }
+  .siteAuditTableStack td[data-label]::before { content: attr(data-label); color: var(--aa-muted); font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .siteAuditTab { transition: none; }
+}

@@ -23,11 +23,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent, NavGroup, NavItem, SubNav } f
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/DropdownMenu";
 import {
   TechnicalAuditResults,
-  TechnicalAuditSummary,
-  TechnicalAuditTrendChart,
-  TechnicalAuditHistoryList,
   SiteAuditRunChecklist,
-  SiteAuditInsightBanner,
   formatSiteAuditTimestamp,
 } from "@/components/TechnicalAuditResults";
 import {
@@ -11872,81 +11868,94 @@ export default function ProjectPage() {
           <div className={styles.analyticsStack}>
             {siteAuditSubTab === "technical" ? (
               <>
-                <div>
-                  <h2 className={styles.sectionTitle}>Technical Audit</h2>
-                  <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 13 }}>
-                    Google PageSpeed Insights performance, Core Web Vitals, and accessibility for your site.
-                  </p>
-                </div>
-                <div className={`${styles.card} ${styles.cardWide}`}>
-                  <div className={styles.analyticsHeaderRow}>
-                    <div className={styles.analyticsHeaderTitle}>
-                      {technicalAudit?.website?.url ? (
-                        <div className={styles.analyticsPropertyTag}>
-                          {faviconUrlForSite(technicalAudit.website.url) ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={faviconUrlForSite(technicalAudit.website.url) as string}
-                              alt=""
-                              className={styles.siteAuditWebsiteFavicon}
-                              width={20}
-                              height={20}
-                            />
-                          ) : (
-                            <span className={styles.analyticsPropertyDot} aria-hidden="true" />
-                          )}
-                          <span>
-                            <a href={technicalAudit.website.url} target="_blank" rel="noreferrer">
-                              <code className={styles.analyticsPropertyCode}>{technicalAudit.website.url}</code>
-                            </a>
-                          </span>
-                        </div>
-                      ) : (
-                        <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
-                          {technicalAudit ? "Website not connected." : "Loading…"}
-                        </p>
-                      )}
-                      {technicalAudit?.audit ? (
-                        <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 12 }}>
-                          Last audited: {formatSiteAuditTimestamp(technicalAudit.audit.created_at)}
-                        </p>
-                      ) : null}
-                    </div>
-                    <div className={styles.analyticsHeaderActions}>
-                      {!technicalAudit && technicalAuditBusy ? (
-                        <button type="button" className={styles.btnSecondary} disabled>
-                          Loading…
-                        </button>
-                      ) : technicalAudit?.website?.connected ? (
-                        <button
-                          type="button"
-                          className={styles.button}
-                          onClick={() => void runTechnicalAuditNow()}
-                          disabled={technicalAuditRunning || !technicalAudit?.pagespeed_configured}
-                          title={!technicalAudit?.pagespeed_configured ? "Google PageSpeed Insights is not configured on the backend" : undefined}
-                        >
-                          {technicalAuditRunning ? (
-                            <>
-                              <span className={styles.siteAuditBtnSpinner} aria-hidden="true" />
-                              Running Audit…
-                            </>
-                          ) : technicalAuditJustCompleted ? (
-                            "Audit Complete"
-                          ) : technicalAuditErr ? (
-                            "Retry Audit"
-                          ) : technicalAudit?.audit ? (
-                            "Re-run Audit"
-                          ) : (
-                            "Run Technical Audit"
-                          )}
-                        </button>
-                      ) : technicalAudit ? (
-                        <button type="button" className={styles.btnSecondary} onClick={() => goTab("project_settings")}>
-                          Go to Project Settings
-                        </button>
-                      ) : null}
-                    </div>
+                {/* A. Page header */}
+                <div className={styles.siteAuditPageHeader}>
+                  <div>
+                    <h2 className={styles.sectionTitle}>Technical Audit</h2>
+                    <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 13 }}>
+                      Google PageSpeed Insights performance, Core Web Vitals, and accessibility for your site.
+                    </p>
                   </div>
+                  <div className={styles.analyticsHeaderActions}>
+                    {!technicalAudit && technicalAuditBusy ? (
+                      <button type="button" className={styles.btnSecondary} disabled>
+                        Loading…
+                      </button>
+                    ) : technicalAudit?.website?.connected ? (
+                      <button
+                        type="button"
+                        className={styles.button}
+                        onClick={() => void runTechnicalAuditNow()}
+                        disabled={technicalAuditRunning || !technicalAudit?.pagespeed_configured}
+                        title={!technicalAudit?.pagespeed_configured ? "Google PageSpeed Insights is not configured on the backend" : undefined}
+                      >
+                        {technicalAuditRunning ? (
+                          <>
+                            <span className={styles.siteAuditBtnSpinner} aria-hidden="true" />
+                            Running audit…
+                          </>
+                        ) : technicalAuditJustCompleted ? (
+                          "Audit complete"
+                        ) : technicalAuditErr ? (
+                          "Retry audit"
+                        ) : technicalAudit?.audit ? (
+                          "Re-run audit"
+                        ) : (
+                          "Run technical audit"
+                        )}
+                      </button>
+                    ) : technicalAudit ? (
+                      <button type="button" className={styles.btnSecondary} onClick={() => goTab("project_settings")}>
+                        Go to Project Settings
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                {/* B. Website bar */}
+                <div className={`${styles.card} ${styles.cardWide} ${styles.siteAuditWebsiteBar}`}>
+                  {technicalAudit?.website?.url ? (
+                    <div className={styles.analyticsPropertyTag}>
+                      {faviconUrlForSite(technicalAudit.website.url) ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={faviconUrlForSite(technicalAudit.website.url) as string}
+                          alt=""
+                          className={styles.siteAuditWebsiteFavicon}
+                          width={20}
+                          height={20}
+                        />
+                      ) : (
+                        <span className={styles.analyticsPropertyDot} aria-hidden="true" />
+                      )}
+                      <a href={technicalAudit.website.url} target="_blank" rel="noreferrer">
+                        <code className={styles.analyticsPropertyCode}>{technicalAudit.website.url}</code>
+                      </a>
+                    </div>
+                  ) : (
+                    <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
+                      {technicalAudit ? "Website not connected. Connect a website in Project Settings to run a Technical Audit." : "Loading…"}
+                    </p>
+                  )}
+                  {(() => {
+                    const viewing = selectedHistoricalRunId ? technicalAuditHistory.find((r) => r.id === selectedHistoricalRunId) || null : null;
+                    const shown = viewing || technicalAudit?.audit || null;
+                    return shown ? (
+                      <div className={styles.siteAuditWebsiteMeta}>
+                        <span className={styles.muted} style={{ fontSize: 12 }}>
+                          Last audited: {formatSiteAuditTimestamp(technicalAudit?.audit?.created_at)}
+                        </span>
+                        {viewing ? (
+                          <span className={styles.siteAuditViewingChip} role="status">
+                            Viewing audit from {formatSiteAuditTimestamp(viewing.created_at)}
+                            <button type="button" className={styles.btnSecondary} onClick={() => setSelectedHistoricalRunId(null)}>
+                              Back to latest
+                            </button>
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
 
                 {technicalAudit && !technicalAudit.pagespeed_configured ? (
@@ -11985,39 +11994,23 @@ export default function ProjectPage() {
                 {technicalAudit?.audit
                   ? (() => {
                       const latest = technicalAudit.audit!;
-                      const previousAudit = technicalAuditHistory.length > 1 ? technicalAuditHistory[1] : null;
-                      const selected = selectedHistoricalRunId
-                        ? technicalAuditHistory.find((r) => r.id === selectedHistoricalRunId) || null
-                        : null;
+                      const selected = selectedHistoricalRunId ? technicalAuditHistory.find((r) => r.id === selectedHistoricalRunId) || null : null;
                       const displayedRun = selected || latest;
+                      const idx = technicalAuditHistory.findIndex((r) => r.id === displayedRun.id);
+                      const previousRun = idx >= 0 ? technicalAuditHistory[idx + 1] || null : technicalAuditHistory[1] || null;
                       return (
-                        <>
-                          <TechnicalAuditSummary audit={latest} previousAudit={previousAudit} strategy={technicalAuditStrategy} styles={styles} />
-                          <TechnicalAuditTrendChart history={technicalAuditHistory} styles={styles} />
-                          <TechnicalAuditHistoryList
-                            history={technicalAuditHistory}
-                            selectedRunId={selectedHistoricalRunId}
-                            onSelectRun={setSelectedHistoricalRunId}
-                            styles={styles}
-                          />
-                          {selected ? (
-                            <div className={`${styles.card} ${styles.cardWide}`} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                              <p style={{ margin: 0, fontSize: 13 }}>
-                                Viewing audit from <strong>{formatSiteAuditTimestamp(selected.created_at)}</strong>
-                              </p>
-                              <button type="button" className={styles.btnSecondary} onClick={() => setSelectedHistoricalRunId(null)}>
-                                Back to latest
-                              </button>
-                            </div>
-                          ) : null}
-                          <TechnicalAuditResults
-                            audit={displayedRun}
-                            strategy={technicalAuditStrategy}
-                            onStrategyChange={setTechnicalAuditStrategy}
-                            styles={styles}
-                          />
-                          <SiteAuditInsightBanner styles={styles} seed={displayedRun.id} />
-                        </>
+                        <TechnicalAuditResults
+                          run={displayedRun}
+                          previousRun={previousRun}
+                          history={technicalAuditHistory}
+                          strategy={technicalAuditStrategy}
+                          onStrategyChange={setTechnicalAuditStrategy}
+                          selectedRunId={selectedHistoricalRunId}
+                          onSelectRun={setSelectedHistoricalRunId}
+                          onRerun={() => void runTechnicalAuditNow()}
+                          canRerun={Boolean(technicalAudit.website?.connected && technicalAudit.pagespeed_configured && !technicalAuditRunning)}
+                          styles={styles}
+                        />
                       );
                     })()
                   : null}
