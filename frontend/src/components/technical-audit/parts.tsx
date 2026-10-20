@@ -1,8 +1,10 @@
 "use client";
 
-import type { TechnicalAuditFinding } from "@/lib/api";
+import { type ReactNode, useEffect, useId } from "react";
+import type { TechnicalAuditFinding, TechnicalAuditIndexEntry } from "@/lib/api";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 import { describeSample, formatSavings } from "@/lib/technicalAudit";
-import { METRIC_THRESHOLDS, type MetricKey, plainLighthouseText, scoreStatus, statusLabel } from "@/lib/technicalAuditView";
+import { METRIC_THRESHOLDS, type MetricKey, parseLighthouseText, scoreStatus, statusLabel } from "@/lib/technicalAuditView";
 
 export type CssModule = { [key: string]: string };
 
@@ -114,7 +116,11 @@ export function FindingDetails({
   const savings = formatSavings(finding.overall_savings_ms, finding.overall_savings_bytes, finding.metric_savings);
   return (
     <div className={styles.siteAuditFindingBody}>
-      {finding.description ? <p style={{ margin: 0, fontSize: 13 }}>{plainLighthouseText(finding.description)}</p> : null}
+      {finding.description ? (
+        <p style={{ margin: 0, fontSize: 13 }}>
+          <LighthouseText text={finding.description} styles={styles} />
+        </p>
+      ) : null}
       {savings ? (
         <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 12 }}>
           {savings} (Google estimate)
@@ -212,4 +218,144 @@ export function scrollToSection(id: string): void {
   const reduce = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
   el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
   el.focus({ preventScroll: true });
+}
+
+/* ── v2 shared pieces ───────────────────────────────────────────────────── */
+
+export type Kind = TechnicalAuditIndexEntry["kind"];
+
+export const KIND_LABELS: Record<Kind, string> = {
+  failed: "Failed",
+  warning: "Needs improvement",
+  passed: "Passed",
+  informational: "Informational",
+  manual: "Check manually",
+  not_applicable: "Not applicable",
+  error: "Could not run",
+};
+
+/** PSI's convention: ▲ fail · ■ needs improvement · ● pass · ◆ informational (shape + colour). */
+export function ShapeIcon({ kind, styles }: { kind: Kind | string; styles: CssModule }) {
+  const k = kind === "failed" || kind === "error" ? "failed" : kind === "warning" ? "warning" : kind === "passed" ? "passed" : "info";
+  return (
+    <span className={styles.siteAuditShape} data-kind={k} aria-hidden="true">
+      <svg viewBox="0 0 12 12" width="12" height="12">
+        {k === "failed" ? <path d="M6 1l5 9.5H1z" /> : k === "warning" ? <rect x="1.5" y="1.5" width="9" height="9" rx="1" /> : k === "passed" ? <circle cx="6" cy="6" r="5" /> : <path d="M6 .8l5.2 5.2L6 11.2.8 6z" />}
+      </svg>
+    </span>
+  );
+}
+
+/** Lighthouse text with safe https links and code spans; never HTML. */
+export function LighthouseText({ text, styles }: { text: string | null | undefined; styles: CssModule }) {
+  return (
+    <>
+      {parseLighthouseText(text).map((p, i) =>
+        p.type === "link" ? (
+          <a key={i} href={p.href} target="_blank" rel="noopener noreferrer" className={styles.siteAuditTextLink}>
+            {p.text}
+            <span className={styles.srOnly}> (opens in a new tab)</span>
+          </a>
+        ) : p.type === "code" ? (
+          <code key={i} className={styles.siteAuditInlineCode}>
+            {p.text}
+          </code>
+        ) : (
+          <span key={i}>{p.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+let openDialogs = 0;
+
+/** Focus-trapped dialog (Esc, backdrop, Close button), body scroll locked while open. */
+export function AuditDialog({
+  open,
+  onClose,
+  title,
+  children,
+  size = "md",
+  styles,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  size?: "md" | "lg";
+  styles: CssModule;
+}) {
+  const ref = useFocusTrap(open);
+  const titleId = useId();
+  useEffect(() => {
+    if (!open) return;
+    openDialogs += 1;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      openDialogs -= 1;
+      if (openDialogs === 0) document.body.style.overflow = "";
+    };
+  }, [open, onClose]);
+  if (!open) return null;
+  return (
+    <>
+      <div className={styles.siteAuditDialogBackdrop} onClick={onClose} aria-hidden="true" />
+      <div ref={ref} role="dialog" aria-modal="true" aria-labelledby={titleId} className={styles.siteAuditDialog} data-size={size}>
+        <div className={styles.siteAuditDialogHead}>
+          <h3 id={titleId} className={styles.siteAuditPanelTitle}>
+            {title}
+          </h3>
+          <button type="button" className={styles.btnSecondary} onClick={onClose}>
+            Close details
+          </button>
+        </div>
+        <div className={styles.siteAuditDialogBody}>{children}</div>
+      </div>
+    </>
+  );
+}
+
+/** One Lighthouse audit row: shape icon + title + Lighthouse's displayValue verbatim; expands inline. */
+export function AuditRow({
+  audit,
+  open,
+  onToggle,
+  styles,
+}: {
+  audit: TechnicalAuditIndexEntry;
+  open: boolean;
+  onToggle: () => void;
+  styles: CssModule;
+}) {
+  const hasDetails = Boolean(audit.description || (audit.samples && audit.samples.length) || audit.error_message);
+  const panelId = `ta-audit-${audit.category}-${audit.id}`;
+  return (
+    <li className={styles.siteAuditAuditRow}>
+      <button type="button" className={styles.siteAuditAuditToggle} onClick={onToggle} aria-expanded={hasDetails ? open : undefined} aria-controls={hasDetails ? panelId : undefined} disabled={!hasDetails}>
+        <ShapeIcon kind={audit.kind} styles={styles} />
+        <span className={styles.siteAuditAuditTitle}>
+          {audit.title || audit.id}
+          <span className={styles.srOnly}> — {KIND_LABELS[audit.kind]}</span>
+        </span>
+        {audit.display_value ? <span className={styles.siteAuditAuditValue}>{audit.display_value}</span> : null}
+        {hasDetails ? (
+          <span className={styles.siteAuditChevron} data-open={open || undefined} aria-hidden="true">
+            ›
+          </span>
+        ) : null}
+      </button>
+      {open && hasDetails ? (
+        <div id={panelId}>
+          {audit.error_message ? <p className={styles.muted} style={{ margin: "0 0 6px", fontSize: 12 }}>Lighthouse could not run this audit: {audit.error_message}</p> : null}
+          <FindingDetails finding={audit} styles={styles} />
+        </div>
+      ) : null}
+    </li>
+  );
 }

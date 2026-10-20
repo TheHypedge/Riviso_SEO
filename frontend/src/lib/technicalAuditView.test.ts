@@ -132,3 +132,157 @@ describe("rankTopInsights", () => {
     assert.deepEqual(rankTopInsights(withTechnicalResultDefaults(undefined)), []);
   });
 });
+
+/* ── v2 helpers ─────────────────────────────────────────────────────────── */
+
+import {
+  categoryToFix,
+  diagnosticsBuckets,
+  distributionPercents,
+  fieldAssessment,
+  filterDiagnostics,
+  formatBytes,
+  formatFieldValue,
+  impactTier,
+  isSafeHttpsUrl,
+  kindFromScore,
+  metricFilterChips,
+  parseLighthouseText,
+  reportFilename,
+  sortOpportunities,
+} from "./technicalAuditView";
+
+describe("parseLighthouseText", () => {
+  it("keeps https links and code, as parts", () => {
+    assert.deepEqual(parseLighthouseText("Use `font-display`. [Learn more](https://web.dev/x)."), [
+      { type: "text", text: "Use " },
+      { type: "code", text: "font-display" },
+      { type: "text", text: ". " },
+      { type: "link", text: "Learn more", href: "https://web.dev/x" },
+      { type: "text", text: "." },
+    ]);
+  });
+  it("never links javascript:, data: or http: URLs", () => {
+    for (const bad of ["javascript:alert(1)", "javascript:void0", "data:text/html,x", "http://example.com"]) {
+      const parts = parseLighthouseText(`[Click](${bad})`);
+      assert.equal(parts.some((p) => p.type === "link"), false, bad);
+    }
+    assert.deepEqual(parseLighthouseText("[Click](javascript:void0)"), [{ type: "text", text: "Click" }]);
+  });
+  it("handles empty labels, unmatched backticks, plain text and huge input", () => {
+    assert.deepEqual(parseLighthouseText("[](https://web.dev)"), []);
+    assert.deepEqual(parseLighthouseText("a `b"), [{ type: "text", text: "a `b" }]);
+    assert.deepEqual(parseLighthouseText(undefined), []);
+    assert.equal(parseLighthouseText("x".repeat(10_000)).map((p) => p.text).join("").length, 4000);
+  });
+});
+
+describe("isSafeHttpsUrl", () => {
+  it("accepts only absolute https URLs", () => {
+    assert.equal(isSafeHttpsUrl("https://res.cloudinary.com/a.jpg"), true);
+    assert.equal(isSafeHttpsUrl("http://a.com"), false);
+    assert.equal(isSafeHttpsUrl("javascript:alert(1)"), false);
+    assert.equal(isSafeHttpsUrl("/relative"), false);
+    assert.equal(isSafeHttpsUrl(null), false);
+  });
+});
+
+describe("impactTier (Riviso bands over Google savings)", () => {
+  it("bands by ms or bytes, whichever is larger", () => {
+    assert.equal(impactTier(1000, 0), "high");
+    assert.equal(impactTier(0, 600 * 1024), "high");
+    assert.equal(impactTier(300, null), "medium");
+    assert.equal(impactTier(50, 120 * 1024), "medium");
+    assert.equal(impactTier(100, 10 * 1024), "low");
+  });
+  it("is null when Google gave no savings (never 'low')", () => {
+    assert.equal(impactTier(null, undefined), null);
+    assert.equal(impactTier(0, 0), null);
+  });
+});
+
+describe("opportunities", () => {
+  const opps = [
+    { id: "a", title: "Zeta", overall_savings_ms: 200, metric_savings: { FCP: 200 } },
+    { id: "b", title: "Alpha", metric_savings: { LCP: 2500, FCP: 0 } },
+    { id: "c", title: "Mid", overall_savings_bytes: 600 * 1024 },
+  ];
+  it("metric chips count only metrics with real savings", () => {
+    assert.deepEqual(metricFilterChips(opps), [
+      { key: "all", label: "All", count: 3 },
+      { key: "FCP", label: "FCP", count: 1 },
+      { key: "LCP", label: "LCP", count: 1 },
+    ]);
+    assert.deepEqual(metricFilterChips([]), [{ key: "all", label: "All", count: 0 }]);
+  });
+  it("sorts by savings, impact, metric and name", () => {
+    assert.deepEqual(sortOpportunities(opps, "savings").map((o) => o.id), ["b", "a", "c"]);
+    assert.deepEqual(sortOpportunities(opps, "impact").map((o) => o.id), ["b", "c", "a"]);
+    assert.deepEqual(sortOpportunities(opps, "metric").map((o) => o.id), ["a", "b", "c"]);
+    assert.deepEqual(sortOpportunities(opps, "name").map((o) => o.id), ["b", "c", "a"]);
+  });
+});
+
+describe("diagnostics", () => {
+  const rows = [
+    { id: "p", kind: "passed" },
+    { id: "f1", kind: "failed" },
+    { id: "w", kind: "warning" },
+    { id: "i", kind: "informational" },
+    { id: "f2", kind: "failed" },
+  ];
+  it("counts buckets; All excludes informational", () => {
+    assert.deepEqual(diagnosticsBuckets(rows), { passed: 1, warning: 1, failed: 2, informational: 1, all: 4 });
+    assert.deepEqual(diagnosticsBuckets([]), { passed: 0, warning: 0, failed: 0, informational: 0, all: 0 });
+  });
+  it("orders failed, warnings, passed and keeps Lighthouse order within a group", () => {
+    assert.deepEqual(filterDiagnostics(rows, "all").map((r) => r.id), ["f1", "f2", "w", "p"]);
+    assert.deepEqual(filterDiagnostics(rows, "informational").map((r) => r.id), ["i"]);
+  });
+  it("maps old-run scores to kinds", () => {
+    assert.equal(kindFromScore(95), "passed");
+    assert.equal(kindFromScore(60), "warning");
+    assert.equal(kindFromScore(10), "failed");
+    assert.equal(kindFromScore(null), "informational");
+  });
+});
+
+describe("field data", () => {
+  const m = (status: "good" | "needs_improvement" | "poor") => ({ percentile: 1, status, distributions: [] });
+  it("assessment passes only when LCP, INP and CLS are all good", () => {
+    assert.equal(fieldAssessment({ scope: "url", overall_status: "good", metrics: { lcp: m("good"), inp: m("good"), cls: m("good") } }), "passed");
+    assert.equal(fieldAssessment({ scope: "url", overall_status: null, metrics: { lcp: m("good"), inp: m("poor"), cls: m("good") } }), "failed");
+    assert.equal(fieldAssessment({ scope: "origin", overall_status: null, metrics: { lcp: m("good"), cls: m("good") } }), "no_data");
+    assert.equal(fieldAssessment(null), "no_data");
+  });
+  it("formats p75 and distribution shares", () => {
+    assert.equal(formatFieldValue("lcp", 845), "845 ms");
+    assert.equal(formatFieldValue("cls", 0.01), "0.01");
+    assert.equal(formatFieldValue("inp", null), "—");
+    const dist = { percentile: 1, status: "good" as const, distributions: [{ min: 0, max: 0.1, proportion: 0.8749 }, { min: 0.1, max: 0.25, proportion: 0.0764 }, { min: 0.25, max: null, proportion: 0.0487 }] };
+    assert.deepEqual(distributionPercents(dist), [87, 8, 5]);
+    assert.equal(distributionPercents(undefined), null);
+  });
+});
+
+describe("misc", () => {
+  it("formats bytes like Lighthouse (KiB/MiB)", () => {
+    assert.equal(formatBytes(934 * 1024), "934 KiB");
+    assert.equal(formatBytes(3 * 1024 * 1024), "3.0 MiB");
+    assert.equal(formatBytes(500), "500 B");
+  });
+  it("counts audits to fix per category, null when the index was not stored", () => {
+    const idx = [
+      { id: "a", category: "seo", kind: "failed" },
+      { id: "b", category: "seo", kind: "warning" },
+      { id: "c", category: "seo", kind: "passed" },
+    ] as never;
+    assert.equal(categoryToFix(idx, "seo"), 2);
+    assert.equal(categoryToFix(idx, "accessibility"), 0);
+    assert.equal(categoryToFix(undefined, "seo"), null);
+  });
+  it("builds a safe report filename", () => {
+    assert.equal(reportFilename("https://www.example.com/a?b", "2026-10-20 10:00:00", "mobile"), "riviso-technical-audit-www.example.com-2026-10-20-mobile.json");
+    assert.equal(reportFilename("not a url", null, "desktop"), "riviso-technical-audit-site-unknown-date-desktop.json");
+  });
+});

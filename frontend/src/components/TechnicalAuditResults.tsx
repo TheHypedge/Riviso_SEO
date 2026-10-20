@@ -2,39 +2,31 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { TechnicalAuditRun, TechnicalAuditStrategyResult } from "@/lib/api";
+import { api } from "@/lib/api";
+import type { TechnicalAuditIndexEntry, TechnicalAuditLatestResponse, TechnicalAuditRun, TechnicalAuditStrategyResult } from "@/lib/api";
 import { withTechnicalResultDefaults } from "@/lib/technicalAudit";
-import { type Strategy, healthDelta } from "@/lib/technicalAuditView";
-import { CoreWebVitalsCards } from "@/components/technical-audit/CoreWebVitalsCards";
-import { type DiagnosticsTab, DiagnosticsTabs } from "@/components/technical-audit/DiagnosticsTabs";
+import { type Strategy, categoryToFix, healthDelta, kindFromScore } from "@/lib/technicalAuditView";
+import { formatShortDate, formatSiteAuditTimestamp } from "@/lib/technicalAuditFormat";
+import { AuditDetailsPanel } from "@/components/technical-audit/AuditDetailsPanel";
+import { CategoryAuditsTab } from "@/components/technical-audit/CategoryAuditsTab";
+import { CoreWebVitalsPanel } from "@/components/technical-audit/CoreWebVitalsPanel";
+import { DiagnosticsPanel } from "@/components/technical-audit/DiagnosticsPanel";
 import { MetricComparisonTable } from "@/components/technical-audit/MetricComparisonTable";
-import { OpportunitiesTable } from "@/components/technical-audit/OpportunitiesTable";
-import { ScoreRow } from "@/components/technical-audit/ScoreRow";
-import { TopInsightsList } from "@/components/technical-audit/TopInsightsList";
-import { type CssModule, ScoreGauge, scrollToSection } from "@/components/technical-audit/parts";
+import { OpportunitiesPanel } from "@/components/technical-audit/OpportunitiesPanel";
+import { OtherMetricsPanel } from "@/components/technical-audit/OtherMetricsPanel";
+import { PagePreview } from "@/components/technical-audit/PagePreview";
+import { PerformanceScoreCard } from "@/components/technical-audit/PerformanceScoreCard";
+import { TechnicalAuditExplainer } from "@/components/technical-audit/TechnicalAuditExplainer";
+import { TechnicalAuditHeader } from "@/components/technical-audit/TechnicalAuditHeader";
+import { type TaTab, TechnicalAuditTabs } from "@/components/technical-audit/TechnicalAuditTabs";
+import { type CssModule, ScoreGauge } from "@/components/technical-audit/parts";
 
-// Re-exported: SeoAuditResults imports the gauge from here.
-export { ScoreGauge };
-
-export function formatSiteAuditTimestamp(iso: string | null | undefined): string {
-  if (!iso) return "Not available";
-  const normalized = iso.includes("T") ? iso : iso.replace(" ", "T") + "Z";
-  const d = new Date(normalized);
-  if (Number.isNaN(d.getTime())) return "Not available";
-  return (
-    d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) +
-    " • " +
-    d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
-  );
+function pageSpeedInsightsUrl(url: string | null | undefined, strategy: Strategy): string | null {
+  return url ? `https://pagespeed.web.dev/analysis?url=${encodeURIComponent(url)}&form_factor=${strategy}` : null;
 }
 
-function formatShortDate(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const normalized = iso.includes("T") ? iso : iso.replace(" ", "T") + "Z";
-  const d = new Date(normalized);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-}
+// Re-exported: SeoAuditResults and the project page import these from here.
+export { ScoreGauge, formatSiteAuditTimestamp };
 
 /* ── Running-state checklist: illustrative staged progress, not a claim of real
    per-stage backend status (mobile + desktop run concurrently server-side, so
@@ -302,69 +294,283 @@ export function TechnicalAuditHistoryList({
   );
 }
 
-/* ── The Technical Audit screen (blocks C-F) for one run ─────────────────── */
+/* ── The Technical Audit screen (TECHNICAL_AUDIT_UI_SPEC v2) ─────────────── */
 
-export function TechnicalAuditResults({
-  run,
-  previousRun,
+const CATEGORY_TITLES: Record<Exclude<TaTab, "overview">, string> = {
+  performance: "Performance",
+  accessibility: "Accessibility",
+  best_practices: "Best Practices",
+  seo: "PageSpeed SEO",
+};
+const SCORE_KEY: Record<Exclude<TaTab, "overview">, keyof TechnicalAuditStrategyResult["scores"]> = {
+  performance: "performance",
+  accessibility: "accessibility",
+  best_practices: "best_practices",
+  seo: "pagespeed_seo",
+};
+
+/** Old runs (no audits index) only have the failing diagnostics; show those as rows. */
+function legacyDiagnostics(result: TechnicalAuditStrategyResult): TechnicalAuditIndexEntry[] {
+  return result.diagnostics.map((d) => ({ ...d, category: "performance" as const, kind: kindFromScore(d.score) }));
+}
+
+export function TechnicalAuditScreen({
+  projectId,
+  latest,
   history,
+  busy,
+  running,
+  justCompleted,
+  error,
   strategy,
   onStrategyChange,
   selectedRunId,
   onSelectRun,
-  onRerun,
-  canRerun,
+  onRun,
+  onGoToSettings,
+  onOpenSeoAudit,
+  faviconUrl,
   styles,
 }: {
-  run: TechnicalAuditRun;
-  /** The run immediately before `run` in history (older), if any. */
-  previousRun: TechnicalAuditRun | null;
+  projectId: string;
+  latest: TechnicalAuditLatestResponse | null;
   history: TechnicalAuditRun[];
+  busy: boolean;
+  running: boolean;
+  justCompleted: boolean;
+  error: string | null;
   strategy: Strategy;
   onStrategyChange: (s: Strategy) => void;
   selectedRunId: string | null;
   onSelectRun: (id: string | null) => void;
-  onRerun: () => void;
-  canRerun: boolean;
+  onRun: () => void;
+  onGoToSettings: () => void;
+  onOpenSeoAudit: () => void;
+  faviconUrl: string | null;
   styles: CssModule;
 }) {
-  const mobile = useMemo(() => withTechnicalResultDefaults(run.mobile), [run]);
-  const desktop = useMemo(() => withTechnicalResultDefaults(run.desktop), [run]);
-  const result = strategy === "mobile" ? mobile : desktop;
-  const raw: Partial<TechnicalAuditStrategyResult> = (strategy === "mobile" ? run.mobile : run.desktop) || {};
-  const comparable = !previousRun || previousRun.website_url === run.website_url;
-  const previous = previousRun ? withTechnicalResultDefaults(strategy === "mobile" ? previousRun.mobile : previousRun.desktop) : null;
+  const [tab, setTab] = useState<TaTab>("overview");
+  const [learnOpen, setLearnOpen] = useState(false);
+  // History rows omit the audits index; a selected run's full document is fetched once.
+  const [fullRuns, setFullRuns] = useState<Record<string, TechnicalAuditRun>>({});
+  const historyRow = selectedRunId ? history.find((r) => r.id === selectedRunId) || null : null;
+  const run = (historyRow && fullRuns[historyRow.id]) || historyRow || latest?.audit || null;
 
-  const tabs: DiagnosticsTab[] = [
-    { key: "performance", label: "Performance", findings: result.diagnostics, available: true },
-    { key: "accessibility", label: "Accessibility", findings: result.accessibility_failures, summary: result.accessibility_summary, available: true },
-    { key: "best_practices", label: "Best Practices", findings: result.best_practices_failures, summary: result.best_practices_summary, available: true },
-    // seo_failures only exists on runs stored after it was added.
-    { key: "seo", label: "SEO", findings: result.seo_failures || [], summary: result.seo_summary, available: Array.isArray(raw.seo_failures) },
-  ];
+  useEffect(() => {
+    if (!historyRow || fullRuns[historyRow.id] || historyRow.mobile?.audits_index) return;
+    let cancelled = false;
+    api
+      .getTechnicalAuditRun(projectId, historyRow.id)
+      .then((res) => {
+        if (!cancelled && res?.run) setFullRuns((m) => ({ ...m, [historyRow.id]: res.run }));
+      })
+      .catch(() => {
+        /* the slim history row still renders; full lists show the "not stored" state */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [historyRow, fullRuns, projectId]);
+
+  const idx = run ? history.findIndex((r) => r.id === run.id) : -1;
+  const previousRun = idx >= 0 ? history[idx + 1] || null : history[1] || null;
+
+  const rawResult: Partial<TechnicalAuditStrategyResult> | null | undefined = run ? (strategy === "mobile" ? run.mobile : run.desktop) : null;
+  const result = useMemo(() => withTechnicalResultDefaults(rawResult || undefined), [rawResult]);
+  const previous = previousRun ? withTechnicalResultDefaults(strategy === "mobile" ? previousRun.mobile : previousRun.desktop) : null;
+  const comparable = !previousRun || !run || previousRun.website_url === run.website_url;
+  const index = Array.isArray(rawResult?.audits_index) ? (rawResult!.audits_index as TechnicalAuditIndexEntry[]) : null;
+  const stored = index !== null;
+  const psiUrl = run ? pageSpeedInsightsUrl(result.final_url || run.website_url, strategy) : null;
+
+  const opportunityIds = useMemo(() => new Set(result.opportunities.map((o) => o.id)), [result]);
+  const diagnosticsRows = useMemo(
+    () =>
+      index
+        ? index.filter((a) => a.category === "performance" && !opportunityIds.has(a.id) && ["passed", "warning", "failed", "informational"].includes(a.kind))
+        : legacyDiagnostics(result),
+    [index, opportunityIds, result],
+  );
+  const toFix = {
+    performance: categoryToFix(index ?? undefined, "performance"),
+    accessibility: categoryToFix(index ?? undefined, "accessibility"),
+    best_practices: categoryToFix(index ?? undefined, "best_practices"),
+    seo: categoryToFix(index ?? undefined, "seo"),
+  };
+
+  const header = (
+    <TechnicalAuditHeader
+      latest={latest}
+      viewing={historyRow}
+      displayed={run}
+      busy={busy}
+      running={running}
+      justCompleted={justCompleted}
+      error={error}
+      faviconUrl={faviconUrl}
+      onRun={onRun}
+      onBackToLatest={() => onSelectRun(null)}
+      onGoToSettings={onGoToSettings}
+      onLearn={() => setLearnOpen(true)}
+      styles={styles}
+    />
+  );
+  const states = (
+    <>
+      {latest && !latest.pagespeed_configured ? (
+        <div className={`${styles.card} ${styles.cardWide}`}>
+          <p className={styles.muted} style={{ margin: 0 }}>
+            Google PageSpeed Insights is not configured on the backend yet. Technical Audit will be available once it is.
+          </p>
+        </div>
+      ) : null}
+      {error ? (
+        <div className={`${styles.card} ${styles.cardWide}`} style={{ borderColor: "var(--aa-error)" }} role="alert">
+          <p style={{ margin: 0, color: "var(--aa-error)", fontSize: 14 }}>{error}</p>
+        </div>
+      ) : null}
+      {running ? (
+        <div className={`${styles.card} ${styles.cardWide}`}>
+          <p style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>Running Technical Audit</p>
+          <SiteAuditRunChecklist styles={styles} />
+          <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
+            Fetching mobile and desktop results from PageSpeed Insights. This can take up to two minutes for heavy pages.
+          </p>
+        </div>
+      ) : null}
+      {!busy && latest && !latest.audit && !running && latest.website?.connected ? (
+        <div className={`${styles.card} ${styles.cardWide}`} style={{ alignItems: "center", textAlign: "center", padding: "40px 24px" }}>
+          <p style={{ margin: 0, fontWeight: 600 }}>No audit has been performed yet.</p>
+          <p className={styles.muted} style={{ margin: 0, maxWidth: 440 }}>
+            Run a Technical Audit to see performance, Core Web Vitals, accessibility, best practices and SEO checks for your site.
+          </p>
+        </div>
+      ) : null}
+    </>
+  );
+  const explainer = <TechnicalAuditExplainer open={learnOpen} onClose={() => setLearnOpen(false)} styles={styles} />;
+
+  if (!run) {
+    return (
+      <>
+        {header}
+        {states}
+        {explainer}
+      </>
+    );
+  }
+
+  const missingStrategy = !rawResult ? (
+    <div className={`${styles.card} ${styles.cardWide}`} role="status">
+      <p style={{ margin: 0, fontSize: 14 }}>
+        {strategy === "mobile" ? "Mobile" : "Desktop"} results are missing for this run. Switch device or re-run the audit.
+      </p>
+    </div>
+  ) : null;
+  const warnings = result.run_warnings || [];
 
   return (
     <>
-      <ScoreRow mobile={mobile} desktop={desktop} strategy={strategy} previous={previous} comparable={comparable} styles={styles} />
-      <div className={styles.siteAuditMainGrid}>
-        <div className={styles.siteAuditMainLeft}>
-          <MetricComparisonTable mobile={mobile} desktop={desktop} strategy={strategy} onStrategyChange={onStrategyChange} styles={styles} />
+      {header}
+      {states}
+      <TechnicalAuditTabs active={tab} onChange={setTab} toFix={toFix} strategy={strategy} onStrategyChange={onStrategyChange} styles={styles} />
+      {missingStrategy}
+      {warnings.length ? (
+        <div className={`${styles.card} ${styles.cardWide} ${styles.siteAuditWarningBanner}`} role="status">
+          <strong>Lighthouse reported a problem with this test.</strong>
+          <span>{warnings[0]}</span>
+          <span className={styles.muted}>Scores below may not reflect your real page. Fix the issue and re-run the audit.</span>
         </div>
-        <div className={styles.siteAuditMainRight}>
-          <CoreWebVitalsCards result={result} strategy={strategy} auditedUrl={run.website_url} styles={styles} />
-          <TopInsightsList result={result} onSeeAllDiagnostics={() => scrollToSection("ta-diagnostics")} styles={styles} />
-        </div>
+      ) : null}
+
+      <div role="tabpanel" id={`ta-panel-${tab}`} aria-labelledby={`ta-tab-${tab}`} className={styles.analyticsStack}>
+        {tab === "overview" ? (
+          <>
+            <div className={styles.siteAuditGridTop}>
+              <PerformanceScoreCard
+                title="Performance Score"
+                score={result.scores.performance}
+                previousScore={previous?.scores.performance ?? null}
+                comparable={comparable}
+                hasPrevious={previousRun !== null}
+                strategy={strategy}
+                styles={styles}
+              />
+              <div className={styles.siteAuditStack}>
+                <CoreWebVitalsPanel key={`${run.id}-${strategy}`} result={result} strategy={strategy} onExplain={() => setLearnOpen(true)} styles={styles} />
+                <OtherMetricsPanel result={result} styles={styles} />
+              </div>
+            </div>
+            <div className={styles.siteAuditGridMain}>
+              <div className={styles.siteAuditStack}>
+                <OpportunitiesPanel key={`${run.id}-${strategy}`} opportunities={result.opportunities} stored={stored} psiUrl={psiUrl} styles={styles} />
+                <DiagnosticsPanel key={`d-${run.id}-${strategy}`} rows={diagnosticsRows} stored={stored} styles={styles} />
+              </div>
+              <div className={styles.siteAuditStack}>
+                <PagePreview result={result} strategy={strategy} onStrategyChange={onStrategyChange} pageUrl={result.final_url || run.website_url} styles={styles} />
+                <AuditDetailsPanel run={run} result={result} strategy={strategy} psiUrl={psiUrl} styles={styles} />
+                <section className={`${styles.card} ${styles.siteAuditPanel}`} aria-labelledby="ta-crawl-title">
+                  <h3 id="ta-crawl-title" className={styles.siteAuditPanelTitle}>
+                    Check how search engines crawl your site
+                  </h3>
+                  <p className={styles.muted} style={{ margin: 0, fontSize: 14 }}>
+                    Technical issues like these can affect how users and search engines experience your pages.
+                  </p>
+                  <button type="button" className={styles.button} onClick={onOpenSeoAudit}>
+                    Open SEO Audit
+                  </button>
+                </section>
+              </div>
+            </div>
+            <section className={styles.siteAuditHistorySection} aria-label="History and device comparison">
+              <MetricComparisonTable mobile={withTechnicalResultDefaults(run.mobile)} desktop={withTechnicalResultDefaults(run.desktop)} strategy={strategy} onStrategyChange={onStrategyChange} styles={styles} />
+              <div className={styles.siteAuditGridHistory}>
+                <section id="ta-trend" aria-label="Performance trend">
+                  <TechnicalAuditTrendChart history={history} styles={styles} />
+                </section>
+                <TechnicalAuditHistoryList history={history} selectedRunId={selectedRunId} onSelectRun={onSelectRun} styles={styles} />
+              </div>
+            </section>
+          </>
+        ) : (
+          <>
+            <PerformanceScoreCard
+              id={`ta-score-${tab}`}
+              title={`${CATEGORY_TITLES[tab]} Score`}
+              score={result.scores[SCORE_KEY[tab]]}
+              previousScore={previous?.scores[SCORE_KEY[tab]] ?? null}
+              comparable={comparable}
+              hasPrevious={previousRun !== null}
+              strategy={strategy}
+              styles={styles}
+            />
+            {tab === "performance" ? (
+              <>
+                <CoreWebVitalsPanel key={`p-${run.id}-${strategy}`} result={result} strategy={strategy} onExplain={() => setLearnOpen(true)} styles={styles} />
+                <OtherMetricsPanel result={result} styles={styles} />
+                <OpportunitiesPanel key={`po-${run.id}-${strategy}`} opportunities={result.opportunities} stored={stored} psiUrl={psiUrl} styles={styles} />
+              </>
+            ) : null}
+            <CategoryAuditsTab
+              key={`${tab}-${run.id}-${strategy}`}
+              rows={(index || []).filter((a) => a.category === tab)}
+              stored={stored}
+              note={
+                tab === "seo" ? (
+                  <p className={styles.muted} style={{ margin: 0, fontSize: 13 }}>
+                    This is Google&rsquo;s PageSpeed SEO category, not the Riviso SEO Audit.{" "}
+                    <button type="button" className={styles.siteAuditTextButton} onClick={onOpenSeoAudit}>
+                      Open SEO Audit →
+                    </button>
+                  </p>
+                ) : null
+              }
+              styles={styles}
+            />
+          </>
+        )}
       </div>
-      <div className={styles.siteAuditBottomGrid}>
-        <OpportunitiesTable opportunities={result.opportunities} styles={styles} />
-        <DiagnosticsTabs tabs={tabs} onRerun={onRerun} canRerun={canRerun} styles={styles} />
-        <div className={styles.siteAuditBottomStack}>
-          <section id="ta-trend" aria-label="Performance trend">
-            <TechnicalAuditTrendChart history={history} styles={styles} />
-          </section>
-          <TechnicalAuditHistoryList history={history} selectedRunId={selectedRunId} onSelectRun={onSelectRun} styles={styles} />
-        </div>
-      </div>
+      {explainer}
     </>
   );
 }

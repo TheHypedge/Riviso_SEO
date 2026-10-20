@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-20 (Technical Audit v2)
+
+### Changed — Technical Audit screen rebuilt to match PageSpeed Insights
+- New tab strip (Overview · Performance · Accessibility · Best Practices · SEO) with a shared Mobile/Desktop switch and "N to fix" counts.
+- Overview: Performance Score with Lighthouse bands; Core Web Vitals with a Field Data / Lab Data switch, the real-user assessment and distribution bars; Other Key Metrics; Performance Opportunities with metric filters, sorting, an Impact column and inline "Show how"; Page Preview (Lighthouse screenshot); Audit Details (Lighthouse version, device, duration, run warnings, View on PageSpeed Insights, Download report as JSON); Diagnostics with All/Passed/Warnings/Failed filters; link to the SEO Audit.
+- Category tabs list every Lighthouse audit grouped like PageSpeed Insights: failing groups, then passed, not applicable and manual checks.
+- "Learn about this audit" explains lab vs real-user data, devices and the Riviso Technical Health Score.
+
+### Fixed
+- Lab metrics no longer show a real-user status next to a lab value (a 17 s mobile LCP was labelled "Good").
+- TTFB shows a value instead of Lighthouse's sentence.
+- Lighthouse run warnings (e.g. the page returned 502) are now shown instead of silently reporting a perfect score.
+
 ## 2026-10-20
 
 ### Added — SEO Audit: pages that could not be crawled are now reported

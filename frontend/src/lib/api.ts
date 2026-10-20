@@ -434,6 +434,8 @@ export type GscSitemapList = {
 export type TechnicalAuditCwvEntry = {
   display_value?: string | null;
   numeric_value?: number | null;
+  /** Lighthouse audit score 0-1 (lab entries stored from 2026-10-20). */
+  score?: number | null;
   status?: "good" | "needs_improvement" | "poor" | null;
   /** "field" = this page's real users, "field_origin" = whole-site real users, "lab" = Lighthouse run. */
   source?: "field" | "field_origin" | "lab" | null;
@@ -490,6 +492,43 @@ export type TechnicalAuditFixFirstItem = {
 
 export type TechnicalAuditCategorySummary = { passed: number; warnings: number; failed: number };
 
+/** Chrome real-user data (CrUX). One scope for every metric: this URL or the whole origin. */
+export type TechnicalAuditFieldMetric = {
+  /** 75th percentile: ms, or unitless for CLS (already de-scaled). */
+  percentile: number | null;
+  status: "good" | "needs_improvement" | "poor" | null;
+  /** good / needs improvement / poor proportions (0-1), Google's bucket bounds. */
+  distributions: { min: number | null; max: number | null; proportion: number }[];
+};
+
+export type TechnicalAuditField = {
+  scope: "url" | "origin";
+  overall_status: "good" | "needs_improvement" | "poor" | null;
+  metrics: Partial<Record<"lcp" | "inp" | "cls" | "fcp" | "ttfb", TechnicalAuditFieldMetric>>;
+};
+
+export type TechnicalAuditKind = "failed" | "warning" | "passed" | "informational" | "manual" | "not_applicable" | "error";
+
+/** One Lighthouse audit, listed once under the category that owns it. */
+export type TechnicalAuditIndexEntry = {
+  id: string;
+  title?: string | null;
+  category: "performance" | "accessibility" | "best_practices" | "seo";
+  group?: string | null;
+  group_title?: string | null;
+  kind: TechnicalAuditKind;
+  score?: number | null;
+  display_value?: string | null;
+  /* Present for non-passed audits only. */
+  description?: string | null;
+  metric_savings?: Record<string, number>;
+  overall_savings_ms?: number | null;
+  overall_savings_bytes?: number | null;
+  error_message?: string | null;
+  item_count?: number;
+  samples?: TechnicalAuditSample[];
+};
+
 export type TechnicalAuditStrategyResult = {
   scores: {
     performance: number | null;
@@ -509,6 +548,19 @@ export type TechnicalAuditStrategyResult = {
   seo_summary?: TechnicalAuditCategorySummary | null;
   fix_first?: TechnicalAuditFixFirstItem[];
   field_data_source?: "field" | "field_origin" | null;
+  /* Added 2026-10 (v2); absent on older runs. History rows omit audits_index. */
+  field?: TechnicalAuditField | null;
+  audits_index?: TechnicalAuditIndexEntry[];
+  requested_url?: string | null;
+  lighthouse_version?: string | null;
+  form_factor?: "mobile" | "desktop" | null;
+  locale?: string | null;
+  emulated_user_agent?: string | null;
+  benchmark_index?: number | null;
+  run_warnings?: string[];
+  run_duration_ms?: number | null;
+  screenshot_url?: string | null;
+  screenshot_status?: "stored" | "unavailable" | "not_captured" | null;
   fetch_time?: string | null;
   final_url?: string | null;
 };
@@ -4331,6 +4383,9 @@ export const api = {
   },
   async getTechnicalAuditHistory(projectId: string) {
     return apiFetch<{ runs: TechnicalAuditRun[] }>(`/api/projects/${projectId}/site-audit/technical/history`);
+  },
+  async getTechnicalAuditRun(projectId: string, runId: string) {
+    return apiFetch<{ run: TechnicalAuditRun }>(`/api/projects/${projectId}/site-audit/technical/runs/${encodeURIComponent(runId)}`);
   },
   async runTechnicalAudit(projectId: string) {
     return apiFetch<TechnicalAuditLatestResponse>(`/api/projects/${projectId}/site-audit/technical/run`, { method: "POST" });

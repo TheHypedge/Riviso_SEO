@@ -2,7 +2,15 @@
  * Pure view logic for the Technical Audit screen. No React, no fetching -- every value is
  * read from a stored PageSpeed Insights result or is arithmetic on it.
  */
-import type { TechnicalAuditCwvEntry, TechnicalAuditFinding, TechnicalAuditOpportunity, TechnicalAuditStrategyResult } from "./api";
+import type {
+  TechnicalAuditCwvEntry,
+  TechnicalAuditField,
+  TechnicalAuditFieldMetric,
+  TechnicalAuditFinding,
+  TechnicalAuditIndexEntry,
+  TechnicalAuditOpportunity,
+  TechnicalAuditStrategyResult,
+} from "./api";
 
 export type Strategy = "mobile" | "desktop";
 export type Status = "good" | "needs_improvement" | "poor";
@@ -188,4 +196,178 @@ export function healthDelta(current: TechnicalAuditStrategyResult | null | undef
   if (a === null || b === null) return null;
   const d = a - b;
   return d === 0 ? "No change" : `${d > 0 ? "▲" : "▼"} ${Math.abs(d)}`;
+}
+
+/* ── v2 (TECHNICAL_AUDIT_UI_SPEC v2 §10) ──────────────────────────────────── */
+
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
+  return `${Math.round(bytes)} B`;
+}
+
+/** Only absolute https: URLs (for links built from Lighthouse or audited-site strings). */
+export function isSafeHttpsUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && Boolean(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export type TextPart = { type: "text"; text: string } | { type: "code"; text: string } | { type: "link"; text: string; href: string };
+
+const LINK_OR_CODE = /\[([^\[\]]*)\]\(([^()\s]*)\)|`([^`]+)`/g;
+const MAX_TEXT = 4000;
+
+/**
+ * Lighthouse strings -> safe parts. Recognises `[label](https://…)` and `` `code` `` only.
+ * Non-https links become plain text (label kept). Everything renders as React text nodes.
+ */
+export function parseLighthouseText(text: string | null | undefined): TextPart[] {
+  const src = (text || "").slice(0, MAX_TEXT);
+  const out: TextPart[] = [];
+  let last = 0;
+  for (const m of src.matchAll(LINK_OR_CODE)) {
+    if (m.index! > last) out.push({ type: "text", text: src.slice(last, m.index) });
+    if (m[3] !== undefined) out.push({ type: "code", text: m[3] });
+    else if (isSafeHttpsUrl(m[2]) && m[1].trim()) out.push({ type: "link", text: m[1], href: m[2] });
+    else if (m[1].trim()) out.push({ type: "text", text: m[1] });
+    last = m.index! + m[0].length;
+  }
+  if (last < src.length) out.push({ type: "text", text: src.slice(last) });
+  return out;
+}
+
+/**
+ * Riviso-defined impact bands over Google's estimated savings -- the one label on this screen
+ * Google does not supply. Shown as "Impact" with the tooltip "Based on Google's estimated
+ * savings". Proposed in the spec, pending owner confirmation.
+ */
+export const IMPACT_HIGH_MS = 1000;
+export const IMPACT_HIGH_BYTES = 500 * 1024;
+export const IMPACT_MEDIUM_MS = 300;
+export const IMPACT_MEDIUM_BYTES = 100 * 1024;
+
+export type ImpactTier = "high" | "medium" | "low";
+
+export function impactTier(savingsMs: number | null | undefined, savingsBytes: number | null | undefined): ImpactTier | null {
+  const ms = typeof savingsMs === "number" && savingsMs > 0 ? savingsMs : 0;
+  const by = typeof savingsBytes === "number" && savingsBytes > 0 ? savingsBytes : 0;
+  if (!ms && !by) return null;
+  if (ms >= IMPACT_HIGH_MS || by >= IMPACT_HIGH_BYTES) return "high";
+  if (ms >= IMPACT_MEDIUM_MS || by >= IMPACT_MEDIUM_BYTES) return "medium";
+  return "low";
+}
+
+export const IMPACT_LABELS: Record<ImpactTier, string> = { high: "High", medium: "Medium", low: "Low" };
+
+/** Metrics Lighthouse can attribute savings to, in PSI's display order. */
+export const SAVINGS_METRICS = ["FCP", "LCP", "INP", "CLS", "TBT"] as const;
+
+type WithSavings = { metric_savings?: Record<string, number> | null };
+
+export function savingsMetrics(f: WithSavings): string[] {
+  const s = f.metric_savings || {};
+  return SAVINGS_METRICS.filter((m) => typeof s[m] === "number" && s[m] > 0);
+}
+
+/** Filter chips with real counts: All (n), then one per metric that has at least one finding. */
+export function metricFilterChips(items: WithSavings[]): { key: string; label: string; count: number }[] {
+  const chips = [{ key: "all", label: "All", count: items.length }];
+  for (const m of SAVINGS_METRICS) {
+    const n = items.filter((f) => savingsMetrics(f).includes(m)).length;
+    if (n > 0) chips.push({ key: m, label: m, count: n });
+  }
+  return chips;
+}
+
+export type OpportunitySort = "savings" | "impact" | "metric" | "name";
+
+type Sortable = TechnicalAuditOpportunity;
+const TIER_RANK: Record<string, number> = { high: 3, medium: 2, low: 1 };
+
+export function sortOpportunities<T extends Sortable>(items: T[], sort: OpportunitySort): T[] {
+  const savings = (f: T) => bestSavingsMs(f) || 0;
+  const bytes = (f: T) => f.overall_savings_bytes ?? 0;
+  const tier = (f: T) => TIER_RANK[impactTier(bestSavingsMs(f), f.overall_savings_bytes) ?? ""] ?? 0;
+  const metric = (f: T) => savingsMetrics(f)[0] ?? "ZZZ";
+  const name = (f: T) => (f.title || f.id).toLowerCase();
+  const bySavings = (a: T, b: T) => savings(b) - savings(a) || bytes(b) - bytes(a);
+  const sorted = [...items];
+  if (sort === "savings") sorted.sort(bySavings);
+  else if (sort === "impact") sorted.sort((a, b) => tier(b) - tier(a) || bySavings(a, b));
+  else if (sort === "metric") sorted.sort((a, b) => metric(a).localeCompare(metric(b)) || bySavings(a, b));
+  else sorted.sort((a, b) => name(a).localeCompare(name(b)));
+  return sorted;
+}
+
+/** Lighthouse score band for a 0-100 score (or null) -> display kind. */
+export function kindFromScore(score: number | null | undefined): "failed" | "warning" | "passed" | "informational" {
+  if (typeof score !== "number") return "informational";
+  if (score >= 90) return "passed";
+  return score >= 50 ? "warning" : "failed";
+}
+
+export type DiagnosticsFilter = "all" | "passed" | "warning" | "failed" | "informational";
+const KIND_ORDER: Record<string, number> = { failed: 0, warning: 1, passed: 2, informational: 3 };
+
+/**
+ * Diagnostics chips: Passed (>= 90), Warnings (50-89), Failed (< 50), Informational.
+ * "All" = passed + warnings + failed (informational excluded, as the UI tooltip says).
+ */
+export function diagnosticsBuckets<T extends { kind: string }>(rows: T[]) {
+  const counts = { passed: 0, warning: 0, failed: 0, informational: 0 };
+  for (const r of rows) if (r.kind in counts) counts[r.kind as keyof typeof counts] += 1;
+  return { ...counts, all: counts.passed + counts.warning + counts.failed };
+}
+
+export function filterDiagnostics<T extends { kind: string }>(rows: T[], filter: DiagnosticsFilter): T[] {
+  const kept = rows.filter((r) => (filter === "all" ? r.kind !== "informational" && r.kind in KIND_ORDER : r.kind === filter));
+  // Stable sort keeps Lighthouse's own order within each group.
+  return kept.map((r, i) => [r, i] as const).sort((a, b) => KIND_ORDER[a[0].kind] - KIND_ORDER[b[0].kind] || a[1] - b[1]).map(([r]) => r);
+}
+
+/**
+ * Core Web Vitals assessment from real-user data: Passed only if LCP, INP and CLS are all
+ * "good" at the 75th percentile; Failed if any of them is not; No data if any is missing.
+ */
+export function fieldAssessment(field: TechnicalAuditField | null | undefined): "passed" | "failed" | "no_data" {
+  const m = field?.metrics;
+  const statuses = (["lcp", "inp", "cls"] as const).map((k) => m?.[k]?.status ?? null);
+  if (statuses.some((s) => s === null)) return "no_data";
+  return statuses.every((s) => s === "good") ? "passed" : "failed";
+}
+
+export function formatFieldValue(metric: MetricKey, value: number | null | undefined): string {
+  if (typeof value !== "number") return "—";
+  if (metric === "cls") return value.toFixed(2);
+  return formatMs(value);
+}
+
+/** good / needs improvement / poor shares as whole percentages (from Google's buckets). */
+export function distributionPercents(field: TechnicalAuditFieldMetric | null | undefined): [number, number, number] | null {
+  const d = field?.distributions || [];
+  if (d.length !== 3) return null;
+  return [Math.round(d[0].proportion * 100), Math.round(d[1].proportion * 100), Math.round(d[2].proportion * 100)];
+}
+
+/** Failing + warning audits for a category, from the index (null when not stored). */
+export function categoryToFix(index: TechnicalAuditIndexEntry[] | undefined, category: TechnicalAuditIndexEntry["category"]): number | null {
+  if (!index || index.length === 0) return null;
+  return index.filter((a) => a.category === category && (a.kind === "failed" || a.kind === "warning")).length;
+}
+
+/** Safe download name, e.g. riviso-technical-audit-example.com-2026-10-20-mobile.json */
+export function reportFilename(url: string | null | undefined, createdAt: string | null | undefined, strategy: Strategy): string {
+  let host = "site";
+  try {
+    host = url ? new URL(url).hostname : host;
+  } catch {
+    /* keep default */
+  }
+  const day = (createdAt || "").slice(0, 10).replace(/[^0-9-]/g, "") || "unknown-date";
+  return `riviso-technical-audit-${host.replace(/[^a-z0-9.-]/gi, "")}-${day}-${strategy}.json`;
 }
