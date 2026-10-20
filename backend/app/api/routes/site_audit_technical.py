@@ -3,6 +3,7 @@ Site Audit — Technical Audit (Google PageSpeed Insights), Phase 1.
 
 - ``GET  /api/projects/{project_id}/site-audit/technical/latest``   — current result + running state
 - ``GET  /api/projects/{project_id}/site-audit/technical/history``  — recent runs
+- ``GET  /api/projects/{project_id}/site-audit/technical/runs/{id}`` — one full run
 - ``POST /api/projects/{project_id}/site-audit/technical/run``      — start mobile + desktop, returns immediately
 
 ``/run`` used to run PSI's mobile+desktop calls inline and hold the HTTP connection open until
@@ -18,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -26,7 +28,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.core.deps import get_current_user
 from app.core.project_lookup import async_require_project_access
 from app.legacy.storage import get_legacy_storage_module
-from app.services.pagespeed_client import fetch_pagespeed_result, normalize_pagespeed_result, pagespeed_configured
+from app.services.cloudinary_storage import upload_image_bytes
+from app.services.pagespeed_client import extract_final_screenshot, fetch_pagespeed_result, normalize_pagespeed_result, pagespeed_configured
 from app.services.plan_gatekeeper import PlanAction, require_plan_action_for_project
 from app.services.site_audit.website import resolve_project_website_url
 from app.services.to_thread import run_sync
@@ -50,20 +53,45 @@ def _website_block(proj: dict) -> dict[str, Any]:
     return {"url": url, "connected": bool(url)}
 
 
+async def _timed_fetch(url: str, strategy: str) -> tuple[dict[str, Any], int]:
+    """PSI result plus Riviso's own measured wall-clock duration of the call (ms)."""
+    started = time.monotonic()
+    raw = await fetch_pagespeed_result(url=url, strategy=strategy)  # type: ignore[arg-type]
+    return raw, int((time.monotonic() - started) * 1000)
+
+
+async def _store_screenshot(raw: dict[str, Any], *, project_id: str, run_id: str, strategy: str) -> dict[str, Any]:
+    """Upload Lighthouse's final screenshot to image storage; only the URL is stored."""
+    data = extract_final_screenshot(raw)
+    if not data:
+        return {"screenshot_url": None, "screenshot_status": "not_captured"}
+    uploaded = await asyncio.to_thread(upload_image_bytes, data, folder=f"technical-audit/{project_id}", public_id=f"{run_id}-{strategy}")
+    if not uploaded:
+        return {"screenshot_url": None, "screenshot_status": "unavailable"}
+    return {"screenshot_url": uploaded["secure_url"], "screenshot_status": "stored"}
+
+
 async def _execute_technical_audit(*, project_id: str, url: str) -> None:
     st = get_legacy_storage_module()
     try:
-        mobile_raw, desktop_raw = await asyncio.gather(
-            fetch_pagespeed_result(url=url, strategy="mobile"),
-            fetch_pagespeed_result(url=url, strategy="desktop"),
-        )
+        (mobile_raw, mobile_ms), (desktop_raw, desktop_ms) = await asyncio.gather(_timed_fetch(url, "mobile"), _timed_fetch(url, "desktop"))
+        run_id = secrets.token_hex(16)
+        strategies: dict[str, Any] = {}
+        for strategy, raw, ms in (("mobile", mobile_raw, mobile_ms), ("desktop", desktop_raw, desktop_ms)):
+            result = normalize_pagespeed_result(raw)
+            result["run_duration_ms"] = ms
+            try:
+                result.update(await _store_screenshot(raw, project_id=project_id, run_id=run_id, strategy=strategy))
+            except Exception:  # a screenshot must never fail the audit
+                log.warning("Technical Audit screenshot upload failed for project %s", project_id, exc_info=True)
+                result.update({"screenshot_url": None, "screenshot_status": "unavailable"})
+            strategies[strategy] = result
         run = {
-            "id": secrets.token_hex(16),
+            "id": run_id,
             "project_id": project_id,
             "website_url": url,
             "created_at": _now_iso(),
-            "mobile": normalize_pagespeed_result(mobile_raw),
-            "desktop": normalize_pagespeed_result(desktop_raw),
+            **strategies,
         }
         if hasattr(st, "save_technical_audit_run"):
             await run_sync(st.save_technical_audit_run, run)
@@ -97,6 +125,17 @@ async def get_technical_audit_history(project_id: str, user: dict = Depends(get_
     await async_require_project_access(user=user, project_id=project_id, full=False, allow_collaborators=True)
     rows = await run_sync(st.load_technical_audit_history, project_id, limit=20) if hasattr(st, "load_technical_audit_history") else []
     return {"runs": rows or []}
+
+
+@router.get("/runs/{run_id}")
+async def get_technical_audit_run(project_id: str, run_id: str, user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    """One full stored run (history rows omit the per-strategy audits index)."""
+    st = get_legacy_storage_module()
+    await async_require_project_access(user=user, project_id=project_id, full=False, allow_collaborators=True)
+    run = await run_sync(st.load_technical_audit_run, project_id, run_id) if hasattr(st, "load_technical_audit_run") else None
+    if not run:
+        raise HTTPException(status_code=404, detail="That Technical Audit run was not found for this project.")
+    return {"run": run}
 
 
 @router.post("/run")

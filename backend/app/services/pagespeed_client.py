@@ -58,6 +58,8 @@ async def fetch_pagespeed_result(*, url: str, strategy: Literal["mobile", "deskt
         "key": api_key,
         "strategy": strategy,
         "category": ["performance", "accessibility", "best-practices", "seo"],
+        # Google's strings (titles, descriptions, displayValues) in one consistent language.
+        "locale": "en",
     }
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout_s, connect=10.0), follow_redirects=True) as client:
         res = await client.get(PAGESPEED_ENDPOINT, params=params)
@@ -117,8 +119,10 @@ def _field_metrics(raw: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
 
 
 def _extract_core_web_vitals(raw: dict[str, Any]) -> dict[str, Any]:
+    """Lab (Lighthouse) values. Status always comes from the same audit's own score, so a
+    value and its status can never come from different sources -- real-user (field) data
+    lives separately in `field` (see _extract_field)."""
     audits = ((raw.get("lighthouseResult") or {}).get("audits") or {})
-    field_metrics, field_source = _field_metrics(raw)
 
     out: dict[str, Any] = {}
     for key, audit_id in _CWV_AUDIT_IDS.items():
@@ -126,26 +130,57 @@ def _extract_core_web_vitals(raw: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(audit, dict):
             continue
         lab_score = audit.get("score")
+        display = audit.get("displayValue")
+        numeric = audit.get("numericValue")
+        if key == "ttfb" and isinstance(numeric, (int, float)):
+            # server-response-time's displayValue is a sentence ("Root document took 60 ms").
+            display = f"{round(numeric)} ms"
         entry: dict[str, Any] = {
-            "display_value": audit.get("displayValue"),
-            "numeric_value": audit.get("numericValue"),
-            # Field data (real users) wins when available; else fall back to Lighthouse's
-            # own lab-score bands -- both are Google's classification, never a custom one.
-            "status": None,
-            "source": None,
+            "display_value": display,
+            "numeric_value": numeric,
+            "score": lab_score,
+            "status": _lab_status_from_score(float(lab_score)) if lab_score is not None else None,
+            "source": "lab",
         }
-        field_key = _CWV_FIELD_KEYS.get(key)
-        field_entry = field_metrics.get(field_key) if field_key else None
-        if isinstance(field_entry, dict) and field_entry.get("category"):
-            entry["status"] = _field_status(field_entry.get("category"))
-            entry["source"] = field_source
-        elif lab_score is not None:
-            entry["status"] = _lab_status_from_score(float(lab_score))
-            entry["source"] = "lab"
         if entry["display_value"] is None and entry["numeric_value"] is None and entry["status"] is None:
             continue
         out[key] = entry
     return out
+
+
+# CrUX keys -> our metric keys. TTFB is still reported under an EXPERIMENTAL_ name.
+_FIELD_KEYS: dict[str, str] = {**_CWV_FIELD_KEYS, "ttfb": "EXPERIMENTAL_TIME_TO_FIRST_BYTE"}
+
+
+def _field_value(metric: str, v: Any) -> float | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    # CrUX reports CLS percentiles and distribution bounds multiplied by 100.
+    return round(v / 100, 3) if metric == "cls" else float(v)
+
+
+def _extract_field(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Chrome real-user data (CrUX) for this URL, else for the whole origin -- never mixed:
+    one scope for every metric, labelled. None when PageSpeed returned no field data."""
+    metrics_src, source = _field_metrics(raw)
+    if not metrics_src:
+        return None
+    exp_key = "loadingExperience" if source == "field" else "originLoadingExperience"
+    metrics: dict[str, Any] = {}
+    for key, crux_key in _FIELD_KEYS.items():
+        m = metrics_src.get(crux_key)
+        if not isinstance(m, dict):
+            continue
+        dist = []
+        for d in (m.get("distributions") or [])[:3]:
+            if isinstance(d, dict) and isinstance(d.get("proportion"), (int, float)):
+                dist.append({"min": _field_value(key, d.get("min")), "max": _field_value(key, d.get("max")), "proportion": round(float(d["proportion"]), 4)})
+        metrics[key] = {"percentile": _field_value(key, m.get("percentile")), "status": _field_status(m.get("category")), "distributions": dist}
+    return {
+        "scope": "url" if source == "field" else "origin",
+        "overall_status": _field_status((raw.get(exp_key) or {}).get("overall_category")),
+        "metrics": metrics,
+    }
 
 
 # Lighthouse categories with their own findings list, in claim order: an audit referenced
@@ -423,6 +458,128 @@ def _extract_category_summary(raw: dict[str, Any], category_key: str) -> dict[st
     return {"passed": passed, "warnings": warnings, "failed": failed}
 
 
+# Lighthouse category ids -> the keys this app uses everywhere else.
+_CATEGORY_KEYS: tuple[tuple[str, str], ...] = (
+    ("performance", "performance"),
+    ("accessibility", "accessibility"),
+    ("best-practices", "best_practices"),
+    ("seo", "seo"),
+)
+_MAX_DESCRIPTION = 600
+
+
+def classify_audit(audit: dict[str, Any]) -> str:
+    """failed | warning | passed | informational | manual | not_applicable | error, using
+    only Lighthouse's own scoreDisplayMode and score bands (0.9 / 0.5)."""
+    mode = audit.get("scoreDisplayMode")
+    if mode == "notApplicable":
+        return "not_applicable"
+    if mode == "manual":
+        return "manual"
+    if mode == "error":
+        return "error"
+    if mode == "informative":
+        return "informational"
+    score = audit.get("score")
+    if score is None:
+        return "informational"
+    score = float(score)
+    if score >= 0.9:
+        return "passed"
+    return "warning" if score >= 0.5 else "failed"
+
+
+def _extract_audits_index(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every audit Lighthouse ran, listed once under the category that owns it (first
+    category wins, e.g. `image-alt` is Accessibility, not SEO). Metric measurements and
+    Lighthouse's hidden audits are excluded; they are shown as metrics, not findings.
+    Passed / not-applicable audits keep only title + status to stay small."""
+    lh = raw.get("lighthouseResult") or {}
+    audits = lh.get("audits") or {}
+    groups = {k: (v or {}).get("title") for k, v in (lh.get("categoryGroups") or {}).items()}
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for lh_key, key in _CATEGORY_KEYS:
+        cat = (lh.get("categories") or {}).get(lh_key) or {}
+        for ref in cat.get("auditRefs") or []:
+            audit_id = (ref or {}).get("id")
+            group = ref.get("group")
+            audit = audits.get(audit_id)
+            if not audit_id or audit_id in seen or not isinstance(audit, dict) or group in _METRIC_GROUPS:
+                continue
+            seen.add(audit_id)
+            kind = classify_audit(audit)
+            score = audit.get("score")
+            row: dict[str, Any] = {
+                "id": audit_id,
+                "title": _clip(audit.get("title")),
+                "category": key,
+                "group": group,
+                "group_title": groups.get(group) if group else None,
+                "kind": kind,
+                "score": round(float(score) * 100) if score is not None and kind not in ("not_applicable", "manual") else None,
+                "display_value": _clip(audit.get("displayValue")),
+            }
+            if kind in ("failed", "warning", "informational", "manual", "error"):
+                details = audit.get("details") if isinstance(audit.get("details"), dict) else {}
+                desc = " ".join(str(audit.get("description") or "").split())
+                row["description"] = desc[:_MAX_DESCRIPTION] or None
+                row["metric_savings"] = _metric_savings(audit)
+                if details.get("type") == "opportunity":
+                    row["overall_savings_ms"] = details.get("overallSavingsMs")
+                    row["overall_savings_bytes"] = details.get("overallSavingsBytes")
+                if kind == "error":
+                    row["error_message"] = _clip(audit.get("errorMessage"))
+                row.update(_affected(details))
+            out.append(row)
+    return out
+
+
+_MAX_WARNINGS = 10
+
+
+def _extract_run_meta(raw: dict[str, Any]) -> dict[str, Any]:
+    lh = raw.get("lighthouseResult") or {}
+    env = lh.get("environment") or {}
+    cfg = lh.get("configSettings") or {}
+    return {
+        "requested_url": lh.get("requestedUrl"),
+        "lighthouse_version": lh.get("lighthouseVersion"),
+        "form_factor": cfg.get("formFactor"),
+        "locale": cfg.get("locale"),
+        # Emulated device user agent, e.g. "...Android 11; moto g power (2022)...".
+        "emulated_user_agent": _clip(env.get("networkUserAgent")),
+        "benchmark_index": _number(env.get("benchmarkIndex")),
+        # Never hide a Lighthouse warning (e.g. "unable to reliably load the page ... 502").
+        "run_warnings": [w for w in (_clip(x) for x in (lh.get("runWarnings") or [])[:_MAX_WARNINGS]) if w],
+    }
+
+
+_SCREENSHOT_RE = re.compile(r"^data:image/(jpeg|png|webp);base64,([A-Za-z0-9+/=\s]+)$")
+_MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024
+_IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"RIFF")
+
+
+def extract_final_screenshot(raw: dict[str, Any]) -> bytes | None:
+    """Decoded bytes of Lighthouse's `final-screenshot` (viewport) for upload to image
+    storage. None unless it is a real JPEG/PNG/WebP within the size cap. The base64 is
+    never stored anywhere."""
+    import base64
+    import binascii
+
+    details = (((raw.get("lighthouseResult") or {}).get("audits") or {}).get("final-screenshot") or {}).get("details") or {}
+    m = _SCREENSHOT_RE.match(str(details.get("data") or ""))
+    if not m:
+        return None
+    try:
+        data = base64.b64decode(m.group(2), validate=False)
+    except (binascii.Error, ValueError):
+        return None
+    if not data or len(data) > _MAX_SCREENSHOT_BYTES or not data.startswith(_IMAGE_MAGIC):
+        return None
+    return data
+
+
 def normalize_pagespeed_result(raw: dict[str, Any]) -> dict[str, Any]:
     """Compact shape the Technical Audit UI reads -- only fields actually present in `raw`."""
     opportunities, diagnostics = _extract_opportunities_and_diagnostics(raw)
@@ -449,4 +606,7 @@ def normalize_pagespeed_result(raw: dict[str, Any]) -> dict[str, Any]:
         "field_data_source": field_source,
         "fetch_time": (raw.get("lighthouseResult") or {}).get("fetchTime"),
         "final_url": (raw.get("lighthouseResult") or {}).get("finalUrl") or raw.get("id"),
+        "field": _extract_field(raw),
+        "audits_index": _extract_audits_index(raw),
+        **_extract_run_meta(raw),
     }

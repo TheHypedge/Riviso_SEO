@@ -67,26 +67,27 @@ def test_samples_capped_and_truncated():
     assert "details" not in json.dumps(out)
 
 
-def test_field_data_falls_back_to_origin():
+def test_field_data_falls_back_to_origin_and_never_mixes_with_lab():
     out = psi.normalize_pagespeed_result(_raw())
     assert out["field_data_source"] == "field_origin"
+    assert out["field"]["scope"] == "origin"
+    assert out["field"]["metrics"]["lcp"]["status"] == "needs_improvement"
+    assert out["field"]["metrics"]["lcp"]["percentile"] == 3100.0
+    # Lab entry keeps the lab value AND the lab status (score 0.3 -> poor): one source per value.
     assert out["core_web_vitals"]["lcp"] == {
-        "display_value": "4.1 s", "numeric_value": 4100, "status": "needs_improvement", "source": "field_origin",
+        "display_value": "4.1 s", "numeric_value": 4100, "score": 0.3, "status": "poor", "source": "lab",
     }
 
     raw = _raw()
     raw["loadingExperience"]["metrics"] = {"LARGEST_CONTENTFUL_PAINT_MS": {"category": "FAST"}}
     out = psi.normalize_pagespeed_result(raw)
-    assert out["field_data_source"] == "field"
-    assert out["core_web_vitals"]["lcp"]["source"] == "field"
-    # Page-level data present but no CLS entry there -> lab, never mixed with origin data.
-    assert out["core_web_vitals"]["cls"]["source"] == "lab"
+    assert out["field_data_source"] == "field" and out["field"]["scope"] == "url"
+    assert set(out["field"]["metrics"]) == {"lcp"}  # URL scope only, origin never merged in
 
     raw = _raw()
     raw["originLoadingExperience"] = {}
     out = psi.normalize_pagespeed_result(raw)
-    assert out["field_data_source"] is None
-    assert out["core_web_vitals"]["lcp"]["source"] == "lab"
+    assert out["field_data_source"] is None and out["field"] is None
 
 
 def test_lighthouse13_insights_are_opportunities_with_metric_savings():

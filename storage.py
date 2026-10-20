@@ -4546,8 +4546,26 @@ def load_technical_audit_history(project_id: str, limit: int = 20) -> list[dict[
         rows = [x for x in _load_json_list("technical_audits.json") if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid]
         rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
         return rows[:lim]
-    cur = get_db().technical_audits.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).limit(lim)
+    # The per-strategy `audits_index` (~60 KB each) is left out: history needs scores and
+    # findings, and a selected run's full document is fetched via load_technical_audit_run.
+    projection = {"_id": 0, "mobile.audits_index": 0, "desktop.audits_index": 0}
+    cur = get_db().technical_audits.find({"project_id": pid}, projection).sort("created_at", -1).limit(lim)
     return [dict(d) for d in cur]
+
+
+def load_technical_audit_run(project_id: str, run_id: str) -> dict[str, Any] | None:
+    """One full Technical Audit run, scoped to its project."""
+    pid = (project_id or "").strip()
+    rid = (run_id or "").strip()
+    if not pid or not rid:
+        return None
+    if _storage_mode != "mongo":
+        for x in _load_json_list("technical_audits.json"):
+            if isinstance(x, dict) and (x.get("project_id") or "").strip() == pid and (x.get("id") or "").strip() == rid:
+                return x
+        return None
+    doc = get_db().technical_audits.find_one({"_id": rid, "project_id": pid}, {"_id": 0})
+    return dict(doc) if isinstance(doc, dict) else None
 
 
 # ----------------------------
