@@ -11911,9 +11911,6 @@ export default function ProjectPage() {
                           Last audited: {formatSiteAuditTimestamp(technicalAudit.audit.created_at)}
                         </p>
                       ) : null}
-                      <span className={`${styles.statusPill} ${styles.statusNeutral}`} style={{ marginTop: 8, display: "inline-block" }}>
-                        Powered by Google PageSpeed Insights
-                      </span>
                     </div>
                     <div className={styles.analyticsHeaderActions}>
                       {!technicalAudit && technicalAuditBusy ? (

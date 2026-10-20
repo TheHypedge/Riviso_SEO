@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { TechnicalAuditCategorySummary, TechnicalAuditFinding, TechnicalAuditRun, TechnicalAuditStrategyResult } from "@/lib/api";
+import { DataTable, DataTableBody, DataTableCell, DataTableHead, DataTableHeaderCell, DataTableRow, StatusPill } from "@/components/ui";
+import type { PillStatus } from "@/components/ui";
 import { FINDING_SECTION_LABELS, describeSample, formatSavings, withTechnicalResultDefaults } from "@/lib/technicalAudit";
 
 type CssModule = { [key: string]: string };
@@ -99,6 +101,12 @@ function statusPillClass(styles: CssModule, status: string | null | undefined): 
   return `${styles.statusPill} ${styles.statusNeutral}`;
 }
 
+const PILL_FOR_STATUS: Record<"good" | "needs_improvement" | "poor", PillStatus> = {
+  good: "success",
+  needs_improvement: "warning",
+  poor: "danger",
+};
+
 function statusLabel(status: string | null | undefined): string {
   if (status === "good") return "Good";
   if (status === "needs_improvement") return "Needs Improvement";
@@ -127,46 +135,6 @@ function technicalHealthScore(result: TechnicalAuditStrategyResult | null | unde
   );
   if (parts.length === 0) return null;
   return Math.round(parts.reduce((a, b) => a + b, 0) / parts.length);
-}
-
-const CATEGORY_LABELS: Record<string, string> = {
-  performance: "Performance",
-  accessibility: "Accessibility",
-  best_practices: "Best Practices",
-  pagespeed_seo: "PageSpeed SEO",
-};
-
-/**
- * Deterministic, real-data-derived contextual message: identifies the lowest-scoring
- * category (ties broken by the order above) and, where a findings list exists for it,
- * names up to two real finding titles from that list -- never invented copy.
- */
-function buildHealthMessage(result: TechnicalAuditStrategyResult, health: number | null): string {
-  const entries: Array<{ key: string; value: number | null }> = [
-    { key: "performance", value: result.scores.performance },
-    { key: "accessibility", value: result.scores.accessibility },
-    { key: "best_practices", value: result.scores.best_practices },
-  ];
-  const scored = entries.filter((e): e is { key: string; value: number } => typeof e.value === "number");
-  if (scored.length === 0) return "Run a Technical Audit to see a health summary for this page.";
-
-  const weakest = scored.reduce((a, b) => (b.value < a.value ? b : a));
-  if (health !== null && health >= 90) {
-    return "Great job! Your site is performing well. Keep an eye on Core Web Vitals as content and traffic grow.";
-  }
-
-  const findings = weakest.key === "performance" ? result.opportunities : weakest.key === "accessibility" ? result.accessibility_failures : result.best_practices_failures;
-  const names = findings
-    .map((f) => f.title)
-    .filter((t): t is string => Boolean(t))
-    .slice(0, 2);
-  const label = CATEGORY_LABELS[weakest.key] || weakest.key;
-  const severity = weakest.value < 50 ? "requires attention" : "has room to improve";
-
-  if (names.length > 0) {
-    return `${label} ${severity}. The primary opportunities are related to ${names.join(" and ")}.`;
-  }
-  return `${label} ${severity}. Review the ${label.toLowerCase()} findings below for details.`;
 }
 
 /* ── Score gauge (270° arc) ─────────────────────────────────────────────── */
@@ -292,7 +260,6 @@ export function TechnicalAuditSummary({
     { key: "best_practices", label: "Best Practices", value: result.scores.best_practices },
     { key: "pagespeed_seo", label: "PageSpeed SEO", value: result.scores.pagespeed_seo },
   ];
-  const message = buildHealthMessage(result, health);
 
   return (
     <div className={`${styles.card} ${styles.cardWide} ${styles.siteAuditSummaryCard}`}>
@@ -328,38 +295,64 @@ export function TechnicalAuditSummary({
           );
         })}
       </div>
-      <table className={styles.siteAuditDeviceTable}>
-        <caption>Mobile vs Desktop (Lighthouse scores, out of 100)</caption>
-        <thead>
-          <tr>
-            <th scope="col">Category</th>
-            <th scope="col">Mobile</th>
-            <th scope="col">Desktop</th>
-          </tr>
-        </thead>
-        <tbody>
-          {scoreEntries.map((s) => {
-            const key = s.key as keyof TechnicalAuditStrategyResult["scores"];
-            return (
-              <tr key={s.key}>
-                <th scope="row">{s.label}</th>
-                {[mobile.scores[key], desktop.scores[key]].map((v, i) => (
-                  <td key={i}>
-                    <span className={styles.siteAuditBreakdownDot} data-status={scoreStatus(v) || "unknown"} aria-hidden="true" />
-                    {v === null ? "—" : v}
-                    {v !== null ? <span className={styles.srOnly}> ({statusLabel(scoreStatus(v))})</span> : null}
-                  </td>
-                ))}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      <div className={styles.siteAuditHealthMessage}>
-        <p style={{ margin: 0, fontSize: 13 }}>{message}</p>
-        <p className={styles.muted} style={{ margin: "4px 0 0", fontSize: 11 }}>
-          PageSpeed SEO is a Lighthouse category, not Riviso&rsquo;s SEO Audit.
-        </p>
+      <div className={styles.siteAuditDeviceCompare}>
+        <h3 className={styles.sectionTitle} style={{ fontSize: 15 }}>
+          Mobile vs Desktop
+        </h3>
+        <DataTable aria-label="Mobile vs Desktop Lighthouse scores, out of 100">
+          <DataTableHead>
+            <DataTableRow>
+              <DataTableHeaderCell scope="col">Category</DataTableHeaderCell>
+              <DataTableHeaderCell scope="col">Mobile</DataTableHeaderCell>
+              <DataTableHeaderCell scope="col">Desktop</DataTableHeaderCell>
+              <DataTableHeaderCell scope="col" className="text-right">
+                Difference
+              </DataTableHeaderCell>
+            </DataTableRow>
+          </DataTableHead>
+          <DataTableBody>
+            {scoreEntries.map((s) => {
+              const key = s.key as keyof TechnicalAuditStrategyResult["scores"];
+              const m = mobile.scores[key];
+              const d = desktop.scores[key];
+              const diff = m !== null && d !== null ? d - m : null;
+              return (
+                <DataTableRow key={s.key}>
+                  <DataTableCell>
+                    <span className={styles.siteAuditDeviceCategory}>
+                      <span className={styles.siteAuditCategoryIcon} data-status={scoreStatus(Math.min(m ?? 100, d ?? 100)) || "unknown"} aria-hidden="true">
+                        <CategoryIcon category={s.key} />
+                      </span>
+                      <span style={{ fontWeight: 600 }}>{s.label}</span>
+                    </span>
+                  </DataTableCell>
+                  {[m, d].map((v, i) => (
+                    <DataTableCell key={i}>
+                      <span className={styles.siteAuditDeviceScore}>
+                        <span className="tabular-nums" style={{ fontWeight: 700, minWidth: 28 }}>
+                          {v === null ? "—" : v}
+                        </span>
+                        {v !== null ? <StatusPill status={PILL_FOR_STATUS[scoreStatus(v) || "poor"]} label={statusLabel(scoreStatus(v))} /> : null}
+                      </span>
+                    </DataTableCell>
+                  ))}
+                  <DataTableCell className="text-right tabular-nums">
+                    {diff === null ? (
+                      "—"
+                    ) : diff === 0 ? (
+                      <span className={styles.muted}>Same</span>
+                    ) : (
+                      <span>
+                        {diff > 0 ? "+" : "−"}
+                        {Math.abs(diff)} <span className={styles.muted}>on {diff > 0 ? "desktop" : "mobile"}</span>
+                      </span>
+                    )}
+                  </DataTableCell>
+                </DataTableRow>
+              );
+            })}
+          </DataTableBody>
+        </DataTable>
       </div>
     </div>
   );
