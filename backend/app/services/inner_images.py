@@ -97,7 +97,12 @@ _EXTRACT_SYSTEM = (
     '"unit": "<= 12 chars, e.g. %, USD bn, users, or empty", '
     '"points": [{"label": "<= 28 chars", "value": <number>}]}}\n'
     "bar: 2-8 comparable items sharing one unit. line: 3-10 points in time order (label = period). "
-    "stat: 1-3 standalone headline figures. All points must share the same unit."
+    "stat: 1-3 standalone headline figures. All points must share the same unit.\n"
+    "Every value must be a measured quantity of the SAME kind (e.g. all percentages, or all "
+    "dollar amounts, or all days). Never use: a number that is part of a name or label "
+    '(e.g. "100-point check", "Top 10 lenders", "Section 7"), a year or date, a phone '
+    "number, a version or ID. If the section does not have such comparable figures, "
+    'return {"chart": null}.'
 )
 
 _COUNTS = {"bar": (2, 8), "line": (3, 10), "stat": (1, 3)}
@@ -105,6 +110,17 @@ _COUNTS = {"bar": (2, 8), "line": (3, 10), "stat": (1, 3)}
 
 def _numbers_in(text: str) -> set[float]:
     return {float(m.replace(",", "")) for m in _NUM.findall(text or "")}
+
+
+def _is_year(value: float) -> bool:
+    # A calendar year is a date, not a quantity -- charting "1988" as a bar is meaningless.
+    return value.is_integer() and 1900 <= value <= 2100
+
+
+def _is_name_number(label: str, value: float) -> bool:
+    """The figure is part of the item's own name ("100-point ID check" -> 100,
+    "Top 10 lenders" -> 10), so it is a label, not a measurement."""
+    return value in _numbers_in(label)
 
 
 def validate_chart(chart: Any, section_text: str) -> dict | None:
@@ -131,7 +147,11 @@ def validate_chart(chart: Any, section_text: str) -> dict | None:
         # ponytail: negatives rejected (bars/axes assume >= 0); add a zero baseline if needed.
         if not label or not math.isfinite(value) or value < 0 or abs(value) not in allowed:
             return None
+        if _is_year(value) or _is_name_number(label, value):
+            continue  # drop the point; the chart must still have enough real data (below)
         clean.append({"label": label, "value": value})
+    if not lo <= len(clean) <= hi:
+        return None
     title = " ".join(str(chart.get("title") or "").split())[:70]
     if not title:
         return None
@@ -268,6 +288,7 @@ async def add_inner_images(
         month_limit = _plan_for(st, user).get("max_inner_images_per_month")
 
         placed: list[tuple[int, str, str]] = []
+        used_values: set[float] = set()  # one figure never appears in two charts
         # Bound text-model calls: a few fallback sections beyond the requested count.
         for line_idx, heading, text in candidates[: count + 3]:
             if len(placed) >= count:
@@ -275,6 +296,9 @@ async def add_inner_images(
             try:
                 chart = await _extract_chart(title, heading, text)
                 if not chart:
+                    continue
+                values = {p["value"] for p in chart["points"]}
+                if values & used_values:
                     continue
                 if not is_admin and uid and hasattr(st, "consume_inner_image_usage"):
                     ok, msg = await run_sync(call_storage, st.consume_inner_image_usage, uid, month_limit=month_limit)
@@ -289,6 +313,7 @@ async def add_inner_images(
                 # by extension, which every CMS and email client renders.
                 if cloud_url:
                     placed.append((line_idx, re.sub(r"\.svg$", ".png", cloud_url), chart_alt(chart)))
+                    used_values |= values
             except Exception:
                 log.warning("inner images: chart for section %r of article %s failed", heading, article_id, exc_info=True)
 

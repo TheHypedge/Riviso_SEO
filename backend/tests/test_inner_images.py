@@ -123,12 +123,14 @@ def _run(mp, st, *, charts, upload=True, count=2):
 
 
 CHART = {"type": "stat", "title": "Adoption", "unit": "%", "points": [{"label": "Teams", "value": 41.0}]}
+CHART_B = {"type": "bar", "title": "Market size", "unit": "", "points": [{"label": "2022", "value": 62.0}, {"label": "2023", "value": 74.0}]}
 
 
 def test_happy_path_uploads_svg_and_links_png(monkeypatch):
     st = _St()
-    assert _run(monkeypatch, st, charts=[CHART, CHART]) == (2, ["image/svg+xml", "image/svg+xml"])
+    assert _run(monkeypatch, st, charts=[CHART, CHART_B]) == (2, ["image/svg+xml", "image/svg+xml"])
     assert st.saved["article"].count('src="https://res.cloudinary.com/a/b.png"') == 2
+
     assert 'alt="Key figures: Adoption. Teams: 41%"' in st.saved["article"]
 
 
@@ -140,8 +142,51 @@ def test_no_chartable_data_skips_without_quota_or_write(monkeypatch):
 
 def test_quota_errors_and_upload_failures_are_non_fatal(monkeypatch):
     st = _St(quota=1)
-    assert _run(monkeypatch, st, charts=[CHART, CHART])[0] == 1
+    assert _run(monkeypatch, st, charts=[CHART, CHART_B])[0] == 1
     st = _St()
     assert _run(monkeypatch, st, charts=[RuntimeError("openai down"), CHART])[0] == 1
     st = _St()
     assert _run(monkeypatch, st, charts=[CHART, CHART], upload=False)[0] == 0 and st.saved is None
+
+
+# Real bad output from the 2026-10-21 local end-to-end run (KCS mortgage article).
+COMPLIANCE_TEXT = (
+    "Brokers must complete a 100-point ID check, keep records for 7 years, and follow the "
+    "Privacy Act 1988. Settlement takes 14 days on average versus 21 days for others."
+)
+
+
+def test_number_that_is_part_of_a_name_is_not_data():
+    stat = {"type": "stat", "title": "Key compliance check", "unit": "", "points": [{"label": "100-point ID check", "value": 100}]}
+    assert validate_chart(stat, COMPLIANCE_TEXT) is None
+    top = {"type": "stat", "title": "Lenders", "unit": "", "points": [{"label": "Top 7 lenders", "value": 7}]}
+    assert validate_chart(top, COMPLIANCE_TEXT) is None
+
+
+def test_years_are_never_charted_and_mixed_chart_collapses():
+    mixed = {
+        "type": "bar",
+        "title": "Key compliance requirements",
+        "unit": "",
+        "points": [
+            {"label": "100-point ID check", "value": 100},
+            {"label": "Record-keeping (years)", "value": 7},
+            {"label": "Privacy Act year", "value": 1988},
+        ],
+    }
+    # Two of three points are not data -> one point left, below the bar minimum of 2.
+    assert validate_chart(mixed, COMPLIANCE_TEXT) is None
+
+
+def test_real_comparable_figures_still_pass():
+    bar = {"type": "bar", "title": "Average settlement time", "unit": "days", "points": [{"label": "Top brokers", "value": 14}, {"label": "Others", "value": 21}]}
+    out = validate_chart(bar, COMPLIANCE_TEXT)
+    assert out and [p["value"] for p in out["points"]] == [14.0, 21.0]
+    pct = {"type": "stat", "title": "Approval", "unit": "%", "points": [{"label": "Approval rate", "value": 100}]}
+    assert validate_chart(pct, "Approval rate hit 100% this year.") is not None
+
+
+def test_same_figure_is_not_charted_twice(monkeypatch):
+    st = _St()
+    n, _ = _run(monkeypatch, st, charts=[CHART, CHART], count=2)
+    assert n == 1 and st.quota == 98  # duplicate skipped without spending quota
