@@ -534,6 +534,10 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Monthly usage counters added after the original user shape (see _normalize_user_dict).
+_EXTRA_MONTHLY_COUNTERS = ("image_prompt_test", "inner_image", "seo_audit", "technical_audit", "ai_citation")
+
+
 def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
     uid = (d.get("id") or "").strip()
     if not uid:
@@ -576,6 +580,16 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "usage_monthly_cluster_plans_count": int(d.get("usage_monthly_cluster_plans_count") or 0),
         "usage_monthly_custom_research_month": (d.get("usage_monthly_custom_research_month") or "").strip()[:16],
         "usage_monthly_custom_research_count": int(d.get("usage_monthly_custom_research_count") or 0),
+        # Every counter consumed via _consume_monthly_counter must be listed here: this dict
+        # is the write shape (replace_one), so a missing field resets on every write and its
+        # plan limit is never enforced.
+        **{
+            f"usage_monthly_{name}_{suffix}": (
+                (d.get(f"usage_monthly_{name}_month") or "").strip()[:16] if suffix == "month" else int(d.get(f"usage_monthly_{name}_count") or 0)
+            )
+            for name in _EXTRA_MONTHLY_COUNTERS
+            for suffix in ("month", "count")
+        },
         "usage_monthly_llm_tokens_month": (d.get("usage_monthly_llm_tokens_month") or "").strip()[:16],
         "usage_monthly_llm_tokens_used": int(d.get("usage_monthly_llm_tokens_used") or 0),
         "created_at": (d.get("created_at") or "")[:64],
