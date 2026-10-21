@@ -288,7 +288,7 @@ export function BulkScheduleForm({
                   aria-describedby="bulk-inner-image-hint"
                 />
                 <span id="bulk-inner-image-hint" className={styles.muted} style={{ fontSize: 11.5 }}>
-                  0–5. Data charts built from the numbers in each article, placed between sections. Sections without data are skipped, so an article may get fewer. Applies only to articles this schedule generates.
+                  0–5. Placed between sections: data charts where the article has real figures, otherwise images in the selected image prompt's style. Applies only to articles this schedule generates.
                 </span>
               </label>
             </div>

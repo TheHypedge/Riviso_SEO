@@ -101,8 +101,13 @@ class _St:
         self.saved = updates
 
 
-def _run(mp, st, *, charts, upload=True, count=2):
+def _run(mp, st, *, charts, upload=True, count=2, illus=None):
     it = iter(charts)
+    illus_calls = []
+
+    async def fake_illustrate(**kw):
+        illus_calls.append(kw["heading"])
+        return illus
 
     async def fake_extract(title, heading, text):
         c = next(it)
@@ -118,7 +123,12 @@ def _run(mp, st, *, charts, upload=True, count=2):
 
     mp.setattr(ii, "_extract_chart", fake_extract)
     mp.setattr(ii, "save_article_media", fake_save)
-    n = asyncio.run(add_inner_images(st=st, user={"id": "u1"}, project_id="p", article_id="a", title="T", markdown=MD, count=count))
+    mp.setattr(ii, "_illustrate", fake_illustrate)
+    proj = {"id": "p"} if illus else None
+    n = asyncio.run(
+        add_inner_images(st=st, user={"id": "u1"}, project_id="p", article_id="a", title="T", markdown=MD, count=count, proj=proj)
+    )
+    st.illus_calls = illus_calls
     return n, uploads
 
 
@@ -210,3 +220,36 @@ def test_mixed_units_on_one_scale_are_rejected():
     assert validate_chart(rates, text) is not None  # same unit, spelled differently
     no_units = {"type": "bar", "title": "Rates", "unit": "%", "points": [{"label": "Bank A", "value": 6.25}, {"label": "Bank B", "value": 6.15}]}
     assert validate_chart(no_units, text) is not None
+
+
+def test_slots_without_chartable_data_get_ai_illustrations(monkeypatch):
+    # Article with no usable figures: the requested count still arrives, as illustrations.
+    st = _St()
+    n, uploads = _run(monkeypatch, st, charts=[None, None, None], illus="https://res.cloudinary.com/a/ill.png", count=2)
+    assert n == 2 and uploads == [] and st.quota == 97
+    assert st.saved["article"].count('src="https://res.cloudinary.com/a/ill.png"') == 2
+    assert all("Question" not in h and "Conclusion" not in h for h in st.illus_calls)
+
+
+def test_illustrations_top_up_charts_in_other_sections(monkeypatch):
+    st = _St()
+    n, uploads = _run(monkeypatch, st, charts=[CHART, None, None], illus="https://res.cloudinary.com/a/ill.png", count=2)
+    assert n == 2 and len(uploads) == 1 and len(st.illus_calls) == 1
+    assert st.saved["article"].count("<img") == 2
+
+
+def test_illustration_failure_and_quota_are_non_fatal(monkeypatch):
+    st = _St(quota=1)
+    n, _ = _run(monkeypatch, st, charts=[None, None, None], illus="https://res.cloudinary.com/a/ill.png", count=2)
+    assert n == 1  # quota allowed one
+
+
+def test_illustrate_keeps_only_hosted_urls(monkeypatch):
+    async def fake_gen(**kw):
+        return {"image_url": "data:image/png;base64,iVBORw0KGgo="}
+
+    saved = []
+    monkeypatch.setattr(ii, "generate_featured_image_only", fake_gen)
+    monkeypatch.setattr(ii, "save_article_media", lambda **kw: saved.append(kw["content_type"]) or ("id", None))
+    url = asyncio.run(ii._illustrate(proj={}, image_prompt_id=None, title="T", heading="H", keywords=[], project_id="p", article_id="a"))
+    assert url is None and saved == ["image/png"]  # Cloudinary down -> nothing inserted

@@ -7,8 +7,9 @@ text, so nothing invented gets drawn), then the chart is drawn deterministically
 and hosted on Cloudinary, which serves it as PNG. AI image models garble numbers, so
 they are deliberately not used here.
 
-Sections without chartable numbers are skipped, so an article can get fewer charts
-than requested -- never a fake one. Runs only right after the scheduler generates fresh
+Sections without chartable numbers never get a fake chart. Slots charts can't fill are
+filled with AI illustrations in the job's image-prompt style (like the featured image), so
+the article gets the requested count. Runs only right after the scheduler generates fresh
 content. Every failure is non-fatal: the article still publishes.
 """
 
@@ -21,8 +22,10 @@ import re
 from typing import Any
 
 from app.core.config import settings
+from app.services.article_generation import generate_featured_image_only
 from app.services.article_media_storage import save_article_media
 from app.services.openai_client import OpenAIClient
+from app.services.shopify_article_image import featured_image_bytes_from_data_url, featured_image_bytes_from_http_url
 from app.services.storage_db import call_storage
 from app.services.to_thread import run_sync
 
@@ -55,10 +58,8 @@ def _insert_index(lines: list[str], h: int) -> int:
     return h + 1
 
 
-def candidate_sections(markdown: str, n: int) -> list[tuple[int, str, str]]:
-    """``(insert_line_index, heading, section_text)`` for eligible H2 sections that
-    contain numbers, ordered so the first ``n`` are evenly spread through the article
-    (the rest follow as fallbacks if extraction finds nothing chartable)."""
+def body_sections(markdown: str) -> list[tuple[int, str, str]]:
+    """``(insert_line_index, heading, section_text)`` for every H2 outside the FAQ/wrap-up."""
     lines = (markdown or "").split("\n")
     heads = [i for i, ln in enumerate(lines) if ln.startswith("## ")]
     out: list[tuple[int, str, str]] = []
@@ -66,14 +67,23 @@ def candidate_sections(markdown: str, n: int) -> list[tuple[int, str, str]]:
         if _SKIP_HEADING.search(lines[h]):
             continue
         end = heads[pos + 1] if pos + 1 < len(heads) else len(lines)
-        body = "\n".join(lines[h + 1 : end]).strip()
-        if _NUM.search(body):
-            out.append((_insert_index(lines, h), lines[h][3:].strip(), body))
+        out.append((_insert_index(lines, h), lines[h][3:].strip(), "\n".join(lines[h + 1 : end]).strip()))
+    return out
+
+
+def _spread(items: list, n: int) -> list:
+    """``items`` reordered so the first ``n`` are evenly spaced; the rest follow."""
     n = max(0, min(int(n or 0), MAX_INNER_IMAGES))
-    if not n or not out:
+    if not n or not items:
         return []
-    first = sorted({k * len(out) // n for k in range(min(n, len(out)))})
-    return [out[i] for i in first] + [x for i, x in enumerate(out) if i not in first]
+    first = sorted({k * len(items) // n for k in range(min(n, len(items)))})
+    return [items[i] for i in first] + [x for i, x in enumerate(items) if i not in first]
+
+
+def candidate_sections(markdown: str, n: int) -> list[tuple[int, str, str]]:
+    """Body sections that contain numbers, spread so the first ``n`` cover the article
+    (the rest follow as fallbacks if extraction finds nothing chartable)."""
+    return _spread([s for s in body_sections(markdown) if _NUM.search(s[2])], n)
 
 
 def insert_images(markdown: str, placed: list[tuple[int, str, str]]) -> str:
@@ -277,6 +287,33 @@ async def _extract_chart(title: str, heading: str, text: str) -> dict | None:
     return validate_chart(obj.get("chart"), text)
 
 
+async def _illustrate(
+    *, proj: dict, image_prompt_id: str | None, title: str, heading: str, keywords: list[str], project_id: str, article_id: str
+) -> str | None:
+    """AI illustration for one section, in the job's image-prompt style. Returns its
+    Cloudinary URL, or None (never keep a data: URL or an expiring OpenAI URL)."""
+    from app.services.article_pipeline import _resolve_image_prompt  # avoid an import cycle
+
+    prompt = _resolve_image_prompt(proj=proj, image_prompt_id=image_prompt_id)
+    gen = await generate_featured_image_only(
+        title=heading or title,
+        keywords=keywords,
+        focus_keyphrase=title,
+        brand_identity=proj.get("brand_identity") or "",
+        niche_identifier=proj.get("niche_identifier") or "",
+        image_prompt_text=(prompt or {}).get("text") or None,
+    )
+    url = (gen.get("image_url") or "").strip()
+    got = featured_image_bytes_from_data_url(url) or await featured_image_bytes_from_http_url(url)
+    if not got:
+        return None
+    data, content_type, _name = got
+    _image_id, cloud_url = await run_sync(
+        save_article_media, data=data, content_type=content_type, project_id=project_id, article_id=article_id
+    )
+    return cloud_url
+
+
 async def add_inner_images(
     *,
     st: Any,
@@ -286,22 +323,36 @@ async def add_inner_images(
     title: str,
     markdown: str,
     count: int,
+    proj: dict | None = None,
+    image_prompt_id: str | None = None,
+    keywords: list[str] | None = None,
 ) -> int:
-    """Add up to ``count`` data charts to ``markdown`` and persist the article. Returns
-    how many were added. Never raises."""
+    """Add ``count`` images to ``markdown`` and persist the article: data charts where a
+    section has real figures, AI illustrations (needs ``proj``) for the remaining slots.
+    Returns how many were added. Never raises."""
     try:
         count = max(0, min(int(count or 0), MAX_INNER_IMAGES))
-        candidates = candidate_sections(markdown, count)
-        if not candidates:
+        sections = body_sections(markdown)
+        if not count or not sections:
+            log.info("inner images: article %s has no body sections to place images in", article_id)
             return 0
         uid = (user.get("id") or "").strip()
         is_admin = (user.get("role") or "").strip().lower() == "admin"
         month_limit = _plan_for(st, user).get("max_inner_images_per_month")
 
+        async def quota_ok() -> bool:
+            if is_admin or not uid or not hasattr(st, "consume_inner_image_usage"):
+                return True
+            ok, msg = await run_sync(call_storage, st.consume_inner_image_usage, uid, month_limit=month_limit)
+            if not ok:
+                log.info("inner images: quota reached for article %s: %s", article_id, msg)
+            return ok
+
         placed: list[tuple[int, str, str]] = []
         used_values: set[float] = set()  # one figure never appears in two charts
+        out_of_quota = False
         # Bound text-model calls: a few fallback sections beyond the requested count.
-        for line_idx, heading, text in candidates[: count + 3]:
+        for line_idx, heading, text in candidate_sections(markdown, count)[: count + 3]:
             if len(placed) >= count:
                 break
             try:
@@ -311,11 +362,9 @@ async def add_inner_images(
                 values = {p["value"] for p in chart["points"]}
                 if values & used_values:
                     continue
-                if not is_admin and uid and hasattr(st, "consume_inner_image_usage"):
-                    ok, msg = await run_sync(call_storage, st.consume_inner_image_usage, uid, month_limit=month_limit)
-                    if not ok:
-                        log.info("inner images: quota reached for article %s: %s", article_id, msg)
-                        break
+                if not await quota_ok():
+                    out_of_quota = True
+                    break
                 svg = render_chart_svg(chart, heading or title)
                 _image_id, cloud_url = await run_sync(
                     save_article_media, data=svg, content_type="image/svg+xml", project_id=project_id, article_id=article_id
@@ -328,6 +377,25 @@ async def add_inner_images(
             except Exception:
                 log.warning("inner images: chart for section %r of article %s failed", heading, article_id, exc_info=True)
 
+        charts = len(placed)
+        if proj is not None and not out_of_quota and len(placed) < count:
+            taken = {p[0] for p in placed}
+            free = [s for s in body_sections(markdown) if s[0] not in taken]
+            # ponytail: sequential (~1 min per image); bounded gather if prep latency matters.
+            for line_idx, heading, _text in _spread(free, count - len(placed))[: count - len(placed)]:
+                if not await quota_ok():
+                    break
+                try:
+                    url = await _illustrate(
+                        proj=proj, image_prompt_id=image_prompt_id, title=title, heading=heading,
+                        keywords=keywords or [], project_id=project_id, article_id=article_id,
+                    )
+                    if url:
+                        placed.append((line_idx, url, heading))
+                except Exception:
+                    log.warning("inner images: illustration for section %r of article %s failed", heading, article_id, exc_info=True)
+
+        log.info("inner images: article %s got %d chart(s) + %d illustration(s) of %d requested", article_id, charts, len(placed) - charts, count)
         if not placed:
             return 0
         persist = getattr(st, "patch_article_fields", None) or st.update_article_fields

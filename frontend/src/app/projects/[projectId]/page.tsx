@@ -7485,7 +7485,7 @@ export default function ProjectPage() {
                         onChange={(e) => setScheduleInnerImageCount(Math.max(0, Math.min(5, Math.trunc(Number(e.target.value) || 0))))}
                       />
                       <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                        0–5. Data charts built from the numbers in the article, placed between sections. Sections without data are skipped, so you may get fewer. Applies only if this schedule generates the article.
+                        0–5. Placed between sections: data charts where the article has real figures, otherwise images in the selected image prompt's style. Applies only if this schedule generates the article.
                         {featureLimits?.inner_images && !featureLimits.inner_images.unlimited && typeof featureLimits.inner_images.month_limit === "number"
                           ? ` ${Math.max(0, featureLimits.inner_images.month_remaining ?? 0)} left this month.`
                           : ""}

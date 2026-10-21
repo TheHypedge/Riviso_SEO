@@ -252,6 +252,9 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
                     title=(art.get("title") or "").strip(),
                     markdown=((result or {}).get("generated") or {}).get("article") or "",
                     count=inner_count,
+                    proj=proj,
+                    image_prompt_id=image_prompt_id,
+                    keywords=[str(k).strip() for k in (art.get("keywords") or []) if str(k).strip()],
                 )
         elif generate_image and needs_image:
             await execute_featured_image_regeneration(
