@@ -141,7 +141,7 @@ class TopicClusterService:
 
     def list_for_project(self, *, limit: int = 100) -> list[dict[str, Any]]:
         st = get_legacy_storage_module()
-        return st.list_topic_clusters_for_project(self.project_id, limit=limit)
+        return self._release_deleted_articles(st.list_topic_clusters_for_project(self.project_id, limit=limit))
 
     def get(self, cluster_id: str) -> dict[str, Any] | None:
         st = get_legacy_storage_module()
@@ -150,7 +150,38 @@ class TopicClusterService:
             return None
         if (row.get("project_id") or "") != self.project_id:
             return None
-        return row
+        return self._release_deleted_articles([row])[0]
+
+    def _release_deleted_articles(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Clear ``imported_article_id`` on topics whose article was deleted, so the topic is
+        pending again (generate / schedule). Done on read, so it covers every delete path and
+        articles deleted before this existed; changed clusters are saved back."""
+        st = get_legacy_storage_module()
+        rows = [r for r in (rows or []) if isinstance(r, dict)]
+        slots = lambda r: [r.get("pillar") or {}, *(r.get("clusters") or [])]  # noqa: E731
+        ids = {(t.get("imported_article_id") or "").strip() for r in rows for t in slots(r) if isinstance(t, dict)} - {""}
+        if not ids or not hasattr(st, "load_articles_by_ids_for_project"):
+            return rows
+        try:
+            alive = set(st.load_articles_by_ids_for_project(self.project_id, sorted(ids)).keys())
+        except Exception:
+            log.warning("topic clusters: could not check imported articles for project %s", self.project_id, exc_info=True)
+            return rows
+        gone = ids - alive
+        if not gone:
+            return rows
+        out = []
+        for r in rows:
+            stale = [t for t in slots(r) if isinstance(t, dict) and (t.get("imported_article_id") or "").strip() in gone]
+            for t in stale:
+                t["imported_article_id"] = ""
+            if stale:
+                try:
+                    r = st.save_topic_cluster(r)
+                except Exception:
+                    log.warning("topic clusters: could not save released topics for %s", r.get("id"), exc_info=True)
+            out.append(r)
+        return out
 
     async def analyze_serp(
         self, *, seed_intent: str, country_code: str, language: str = "en"

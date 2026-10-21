@@ -363,6 +363,7 @@ def _merge_posted_job_into_article_row(a: dict, job: dict | None) -> dict:
             elif str(wpid).strip().isdigit():
                 m["wp_post_id"] = int(str(wpid).strip())
     jws = (job.get("wp_status") or "").strip().lower()
+    ts_job = (job.get("updated_at") or job.get("last_attempt_at") or job.get("created_at") or "").strip()
     if jws == "publish":
         if not _normalize_wp_rest_status(m.get("wp_last_wp_status")):
             m["wp_last_wp_status"] = "publish"
@@ -370,9 +371,18 @@ def _merge_posted_job_into_article_row(a: dict, job: dict | None) -> dict:
             ts = (job.get("updated_at") or job.get("last_attempt_at") or job.get("created_at") or "").strip()
             if ts:
                 m["posted_at"] = ts
-        if _stored_article_status_normalized(m) != "published":
+        # Only repair legacy rows the scheduler left pending/draft after posting. A status
+        # changed after the post (bulk "Change status") is the user's choice and wins.
+        if _stored_article_status_normalized(m) in {"pending", "draft"} and not _changed_after(m.get("updated_at"), ts_job):
             m["status"] = "published"
     return m
+
+
+def _changed_after(article_ts: object, job_ts: str) -> bool:
+    """Article ``updated_at`` is later than the job's post time (mixed ISO / space formats)."""
+    a = str(article_ts or "").replace("T", " ")[:19]
+    j = (job_ts or "").replace("T", " ")[:19]
+    return bool(a and j and a > j)
 
 
 def _to_public(a: dict) -> ArticlePublic:

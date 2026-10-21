@@ -1005,6 +1005,8 @@ export default function ProjectPage() {
   const [listTotal, setListTotal] = useState(0);
   const [articlesListLoading, setArticlesListLoading] = useState(false);
   const [articleTitlesById, setArticleTitlesById] = useState<Record<string, string>>({});
+  // True once the full title list has loaded, so an empty project still reconciles research.
+  const [articleTitlesLoaded, setArticleTitlesLoaded] = useState(false);
   // `status` is the row's derived listing status at selection time (captured here,
   // not re-looked-up later, so it still resolves correctly even if the row's page is
   // no longer loaded -- see bulkSchedule()'s published/scheduled exclusion).
@@ -1361,12 +1363,13 @@ export default function ProjectPage() {
     setResearchHydrated(true);
   }, [projectId]);
 
-  // Reconcile imported flag against actual articles in the project (covers manual deletes
-  // or imports made via the Articles tab using the same title/focus pair).
+  // Reconcile imported flag against actual articles in the project: imports made via the
+  // Articles tab (same title) become imported, and ideas whose article was deleted become
+  // not-imported again so they can be generated / scheduled.
   useEffect(() => {
     if (!researchHydrated) return;
     if (!researchResults.length) return;
-    if (!Object.keys(articleTitlesById).length) return;
+    if (!articleTitlesLoaded) return;
     const titleToId = new Map<string, string>();
     for (const [id, title] of Object.entries(articleTitlesById)) {
       const k = (title || "").trim().toLowerCase();
@@ -1386,10 +1389,15 @@ export default function ProjectPage() {
           imported_at: r.imported_at || new Date().toISOString(),
         };
       }
+      const aid = (r.imported_article_id || "").trim();
+      if (r.imported && !matched && !(aid && aid in articleTitlesById)) {
+        changed = true;
+        return { ...r, imported: false, imported_at: null, imported_article_id: null };
+      }
       return r;
     });
     if (changed) setResearchResults(next);
-  }, [articleTitlesById, researchHydrated, researchResults]);
+  }, [articleTitlesById, articleTitlesLoaded, researchHydrated, researchResults]);
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedQ(q), 300);
@@ -1510,6 +1518,7 @@ export default function ProjectPage() {
           if (row.id) map[row.id] = row.title || "";
         }
         setArticleTitlesById(map);
+        setArticleTitlesLoaded(true);
       } catch {
         // Non-fatal — scheduled tab falls back to "(Untitled article)".
       }
@@ -3864,6 +3873,7 @@ export default function ProjectPage() {
       if (row.id) map[row.id] = row.title || "";
     }
     setArticleTitlesById(map);
+    setArticleTitlesLoaded(true);
   }
 
   const allOnPageSelected = pageItems.length > 0 && pageItems.every((a) => selected[a.id]);
