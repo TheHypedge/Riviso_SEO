@@ -2607,6 +2607,14 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _clamped_int(value: Any, lo: int, hi: int) -> int:
+    try:
+        n = int(value or 0)
+    except (TypeError, ValueError):
+        return lo
+    return max(lo, min(hi, n))
+
+
 def _normalize_scheduled_job_dict(d: dict[str, Any]) -> dict[str, Any]:
     jid = (d.get("id") or "").strip()
     pid = (d.get("project_id") or "").strip()
@@ -2624,6 +2632,9 @@ def _normalize_scheduled_job_dict(d: dict[str, Any]) -> dict[str, Any]:
         "writing_prompt_id": (d.get("writing_prompt_id") or "")[:100],
         "image_prompt_id": (d.get("image_prompt_id") or "")[:100],
         "generate_image": bool(d.get("generate_image", True)),
+        # Data-chart images inserted after a scheduled generation (0-5). This dict is the
+        # read AND write shape for jobs -- a field missing here is silently dropped.
+        "inner_image_count": _clamped_int(d.get("inner_image_count"), 0, 5),
         "state": (d.get("state") or "scheduled")[:32],  # scheduled|posting|posted|failed|cancelled
         "last_error": d.get("last_error") or "",
         "attempts": int(d.get("attempts") or 0),
