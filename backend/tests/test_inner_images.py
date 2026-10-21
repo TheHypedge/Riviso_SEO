@@ -190,3 +190,23 @@ def test_same_figure_is_not_charted_twice(monkeypatch):
     st = _St()
     n, _ = _run(monkeypatch, st, charts=[CHART, CHART], count=2)
     assert n == 1 and st.quota == 98  # duplicate skipped without spending quota
+
+
+def test_mixed_units_on_one_scale_are_rejected():
+    # Real output: interest rates (%) and upfront fees ($) drawn as one bar chart.
+    text = "Bank A 6.25% with $600 fees, Bank B 6.15% with $900 fees, Non-Bank C 6.45% with 0 fees."
+    mixed = {
+        "type": "bar", "title": "Mortgage product features", "unit": "",
+        "points": [
+            {"label": "Bank A Rate", "value": 6.25, "unit": "%"},
+            {"label": "Bank B Rate", "value": 6.15, "unit": "%"},
+            {"label": "Bank A Upfront Fees", "value": 600, "unit": "$"},
+            {"label": "Bank B Upfront Fees", "value": 900, "unit": "$"},
+        ],
+    }
+    assert validate_chart(mixed, text) is None
+    rates = {"type": "bar", "title": "Rates", "unit": "%", "points": [
+        {"label": "Bank A", "value": 6.25, "unit": "%"}, {"label": "Bank B", "value": 6.15, "unit": "percent"}]}
+    assert validate_chart(rates, text) is not None  # same unit, spelled differently
+    no_units = {"type": "bar", "title": "Rates", "unit": "%", "points": [{"label": "Bank A", "value": 6.25}, {"label": "Bank B", "value": 6.15}]}
+    assert validate_chart(no_units, text) is not None

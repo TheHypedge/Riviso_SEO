@@ -95,7 +95,7 @@ _EXTRACT_SYSTEM = (
     'Return JSON: {"chart": null} when the text has nothing worth charting, otherwise\n'
     '{"chart": {"type": "bar" | "line" | "stat", "title": "<= 70 chars, what is measured", '
     '"unit": "<= 12 chars, e.g. %, USD bn, users, or empty", '
-    '"points": [{"label": "<= 28 chars", "value": <number>}]}}\n'
+    '"points": [{"label": "<= 28 chars", "value": <number>, "unit": "the unit of THIS value, e.g. %, $, days"}]}}\n'
     "bar: 2-8 comparable items sharing one unit. line: 3-10 points in time order (label = period). "
     "stat: 1-3 standalone headline figures. All points must share the same unit.\n"
     "Every value must be a measured quantity of the SAME kind (e.g. all percentages, or all "
@@ -110,6 +110,11 @@ _COUNTS = {"bar": (2, 8), "line": (3, 10), "stat": (1, 3)}
 
 def _numbers_in(text: str) -> set[float]:
     return {float(m.replace(",", "")) for m in _NUM.findall(text or "")}
+
+
+def _unit_key(unit: Any) -> str:
+    u = " ".join(str(unit or "").lower().split())
+    return {"percent": "%", "per cent": "%", "pct": "%", "usd": "$", "dollars": "$", "aud": "$", "day": "days"}.get(u, u)
 
 
 def _is_year(value: float) -> bool:
@@ -136,6 +141,7 @@ def validate_chart(chart: Any, section_text: str) -> dict | None:
         return None
     allowed = _numbers_in(section_text)
     clean = []
+    units: set[str] = set()
     for p in pts:
         if not isinstance(p, dict):
             return None
@@ -150,7 +156,12 @@ def validate_chart(chart: Any, section_text: str) -> dict | None:
         if _is_year(value) or _is_name_number(label, value):
             continue  # drop the point; the chart must still have enough real data (below)
         clean.append({"label": label, "value": value})
+        units.add(_unit_key(p.get("unit")))
     if not lo <= len(clean) <= hi:
+        return None
+    # One chart = one kind of quantity. Mixed per-point units (e.g. rates in % next to fees in
+    # $) would put incomparable numbers on one scale.
+    if len(units - {""}) > 1:
         return None
     title = " ".join(str(chart.get("title") or "").split())[:70]
     if not title:
