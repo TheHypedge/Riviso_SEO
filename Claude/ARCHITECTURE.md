@@ -263,7 +263,7 @@ Secret: `SECRET_KEY` env var
 
 | Service | Purpose | Config |
 |---------|---------|--------|
-| OpenAI | Article generation (GPT-4.1-mini), image generation (gpt-image-1), embeddings (text-embedding-3-small) | `OPENAI_API_KEY` |
+| OpenAI | Article generation (GPT-4.1-mini), image generation (gpt-image-2), embeddings (text-embedding-3-small) | `OPENAI_API_KEY` |
 | MongoDB Atlas | Primary database | `MONGODB_URI` |
 | Google Search Console | URL inspection, indexing API | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON` |
 | Shopify | Blog publishing, product context | `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` |

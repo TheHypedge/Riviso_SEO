@@ -1239,6 +1239,7 @@ export type ArticleListItem = {
   title: string;
   status: string;
   created_at?: string | null;
+  generated_at?: string | null;
   keywords?: string[];
   focus_keyphrase?: string | null;
   gsc_status?: string | null;
@@ -2917,6 +2918,7 @@ export const api = {
       writing_prompt_id: string | null;
       image_prompt_id: string | null;
       generate_image: boolean;
+      inner_image_count: number;
       user_timezone: string;
     }>,
   ) {

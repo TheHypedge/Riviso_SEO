@@ -18,6 +18,7 @@ class ArticleListItem(BaseModel):
     title: str
     status: str = Field(default="pending", description="Derived listing status.")
     created_at: str | None = Field(default=None, description="Used for date-range filtering/sorting in the Articles export.")
+    generated_at: str | None = Field(default=None, description="UTC time of the last successful content generation.")
     keywords: list[str] = Field(default_factory=list)
     focus_keyphrase: str | None = None
     gsc_status: str | None = Field(default=None, description="For indexing tooltip in the list UI.")
@@ -394,7 +395,8 @@ class ScheduleRequest(BaseModel):
     image_prompt_id: str | None = Field(default=None, max_length=100)
     generate_image: bool = True
     # Inner (in-body) images added when this schedule generates the article; 0 = none.
-    inner_image_count: int = Field(default=0, ge=0, le=5)
+    # None (omitted) keeps the job's saved count, so a reschedule doesn't reset it.
+    inner_image_count: int | None = Field(default=None, ge=0, le=5)
     # Client-supplied IANA timezone (e.g. "Asia/Kolkata"). When present, takes
     # precedence over the stored profile timezone so scheduling works correctly
     # even when the user has never explicitly saved their profile timezone.

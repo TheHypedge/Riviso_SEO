@@ -139,7 +139,7 @@ Loaded via pydantic-settings (`Settings` class in `backend/app/core/config.py`).
 | `POSTGRES_DSN` | `postgresql+asyncpg://...` | Declared; not used (Mongo is primary) |
 | `OPENAI_API_KEY` | — | Required for generation |
 | `OPENAI_TEXT_MODEL` | `gpt-4.1-mini` | Chat completions model |
-| `OPENAI_IMAGE_MODEL` | `gpt-image-1` | DALL-E / GPT-image model |
+| `OPENAI_IMAGE_MODEL` | `gpt-image-2` | DALL-E / GPT-image model |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` | For cluster validation cosine similarity |
 | `GOOGLE_OAUTH_CLIENT_ID/SECRET` | — | Google Search Console OAuth |
 | `GOOGLE_INDEXING_SERVICE_ACCOUNT_JSON` | — | Google Indexing API service account (raw JSON or base64) |
@@ -352,7 +352,7 @@ Full sequence for `execute_article_generation()`:
 8. Generate bundle (OpenAI)
    └─ generate_article_bundle_safe()
       ├─ Chat completion (gpt-4.1-mini): article body (Markdown) + meta_title + meta_description
-      └─ Image generation (gpt-image-1): DALL-E or img2img with Shopify product reference
+      └─ Image generation (gpt-image-2): DALL-E or img2img with Shopify product reference
 
 9. SSE: publish "integrity_verify" stage
 

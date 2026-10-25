@@ -3941,6 +3941,7 @@ _LISTING_PROJECTION_STAGE = {
         "posted_at": 1,
         "created_at": 1,
         "updated_at": 1,
+        "generated_at": 1,
         "wp_post_id": 1,
         "wp_link": 1,
         "wp_last_wp_status": 1,

@@ -1320,6 +1320,7 @@ export default function ProjectPage() {
   const [editJobWritingPromptId, setEditJobWritingPromptId] = useState("");
   const [editJobImagePromptId, setEditJobImagePromptId] = useState("");
   const [editJobGenerateImage, setEditJobGenerateImage] = useState(true);
+  const [editJobInnerImageCount, setEditJobInnerImageCount] = useState(0);
   const [editRescheduleBusy, setEditRescheduleBusy] = useState(false);
   const [confirmCancelJob, setConfirmCancelJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
   const [confirmPostNowJob, setConfirmPostNowJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
@@ -4163,6 +4164,7 @@ export default function ProjectPage() {
     setEditJobWritingPromptId((j.writing_prompt_id || meta.writingPrompts?.default_id || "").trim());
     setEditJobImagePromptId((j.image_prompt_id || meta.imagePrompts?.default_id || "").trim());
     setEditJobGenerateImage(Boolean(j.generate_image ?? true));
+    setEditJobInnerImageCount(Math.max(0, Math.min(5, Math.trunc(Number(j.inner_image_count) || 0))));
   }
 
   /** Default action for clicking a calendar block -- mirrors what the list row's
@@ -4217,6 +4219,7 @@ export default function ProjectPage() {
           writing_prompt_id: editJobWritingPromptId || null,
           image_prompt_id: editJobImagePromptId || null,
           generate_image: editJobGenerateImage,
+          inner_image_count: editJobInnerImageCount,
           user_timezone: _userTz,
         });
       } else {
@@ -4228,6 +4231,7 @@ export default function ProjectPage() {
           writing_prompt_id: editJobWritingPromptId || null,
           image_prompt_id: editJobImagePromptId || null,
           generate_image: editJobGenerateImage,
+          inner_image_count: editJobInnerImageCount,
           user_timezone: _userTz,
         });
         savedJobId = updated.id || savedJobId;
@@ -4263,6 +4267,10 @@ export default function ProjectPage() {
       setShowBulkPopup(false);
       setBulkMode("root");
       setNotice(`${count} article${count === 1 ? "" : "s"} marked as ${newStatus}.`);
+      // Re-read the saved rows so the list shows exactly what a reload will (status
+      // filter counts, and scheduled jobs the change cancelled).
+      await refreshArticlesList();
+      void reloadScheduledJobs({ quiet: true });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Bulk status update failed");
     }
@@ -7258,6 +7266,11 @@ export default function ProjectPage() {
                                 >
                                   {title}
                                 </Link>
+                                {a.generated_at ? (
+                                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 2 }}>
+                                    Generated {formatInProfileTz(a.generated_at)}
+                                  </div>
+                                ) : null}
                               </div>
                               <div
                                 className={`${styles.articlesTableCell} ${styles.articlesTableCellMuted}`}
@@ -10150,6 +10163,18 @@ export default function ProjectPage() {
                           </option>
                         ))}
                       </select>
+                    </label>
+                    <label className={styles.label}>
+                      No. of inner article image
+                      <input
+                        type="number"
+                        className={styles.input}
+                        min={0}
+                        max={5}
+                        step={1}
+                        value={editJobInnerImageCount}
+                        onChange={(e) => setEditJobInnerImageCount(Math.max(0, Math.min(5, Math.trunc(Number(e.target.value) || 0))))}
+                      />
                     </label>
                     <label className={styles.label}>
                       Categories

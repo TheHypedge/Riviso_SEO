@@ -21,7 +21,7 @@ WordPress/Shopify publishing, and content optimization features are all operatio
 ## Completed Milestones
 
 - [x] Core article generation pipeline (OpenAI GPT-4.1-mini)
-- [x] Featured image generation (gpt-image-1)
+- [x] Featured image generation (gpt-image-2)
 - [x] Multi-project workspace per user
 - [x] WordPress REST API publishing + verification
 - [x] Shopify blog publishing + OAuth

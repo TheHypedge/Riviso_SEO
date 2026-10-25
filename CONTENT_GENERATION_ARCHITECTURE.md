@@ -11,7 +11,7 @@ Status: **read-only audit — no code changed.** Companion to [`CURRENT_CONTENT_
 | Capability | Model (from `backend/app/core/config.py`) | Used for | Called from |
 |---|---|---|---|
 | Chat completions (JSON mode) | `openai_text_model = "gpt-5.5"` | Generating the article JSON bundle (article body, meta title, meta description) | `OpenAIClient.chat_json()` ← `article_generation.generate_article_bundle()` |
-| Image generation | `gpt-image-1` | Featured images (initial generation + on-demand regeneration) | `article_generation.generate_featured_image_only()` / the bundle's image step |
+| Image generation | `gpt-image-2` | Featured images (initial generation + on-demand regeneration) | `article_generation.generate_featured_image_only()` / the bundle's image step |
 | Embeddings | `text-embedding-3-small` | Semantic similarity scoring (used in research/clustering and the humanization engine's `seo_preservation_score`) | various — outside the core generation path |
 
 **A specific, load-bearing detail for any future "creativity" control:** `OpenAIClient.chat_json()` (lines 77–93) explicitly **does not send a custom `temperature`** when the model name starts with `gpt-5` — the comment states "GPT-5.x only accepts the default temperature (1)". For older model families it sends a hardcoded `temperature=0.6`. Since the configured production model is `gpt-5.5`, **temperature is currently not a controllable axis in production at all.** Any design that wants a user-facing "creativity" dial must route around the `temperature` parameter — see the V2 plan's risk section for the recommended alternative (a compiled prompt instruction about creative range, not an API parameter).
@@ -24,7 +24,7 @@ No other AI provider (Anthropic, Google, etc.) appears anywhere in the generatio
 | API | Purpose | Caller |
 |---|---|---|
 | `POST https://api.openai.com/v1/chat/completions` (JSON mode) | Article JSON generation | `OpenAIClient.chat_json()` |
-| OpenAI image generation endpoint (`gpt-image-1`) | Featured image generation | `OpenAIClient` image methods |
+| OpenAI image generation endpoint (`gpt-image-2`) | Featured image generation | `OpenAIClient` image methods |
 | OpenAI embeddings endpoint (`text-embedding-3-small`) | Semantic similarity | `OpenAIClient` embedding methods |
 | WordPress REST API | Publishing/updating posts, uploading featured media | `wordpress_publish.py` |
 | Shopify Admin API | Publishing/updating product/blog content | `shopify_product_pipeline.py` (and related Shopify services) |
@@ -112,7 +112,7 @@ A map of every backend service that participates in (or sits beside) the generat
               │                │   │
               │      ┌─────────▼─┐ │
               │      │ OpenAI    │ │   chat-completions (gpt-5.5, JSON mode)
-              │      │ chat_json │─┼──▶ image gen (gpt-image-1) ──▶ embeddings
+              │      │ chat_json │─┼──▶ image gen (gpt-image-2) ──▶ embeddings
               │      └───────────┘ │
               │  sanitizers ───────┘
               └────────────────────┘

@@ -33,7 +33,7 @@ Status: **read-only audit — no code changed.** This is the top-level summary; 
           - builds the (system, user) chat messages — see PROMPT_FLOW_ANALYSIS.md
           - calls OpenAI's chat-completions API for the article JSON
           - runs sanitizers (strict-JSON enforcement, body/meta sanitization)
-          - optionally generates a featured image (gpt-image-1)
+          - optionally generates a featured image (gpt-image-2)
      f. runs a read-only AI-detection audit (integrity_engine.AIDetectionAuditor)
         and stores the resulting percentage — it does NOT rewrite anything
      g. injects the project's "context links" into the generated Markdown

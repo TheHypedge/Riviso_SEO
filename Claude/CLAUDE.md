@@ -31,7 +31,7 @@ generate articles with AI, humanize them, and schedule publication.
 | Primary DB | MongoDB (Atlas) via pymongo + Motor (async) |
 | Queue | Redis 7 (Redis-backed generation queue; in-process fallback) |
 | Background | APScheduler in dedicated Docker container |
-| AI | OpenAI GPT-4.1-mini (text), gpt-image-1 (images), text-embedding-3-small (embeddings) |
+| AI | OpenAI GPT-4.1-mini (text), gpt-image-2 (images), text-embedding-3-small (embeddings) |
 | Deployment | Docker Compose on Hostinger VPS + Nginx reverse proxy |
 | Auth | JWT (HS256) — `aa_access` cookie + `Authorization: Bearer` |
 | Email | SMTP (configurable host/port/TLS) via `email_dispatch.py` |

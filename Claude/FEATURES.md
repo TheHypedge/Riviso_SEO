@@ -21,7 +21,7 @@ _Last updated: 2026-06-04_
 
 ### Article Generation
 - **AI article generation** — GPT-4.1-mini generates JSON bundle: body (Markdown), meta_title, meta_description, image_alt
-- **Featured image generation** — gpt-image-1 generates contextual featured images
+- **Featured image generation** — gpt-image-2 generates contextual featured images
 - **Generation queue** — Redis-backed async queue with dedup; in-process fallback when Redis unavailable
 - **Generation pipeline SSE stream** — real-time stage updates (queued → OpenAI → humanize → integrity → complete)
 - **Generation error persistence** — `generation_error` field written to article on failure; cleared on retry

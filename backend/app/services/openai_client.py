@@ -162,7 +162,7 @@ class OpenAIClient:
         reference_image_url: str,
     ) -> str | None:
         """Img2Img-style generation using Shopify product hero image as visual reference."""
-        edit_model = model if (model or "").startswith("gpt-image") else "gpt-image-1"
+        edit_model = model if (model or "").startswith("gpt-image") else "gpt-image-2"
         payload = {
             "model": edit_model,
             "prompt": (

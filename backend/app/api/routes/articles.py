@@ -429,6 +429,7 @@ def _to_list_item(a: dict) -> ArticleListItem:
         title=(a.get("title") or "").strip(),
         status=_derive_listing_status(a),
         created_at=(a.get("created_at") or "").strip() or None,
+        generated_at=(a.get("generated_at") or "").strip() or None,
         keywords=_coerce_keywords(a.get("keywords")),
         focus_keyphrase=(a.get("focus_keyphrase") or "").strip() or None,
         gsc_status=(a.get("gsc_status") or "").strip() or None,
@@ -1466,12 +1467,20 @@ async def bulk_action(
         ns = (payload.new_status or "").strip().lower()
         if ns not in {"pending", "draft", "published"}:
             raise HTTPException(status_code=400, detail="Invalid new_status")
-        updates = [(aid, {"status": ns}) for aid in ids]
+        from app.api.routes.scheduled_jobs import _cleared_article_schedule_fields
+        from app.repositories import ScheduledJobRepository
+
+        # A manual status replaces any pending schedule. Leaving wp_scheduled_at set made the
+        # list re-derive "scheduled" on reload, and the unposted job would still run and publish.
+        updates = [(aid, {**_cleared_article_schedule_fields(), "status": ns}) for aid in ids]
         if hasattr(st, "bulk_update_articles"):
             await run_sync(st.bulk_update_articles, updates)
         else:
             for aid, u in updates:
                 await run_sync(st.update_article_fields, aid, u)
+        if hasattr(st, "delete_scheduled_jobs_for_article"):
+            for aid in ids:
+                await run_sync(ScheduledJobRepository(st).delete_for_article, project_id, aid, exclude_states=["posted"])
         return {"ok": True, "updated": len(ids), "new_status": ns}
 
     raise HTTPException(status_code=400, detail="Unknown action")
@@ -2522,7 +2531,7 @@ async def _persist_schedule_row(
     enqueue_preparation: bool = True,
     skip_article_update: bool = False,
     category_ids_override: str | None = None,
-    inner_image_count: int = 0,
+    inner_image_count: int | None = 0,
 ) -> dict:
     """Write article + scheduled-job rows; optionally queue background prep (non-blocking).
 
@@ -2560,6 +2569,7 @@ async def _persist_schedule_row(
     if hasattr(st, "insert_scheduled_job") and hasattr(st, "update_scheduled_job_fields"):
         stable = hashlib.sha1(f"{project_id}:{article_id}".encode("utf-8")).hexdigest()[:20]
         job_id = f"job_{stable}"
+        saved_inner = 0
         if hasattr(st, "load_scheduled_jobs"):
             try:
                 for row in call_storage(st.load_scheduled_jobs, project_id=project_id, article_id=article_id, limit=10) or []:
@@ -2571,6 +2581,7 @@ async def _persist_schedule_row(
                     jid = (row.get("id") or "").strip()
                     if jid:
                         job_id = jid
+                        saved_inner = int(row.get("inner_image_count") or 0)
                         break
             except Exception:
                 pass
@@ -2586,13 +2597,14 @@ async def _persist_schedule_row(
             "writing_prompt_id": writing_prompt_id,
             "image_prompt_id": image_prompt_id,
             "generate_image": generate_image,
-            "inner_image_count": inner_image_count,
             "state": "scheduled",
             "attempts": 0,
             "last_attempt_at": "",
             "last_error": "",
             "updated_at": now_str,
         }
+        # None = keep the job's saved count (0 for a new job), so a reschedule doesn't reset it.
+        job_updates["inner_image_count"] = saved_inner if inner_image_count is None else inner_image_count
         updated = False
         try:
             updated = bool(await run_sync(call_storage, st.update_scheduled_job_fields, job_id, job_updates))
