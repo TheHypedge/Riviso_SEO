@@ -88,9 +88,7 @@ frontend/src/lib/
   articleMarkdown.ts           # markdownToArticleHtml() — the only sanitized path from markdown to dangerouslySetInnerHTML
 
 frontend/src/components/
-  WorkspaceProjectOverview.tsx
   OverviewReadinessGate.tsx
-  ArticlesOverviewChart.tsx
 
 backend/app/services/
   article_pipeline.py         # Single exit point for generation — context links injected here
