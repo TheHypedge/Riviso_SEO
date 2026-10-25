@@ -5,7 +5,12 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    # Password-protected: this Redis was once published on 6379 and picked up
+    # botnet cron payloads. REDIS_PASSWORD comes from the repo-root .env (compose
+    # interpolation, gitignored). No `ports:` -- reachable only on the compose network.
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in the repo-root .env}"]
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 15s
@@ -25,7 +30,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENABLE_SCHEDULER: "0"
       ENABLE_GENERATION_WORKER: "0"
       ENABLE_SERP_REFRESH_WORKER: "0"
@@ -40,8 +45,10 @@ services:
       NEW_RELIC_APP_NAME: Riviso API
     volumes:
       - app_data:/app/data
+    # Loopback only: host nginx (api.riviso.cloud, TLS) proxies to 127.0.0.1:8000.
+    # Docker-published ports bypass ufw, so never bind this to 0.0.0.0.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       - redis
     healthcheck:
@@ -65,7 +72,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENABLE_GENERATION_WORKER: "1"
       ENABLE_SCHEDULER: "0"
       ENABLE_SERP_REFRESH_WORKER: "0"
@@ -97,7 +104,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENABLE_SCHEDULER: "1"
       ENABLE_GENERATION_WORKER: "0"
       ENABLE_SERP_REFRESH_WORKER: "0"
@@ -130,7 +137,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENABLE_SERP_REFRESH_WORKER: "1"
       ENABLE_SCHEDULER: "0"
       ENABLE_GENERATION_WORKER: "0"
@@ -165,7 +172,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENABLE_SEO_CRAWL_WORKER: "1"
       ENABLE_SCHEDULER: "0"
       ENABLE_GENERATION_WORKER: "0"
@@ -194,7 +201,7 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       ENABLE_AI_CITATION_WORKER: "1"
       ENABLE_SCHEDULER: "0"
       ENABLE_GENERATION_WORKER: "0"
@@ -217,21 +224,8 @@ services:
     mem_limit: 1024m
     cpus: 1.0
 
-  # ------------------------------------------------------------------
-  # Nginx — API gateway on port 80.
-  # TLS terminates at Cloudflare/edge; nginx receives plain HTTP and
-  # forwards X-Forwarded-Proto so HSTS + redirects work correctly.
-  # Frontend is hosted on Vercel — nginx proxies only the backend.
-  # ------------------------------------------------------------------
-  nginx:
-    image: nginx:1.27
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-    depends_on:
-      - backend
+  # Edge proxy is host nginx + Certbot (/etc/nginx/sites-enabled/api.riviso.cloud),
+  # not a container. Frontend is on Vercel.
 
 volumes:
   redis_data:

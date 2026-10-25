@@ -41,19 +41,20 @@ After reading, confirm with: "Context loaded — [one line summary of current pr
 **⚠️ Before any `docker compose up --build`, run `git status --porcelain` first.** The Dockerfiles do a raw `COPY` from the working directory, not `git HEAD` — any uncommitted, unrelated file sitting in the tree gets baked into the image and deployed as a side effect. If there's uncommitted work that isn't part of what you're deploying, `git stash push -u` it first. This has actually happened (see `project_f0_hardening.md`).
 
 ```bash
-# Frontend: git push → Vercel auto-deploys from main (secondary; Docker on VPS is primary, see below)
+# Frontend: lives on Vercel only (app.riviso.com) — git push → Vercel auto-deploys; frontend/ is not on this VPS
 git push origin main
 
 # Backend: rebuild only the services that changed (faster, smaller blast radius)
 docker compose up -d --build backend worker scheduler   # storage.py / shared backend code
-docker compose up -d --build frontend                     # frontend-only change
-docker compose ps  # backend/worker/scheduler/redis/frontend → healthy; nginx failing = expected
+docker compose ps  # backend/worker/scheduler/seo-crawl/serp-refresh/ai-citation/redis → all healthy
 
-# Full rebuild (rarely needed — prefer per-service above)
-docker compose down && docker compose up -d --build
+# Env-only change (backend/.env edited): containers read env_file at create time — `restart` is NOT enough
+docker compose up -d --no-build --force-recreate backend worker scheduler seo-crawl serp-refresh ai-citation
 ```
 
-Note: requesting `--build` on one service still recreates its `depends_on` dependencies (e.g. `frontend` also recreates `backend`) — plan for that.
+Note: requesting `--build` on one service still recreates its `depends_on` dependencies (e.g. `backend` also recreates `redis` if its config changed) — plan for that.
+
+**Network exposure rules (2026-10-01):** Docker-published ports bypass ufw. Backend is bound to `127.0.0.1:8000` (host nginx proxies `api.riviso.cloud` → it); Redis and every worker have no `ports:` at all. Never add a `0.0.0.0` port mapping for an internal service. Redis requires `REDIS_PASSWORD` from the repo-root `.env` (compose interpolation) — compose refuses to start without it. The old Redis was publicly exposed Apr–Jun 2026 and collected botnet cron payloads; an orphan Postgres (superuser `app`/`app`, unused by the app) was public until removed — its volume `riviso_postgres_data` is kept.
 
 ---
 
