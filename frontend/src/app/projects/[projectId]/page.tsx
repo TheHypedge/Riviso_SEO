@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import styles from "../../page.module.css";
+import { formatDayMonYearTime } from "@/lib/dateFormat";
 import projectsDark from "../projectsDark.module.css";
 import { CategorySelect } from "@/components/CategorySelect";
 import { ArticlesOverview } from "@/components/ArticlesOverview";
@@ -7259,18 +7260,20 @@ export default function ProjectPage() {
                                 />
                               </span>
                               <div className={`${styles.articlesTableCell} ${styles.articlesTableCellTitle}`}>
-                                <Link
-                                  href={`/projects/${projectId}/articles/${a.id}`}
-                                  className={`${styles.articleTitleLink} ${styles.articlesTableClamp}`}
-                                  title={title}
-                                >
-                                  {title}
-                                </Link>
-                                {a.generated_at ? (
-                                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 2 }}>
-                                    Generated {formatInProfileTz(a.generated_at)}
-                                  </div>
-                                ) : null}
+                                <div className={styles.articleTitleStack}>
+                                  <Link
+                                    href={`/projects/${projectId}/articles/${a.id}`}
+                                    className={`${styles.articleTitleLink} ${styles.articlesTableClamp}`}
+                                    title={title}
+                                  >
+                                    {title}
+                                  </Link>
+                                  {a.generated_at ? (
+                                    <span className={styles.articleGeneratedAt}>
+                                      Generated {formatDayMonYearTime(a.generated_at, profileTz || undefined)}
+                                    </span>
+                                  ) : null}
+                                </div>
                               </div>
                               <div
                                 className={`${styles.articlesTableCell} ${styles.articlesTableCellMuted}`}

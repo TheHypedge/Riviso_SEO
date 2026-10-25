@@ -50,3 +50,17 @@ export function formatDateTime(raw: string | null | undefined, fallback = "No da
   const timePart = d.toLocaleTimeString("en-US", TIME_ONLY_FMT);
   return `${datePart} • ${timePart}`;
 }
+
+/** "26 OCT, 2026 • 10:45 PM" in ``timeZone`` (falls back to the browser's zone). */
+export function formatDayMonYearTime(raw: string | null | undefined, timeZone?: string): string | null {
+  const d = parseServerTimestamp(raw);
+  if (!d) return null;
+  let p: Intl.DateTimeFormatPart[];
+  try {
+    p = new Intl.DateTimeFormat("en-GB", { ...DATE_ONLY_FMT, ...TIME_ONLY_FMT, timeZone }).formatToParts(d);
+  } catch {
+    p = new Intl.DateTimeFormat("en-GB", { ...DATE_ONLY_FMT, ...TIME_ONLY_FMT }).formatToParts(d);
+  }
+  const v = (t: Intl.DateTimeFormatPartTypes) => p.find((x) => x.type === t)?.value ?? "";
+  return `${v("day")} ${v("month").slice(0, 3).toUpperCase()}, ${v("year")} • ${v("hour")}:${v("minute")} ${v("dayPeriod").toUpperCase()}`;
+}
