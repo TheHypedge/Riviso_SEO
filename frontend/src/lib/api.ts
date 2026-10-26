@@ -4083,7 +4083,7 @@ export const api = {
     );
   },
   async linkedinPost(projectId: string, articleId: string, commentary: string) {
-    return apiFetch<{ id: string; post_url: string }>(
+    return apiFetch<{ id: string; post_url: string; image_attached?: boolean }>(
       `/api/projects/${projectId}/articles/${articleId}/linkedin/post`,
       { method: "POST", body: JSON.stringify({ commentary }) },
     );

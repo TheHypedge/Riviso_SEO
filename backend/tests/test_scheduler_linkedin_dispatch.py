@@ -48,10 +48,10 @@ def test_double_post_guard_skips_reposting():
 def test_successful_post_persists_to_all_three_places(monkeypatch):
     st = _FakeStorage()
 
-    async def fake_create_post(*, access_token, author_urn, commentary, article_url, thumbnail_urn, title, description):
-        return {"post_urn": "urn:li:share:999", "post_url": "https://linkedin.com/feed/update/urn:li:share:999/"}
+    async def fake_share_article(*, st, project_id, article, access_token, author_urn, commentary):
+        return {"post_urn": "urn:li:share:999", "post_url": "https://linkedin.com/feed/update/urn:li:share:999/", "image_attached": True}
 
-    monkeypatch.setattr("app.services.linkedin_client.create_post", fake_create_post)
+    monkeypatch.setattr("app.services.linkedin_client.share_article", fake_share_article)
 
     asyncio.run(_publish_scheduled_job_to_linkedin(st=st, jid="job2", proj=_PROJ, art=_ART, job=_JOB))
 

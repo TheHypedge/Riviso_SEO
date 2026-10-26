@@ -634,23 +634,13 @@ async def _publish_scheduled_job_to_linkedin(*, st, jid: str, proj: dict, art: d
         if not commentary:
             raise RuntimeError("Could not generate a LinkedIn caption for this article.")
 
-        article_url = (art.get("wp_link") or art.get("shopify_link") or "").strip() or None
-        thumbnail_urn = await linkedin_client.upload_article_thumbnail(
+        result = await linkedin_client.share_article(
             st=st,
             project_id=(job.get("project_id") or "").strip(),
-            article_id=(job.get("article_id") or "").strip(),
-            access_token=access_token,
-            owner_urn=author_urn,
-        )
-
-        result = await linkedin_client.create_post(
+            article={**art, "id": (art.get("id") or job.get("article_id") or "").strip()},
             access_token=access_token,
             author_urn=author_urn,
             commentary=commentary,
-            article_url=article_url,
-            thumbnail_urn=thumbnail_urn,
-            title=(art.get("title") or "").strip() or None,
-            description=(art.get("meta_description") or "").strip() or None,
         )
     except Exception as e:
         log.exception("Scheduled LinkedIn post failed jid=%s", jid)
@@ -683,6 +673,7 @@ async def _publish_scheduled_job_to_linkedin(*, st, jid: str, proj: dict, art: d
                 "status": "posted",
                 "content_text": commentary,
                 "external_url": result["post_url"],
+                "image_attached": result["image_attached"],
                 "created_at": now_str,
                 "posted_at": now_str,
             },

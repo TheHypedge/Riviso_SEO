@@ -262,20 +262,14 @@ async def linkedin_post(project_id: str, article_id: str, payload: LinkedInPostR
     if not commentary:
         raise HTTPException(status_code=400, detail="commentary is required")
 
-    article_url = (article.get("wp_link") or article.get("shopify_link") or "").strip() or None
-    thumbnail_urn = await linkedin_client.upload_article_thumbnail(
-        st=st, project_id=project_id, article_id=article_id, access_token=access_token, owner_urn=author_urn,
-    )
-
     try:
-        result = await linkedin_client.create_post(
+        result = await linkedin_client.share_article(
+            st=st,
+            project_id=project_id,
+            article={**article, "id": article_id},
             access_token=access_token,
             author_urn=author_urn,
             commentary=commentary,
-            article_url=article_url,
-            thumbnail_urn=thumbnail_urn,
-            title=(article.get("title") or "").strip() or None,
-            description=(article.get("meta_description") or "").strip() or None,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LinkedIn post failed: {e}") from e
@@ -292,11 +286,12 @@ async def linkedin_post(project_id: str, article_id: str, payload: LinkedInPostR
             "status": "posted",
             "content_text": commentary,
             "external_url": result["post_url"],
+            "image_attached": result["image_attached"],
             "created_at": now,
             "posted_at": now,
         },
     )
-    return {"id": post_id, "post_url": result["post_url"]}
+    return {"id": post_id, "post_url": result["post_url"], "image_attached": result["image_attached"]}
 
 
 class LinkedInScheduleRequest(BaseModel):

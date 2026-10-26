@@ -1985,7 +1985,11 @@ export default function ArticleEditPage() {
       } else {
         const res = await api.linkedinPost(params.projectId, params.articleId, commentary);
         setLinkedinShareModal(false);
-        setNotice(`Posted to LinkedIn.\n${res.post_url}`);
+        setNotice(
+          res.image_attached === false
+            ? `Posted to LinkedIn without the featured image (LinkedIn could not use it).\n${res.post_url}`
+            : `Posted to LinkedIn.\n${res.post_url}`,
+        );
       }
     } catch (e) {
       setLinkedinShareMsg(e instanceof Error ? e.message : "Failed to share to LinkedIn");
