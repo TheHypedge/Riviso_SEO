@@ -87,3 +87,65 @@ def test_featured_failure_keeps_inner_images(calls, monkeypatch):
     with pytest.raises(RuntimeError, match="image model down"):
         _prep({"article": BODY, "image_url": ""})
     assert calls == [("inner", 2, BODY)]
+
+
+# --------------------------------------------------------------------------- #
+# Full chain, as "Retry" runs it: queued SCHEDULED_PREP payload -> worker handler ->
+# prepare_article_for_scheduled_job -> images saved -> job ready_to_post.
+# --------------------------------------------------------------------------- #
+import app.services.generation_worker as worker
+
+
+class _ChainStorage:
+    """In-memory project/article/job rows for one past-due failed job (content saved, no images)."""
+
+    def __init__(self):
+        self.article = {"id": "a1", "project_id": "p1", "title": "T", "article": BODY, "image_url": ""}
+        self.job = {"id": "j1", "project_id": "p1", "article_id": "a1", "state": "content_generating",
+                    "run_at": "2026-10-26 04:00:00", "generate_image": True, "inner_image_count": 2}
+
+    def get_project_by_id(self, pid):
+        return dict(PROJ)
+
+    def get_article(self, *, project_id, article_id):
+        return dict(self.article)
+
+    def load_scheduled_jobs(self, *, project_id, article_id):
+        return [dict(self.job)]
+
+    def update_scheduled_job_fields(self, jid, fields):
+        self.job.update(fields)
+        return True
+
+
+def test_retry_chain_on_past_due_failed_job_adds_all_images(calls, monkeypatch):
+    st = _ChainStorage()
+
+    async def inner(**kw):
+        calls.append(("inner", kw["count"], kw["markdown"]))
+        st.article["article"] = kw["markdown"] + '\n\n<img src="https://img.test/c1.png" alt="">'
+        return kw["count"]
+
+    async def featured(**kw):
+        calls.append("featured")
+        st.article["image_url"] = "https://img.test/featured.png"
+
+    async def no_dedup(_key):
+        return None
+
+    monkeypatch.setattr(inner_images, "add_inner_images", inner)
+    monkeypatch.setattr(pipeline, "execute_featured_image_regeneration", featured)
+    monkeypatch.setattr(worker, "get_legacy_storage_module", lambda: st)
+    monkeypatch.setattr(worker, "clear_dedup", no_dedup)
+
+    asyncio.run(worker._handle_scheduled_prep({"job_id": "j1", "project_id": "p1", "article_id": "a1"}))
+
+    assert calls == [("inner", 2, BODY), "featured"]
+    assert "<img " in st.article["article"] and st.article["image_url"]
+    assert st.job["state"] == "ready_to_post" and not st.job.get("last_error")
+
+    # Running the same job again must not add a second set of images.
+    calls.clear()
+    st.job["state"] = "content_generating"
+    asyncio.run(worker._handle_scheduled_prep({"job_id": "j1", "project_id": "p1", "article_id": "a1"}))
+    assert calls == []
