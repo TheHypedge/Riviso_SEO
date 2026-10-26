@@ -209,6 +209,7 @@ async def _handle_article_generate(payload: dict) -> None:
                     mapped_products=mapped_products_list,
                     mapped_pages=mapped_pages_list,
                     reference_source_content=payload.get("reference_source_content"),
+                    inner_image_count=max(0, min(5, int(payload.get("inner_image_count") or 0))),
                 )
                 post_type = payload.get("post_type")
                 wp_status = payload.get("wp_status")
@@ -343,6 +344,7 @@ async def _handle_cluster_generate_all(payload: dict) -> None:
             generate_image=bool(payload.get("generate_image", True)),
             writing_prompt_id=(payload.get("writing_prompt_id") or "").strip() or None,
             image_prompt_id=(payload.get("image_prompt_id") or "").strip() or None,
+            inner_image_count=max(0, min(5, int(payload.get("inner_image_count") or 0))),
             topic_ids=payload.get("topic_ids"),
             post_type=payload.get("post_type"),
             wp_status=payload.get("wp_status"),

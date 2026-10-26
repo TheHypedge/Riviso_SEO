@@ -346,6 +346,8 @@ class GenerateRequest(BaseModel):
     image_prompt_id: str | None = Field(default=None, max_length=100)
     focus_keyphrase: str | None = Field(default=None, max_length=500)
     generate_image: bool = True
+    # Inner (in-body) images added right after the content is generated; 0 = none.
+    inner_image_count: int = Field(default=0, ge=0, le=5)
     post_type: str | None = Field(
         default=None, max_length=200, description="WordPress post type to store as this article's default."
     )

@@ -3622,6 +3622,8 @@ export const api = {
       image_prompt_id?: string | null;
       focus_keyphrase?: string | null;
       generate_image?: boolean;
+      /** Inner (in-body) images added right after the content, 0–5. */
+      inner_image_count?: number;
       /** Stored as this article's own WordPress post-type default for later scheduling/publishing. */
       post_type?: string | null;
       /** Stored as this article's own WordPress status (draft|publish) default for later scheduling/publishing. */
@@ -4229,6 +4231,8 @@ export const api = {
       generate_image?: boolean;
       writing_prompt_id?: string | null;
       image_prompt_id?: string | null;
+      /** Inner (in-body) images per generated article, 0–5. */
+      inner_image_count?: number;
       /** ``null``/omitted ⇒ generate every pending topic. */
       topic_ids?: string[] | null;
       /** Stored as each generated article's own WordPress post-type default. */

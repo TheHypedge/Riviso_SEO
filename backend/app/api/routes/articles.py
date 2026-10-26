@@ -2185,6 +2185,7 @@ async def generate_article_and_image(
         "mapped_pages": mapped_pages_payload,
         "post_type": post_type_norm,
         "wp_status": wp_status_norm,
+        "inner_image_count": payload.inner_image_count,
     }
 
     if should_use_async_queue():
@@ -2231,6 +2232,7 @@ async def generate_article_and_image(
                 focus_keyphrase_override=payload.focus_keyphrase,
                 mapped_products=mapped_products_payload,
                 mapped_pages=mapped_pages_payload,
+                inner_image_count=payload.inner_image_count,
             )
             if post_type_norm or wp_status_norm:
                 await run_sync(st.patch_article_fields, aid, {

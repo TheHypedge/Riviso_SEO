@@ -128,6 +128,7 @@ async def execute_article_generation(
     mapped_products: list[dict] | None = None,
     mapped_pages: list[dict] | None = None,
     reference_source_content: str | None = None,
+    inner_image_count: int = 0,
 ) -> dict:
     """
     Run the same steps as ``POST /projects/{id}/articles/{article_id}/generate``.
@@ -281,6 +282,16 @@ async def execute_article_generation(
     # Replace with a plain hyphen surrounded by spaces, then collapse any double spaces.
     _article_md = re.sub(r"\s*[—–]\s*", " - ", _article_md)
     _article_md = re.sub(r" {2,}", " ", _article_md)
+
+    # Inner images go into this same save, so the article is never shown "done" without them.
+    if inner_image_count > 0 and _article_md.strip():
+        from app.services.inner_images import build_inner_images
+
+        await publish_pipeline_status(article_id, "Adding inner article images...", STAGE_FEATURED_IMAGE)
+        _article_md, _ = await build_inner_images(
+            st=st, user=user, project_id=project_id, article_id=article_id, title=title, markdown=_article_md,
+            count=inner_image_count, proj=proj, image_prompt_id=image_prompt_id, keywords=keywords,
+        )
 
     updates = {
         "article": _article_md,

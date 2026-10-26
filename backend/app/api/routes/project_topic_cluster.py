@@ -184,6 +184,7 @@ class TopicClusterGenerateAllPayload(BaseModel):
     )
     writing_prompt_id: str | None = Field(default=None, max_length=64)
     image_prompt_id: str | None = Field(default=None, max_length=64)
+    inner_image_count: int = Field(default=0, ge=0, le=5, description="Inner (in-body) images per generated article.")
     topic_ids: list[str] | None = Field(default=None, max_length=20)
     post_type: str | None = Field(
         default=None, max_length=200, description="WordPress post type to store as each generated article's default."
@@ -226,6 +227,7 @@ async def generate_all(
         "generate_image": bool(body.generate_image),
         "writing_prompt_id": (body.writing_prompt_id or "").strip() or None,
         "image_prompt_id": (body.image_prompt_id or "").strip() or None,
+        "inner_image_count": body.inner_image_count,
         "topic_ids": body.topic_ids,
         "post_type": post_type_norm,
         "wp_status": wp_status_norm,
@@ -259,6 +261,7 @@ async def generate_all(
             generate_image=bool(body.generate_image),
             writing_prompt_id=(body.writing_prompt_id or "").strip() or None,
             image_prompt_id=(body.image_prompt_id or "").strip() or None,
+            inner_image_count=body.inner_image_count,
             topic_ids=body.topic_ids,
             post_type=post_type_norm,
             wp_status=wp_status_norm,

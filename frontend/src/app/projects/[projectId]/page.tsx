@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import styles from "../../page.module.css";
 import { formatDayMonYearTime } from "@/lib/dateFormat";
+import InnerImageCountField from "@/components/InnerImageCountField";
 import projectsDark from "../projectsDark.module.css";
 import { CategorySelect } from "@/components/CategorySelect";
 import { ArticlesOverview } from "@/components/ArticlesOverview";
@@ -618,6 +619,10 @@ export default function ProjectPage() {
   );
   const isShopifyProject = projectPlatform === "shopify";
   const [featureLimits, setFeatureLimits] = useState<import("@/lib/api").ProjectFeatureLimits | null>(null);
+  const innerImagesLeft =
+    featureLimits?.inner_images && !featureLimits.inner_images.unlimited && typeof featureLimits.inner_images.month_limit === "number"
+      ? (featureLimits.inner_images.month_remaining ?? 0)
+      : null;
   const [articleQuota, setArticleQuota] = useState<import("@/lib/api").ArticleQuota | null>(null);
   const [websiteConnectionModal, setWebsiteConnectionModal] = useState<{
     title: string;
@@ -869,6 +874,7 @@ export default function ProjectPage() {
     pendingCount: number;
     writingPromptId: string;
     imagePromptId: string;
+    innerImageCount: number;
     postType: string;
     wpStatus: "draft" | "publish";
     mappedProducts: MappedShopifyProduct[];
@@ -879,6 +885,7 @@ export default function ProjectPage() {
     ideaIds: string[];
     writingPromptId: string;
     imagePromptId: string;
+    innerImageCount: number;
     postType: string;
     wpStatus: "draft" | "publish";
     mappedProducts: MappedShopifyProduct[];
@@ -5410,6 +5417,7 @@ export default function ProjectPage() {
       topicIds?: string[] | null;
       writingPromptId?: string | null;
       imagePromptId?: string | null;
+      innerImageCount?: number;
       postType?: string | null;
       wpStatus?: "draft" | "publish" | null;
       mappedProducts?: MappedShopifyProduct[] | null;
@@ -5482,6 +5490,7 @@ export default function ProjectPage() {
           generate_image: true,
           writing_prompt_id: opts?.writingPromptId || null,
           image_prompt_id: opts?.imagePromptId || null,
+          inner_image_count: opts?.innerImageCount ?? 0,
           topic_ids: topicIds,
           post_type: opts?.postType || null,
           wp_status: opts?.wpStatus || null,
@@ -5541,6 +5550,7 @@ export default function ProjectPage() {
       pendingCount,
       writingPromptId: prompts.writingPrompts?.default_id || "",
       imagePromptId: prompts.imagePrompts?.default_id || "",
+      innerImageCount: 0,
       postType: wpDefaults?.post_type || "posts",
       wpStatus: wpDefaults?.wp_status || "draft",
       mappedProducts: [],
@@ -5996,6 +6006,7 @@ export default function ProjectPage() {
       ideaIds: selected.map((r) => r.id),
       writingPromptId: prompts.writingPrompts?.default_id || "",
       imagePromptId: prompts.imagePrompts?.default_id || "",
+      innerImageCount: 0,
       postType: wpDefaults?.post_type || "posts",
       wpStatus: wpDefaults?.wp_status || "draft",
       mappedProducts: [],
@@ -6037,6 +6048,7 @@ export default function ProjectPage() {
               writing_prompt_id: m.writingPromptId || null,
               image_prompt_id: m.imagePromptId || null,
               generate_image: true,
+              inner_image_count: m.innerImageCount,
               post_type: m.postType || null,
               wp_status: m.wpStatus || null,
               mapped_products: mapped,
@@ -7499,24 +7511,12 @@ export default function ProjectPage() {
                       ) : null}
                     </label>
 
-                    <label className={styles.label}>
-                      No. of inner article image
-                      <input
-                        type="number"
-                        className={styles.input}
-                        min={0}
-                        max={5}
-                        step={1}
-                        value={scheduleInnerImageCount}
-                        onChange={(e) => setScheduleInnerImageCount(Math.max(0, Math.min(5, Math.trunc(Number(e.target.value) || 0))))}
-                      />
-                      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                        0–5. Placed between sections: data charts where the article has real figures, otherwise images in the selected image prompt's style. Applies only if this schedule generates the article.
-                        {featureLimits?.inner_images && !featureLimits.inner_images.unlimited && typeof featureLimits.inner_images.month_limit === "number"
-                          ? ` ${Math.max(0, featureLimits.inner_images.month_remaining ?? 0)} left this month.`
-                          : ""}
-                      </div>
-                    </label>
+                    <InnerImageCountField
+                      value={scheduleInnerImageCount}
+                      onChange={setScheduleInnerImageCount}
+                      monthRemaining={innerImagesLeft}
+                      hint="0–5. Placed between sections: data charts where the article has real figures, otherwise images in the selected image prompt's style. Applies only if this schedule generates the article."
+                    />
 
                     <label className={styles.label}>
                       WordPress post type
@@ -10167,18 +10167,11 @@ export default function ProjectPage() {
                         ))}
                       </select>
                     </label>
-                    <label className={styles.label}>
-                      No. of inner article image
-                      <input
-                        type="number"
-                        className={styles.input}
-                        min={0}
-                        max={5}
-                        step={1}
-                        value={editJobInnerImageCount}
-                        onChange={(e) => setEditJobInnerImageCount(Math.max(0, Math.min(5, Math.trunc(Number(e.target.value) || 0))))}
-                      />
-                    </label>
+                    <InnerImageCountField
+                      value={editJobInnerImageCount}
+                      onChange={setEditJobInnerImageCount}
+                      monthRemaining={innerImagesLeft}
+                    />
                     <label className={styles.label}>
                       Categories
                       <select
@@ -13674,6 +13667,11 @@ export default function ProjectPage() {
                         ))}
                       </select>
                     </label>
+                    <InnerImageCountField
+                      value={curationPromptModal.innerImageCount}
+                      onChange={(n) => setCurationPromptModal((m) => (m ? { ...m, innerImageCount: n } : m))}
+                      monthRemaining={innerImagesLeft}
+                    />
                     <label className={styles.label}>
                       WordPress post type
                       <select
@@ -13851,6 +13849,11 @@ export default function ProjectPage() {
                         ))}
                       </select>
                     </label>
+                    <InnerImageCountField
+                      value={clusterGeneratePromptModal.innerImageCount}
+                      onChange={(n) => setClusterGeneratePromptModal((m) => (m ? { ...m, innerImageCount: n } : m))}
+                      monthRemaining={innerImagesLeft}
+                    />
                     <label className={styles.label}>
                       WordPress post type
                       <select
@@ -13941,6 +13944,7 @@ export default function ProjectPage() {
                           topicIds: m.topicIds,
                           writingPromptId: m.writingPromptId || null,
                           imagePromptId: m.imagePromptId || null,
+                          innerImageCount: m.innerImageCount,
                           postType: m.postType || null,
                           wpStatus: m.wpStatus || null,
                         });
@@ -13963,6 +13967,7 @@ export default function ProjectPage() {
                           topicIds: m.topicIds,
                           writingPromptId: m.writingPromptId || null,
                           imagePromptId: m.imagePromptId || null,
+                          innerImageCount: m.innerImageCount,
                           postType: m.postType || null,
                           wpStatus: m.wpStatus || null,
                           mappedProducts: [],
@@ -13983,6 +13988,7 @@ export default function ProjectPage() {
                           topicIds: m.topicIds,
                           writingPromptId: m.writingPromptId || null,
                           imagePromptId: m.imagePromptId || null,
+                          innerImageCount: m.innerImageCount,
                           postType: m.postType || null,
                           wpStatus: m.wpStatus || null,
                           mappedProducts: m.mappedProducts,

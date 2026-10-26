@@ -342,7 +342,22 @@ async def _illustrate(
     return cloud_url
 
 
-async def add_inner_images(
+async def add_inner_images(**kw: Any) -> int:
+    """``build_inner_images`` + persist the article. Returns how many were added. Never raises."""
+    new_markdown, added = await build_inner_images(**kw)
+    if not added:
+        return 0
+    try:
+        st = kw["st"]
+        persist = getattr(st, "patch_article_fields", None) or st.update_article_fields
+        await run_sync(call_storage, persist, kw["article_id"], {"article": new_markdown})
+        return added
+    except Exception:
+        log.warning("inner images: could not save article %s", kw.get("article_id"), exc_info=True)
+        return 0
+
+
+async def build_inner_images(
     *,
     st: Any,
     user: dict,
@@ -354,16 +369,16 @@ async def add_inner_images(
     proj: dict | None = None,
     image_prompt_id: str | None = None,
     keywords: list[str] | None = None,
-) -> int:
-    """Add ``count`` images to ``markdown`` and persist the article: data charts where a
-    section has real figures, AI illustrations (needs ``proj``) for the remaining slots.
-    Returns how many were added. Never raises."""
+) -> tuple[str, int]:
+    """Place ``count`` images in ``markdown``: data charts where a section has real figures,
+    AI illustrations (needs ``proj``) for the remaining slots. Returns ``(markdown with the
+    images, how many were added)`` without saving. Never raises."""
     try:
         count = max(0, min(int(count or 0), MAX_INNER_IMAGES))
         sections = body_sections(markdown)
         if not count or not sections:
             log.info("inner images: article %s has no body sections to place images in", article_id)
-            return 0
+            return markdown, 0
         uid = (user.get("id") or "").strip()
         is_admin = (user.get("role") or "").strip().lower() == "admin"
         month_limit = _plan_for(st, user).get("max_inner_images_per_month")
@@ -425,10 +440,8 @@ async def add_inner_images(
 
         log.info("inner images: article %s got %d chart(s) + %d illustration(s) of %d requested", article_id, charts, len(placed) - charts, count)
         if not placed:
-            return 0
-        persist = getattr(st, "patch_article_fields", None) or st.update_article_fields
-        await run_sync(call_storage, persist, article_id, {"article": insert_images(markdown, placed)})
-        return len(placed)
+            return markdown, 0
+        return insert_images(markdown, placed), len(placed)
     except Exception:
         log.warning("inner images: failed for article %s", article_id, exc_info=True)
-        return 0
+        return markdown, 0

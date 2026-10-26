@@ -626,6 +626,7 @@ class TopicClusterService:
         post_type: str | None = None,
         wp_status: str | None = None,
         mapped_products: list[dict] | None = None,
+        inner_image_count: int = 0,
     ) -> dict[str, Any]:
         """
         Generate article bodies for the pillar + each cluster without ``imported_article_id``.
@@ -737,6 +738,7 @@ class TopicClusterService:
                         generate_image=generate_image,
                         focus_keyphrase_override=None,
                         mapped_products=mapped_products,
+                        inner_image_count=inner_image_count,
                     )
                 if generate_image:
                     img_url = ((gen_result.get("generated") or {}).get("image_url") or "").strip()
