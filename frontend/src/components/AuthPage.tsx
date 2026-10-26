@@ -219,7 +219,9 @@ export default function AuthPage() {
   const isStrongPassword = Object.values(pwRules).every(Boolean);
 
   return (
-    <div className={styles.authPage}>
+    // Always dark: the form sits on the dark landing background, so light-theme tokens
+    // (shared .input/.label states, browser autofill) would put dark text on it.
+    <div className={styles.authPage} data-theme="dark">
       <div className={styles.authShell}>
         <section className={styles.authLeft}>
           <div className={styles.authBrand} aria-label="Riviso">

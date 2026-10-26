@@ -139,8 +139,11 @@
    layout.tsx for how a returning user's choice is applied before first paint.
    Deliberately only overrides tokens that actually differ by theme (surfaces,
    ink/text, hairlines) -- radii/shadows/spacing/fonts/status colors are the
-   same in both, see the :root comment above on why status colors don't vary. */
-html[data-theme="dark"] {
+   same in both, see the :root comment above on why status colors don't vary.
+   The bare [data-theme="dark"] pins a subtree to dark regardless of the app theme
+   (the login screen sits on a dark landing background). */
+html[data-theme="dark"],
+[data-theme="dark"] {
   --aa-canvas: #0b0b0d;
   --aa-surface-soft: rgba(255, 255, 255, 0.04);
   --aa-surface-card: rgba(18, 18, 20, 0.72);
