@@ -280,6 +280,14 @@ class Settings(BaseSettings):
         """
         return _clean_env_str(v)
 
+    @field_validator("openai_image_model", mode="before")
+    @classmethod
+    def _replace_retired_image_model(cls, v: Any) -> Any:
+        """OpenAI shut gpt-image-1 down on 2026-10-23; a stale OPENAI_IMAGE_MODEL in a server
+        .env must not silently kill every featured and inner image."""
+        v = _clean_env_str(v)
+        return "gpt-image-2" if v == "gpt-image-1" else v
+
     @property
     def is_production(self) -> bool:
         """True when ``ENVIRONMENT`` is set to production (case-insensitive)."""
