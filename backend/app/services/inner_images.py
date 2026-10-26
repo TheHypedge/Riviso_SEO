@@ -315,18 +315,48 @@ async def _extract_chart(title: str, heading: str, text: str) -> dict | None:
     return validate_chart(obj.get("chart"), text)
 
 
-async def _illustrate(
-    *, proj: dict, image_prompt_id: str | None, title: str, heading: str, keywords: list[str], project_id: str, article_id: str
-) -> str | None:
-    """AI illustration for one section, in the job's image-prompt style. Returns its
-    Cloudinary URL, or None (never keep a data: URL or an expiring OpenAI URL)."""
+_SCENE_SYSTEM = (
+    "You turn one passage of an article into ONE image idea that shows exactly what this passage "
+    "says (its specific point, not the article's general topic).\n"
+    'Return JSON: {"scene": "<= 300 chars: a concrete scene (people, setting, objects, action) that '
+    'illustrates the passage; no words, letters, numbers, charts, logos or screens in the image", '
+    '"alt": "<= 125 chars: plain description of that image for screen readers"}'
+)
+
+
+async def describe_passage(*, title: str, heading: str, passage: str) -> dict[str, str]:
+    """Scene + alt text for an image of ``passage``. Falls back to the heading/title (the
+    pre-passage behavior) if the text model fails, so an image is still made."""
+    fallback = (heading or title or "").strip()[:200]
+    try:
+        obj = await OpenAIClient().chat_json(
+            model=settings.openai_text_model,
+            system=_SCENE_SYSTEM,
+            user=f"Article: {title}\nSection: {heading}\n\nPassage:\n{(passage or '')[:4000]}",
+        )
+        scene = " ".join(str(obj.get("scene") or "").split())[:300]
+        alt = " ".join(str(obj.get("alt") or "").split())[:125]
+        if scene:
+            return {"scene": scene, "alt": alt or fallback}
+    except Exception:
+        log.warning("inner images: scene description failed; using the heading", exc_info=True)
+    return {"scene": fallback, "alt": fallback}
+
+
+async def illustrate_passage(
+    *, proj: dict, image_prompt_id: str | None, title: str, heading: str, passage: str,
+    keywords: list[str], project_id: str, article_id: str,
+) -> tuple[str | None, str | None, str]:
+    """AI image of what ``passage`` says, in the project's image-prompt style, saved as
+    article media. Returns ``(media_id, cloudinary_url, alt)``; ids are None on failure."""
     from app.services.article_pipeline import _resolve_image_prompt  # avoid an import cycle
 
+    desc = await describe_passage(title=title, heading=heading, passage=passage)
     prompt = _resolve_image_prompt(proj=proj, image_prompt_id=image_prompt_id)
     gen = await generate_featured_image_only(
-        title=heading or title,
+        title=title,
         keywords=keywords,
-        focus_keyphrase=title,
+        focus_keyphrase=desc["scene"],
         brand_identity=proj.get("brand_identity") or "",
         niche_identifier=proj.get("niche_identifier") or "",
         image_prompt_text=(prompt or {}).get("text") or None,
@@ -334,12 +364,12 @@ async def _illustrate(
     url = (gen.get("image_url") or "").strip()
     got = featured_image_bytes_from_data_url(url) or await featured_image_bytes_from_http_url(url)
     if not got:
-        return None
+        return None, None, desc["alt"]
     data, content_type, _name = got
-    _image_id, cloud_url = await run_sync(
+    image_id, cloud_url = await run_sync(
         save_article_media, data=data, content_type=content_type, project_id=project_id, article_id=article_id
     )
-    return cloud_url
+    return image_id, cloud_url, desc["alt"]
 
 
 async def add_inner_images(**kw: Any) -> int:
@@ -425,16 +455,17 @@ async def build_inner_images(
             taken = {p[0] for p in placed}
             free = [s for s in body_sections(markdown) if s[0] not in taken]
             # ponytail: sequential (~1 min per image); bounded gather if prep latency matters.
-            for line_idx, heading, _text in _spread(free, count - len(placed))[: count - len(placed)]:
+            for line_idx, heading, text in _spread(free, count - len(placed))[: count - len(placed)]:
                 if not await quota_ok():
                     break
                 try:
-                    url = await _illustrate(
-                        proj=proj, image_prompt_id=image_prompt_id, title=title, heading=heading,
+                    _id, url, alt = await illustrate_passage(
+                        proj=proj, image_prompt_id=image_prompt_id, title=title, heading=heading, passage=text,
                         keywords=keywords or [], project_id=project_id, article_id=article_id,
                     )
+                    # Only a Cloudinary URL works on WordPress (never a local /media path).
                     if url:
-                        placed.append((line_idx, url, heading))
+                        placed.append((line_idx, url, alt or heading))
                 except Exception:
                     log.warning("inner images: illustration for section %r of article %s failed", heading, article_id, exc_info=True)
 

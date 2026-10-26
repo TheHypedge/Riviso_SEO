@@ -2555,6 +2555,7 @@ export default function ArticleEditPage() {
                       articleId={params.articleId}
                       focusKeyphrase={focus}
                       keywords={kwFromString(keywords)}
+                      imagePromptId={imagePromptId}
                       disabled={editorLocked}
                       onError={setNotice}
                     />

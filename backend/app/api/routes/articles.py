@@ -126,6 +126,7 @@ from app.schemas.articles import (
     ArticleFromSourceRequest,
     RegenerateSelectionRequest,
     RegenerateSelectionResponse,
+    ArticleMediaFromSelectionRequest,
     ArticleMediaFromUrlRequest,
     ArticleMediaGenerateRequest,
     ArticleMediaResponse,
@@ -1419,6 +1420,49 @@ async def insert_article_media_generate(
         article_id=article_id,
     )
     return ArticleMediaResponse(id=image_id, url=cloudinary_url or _article_media_public_url(image_id))
+
+
+@router.post("/{article_id}/media/generate-from-selection", response_model=ArticleMediaResponse)
+@limiter.limit("6/minute")
+async def insert_article_media_from_selection(
+    request: Request,
+    project_id: str,
+    article_id: str,
+    payload: ArticleMediaFromSelectionRequest,
+    user: dict = Depends(get_current_user),
+) -> ArticleMediaResponse:
+    """
+    Article editor selection tool — "Generate image". An image of what the selected passage
+    says (passage -> scene -> project image style), saved as article media. The editor inserts
+    it below the selected block; the text itself is never replaced. Same no-quota, tight-rate-
+    limit policy as the Insert Media AI tab.
+    """
+    from app.services.inner_images import illustrate_passage
+
+    st = get_legacy_storage_module()
+    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    article = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(status_code=501, detail="OPENAI_API_KEY is not configured on the backend")
+
+    try:
+        image_id, cloudinary_url, alt = await illustrate_passage(
+            proj=proj,
+            image_prompt_id=(payload.image_prompt_id or "").strip() or None,
+            title=(article.get("title") or "").strip(),
+            heading=payload.heading.strip(),
+            passage=payload.selected_text.strip(),
+            keywords=_coerce_keywords(article.get("keywords")),
+            project_id=project_id,
+            article_id=article_id,
+        )
+    except Exception as e:
+        _log.warning("selection image failed for article %s", article_id, exc_info=True)
+        raise HTTPException(status_code=502, detail="Couldn't generate an image for that text. Try again.") from e
+    if not image_id:
+        raise HTTPException(status_code=502, detail="Couldn't generate an image for that text. Try again.")
+    return ArticleMediaResponse(id=image_id, url=cloudinary_url or _article_media_public_url(image_id), alt=alt)
 
 
 @router.post("/bulk", status_code=200)

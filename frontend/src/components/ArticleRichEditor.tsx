@@ -23,6 +23,9 @@ const turndown = new TurndownService({
 // `![alt](src)` markdown can't represent — always emit a raw <img> tag
 // instead (both Turndown's caller and `marked`/CommonMark on the way back in
 // pass inline raw HTML through untouched, so this round-trips losslessly).
+// getAttribute() returns decoded values, so re-escape them: an AI alt text with a
+// quote in it would otherwise close the attribute early and break the tag.
+const attr = (v: string) => v.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
 turndown.addRule("articleImage", {
   filter: "img",
   replacement: (_content, node) => {
@@ -32,9 +35,9 @@ turndown.addRule("articleImage", {
     const alt = el.getAttribute("alt") || "";
     const style = el.getAttribute("style");
     const className = el.getAttribute("class");
-    let tag = `<img src="${src}" alt="${alt}"`;
-    if (style) tag += ` style="${style}"`;
-    if (className) tag += ` class="${className}"`;
+    let tag = `<img src="${attr(src)}" alt="${attr(alt)}"`;
+    if (style) tag += ` style="${attr(style)}"`;
+    if (className) tag += ` class="${attr(className)}"`;
     tag += ">";
     return tag;
   },

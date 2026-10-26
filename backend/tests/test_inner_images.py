@@ -122,7 +122,7 @@ def _run(mp, st, *, charts, upload=True, count=2, illus=None):
 
     async def fake_illustrate(**kw):
         illus_calls.append(kw["heading"])
-        return illus
+        return ("id", illus, f"alt for {kw['heading']}") if illus else (None, None, "")
 
     async def fake_extract(title, heading, text):
         c = next(it)
@@ -138,7 +138,7 @@ def _run(mp, st, *, charts, upload=True, count=2, illus=None):
 
     mp.setattr(ii, "_extract_chart", fake_extract)
     mp.setattr(ii, "save_article_media", fake_save)
-    mp.setattr(ii, "_illustrate", fake_illustrate)
+    mp.setattr(ii, "illustrate_passage", fake_illustrate)
     proj = {"id": "p"} if illus else None
     n = asyncio.run(
         add_inner_images(st=st, user={"id": "u1"}, project_id="p", article_id="a", title="T", markdown=MD, count=count, proj=proj)
@@ -263,8 +263,45 @@ def test_illustrate_keeps_only_hosted_urls(monkeypatch):
     async def fake_gen(**kw):
         return {"image_url": "data:image/png;base64,iVBORw0KGgo="}
 
+    async def fake_describe(**kw):
+        return {"scene": "A lawyer reviewing papers", "alt": "Lawyer reviewing papers"}
+
     saved = []
     monkeypatch.setattr(ii, "generate_featured_image_only", fake_gen)
+    monkeypatch.setattr(ii, "describe_passage", fake_describe)
     monkeypatch.setattr(ii, "save_article_media", lambda **kw: saved.append(kw["content_type"]) or ("id", None))
-    url = asyncio.run(ii._illustrate(proj={}, image_prompt_id=None, title="T", heading="H", keywords=[], project_id="p", article_id="a"))
+    _id, url, alt = asyncio.run(ii.illustrate_passage(
+        proj={}, image_prompt_id=None, title="T", heading="H", passage="P", keywords=[], project_id="p", article_id="a"))
     assert url is None and saved == ["image/png"]  # Cloudinary down -> nothing inserted
+    assert alt == "Lawyer reviewing papers"
+
+
+def test_illustration_prompt_is_built_from_the_passage(monkeypatch):
+    seen = {}
+
+    async def fake_gen(**kw):
+        seen.update(kw)
+        return {"image_url": "data:image/png;base64,iVBORw0KGgo="}
+
+    async def fake_chat(self, *, model, system, user):
+        seen["chat_user"] = user
+        return {"scene": "Two spouses signing a settlement at a court desk", "alt": "Couple signing settlement"}
+
+    monkeypatch.setattr(ii, "generate_featured_image_only", fake_gen)
+    monkeypatch.setattr(ii.OpenAIClient, "chat_json", fake_chat)
+    monkeypatch.setattr(ii, "save_article_media", lambda **kw: ("m1", "https://res.cloudinary.com/x/m1.png"))
+    res = asyncio.run(ii.illustrate_passage(
+        proj={}, image_prompt_id=None, title="Mutual Divorce", heading="Settlement",
+        passage="Both spouses sign the settlement deed before the family court.", keywords=["divorce"],
+        project_id="p", article_id="a"))
+    assert res == ("m1", "https://res.cloudinary.com/x/m1.png", "Couple signing settlement")
+    assert "sign the settlement deed" in seen["chat_user"]
+    assert seen["focus_keyphrase"] == "Two spouses signing a settlement at a court desk"
+
+
+def test_scene_falls_back_to_heading_when_text_model_fails(monkeypatch):
+    async def broken_chat(self, **kw):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(ii.OpenAIClient, "chat_json", broken_chat)
+    assert asyncio.run(ii.describe_passage(title="T", heading="Fees", passage="x")) == {"scene": "Fees", "alt": "Fees"}

@@ -156,11 +156,21 @@ class ArticleMediaGenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=200)
 
 
+class ArticleMediaFromSelectionRequest(BaseModel):
+    """Payload for POST .../articles/{article_id}/media/generate-from-selection (editor
+    selection tool): an image of what the selected passage says."""
+
+    selected_text: str = Field(min_length=12, max_length=4000)
+    heading: str = Field(default="", max_length=300)
+    image_prompt_id: str | None = Field(default=None, max_length=100)
+
+
 class ArticleMediaResponse(BaseModel):
     """{id, url} returned by all three Insert Media endpoints (from-url/upload/generate)."""
 
     id: str
     url: str
+    alt: str = ""
 
 
 class BulkActionRequest(BaseModel):

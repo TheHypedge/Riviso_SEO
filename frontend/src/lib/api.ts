@@ -3105,6 +3105,17 @@ export const api = {
       { method: "POST", body: JSON.stringify({ prompt }) },
     );
   },
+  /** Editor selection tool: an image of what the selected passage says (inserted below it, never replacing it). */
+  async generateArticleMediaFromSelection(
+    projectId: string,
+    articleId: string,
+    body: { selected_text: string; heading?: string; image_prompt_id?: string | null },
+  ) {
+    return apiFetch<{ id: string; url: string; alt: string }>(
+      `/api/projects/${projectId}/articles/${articleId}/media/generate-from-selection`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  },
   async bulkDeleteArticles(projectId: string, article_ids: string[]) {
     return apiFetch<{ ok: true; deleted: number }>(`/api/projects/${projectId}/articles/bulk`, {
       method: "POST",

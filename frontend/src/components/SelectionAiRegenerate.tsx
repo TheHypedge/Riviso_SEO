@@ -12,6 +12,8 @@ type Props = {
   articleId: string;
   focusKeyphrase: string;
   keywords: string[];
+  /** Image style for "Generate image" (falls back to the project default on the server). */
+  imagePromptId?: string;
   disabled?: boolean;
   onError: (message: string) => void;
 };
@@ -23,6 +25,29 @@ type Tab = "auto" | "custom";
 const MIN_SELECTION_CHARS = 12;
 const CONTEXT_CHARS = 600;
 const MAX_CUSTOM_PROMPT_CHARS = 100;
+
+function ImageIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true" width={14} height={14}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="9" cy="10" r="2" />
+      <path d="M21 17l-5-5-9 8" />
+    </svg>
+  );
+}
+
+/** Text of the last heading before ``pos`` -- context for what the passage is about. */
+function headingBefore(editor: TipTapEditor, pos: number): string {
+  let heading = "";
+  editor.state.doc.nodesBetween(0, pos, (node) => {
+    if (node.type.name === "heading") {
+      heading = node.textContent;
+      return false;
+    }
+    return true;
+  });
+  return heading.slice(0, 300);
+}
 
 function SparkleIcon() {
   return (
@@ -39,6 +64,7 @@ export function SelectionAiRegenerate({
   articleId,
   focusKeyphrase,
   keywords,
+  imagePromptId,
   disabled,
   onError,
 }: Props) {
@@ -46,6 +72,7 @@ export function SelectionAiRegenerate({
   const busyRef = useRef(false);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
   const [busy, setBusy] = useState(false);
+  const [imageBusy, setImageBusy] = useState(false);
   const [shimmerRects, setShimmerRects] = useState<Rect[]>([]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("auto");
@@ -156,6 +183,35 @@ export function SelectionAiRegenerate({
     }
   }
 
+  async function runGenerateImage() {
+    if (!editor || !anchor || busy || imageBusy) return;
+    const { from, to } = anchor;
+    busyRef.current = true;
+    setImageBusy(true);
+    try {
+      const res = await api.generateArticleMediaFromSelection(projectId, articleId, {
+        selected_text: editor.state.doc.textBetween(from, to, "\n\n").slice(0, 4000),
+        heading: headingBefore(editor, from),
+        image_prompt_id: imagePromptId || null,
+      });
+      // Below the block the selection ends in -- the selected text itself is never replaced.
+      const { doc } = editor.state;
+      const end = doc.resolve(Math.min(to, doc.content.size));
+      const insertAt = end.depth > 0 ? end.after(1) : end.pos;
+      editor
+        .chain()
+        .focus()
+        .insertContentAt(insertAt, { type: "articleImage", attrs: { src: res.url, alt: res.alt || "", align: "center" } })
+        .run();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : "Couldn't generate an image for that text.");
+    } finally {
+      busyRef.current = false;
+      setImageBusy(false);
+      setAnchor(null);
+    }
+  }
+
   if (disabled || !editor) return null;
 
   const customPromptTrimmed = customPrompt.trim();
@@ -170,16 +226,29 @@ export function SelectionAiRegenerate({
         />
       ))}
       {anchor && !busy && !dialogOpen ? (
-        <button
-          type="button"
-          className={editorStyles.selectionAiPill}
-          style={{ top: anchor.top - 34, left: anchor.left }}
-          onClick={openDialog}
-          title="AI regenerate"
-        >
-          <SparkleIcon />
-          <span className={editorStyles.selectionAiPillLabel}>AI regenerate</span>
-        </button>
+        <div className={editorStyles.selectionAiPillRow} style={{ top: anchor.top - 34, left: anchor.left }}>
+          <button
+            type="button"
+            className={editorStyles.selectionAiPill}
+            onClick={openDialog}
+            disabled={imageBusy}
+            title="AI regenerate"
+          >
+            <SparkleIcon />
+            <span className={editorStyles.selectionAiPillLabel}>AI regenerate</span>
+          </button>
+          <button
+            type="button"
+            className={`${editorStyles.selectionAiPill} ${editorStyles.selectionAiPillSecondary}`}
+            onClick={() => void runGenerateImage()}
+            disabled={imageBusy}
+            aria-busy={imageBusy}
+            title="Generate an image of this text, placed below it"
+          >
+            <ImageIcon />
+            <span className={editorStyles.selectionAiPillLabel}>{imageBusy ? "Generating image…" : "Generate image"}</span>
+          </button>
+        </div>
       ) : null}
       {anchor && dialogOpen ? (
         <div

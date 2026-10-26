@@ -425,6 +425,37 @@
   outline: none;
 }
 
+/* "AI regenerate" + "Generate image" side by side; the row is what's positioned. */
+.selectionAiPillRow {
+  position: absolute;
+  display: inline-flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.selectionAiPillRow .selectionAiPill {
+  position: static;
+}
+
+/* Secondary action: outlined on a solid canvas so it stays legible over article text. */
+.selectionAiPillSecondary {
+  background: var(--aa-canvas);
+  color: var(--aa-primary);
+  border-color: var(--aa-primary);
+}
+
+.selectionAiPillSecondary:hover,
+.selectionAiPillSecondary:focus-visible {
+  background: var(--aa-canvas);
+  color: var(--aa-primary-hover);
+  border-color: var(--aa-primary-hover);
+}
+
+.selectionAiPill:disabled {
+  opacity: 0.7;
+  cursor: progress;
+}
+
 .selectionAiPillLabel {
   font-size: 12px;
   font-weight: 700;
