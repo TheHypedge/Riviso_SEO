@@ -3,6 +3,7 @@ import xml.dom.minidom
 
 import app.services.inner_images as ii
 from app.services.inner_images import (
+    _scale_only_numbers,
     add_inner_images,
     candidate_sections,
     chart_alt,
@@ -53,6 +54,20 @@ def test_validate_rejects_any_number_not_in_text():
     assert validate_chart(ok, text)["points"][2]["value"] == 1200.0
     bad = {**ok, "points": ok["points"][:2] + [{"label": "2025", "value": 95}]}
     assert validate_chart(bad, text) is None
+
+
+def test_validate_rejects_figure_that_drops_its_magnitude():
+    # Seen live: "fines up to $2.5 million" was charted as "$2.50".
+    text = "Breaches carry fines up to $2.5 million for companies."
+    stat = {"type": "stat", "title": "Maximum fine", "unit": "$", "points": [{"label": "Fine", "value": 2.5, "unit": "$"}]}
+    assert validate_chart(stat, text) is None
+    assert validate_chart({**stat, "unit": "$ million"}, text)["points"][0]["value"] == 2.5
+    # A figure that also appears without a magnitude stays chartable.
+    assert validate_chart(stat, text + " Rates rose 2.5 points.") is not None
+    # Indian magnitudes count too; units like "minutes" are not mistaken for "m".
+    rupees = {**stat, "unit": "₹", "points": [{"label": "Cost", "value": 4, "unit": "₹"}]}
+    assert validate_chart(rupees, "Costs reached ₹4 crore.") is None
+    assert _scale_only_numbers("Costs reached ₹4 crore and 60 minutes.") == {4.0: "crore"}
 
 
 def test_validate_rejects_bad_shapes():

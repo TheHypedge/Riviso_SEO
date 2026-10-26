@@ -209,7 +209,11 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
     needs_content = not (str(art.get("article") or "").strip())
     needs_image = not (str(art.get("image_url") or "").strip())
     generate_image = bool(job.get("generate_image", True))
-    if not (needs_content or (generate_image and needs_image)):
+    inner_count = int(job.get("inner_image_count") or 0)
+    # A retry (content already saved) must still add the requested inner images; a body
+    # that already has any <img> is left alone so retries never stack duplicates.
+    needs_inner = inner_count > 0 and "<img " not in str(art.get("article") or "")
+    if not (needs_content or needs_inner or (generate_image and needs_image)):
         return art
 
     await _patch_scheduled_job(
@@ -225,6 +229,7 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
     user = await _owner_user_dict(st, proj)
 
     try:
+        markdown = str(art.get("article") or "")
         if needs_content:
             result = await execute_article_generation(
                 st=st,
@@ -240,23 +245,24 @@ async def prepare_article_for_scheduled_job(*, st, jid: str, proj: dict, art: di
                 mapped_products=mapped_products if isinstance(mapped_products, list) else None,
                 mapped_pages=mapped_pages if isinstance(mapped_pages, list) else None,
             )
-            inner_count = int(job.get("inner_image_count") or 0)
-            if inner_count > 0:
-                from app.services.inner_images import add_inner_images
+            markdown = ((result or {}).get("generated") or {}).get("article") or ""
+        # Before the featured-image retry, so a featured failure can't block inner images.
+        if inner_count > 0 and markdown.strip() and "<img " not in markdown:
+            from app.services.inner_images import add_inner_images
 
-                await add_inner_images(
-                    st=st,
-                    user=user,
-                    project_id=pid,
-                    article_id=aid,
-                    title=(art.get("title") or "").strip(),
-                    markdown=((result or {}).get("generated") or {}).get("article") or "",
-                    count=inner_count,
-                    proj=proj,
-                    image_prompt_id=image_prompt_id,
-                    keywords=[str(k).strip() for k in (art.get("keywords") or []) if str(k).strip()],
-                )
-        elif generate_image and needs_image:
+            await add_inner_images(
+                st=st,
+                user=user,
+                project_id=pid,
+                article_id=aid,
+                title=(art.get("title") or "").strip(),
+                markdown=markdown,
+                count=inner_count,
+                proj=proj,
+                image_prompt_id=image_prompt_id,
+                keywords=[str(k).strip() for k in (art.get("keywords") or []) if str(k).strip()],
+            )
+        if not needs_content and generate_image and needs_image:
             await execute_featured_image_regeneration(
                 st=st,
                 user=user,

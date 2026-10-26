@@ -122,6 +122,31 @@ def _numbers_in(text: str) -> set[float]:
     return {float(m.replace(",", "")) for m in _NUM.findall(text or "")}
 
 
+_MAGNITUDES = {
+    "thousand": "thousand", "k": "thousand",
+    "million": "million", "mn": "million", "m": "million",
+    "billion": "billion", "bn": "billion", "b": "billion",
+    "trillion": "trillion", "tn": "trillion",
+    "lakh": "lakh", "lakhs": "lakh", "crore": "crore", "crores": "crore",
+}
+_SCALED_NUM = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(" + "|".join(sorted(_MAGNITUDES, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+
+
+def _scale_only_numbers(text: str) -> dict[float, str]:
+    """Numbers that appear in the text ONLY with a magnitude word ("$2.5 million" -> 2.5),
+    mapped to that magnitude. Charting the bare 2.5 would be off by a factor of a million."""
+    scaled: dict[float, str] = {}
+    for n, word in _SCALED_NUM.findall(text or ""):
+        scaled[float(n.replace(",", ""))] = _MAGNITUDES[word.lower()]
+    plain = _numbers_in(_SCALED_NUM.sub(" ", text or ""))
+    return {v: m for v, m in scaled.items() if v not in plain}
+
+
+def _unit_magnitudes(*units: Any) -> set[str]:
+    words = re.findall(r"[a-z]+", " ".join(str(u or "") for u in units).lower())
+    return {_MAGNITUDES[w] for w in words if w in _MAGNITUDES}
+
+
 def _unit_key(unit: Any) -> str:
     u = " ".join(str(unit or "").lower().split())
     return {"percent": "%", "per cent": "%", "pct": "%", "usd": "$", "dollars": "$", "aud": "$", "day": "days"}.get(u, u)
@@ -150,6 +175,7 @@ def validate_chart(chart: Any, section_text: str) -> dict | None:
     if not lo <= len(pts) <= hi:
         return None
     allowed = _numbers_in(section_text)
+    scale_only = _scale_only_numbers(section_text)
     clean = []
     units: set[str] = set()
     for p in pts:
@@ -163,6 +189,8 @@ def validate_chart(chart: Any, section_text: str) -> dict | None:
         # ponytail: negatives rejected (bars/axes assume >= 0); add a zero baseline if needed.
         if not label or not math.isfinite(value) or value < 0 or abs(value) not in allowed:
             return None
+        if value in scale_only and scale_only[value] not in _unit_magnitudes(p.get("unit"), chart.get("unit")):
+            return None  # "$2.5 million" would be drawn as "$2.50"
         if _is_year(value) or _is_name_number(label, value):
             continue  # drop the point; the chart must still have enough real data (below)
         clean.append({"label": label, "value": value})
