@@ -99,14 +99,14 @@ _READABILITY_GUIDANCE: dict[ReadabilityLevel, str] = {
 
 _STRUCTURE_LABELS: dict[ContentStructureOption, str] = {
     "Introduction": "Introduction",
-    "Quick Answer / TL;DR": "Quick Answer / TL;DR (a 50–100 word direct answer to the primary query, near the top)",
+    "Quick Answer / TL;DR": "A 50–100 word direct answer to the primary query in the opening paragraphs (no heading of its own)",
     "Table of Contents": "Table of Contents",
     "Key Takeaways": "Key Takeaways (8–10 bullet summary of the most important insights)",
     "Pros and Cons": "Pros and Cons section",
     "Step-by-Step Breakdown": "Step-by-Step Breakdown section",
     "FAQs": "FAQs section (5–10 Q&A pairs optimised for AI extraction)",
     "CTA (Call to Action)": "Call to Action",
-    "Summary / Conclusion": "Summary / Conclusion",
+    "Summary / Conclusion": "A short closing section under a specific heading about its content (not a generic wrap-up label)",
 }
 
 

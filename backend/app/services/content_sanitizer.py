@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 
 from app.services.generation_blocklist import (
+    clean_banned_heading,
     sanitize_line_banned_phrases,
     strip_banned_phrases_from_text,
     strip_em_dashes,
@@ -161,6 +162,11 @@ def sanitize_article_body(text: str | None) -> str:
 
         # Banned line patterns (single-line meta echoes / preamble).
         if _line_is_banned(line):
+            continue
+
+        # AI-tell headings ("Quick Answer", "Conclusion"): drop the heading, keep its text.
+        line = clean_banned_heading(line)
+        if line is None:
             continue
 
         cleaned.append(sanitize_line_banned_phrases(line))

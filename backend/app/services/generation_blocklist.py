@@ -49,6 +49,22 @@ DEFAULT_GENERATION_BANNED_PHRASES: tuple[str, ...] = (
 )
 
 
+# Section headings that read as AI-written. They are never shown: the prompt forbids them
+# and sanitization drops the heading line (the section's text stays). Grow this list as
+# more AI tells show up; GENERATION_BANNED_HEADINGS adds more without a deploy.
+DEFAULT_GENERATION_BANNED_HEADINGS: tuple[str, ...] = (
+    "quick answer",
+    "quick answers",
+    "quick answer / tl;dr",
+    "tl;dr",
+    "tldr",
+    "conclusion",
+    "conclusions",
+    "in conclusion",
+    "summary / conclusion",
+)
+
+
 def _parse_env_phrases(raw: str) -> list[str]:
     out: list[str] = []
     for part in (raw or "").replace("\n", ",").split(","):
@@ -70,6 +86,48 @@ def get_generation_banned_phrases() -> tuple[str, ...]:
         seen.add(key)
         merged.append(p.strip())
     return tuple(merged)
+
+
+@lru_cache(maxsize=1)
+def get_generation_banned_headings() -> tuple[str, ...]:
+    """Built-in + env banned headings, normalized like ``_heading_key``."""
+    out: list[str] = []
+    for h in list(DEFAULT_GENERATION_BANNED_HEADINGS) + _parse_env_phrases(settings.generation_banned_headings):
+        key = _heading_key(h)
+        if key and key not in out:
+            out.append(key)
+    return tuple(out)
+
+
+_MD_HEADING = re.compile(r"^(\s*#{1,6}\s+)(.*)$")
+_BOLD_LINE = re.compile(r"^(\s*)\*\*(.+?)\*\*\s*:?\s*$")  # "**Conclusion**" used as a pseudo-heading
+
+
+def _heading_key(text: str) -> str:
+    s = re.sub(r"[*_`]+", "", text or "")
+    s = re.sub(r"^\s*\d+[.)]\s*", "", s)  # "5. Conclusion"
+    s = s.strip().rstrip(":.!-–— ").strip()
+    return " ".join(s.lower().split())
+
+
+def clean_banned_heading(line: str) -> str | None:
+    """Apply the banned-heading list to one markdown line.
+
+    Returns None to drop a banned heading line, the heading without its banned label
+    ("## Conclusion: Choosing a Lawyer" -> "## Choosing a Lawyer"), or the line unchanged.
+    """
+    m = _MD_HEADING.match(line) or _BOLD_LINE.match(line)
+    if not m:
+        return line
+    prefix, body = m.group(1), m.group(2)
+    banned = get_generation_banned_headings()
+    if _heading_key(body) in banned:
+        return None
+    for h in banned:
+        rest = re.match(rf"^\s*[*_]*{re.escape(h)}[*_]*\s*[:|\-–—]\s*(.+)$", body, re.IGNORECASE)
+        if rest:
+            return f"{prefix}{rest.group(1).strip()}" if _MD_HEADING.match(line) else f"{prefix}**{rest.group(1).strip()}**"
+    return line
 
 
 def _phrase_to_flexible_pattern(phrase: str) -> str:
@@ -96,6 +154,11 @@ def format_banned_phrases_for_prompt(phrases: tuple[str, ...] | None = None) -> 
         "- Do NOT tag headings with optimization hints in parentheses or brackets "
         '(e.g. avoid "(AEO-Optimized)", "[AI Suggested Keywords]", "(SEO FAQ)").\n'
         "- Write natural reader-facing headings only; never expose internal SEO/AEO workflow labels.\n"
+        "\nFORBIDDEN HEADINGS (they read as AI-written; never use them, or any variant, as a heading):\n"
+        + "\n".join(f"- {h}" for h in get_generation_banned_headings())
+        + "\n- Put a short direct answer in the opening paragraphs without a heading of its own.\n"
+        "- Give a closing section a specific heading about its content "
+        '(e.g. "What to Prepare Before You Apply"), never a generic wrap-up label.\n'
     )
 
 

@@ -249,6 +249,14 @@ class Settings(BaseSettings):
             "Built-in defaults always apply; this env extends the list."
         ),
     )
+    generation_banned_headings: str = Field(
+        default="",
+        validation_alias="GENERATION_BANNED_HEADINGS",
+        description=(
+            "Extra section headings generated articles must never show (e.g. 'Final Thoughts,Wrapping Up'). "
+            "Built-in defaults (Quick Answer, Conclusion, ...) always apply; this env extends the list."
+        ),
+    )
 
     @field_validator(
         "secret_key",
