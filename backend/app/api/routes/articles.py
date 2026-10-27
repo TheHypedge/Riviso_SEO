@@ -69,7 +69,7 @@ from app.services.article_metadata_suggestion import (
     suggest_metadata_from_source_content,
 )
 from app.services.article_selection_rewrite import rewrite_selected_text
-from app.services.article_media_storage import save_article_media
+from app.services.article_media_storage import save_article_media, sniff_raster_image
 from app.services.article_pdf_export import render_article_pdf, content_disposition_header
 from app.services.openai_client import OpenAIClient
 from app.services.url_content_extractor import fetch_and_extract_url
@@ -1322,6 +1322,10 @@ async def insert_article_media_from_url(
         raise HTTPException(status_code=400, detail="That URL doesn't point at an image.")
     if len(resp.content) > MAX_ARTICLE_MEDIA_BYTES:
         raise HTTPException(status_code=400, detail="That image is too large (max 8MB).")
+    # The remote server's Content-Type is not trusted: store what the bytes really are.
+    content_type = sniff_raster_image(resp.content)
+    if not content_type:
+        raise HTTPException(status_code=400, detail="That URL doesn't point at a PNG, JPEG, GIF or WebP image.")
 
     image_id, cloudinary_url = await run_sync(
         save_article_media,
@@ -1356,6 +1360,9 @@ async def insert_article_media_upload(
         raise HTTPException(status_code=400, detail="That file is empty.")
     if len(data) > MAX_ARTICLE_MEDIA_BYTES:
         raise HTTPException(status_code=400, detail="That image is too large (max 8MB).")
+    content_type = sniff_raster_image(data)
+    if not content_type:
+        raise HTTPException(status_code=400, detail="Please upload a PNG, JPEG, GIF or WebP image.")
 
     image_id, cloudinary_url = await run_sync(
         save_article_media,

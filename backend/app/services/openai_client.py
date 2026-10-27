@@ -215,6 +215,10 @@ class OpenAIClient:
             return None
 
     def _extract_image_from_response(self, res: httpx.Response) -> str | None:
+        if res.status_code >= 400:
+            # OpenAI explains rejections in the body (e.g. moderation_blocked, invalid_value);
+            # without it a 400 is undiagnosable.
+            log.warning("OpenAI image request rejected (%s): %s", res.status_code, res.text[:500])
         res.raise_for_status()
         data = res.json()
         items = data.get("data") or []

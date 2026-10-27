@@ -305,3 +305,46 @@ def test_scene_falls_back_to_heading_when_text_model_fails(monkeypatch):
 
     monkeypatch.setattr(ii.OpenAIClient, "chat_json", broken_chat)
     assert asyncio.run(ii.describe_passage(title="T", heading="Fees", passage="x")) == {"scene": "Fees", "alt": "Fees"}
+
+
+def test_rejected_scene_is_retried_as_a_people_free_still_life(monkeypatch):
+    """Seen live: OpenAI's safety system (moderation_blocked) rejected a child-custody scene."""
+    scenes = []
+
+    async def fake_gen(**kw):
+        scenes.append(kw["focus_keyphrase"])
+        if len(scenes) == 1:
+            raise RuntimeError("OpenAI image request failed: Image model returned 400: moderation_blocked")
+        return {"image_url": "data:image/png;base64,iVBORw0KGgo="}
+
+    async def fake_describe(**kw):
+        return {"scene": "A judge talks with a young child", "alt": "Judge and child"}
+
+    monkeypatch.setattr(ii, "generate_featured_image_only", fake_gen)
+    monkeypatch.setattr(ii, "describe_passage", fake_describe)
+    monkeypatch.setattr(ii, "save_article_media", lambda **kw: ("m1", "https://res.cloudinary.com/x/m1.png"))
+    res = asyncio.run(ii.illustrate_passage(
+        proj={}, image_prompt_id=None, title="Custody", heading="What Courts Consider", passage="P", keywords=[],
+        project_id="p", article_id="a"))
+    assert res == ("m1", "https://res.cloudinary.com/x/m1.png", "What Courts Consider")
+    assert len(scenes) == 2 and "no people" in scenes[1] and "What Courts Consider" in scenes[1]
+
+
+def test_a_failed_section_moves_on_so_the_requested_count_is_met(monkeypatch):
+    calls = []
+
+    async def flaky(**kw):
+        calls.append(kw["heading"])
+        if len(calls) == 1:
+            raise RuntimeError("rejected twice")
+        return ("id", f"https://res.cloudinary.com/a/{len(calls)}.png", "alt")
+
+    async def no_chart(title, heading, text):
+        return None
+
+    monkeypatch.setattr(ii, "illustrate_passage", flaky)
+    monkeypatch.setattr(ii, "_extract_chart", no_chart)
+    st = _St()
+    n = asyncio.run(add_inner_images(st=st, user={"id": "u1", "role": "admin"}, project_id="p", article_id="a",
+                                     title="T", markdown=MD, count=2, proj={"id": "p"}))
+    assert n == 2 and len(calls) == 3

@@ -320,8 +320,14 @@ _SCENE_SYSTEM = (
     "says (its specific point, not the article's general topic).\n"
     'Return JSON: {"scene": "<= 300 chars: a concrete scene (people, setting, objects, action) that '
     'illustrates the passage; no words, letters, numbers, charts, logos or screens in the image", '
-    '"alt": "<= 125 chars: plain description of that image for screen readers"}'
+    '"alt": "<= 125 chars: plain description of that image for screen readers"}\n'
+    "Show adults, objects or settings only: never children or minors, injuries, violence or people "
+    "in distress -- the image model's safety system rejects those."
 )
+
+# Used when the image model's safety system rejects the passage scene (code moderation_blocked):
+# a still life of the section's subject, with no people, which it reliably accepts.
+_SAFE_SCENE = "A calm editorial still life representing '{topic}': documents, a tidy desk and relevant objects; no people"
 
 
 async def describe_passage(*, title: str, heading: str, passage: str) -> dict[str, str]:
@@ -353,14 +359,25 @@ async def illustrate_passage(
 
     desc = await describe_passage(title=title, heading=heading, passage=passage)
     prompt = _resolve_image_prompt(proj=proj, image_prompt_id=image_prompt_id)
-    gen = await generate_featured_image_only(
-        title=title,
-        keywords=keywords,
-        focus_keyphrase=desc["scene"],
-        brand_identity=proj.get("brand_identity") or "",
-        niche_identifier=proj.get("niche_identifier") or "",
-        image_prompt_text=(prompt or {}).get("text") or None,
-    )
+
+    async def _generate(scene: str) -> dict:
+        return await generate_featured_image_only(
+            title=title,
+            keywords=keywords,
+            focus_keyphrase=scene,
+            brand_identity=proj.get("brand_identity") or "",
+            niche_identifier=proj.get("niche_identifier") or "",
+            image_prompt_text=(prompt or {}).get("text") or None,
+        )
+
+    try:
+        gen = await _generate(desc["scene"])
+    except Exception:
+        # Usually the safety system rejecting the scene; one retry with a people-free still life.
+        log.warning("inner images: scene rejected for %r; retrying with a still life", heading or title)
+        topic = (heading or title or "")[:120]
+        gen = await _generate(_SAFE_SCENE.format(topic=topic))
+        desc = {**desc, "alt": topic}
     url = (gen.get("image_url") or "").strip()
     got = featured_image_bytes_from_data_url(url) or await featured_image_bytes_from_http_url(url)
     if not got:
@@ -455,7 +472,12 @@ async def build_inner_images(
             taken = {p[0] for p in placed}
             free = [s for s in body_sections(markdown) if s[0] not in taken]
             # ponytail: sequential (~1 min per image); bounded gather if prep latency matters.
-            for line_idx, heading, text in _spread(free, count - len(placed))[: count - len(placed)]:
+            # A failed section moves on to the next free one, so one rejection doesn't cost a slot;
+            # attempts are capped so a broken image model can't burn the budget.
+            need = count - len(placed)
+            for line_idx, heading, text in _spread(free, need)[: need + 2]:
+                if len(placed) >= count:
+                    break
                 if not await quota_ok():
                     break
                 try:

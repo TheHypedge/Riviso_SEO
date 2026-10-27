@@ -119,7 +119,9 @@ def test_inbound_request_id_is_echoed(client):
     assert resp.headers.get("x-request-id") == "corr-abc-123"
 
 
-def test_metrics_endpoint_exposed(client):
+def test_metrics_endpoint_exposed(client, monkeypatch):
+    # Outside production; production without METRICS_TOKEN fails closed (test_metrics_fail_closed.py).
+    monkeypatch.setattr(main_mod.settings, "environment", "development")
     resp = client.get("/metrics")
     # 200 when prometheus-client is installed, 503 when it is not — both prove wiring.
     assert resp.status_code in (200, 503)

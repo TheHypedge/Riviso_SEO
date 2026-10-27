@@ -29,5 +29,10 @@ async def get_article_media(image_id: str) -> Response:
     return Response(
         content=data,
         media_type=content_type,
-        headers={"cache-control": "public, max-age=31536000, immutable"},
+        headers={
+            "cache-control": "public, max-age=31536000, immutable",
+            # Served from the API origin: even a stored SVG/HTML file must never run script here.
+            "x-content-type-options": "nosniff",
+            "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+        },
     )

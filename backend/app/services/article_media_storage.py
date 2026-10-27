@@ -30,6 +30,22 @@ from app.legacy.storage import get_legacy_storage_module
 _SAFE_ID = re.compile(r"^[a-f0-9\-]{8,64}$")
 
 
+def sniff_raster_image(data: bytes) -> str | None:
+    """Real image type from the file's magic bytes, or None. User-supplied media (upload,
+    from-URL) must pass this: the browser's/remote server's Content-Type is attacker-chosen,
+    and an SVG or HTML file served as media from the API origin can run script there."""
+    head = data[:16] if data else b""
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 def _media_dir(*, ensure: bool = False) -> str:
     st = get_legacy_storage_module()
     path = st._data_path("article_media")  # noqa: SLF001 - reusing the repo-root helper deliberately

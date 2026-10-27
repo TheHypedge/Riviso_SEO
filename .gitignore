@@ -29,3 +29,6 @@ REVIEW.md
 # gitleaks binary (downloaded by security workflow — not part of the codebase)
 gitleaks
 LICENSE
+
+# Local QA/security audit artifacts (findings + isolated test MongoDB) -- never commit, repo is public
+qa/

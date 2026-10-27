@@ -377,9 +377,8 @@ async def _reset_failed_login(st, user: dict) -> None:
         pass
 
 
-@limiter.limit("10/minute")
-
 @router.post("/login", response_model=TokenPair)
+@limiter.limit("10/minute")
 
 async def login(payload: LoginRequest, request: Request, response: Response) -> TokenPair:
 
@@ -462,9 +461,8 @@ async def login(payload: LoginRequest, request: Request, response: Response) -> 
 
 
 
-@limiter.limit("5/minute")
-
 @router.post("/register", response_model=RegisterPendingResponse, status_code=201)
+@limiter.limit("5/minute")
 
 async def register(payload: RegisterRequest, request: Request) -> RegisterPendingResponse:
 
@@ -566,6 +564,7 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterPendin
                 "created_at": created_at,
 
                 "email_verification_token": verification_code,
+                "email_verification_attempts": 0,
 
                 "email_verification_expires": expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
 
@@ -595,9 +594,8 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterPendin
 
 
 
-@limiter.limit("5/minute")
-
 @router.post("/resend-verification", response_model=ResendVerificationResponse)
+@limiter.limit("5/minute")
 
 async def resend_verification(payload: ResendVerificationRequest, request: Request) -> ResendVerificationResponse:
 
@@ -649,9 +647,8 @@ async def resend_verification(payload: ResendVerificationRequest, request: Reque
 
 
 
-@limiter.limit("10/minute")
-
 @router.post("/verify-email", response_model=VerifyEmailResponse)
+@limiter.limit("10/minute")
 
 async def verify_email(payload: VerifyEmailRequest, request: Request, response: Response) -> VerifyEmailResponse:
 
@@ -709,9 +706,8 @@ async def verify_email(payload: VerifyEmailRequest, request: Request, response: 
 
 
 
-@limiter.limit("10/minute")
-
 @router.post("/check-email", response_model=CheckEmailResponse)
+@limiter.limit("10/minute")
 
 async def check_email(payload: CheckEmailRequest, request: Request) -> CheckEmailResponse:
 
@@ -733,9 +729,8 @@ async def check_email(payload: CheckEmailRequest, request: Request) -> CheckEmai
 
 
 
-@limiter.limit("20/minute")
-
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
+@limiter.limit("20/minute")
 
 async def forgot_password(payload: ForgotPasswordRequest, request: Request) -> ForgotPasswordResponse:
 
@@ -807,9 +802,8 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request) -> F
 
 
 
-@limiter.limit("20/minute")
-
 @router.get("/validate-reset-token", response_model=ValidateResetTokenResponse)
+@limiter.limit("20/minute")
 
 async def validate_reset_token(token: str, request: Request) -> ValidateResetTokenResponse:
 
@@ -845,9 +839,8 @@ async def validate_reset_token(token: str, request: Request) -> ValidateResetTok
 
 
 
-@limiter.limit("5/minute")
-
 @router.post("/reset-password", response_model=ResetPasswordResponse)
+@limiter.limit("5/minute")
 
 async def reset_password(payload: ResetPasswordRequest, request: Request) -> ResetPasswordResponse:
 
@@ -891,9 +884,8 @@ async def reset_password(payload: ResetPasswordRequest, request: Request) -> Res
 
 
 
-@limiter.limit("5/minute")
-
 @router.post("/reactivate", response_model=TokenPair)
+@limiter.limit("5/minute")
 
 async def reactivate(payload: LoginRequest, request: Request, response: Response) -> TokenPair:
 
@@ -1003,9 +995,8 @@ async def me(user: dict = Depends(get_current_user)) -> UserPublic:
 
 
 
-@limiter.limit("20/minute")
-
 @router.post("/refresh", response_model=TokenPair)
+@limiter.limit("20/minute")
 
 async def refresh_token(request: Request, response: Response) -> TokenPair:
 
@@ -1122,9 +1113,8 @@ def _clear_auth_cookies(response: Response) -> None:
         response.delete_cookie(name, path="/", domain=settings.cookie_domain)
 
 
-@limiter.limit("10/minute")
-
 @router.post("/resend-reset", response_model=ForgotPasswordResponse)
+@limiter.limit("10/minute")
 
 async def resend_reset(payload: ResendResetRequest, request: Request) -> ForgotPasswordResponse:
 

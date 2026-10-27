@@ -83,8 +83,8 @@ if (nrAccountId && nrLicenseKey && nrAppId) {
             enabled: true,
             block_selector: "",
             mask_text_selector: "*",
-            sampling_rate: 10.0,
-            error_sampling_rate: 100.0,
+            // sampling_rate / error_sampling_rate were removed from the agent's config in
+            // 1.32x (sampling is now set server-side in New Relic: Session Replay settings).
             mask_all_inputs: true,
             collect_fonts: true,
             inline_images: false,

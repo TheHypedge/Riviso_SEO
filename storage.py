@@ -7,6 +7,7 @@ Do not load or save `data/projects.json` / `data/articles.json` from app routes 
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -595,6 +596,7 @@ def _normalize_user_dict(d: dict[str, Any]) -> dict[str, Any]:
         "created_at": (d.get("created_at") or "")[:64],
         "pending_product_tour": bool(d.get("pending_product_tour", False)),
         "email_verification_token": (d.get("email_verification_token") or "").strip()[:128],
+        "email_verification_attempts": _clamped_int(d.get("email_verification_attempts"), 0, 1000),
         "email_verification_expires": (d.get("email_verification_expires") or "").strip()[:64],
         "email_verification_expires_at": d.get("email_verification_expires_at"),
         "email_verification_sent_at": d.get("email_verification_sent_at"),
@@ -1871,6 +1873,7 @@ def _user_doc_to_public(doc: dict[str, Any] | None) -> dict[str, Any] | None:
         "created_at": (doc.get("created_at") or "").strip(),
         "pending_product_tour": bool(doc.get("pending_product_tour", False)),
         "email_verification_token": (doc.get("email_verification_token") or "").strip(),
+        "email_verification_attempts": int(doc.get("email_verification_attempts") or 0),
         "email_verification_expires": (doc.get("email_verification_expires") or "").strip(),
         "password_reset_token": (doc.get("password_reset_token") or "").strip(),
         "password_reset_expires": (doc.get("password_reset_expires") or "").strip(),
@@ -1954,6 +1957,7 @@ def get_user_by_email(email: str) -> dict[str, Any] | None:
         "created_at": (doc.get("created_at") or "").strip(),
         "pending_product_tour": bool(doc.get("pending_product_tour", False)),
         "email_verification_token": (doc.get("email_verification_token") or "").strip(),
+        "email_verification_attempts": int(doc.get("email_verification_attempts") or 0),
         "email_verification_expires": (doc.get("email_verification_expires") or "").strip(),
         "password_reset_token": (doc.get("password_reset_token") or "").strip(),
         "password_reset_expires": (doc.get("password_reset_expires") or "").strip(),
@@ -2010,6 +2014,7 @@ def set_email_verification(*, user_id: str, token: str, expires_at: datetime, se
     exp_iso = expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     updates = {
         "email_verification_token": tok,
+        "email_verification_attempts": 0,
         "email_verification_expires": exp_iso,
         "email_verification_expires_at": expires_at,
         "email_verification_sent_at": sent,
@@ -2063,6 +2068,9 @@ def resend_email_verification(*, email: str, cooldown_seconds: int = 60) -> tupl
     return "sent", "Verification email sent. Check your inbox.", cooldown_seconds, token
 
 
+_MAX_EMAIL_OTP_ATTEMPTS = 5
+
+
 def verify_email_with_token(*, email: str, token: str) -> tuple[bool, str]:
     em = (email or "").strip().lower()
     tok = (token or "").strip()
@@ -2072,17 +2080,29 @@ def verify_email_with_token(*, email: str, token: str) -> tuple[bool, str]:
     if not user:
         return False, "Invalid verification code."
     stored = (user.get("email_verification_token") or "").strip()
-    if not stored or stored != tok:
+    uid = (user.get("id") or "").strip()
+    attempts = int(user.get("email_verification_attempts") or 0)
+    if stored and attempts >= _MAX_EMAIL_OTP_ATTEMPTS:
+        return False, "Too many incorrect codes. Request a new verification code."
+    if not stored or not hmac.compare_digest(stored, tok):
+        if stored:
+            # A 6-digit code is guessable without a per-account cap (a per-IP limit is
+            # bypassed by rotating IPs): after the cap the code is void until a resend.
+            attempts += 1
+            fields = {"email_verification_attempts": attempts}
+            if attempts >= _MAX_EMAIL_OTP_ATTEMPTS:
+                fields.update({"email_verification_token": "", "email_verification_expires": "", "email_verification_expires_at": None})
+            update_user_fields(uid, fields)
         return False, "Invalid verification code."
     exp_raw = (user.get("email_verification_expires") or "").strip()
     exp = _parse_iso_ts(exp_raw)
     if not exp or datetime.utcnow() > exp:
         return False, "Verification code has expired. Request a new one."
-    uid = (user.get("id") or "").strip()
     ok = update_user_fields(
         uid,
         {
             "account_status": "active",
+            "email_verification_attempts": 0,
             "email_verification_token": "",
             "email_verification_expires": "",
             "email_verification_expires_at": None,
@@ -3140,18 +3160,24 @@ _PROJECT_SHOPIFY_STATUS_PROJECTION: dict[str, int] = {
     "shopify_catalog.warnings": 1,
 }
 
+# Every field _normalize_scheduled_job_dict produces. Job docs are small, so this costs
+# nothing -- and load_scheduled_jobs() feeds the generation worker and the Scheduled tab:
+# a field missing here is silently reset to its default on every load. That is how
+# inner_image_count, image_prompt_id, writing_prompt_id and generate_image were lost
+# (scheduled prep made no inner images and ignored the chosen prompts) until 2026-10-27.
+# tests/test_scheduled_job_projection.py keeps this list in sync with the normalizer.
 _SCHEDULED_JOB_LISTING_PROJECTION: dict[str, int] = {
     "_id": 0,
-    "id": 1,
-    "project_id": 1,
-    "article_id": 1,
-    "state": 1,
-    "run_at": 1,
-    "updated_at": 1,
-    "last_error": 1,
-    "wp_link": 1,
-    "wp_post_id": 1,
-    "wp_status": 1,
+    **{
+        f: 1
+        for f in (
+            "id", "project_id", "article_id", "run_at", "post_type", "wp_status", "category_ids",
+            "writing_prompt_id", "image_prompt_id", "generate_image", "inner_image_count", "state",
+            "last_error", "attempts", "last_attempt_at", "created_at", "updated_at", "wp_post_id",
+            "wp_link", "shopify_article_id", "shopify_link", "platform", "linkedin_commentary",
+            "linkedin_post_urn", "linkedin_post_url",
+        )
+    },
 }
 
 

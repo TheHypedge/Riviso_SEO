@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import hmac
 import os
 from contextlib import asynccontextmanager
 
@@ -391,12 +392,16 @@ def create_app() -> FastAPI:
     async def _metrics(request: Request):
         if not _metrics_enabled:
             return Response("metrics disabled", status_code=404)
+        # Fail closed in production: without METRICS_TOKEN the endpoint was public there
+        # (found by the 2026-10-27 QA run), exposing route names, traffic and queue depth.
+        if not _metrics_token and settings.environment.strip().lower() == "production":
+            return Response("Not Found", status_code=404)
         if not metrics_available():
             return Response("prometheus-client not installed", status_code=503)
         if _metrics_token:
             auth = request.headers.get("authorization", "")
             supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else request.query_params.get("token", "")
-            if supplied != _metrics_token:
+            if not hmac.compare_digest(supplied.encode(), _metrics_token.encode()):
                 return Response("unauthorized", status_code=401)
         body, content_type = render_latest()
         return Response(content=body, media_type=content_type)
