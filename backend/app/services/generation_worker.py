@@ -211,16 +211,15 @@ async def _handle_article_generate(payload: dict) -> None:
                     reference_source_content=payload.get("reference_source_content"),
                     inner_image_count=max(0, min(5, int(payload.get("inner_image_count") or 0))),
                 )
-                post_type = payload.get("post_type")
-                wp_status = payload.get("wp_status")
-                if post_type or wp_status:
-                    try:
-                        if hasattr(st, "patch_article_fields"):
-                            await run_sync(st.patch_article_fields, aid, {
-                                "wp_rest_base": post_type, "wp_schedule_wp_status": wp_status,
-                            })
-                    except Exception:
-                        pass
+                from app.api.routes.articles import apply_generate_wp_choice
+
+                try:
+                    await apply_generate_wp_choice(
+                        st=st, proj=proj, project_id=pid, article_id=aid,
+                        post_type=payload.get("post_type"), wp_status=payload.get("wp_status"),
+                    )
+                except Exception:
+                    log.warning("apply_generate_wp_choice failed article=%s", aid, exc_info=True)
     except Exception as exc:
         from fastapi import HTTPException as FastAPIHTTPException
 

@@ -2982,6 +2982,41 @@
   display: block;
 }
 
+/* Tables: same shape WordPress's core table block renders (full width, 1px cell borders). */
+.articleProseMirror :global(.tableWrapper) {
+  margin: 1em 0;
+  overflow-x: auto;
+}
+
+.articleProseMirror table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: 0.95em;
+}
+
+.articleProseMirror th,
+.articleProseMirror td {
+  border: 1px solid var(--aa-hairline);
+  padding: 0.5em 0.75em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.articleProseMirror th {
+  background: var(--aa-surface-soft);
+  font-weight: 600;
+}
+
+.articleProseMirror th p,
+.articleProseMirror td p {
+  margin: 0;
+}
+
+.articleProseMirror :global(.selectedCell) {
+  background: color-mix(in oklab, var(--aa-primary), transparent 88%);
+}
+
 .articleProseMirror h1 {
   font-family: var(--font-display-serif), var(--font-geist-sans), serif;
   font-size: 1.85rem;

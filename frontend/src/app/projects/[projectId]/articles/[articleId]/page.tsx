@@ -2496,6 +2496,13 @@ export default function ArticleEditPage() {
                 </label>
                 <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().toggleBold().run()} aria-pressed={tiptapEditor.isActive("bold")} data-tooltip="Bold"><strong>B</strong></button>
                 <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().toggleItalic().run()} aria-pressed={tiptapEditor.isActive("italic")} data-tooltip="Italic"><em>I</em></button>
+                {([
+                  ["U", "Underline", () => tiptapEditor.chain().focus().toggleUnderline().run(), "underline", { textDecoration: "underline" }],
+                  ["S", "Strikethrough", () => tiptapEditor.chain().focus().toggleStrike().run(), "strike", { textDecoration: "line-through" }],
+                  ["H", "Highlight", () => tiptapEditor.chain().focus().toggleHighlight().run(), "highlight", { background: "#fff3a3", color: "#1a1a1a", padding: "0 3px" }],
+                ] as const).map(([label, tip, run, mark, style]) => (
+                  <button key={tip} type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={run} aria-pressed={tiptapEditor.isActive(mark)} aria-label={tip} data-tooltip={tip}><span style={style}>{label}</span></button>
+                ))}
                 <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().toggleBulletList().run()} aria-pressed={tiptapEditor.isActive("bulletList")} data-tooltip="Bullet list">• List</button>
                 <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().toggleOrderedList().run()} aria-pressed={tiptapEditor.isActive("orderedList")} data-tooltip="Numbered list">1. List</button>
                 <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().toggleBlockquote().run()} aria-pressed={tiptapEditor.isActive("blockquote")} data-tooltip="Quote">&ldquo;&rdquo;</button>
@@ -2508,8 +2515,28 @@ export default function ArticleEditPage() {
                   tiptapEditor.chain().focus().extendMarkRange("link").setLink({ href: trimmed }).run();
                 }} aria-pressed={tiptapEditor.isActive("link")} data-tooltip="Link">Link</button>
                 <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => setShowInsertMedia(true)} data-tooltip="Insert image">Image</button>
+                {(["left", "center", "right", "justify"] as const).map((a) => (
+                  <button key={a} type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => (a === "left" ? tiptapEditor.chain().focus().unsetTextAlign() : tiptapEditor.chain().focus().setTextAlign(a)).run()} aria-pressed={a !== "left" && tiptapEditor.isActive({ textAlign: a })} aria-label={`Align ${a}`} data-tooltip={`Align ${a}`}>
+                    {a === "left" ? "⇤" : a === "center" ? "≡" : a === "right" ? "⇥" : "☰"}
+                  </button>
+                ))}
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()} disabled={tiptapEditor.isActive("table")} data-tooltip="Insert table">Table</button>
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().setHorizontalRule().run()} aria-label="Horizontal line" data-tooltip="Horizontal line">―</button>
+                <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().unsetAllMarks().unsetTextAlign().run()} aria-label="Clear formatting" data-tooltip="Clear formatting">T&#x338;</button>
                 <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().undo().run()} data-tooltip="Undo">Undo</button>
                 <button type="button" className={`${styles.articleRichToolBtn} ${editorStyles.editorTooltip}`} onClick={() => tiptapEditor.chain().focus().redo().run()} data-tooltip="Redo">Redo</button>
+                {tiptapEditor.isActive("table") ? ([
+
+                  ["+ Row above", () => tiptapEditor.chain().focus().addRowBefore().run()],
+                  ["+ Row below", () => tiptapEditor.chain().focus().addRowAfter().run()],
+                  ["+ Column left", () => tiptapEditor.chain().focus().addColumnBefore().run()],
+                  ["+ Column right", () => tiptapEditor.chain().focus().addColumnAfter().run()],
+                  ["− Row", () => tiptapEditor.chain().focus().deleteRow().run()],
+                  ["− Column", () => tiptapEditor.chain().focus().deleteColumn().run()],
+                  ["Delete table", () => tiptapEditor.chain().focus().deleteTable().run()],
+                ] as const).map(([label, run]) => (
+                  <button key={label} type="button" className={styles.articleRichToolBtn} onClick={run}>{label}</button>
+                )) : null}
               </div>
             ) : null}
 

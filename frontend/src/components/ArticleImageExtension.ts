@@ -19,8 +19,8 @@ function alignFromClassList(classList: string | null | undefined): ArticleImageA
   return null;
 }
 
-function widthFromStyle(style: string | null | undefined): number | null {
-  const m = /width\s*:\s*(\d+(?:\.\d+)?)px/i.exec(style || "");
+function pxFromStyle(prop: "width" | "height", style: string | null | undefined): number | null {
+  const m = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*(\\d+(?:\\.\\d+)?)px`, "i").exec(style || "");
   return m ? Math.round(parseFloat(m[1])) : null;
 }
 
@@ -29,7 +29,7 @@ function widthFromStyle(style: string | null | undefined): number | null {
  * an inline glyph. Extends the base extension (reuse its schema/commands)
  * rather than building a node from scratch.
  *
- * `width`/`align` are the only custom attrs. They render as `style`/`class`
+ * `width`/`height`/`align` are the only custom attrs. They render as `style`/`class`
  * on the `<img>` tag using WordPress's own standard alignment class names
  * (alignleft/aligncenter/alignright) so a connected WP theme's existing CSS
  * already knows how to style them — no bespoke class scheme to invent.
@@ -44,10 +44,20 @@ export const ArticleImage = Image.extend({
       ...this.parent?.(),
       width: {
         default: null as number | null,
-        parseHTML: (element: HTMLElement) => widthFromStyle(element.getAttribute("style")),
-        renderHTML: (attributes: { width: number | null }) => {
+        parseHTML: (element: HTMLElement) => pxFromStyle("width", element.getAttribute("style")),
+        renderHTML: (attributes: { width: number | null; height: number | null }) => {
           if (!attributes.width) return {};
-          return { style: `width:${attributes.width}px;height:auto;` };
+          return { style: attributes.height ? `width:${attributes.width}px;` : `width:${attributes.width}px;height:auto;` };
+        },
+      },
+      // A fixed height crops (object-fit: cover) instead of stretching -- plain inline
+      // CSS, so WordPress renders the same crop without any theme support.
+      height: {
+        default: null as number | null,
+        parseHTML: (element: HTMLElement) => pxFromStyle("height", element.getAttribute("style")),
+        renderHTML: (attributes: { height: number | null }) => {
+          if (!attributes.height) return {};
+          return { style: `height:${attributes.height}px;object-fit:cover;` };
         },
       },
       align: {

@@ -91,6 +91,7 @@ from app.services.pipeline_streamer import (
     STAGE_COMPLETE,
     STAGE_PUBLISH_DISPATCH,
     pipeline_event_stream,
+    publish_pipeline_error,
     publish_pipeline_status,
 )
 from app.services.plan_gatekeeper import PlanAction, require_plan_action, require_plan_action_for_project
@@ -2285,10 +2286,10 @@ async def generate_article_and_image(
                 mapped_pages=mapped_pages_payload,
                 inner_image_count=payload.inner_image_count,
             )
-            if post_type_norm or wp_status_norm:
-                await run_sync(st.patch_article_fields, aid, {
-                    "wp_rest_base": post_type_norm, "wp_schedule_wp_status": wp_status_norm,
-                })
+            await apply_generate_wp_choice(
+                st=st, proj=proj, project_id=project_id, article_id=aid,
+                post_type=post_type_norm, wp_status=wp_status_norm,
+            )
             return result
 
 
@@ -3112,6 +3113,40 @@ async def publish_to_live_site(
         if not ok:
             raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
 
+    return await _publish_article_core(
+        st=st,
+        proj=proj,
+        project_id=project_id,
+        article_id=article_id,
+        a=a,
+        post_type=post_type,
+        wp_status=wp_status,
+        category_ids=category_ids,
+        tag_ids=tag_ids,
+        image_file=image_file,
+        claimed_job_id=claimed_job_id,
+    )
+
+
+async def _publish_article_core(
+    *,
+    st,
+    proj: dict,
+    project_id: str,
+    article_id: str,
+    a: dict,
+    post_type: str,
+    wp_status: str,
+    category_ids: str = "",
+    tag_ids: str = "",
+    image_file: UploadFile | None = None,
+    claimed_job_id: str | None = None,
+) -> dict:
+    """WordPress publish shared by the /publish route and post-generation auto-publish.
+
+    Callers own access checks, the double-post guard and quota.
+    """
+
     links = []
     for x in (proj.get("context_links") or []):
         if isinstance(x, dict) and (x.get("label") or "").strip() and (x.get("url") or "").strip():
@@ -3334,6 +3369,63 @@ async def publish_to_live_site(
         "wp_link": wp_link,
         "featured_media_id": featured_media_id,
     }
+
+
+
+async def apply_generate_wp_choice(
+    *,
+    st,
+    proj: dict,
+    project_id: str,
+    article_id: str,
+    post_type: str | None,
+    wp_status: str | None,
+) -> None:
+    """Apply the Generate modal's WordPress post type/status once generation succeeded.
+
+    Always stores them as the article's own WP defaults; when the user picked "publish"
+    the article is also posted live right away (WordPress projects only). Generation
+    already consumed the article quota, so publishing here does not consume it again.
+    A failed auto-publish never fails generation: the article stays ready to post and
+    the reason lands in ``wp_schedule_error`` + the pipeline stream.
+    """
+    if not (post_type or wp_status):
+        return
+    await run_sync(
+        st.patch_article_fields,
+        article_id,
+        {"wp_rest_base": post_type, "wp_schedule_wp_status": wp_status},
+    )
+    if (wp_status or "").strip().lower() != "publish":
+        return
+    plat = (proj.get("platform") or "").strip().lower()
+    if plat == "shopify" or (proj.get("shopify_shop") or "").strip():
+        return
+    try:
+        a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+        if str(a.get("wp_post_id") or "").strip():
+            return
+        _require_verified_website(proj)
+        await _publish_article_core(
+            st=st,
+            proj=proj,
+            project_id=project_id,
+            article_id=article_id,
+            a=a,
+            post_type=(post_type or "").strip() or "posts",
+            wp_status="publish",
+        )
+    except Exception as e:
+        detail = e.detail if isinstance(e, HTTPException) else str(e)
+        if isinstance(detail, dict):
+            detail = detail.get("message") or str(detail)
+        msg = f"Generated, but auto-publish to WordPress failed: {detail}"[:1000]
+        _log.warning("auto-publish after generation failed article=%s: %s", article_id, detail)
+        try:
+            await run_sync(st.patch_article_fields, article_id, {"wp_schedule_error": msg})
+            await publish_pipeline_error(article_id, msg)
+        except Exception:
+            pass
 
 
 @router.post("/{article_id}/shopify/publish", status_code=200)

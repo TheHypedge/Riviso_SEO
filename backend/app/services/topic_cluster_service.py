@@ -745,11 +745,12 @@ class TopicClusterService:
                     if not img_url:
                         warn = (gen_result.get("image_warning") or "").strip() or "Featured image was not generated."
                         errors.append({"topic_id": topic_id, "message": warn[:500]})
-                if post_type or wp_status:
-                    await asyncio.to_thread(
-                        st.patch_article_fields, aid,
-                        {"wp_rest_base": post_type, "wp_schedule_wp_status": wp_status},
-                    )
+                from app.api.routes.articles import apply_generate_wp_choice
+
+                await apply_generate_wp_choice(
+                    st=st, proj=proj, project_id=pid, article_id=aid,
+                    post_type=post_type, wp_status=wp_status,
+                )
                 return aid
             except HTTPException as he:
                 errors.append({"topic_id": topic_id, "message": (str(he.detail) if he.detail else str(he))[:500]})

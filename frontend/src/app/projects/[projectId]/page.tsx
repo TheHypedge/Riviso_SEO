@@ -13704,6 +13704,9 @@ export default function ProjectPage() {
                         <option value="draft">Draft</option>
                         <option value="publish">Publish</option>
                       </select>
+                      <span className={styles.muted} style={{ fontSize: 12, marginTop: 6, display: "block" }}>
+                        Publish posts each article live to WordPress as soon as it is generated. Draft keeps it in Riviso to review first.
+                      </span>
                     </label>
                   </>
                 ) : (
@@ -13886,6 +13889,9 @@ export default function ProjectPage() {
                         <option value="draft">Draft</option>
                         <option value="publish">Publish</option>
                       </select>
+                      <span className={styles.muted} style={{ fontSize: 12, marginTop: 6, display: "block" }}>
+                        Publish posts each article live to WordPress as soon as it is generated. Draft keeps it in Riviso to review first.
+                      </span>
                     </label>
                   </>
                 ) : (

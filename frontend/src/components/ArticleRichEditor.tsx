@@ -2,6 +2,9 @@
 
 import LinkExt from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
+import Highlight from "@tiptap/extension-highlight";
+import { TableKit } from "@tiptap/extension-table";
+import TextAlign from "@tiptap/extension-text-align";
 import { EditorContent, useEditor } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -41,6 +44,55 @@ turndown.addRule("articleImage", {
     tag += ">";
     return tag;
   },
+});
+
+// Tables: emit GFM pipe tables (what generation writes and what the WordPress publish
+// path's Python-Markdown "extra" renders). Without this rule Turndown flattened every
+// table into one run-on paragraph and the next save destroyed it.
+const cellText = (cell: Element) =>
+  turndown
+    .turndown((cell as HTMLElement).innerHTML || "")
+    .replace(/\n+/g, " ")
+    .replace(/\|/g, "\\|")
+    .trim();
+turndown.addRule("gfmTable", {
+  filter: "table",
+  replacement: (_content, node) => {
+    const rows = Array.from((node as HTMLTableElement).querySelectorAll("tr")).map((tr) =>
+      Array.from(tr.children).map(cellText),
+    );
+    if (!rows.length) return "";
+    const cols = Math.max(...rows.map((r) => r.length));
+    const line = (r: string[]) => `| ${Array.from({ length: cols }, (_, i) => r[i] ?? "").join(" | ")} |`;
+    const [head, ...body] = rows;
+    return `\n\n${[line(head), `|${" --- |".repeat(cols)}`, ...body.map(line)].join("\n")}\n\n`;
+  },
+});
+
+// Formatting markdown has no syntax for (and Python-Markdown on the WordPress publish
+// path doesn't support ~~strike~~ either) is kept as raw inline HTML, which both
+// `marked` (editor) and Python-Markdown (WordPress) pass through untouched.
+turndown.keep(["u", "s", "del", "mark", "sub", "sup"]);
+
+// Shift+Enter line break as a raw <br>: Markdown's two-trailing-spaces break is
+// stripped by the backend's body sanitizer, so WordPress joined the lines.
+turndown.addRule("lineBreak", { filter: "br", replacement: () => "<br>" });
+
+// Centered/right/justified paragraphs and headings: keep the whole block as raw HTML
+// so the text-align style reaches WordPress (left = default, renders no style).
+turndown.addRule("alignedBlock", {
+  filter: (node) =>
+    /^(P|H[1-6])$/.test(node.nodeName) &&
+    node.parentNode?.nodeName !== "LI" &&
+    /text-align/i.test(node.getAttribute("style") || ""),
+  replacement: (_content, node) => `\n\n${(node as HTMLElement).outerHTML}\n\n`,
+});
+
+// tiptap wraps every list item's text in <p>; without this Turndown emits a "loose"
+// list (blank line between items) that WordPress renders with paragraph gaps.
+turndown.addRule("listItemParagraph", {
+  filter: (node) => node.nodeName === "P" && node.parentNode?.nodeName === "LI",
+  replacement: (content, node) => (node.nextSibling ? `${content}\n` : content),
 });
 
 function htmlToMarkdown(html: string): string {
@@ -101,6 +153,9 @@ export function ArticleRichEditor({ value, onChange, placeholder, contentRevisio
         },
       }),
       ArticleImage,
+      TableKit.configure({ table: { resizable: false } }),
+      TextAlign.configure({ types: ["heading", "paragraph"] }),
+      Highlight,
     ],
     [placeholder],
   );

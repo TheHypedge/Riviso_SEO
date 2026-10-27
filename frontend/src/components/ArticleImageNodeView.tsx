@@ -8,66 +8,88 @@ import editorStyles from "@/app/projects/[projectId]/articles/[articleId]/articl
 import type { ArticleImageAlign } from "./ArticleImageExtension";
 
 const MIN_WIDTH = 80;
+const MIN_HEIGHT = 40;
 
-type HandleCorner = "nw" | "ne" | "sw" | "se";
+// Corners resize proportionally; the right/bottom edges change one dimension and crop
+// (object-fit: cover) instead of stretching the picture.
+type Handle = "nw" | "ne" | "sw" | "se" | "e" | "s";
 
-const HANDLES: { corner: HandleCorner; cursor: string; style: React.CSSProperties }[] = [
-  { corner: "nw", cursor: "nwse-resize", style: { top: -5, left: -5 } },
-  { corner: "ne", cursor: "nesw-resize", style: { top: -5, right: -5 } },
-  { corner: "sw", cursor: "nesw-resize", style: { bottom: -5, left: -5 } },
-  { corner: "se", cursor: "nwse-resize", style: { bottom: -5, right: -5 } },
+const HANDLES: { handle: Handle; cursor: string; style: React.CSSProperties }[] = [
+  { handle: "nw", cursor: "nwse-resize", style: { top: -5, left: -5 } },
+  { handle: "ne", cursor: "nesw-resize", style: { top: -5, right: -5 } },
+  { handle: "sw", cursor: "nesw-resize", style: { bottom: -5, left: -5 } },
+  { handle: "se", cursor: "nwse-resize", style: { bottom: -5, right: -5 } },
+  { handle: "e", cursor: "ew-resize", style: { top: "calc(50% - 6px)", right: -5 } },
+  { handle: "s", cursor: "ns-resize", style: { bottom: -5, left: "calc(50% - 6px)" } },
 ];
+
+type Size = { width: number; height: number | null };
 
 export function ArticleImageNodeView({ node, updateAttributes, selected, deleteNode }: ReactNodeViewProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
-  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const [dragSize, setDragSize] = useState<Size | null>(null);
 
   const src = node.attrs.src as string;
   const alt = (node.attrs.alt as string) || "";
   const width = node.attrs.width as number | null;
+  const height = node.attrs.height as number | null;
   const align = node.attrs.align as ArticleImageAlign;
 
-  const displayWidth = dragWidth ?? width ?? undefined;
+  const displayWidth = dragSize?.width ?? width ?? undefined;
+  const displayHeight = dragSize ? dragSize.height : height;
 
   const startDrag = useCallback(
-    (corner: HandleCorner, startEvent: React.MouseEvent) => {
+    (handle: Handle, startEvent: React.MouseEvent) => {
       startEvent.preventDefault();
       startEvent.stopPropagation();
       const startX = startEvent.clientX;
+      const startY = startEvent.clientY;
       const startWidth = width ?? imgRef.current?.offsetWidth ?? 300;
-      const isLeftHandle = corner === "nw" || corner === "sw";
-      const containerWidth =
-        wrapperRef.current?.closest<HTMLElement>(".articleProseMirror")?.clientWidth ??
-        wrapperRef.current?.parentElement?.clientWidth ??
-        Number.POSITIVE_INFINITY;
+      const startHeight = height ?? imgRef.current?.offsetHeight ?? null;
+      const isLeftHandle = handle === "nw" || handle === "sw";
+      const containerWidth = wrapperRef.current?.parentElement?.clientWidth ?? Number.POSITIVE_INFINITY;
+      let latest: Size | null = null;
 
       function onMouseMove(e: MouseEvent) {
-        const delta = e.clientX - startX;
-        const rawWidth = isLeftHandle ? startWidth - delta : startWidth + delta;
-        const clamped = Math.min(Math.max(rawWidth, MIN_WIDTH), containerWidth);
-        setDragWidth(Math.round(clamped));
+        const dx = e.clientX - startX;
+        if (handle === "s") {
+          const h = Math.max(MIN_HEIGHT, Math.round((startHeight ?? 200) + e.clientY - startY));
+          latest = { width: Math.round(startWidth), height: h };
+        } else {
+          const rawWidth = isLeftHandle ? startWidth - dx : startWidth + dx;
+          const w = Math.round(Math.min(Math.max(rawWidth, MIN_WIDTH), containerWidth));
+          // Edge keeps the current height (crops); corners keep the crop's aspect ratio.
+          const h =
+            handle === "e"
+              ? startHeight
+              : height && startHeight
+                ? Math.max(MIN_HEIGHT, Math.round((startHeight * w) / startWidth))
+                : null;
+          latest = { width: w, height: h };
+        }
+        setDragSize(latest);
       }
 
       function onMouseUp() {
         window.removeEventListener("mousemove", onMouseMove);
         window.removeEventListener("mouseup", onMouseUp);
-        setDragWidth((current) => {
-          if (current != null) updateAttributes({ width: current });
-          return null;
-        });
+        if (latest) updateAttributes({ width: latest.width, height: latest.height });
+        setDragSize(null);
       }
 
       window.addEventListener("mousemove", onMouseMove);
       window.addEventListener("mouseup", onMouseUp);
     },
-    [width, updateAttributes],
+    [width, height, updateAttributes],
   );
 
   return (
     <NodeViewWrapper
       ref={wrapperRef}
       className={editorStyles.articleImageNodeView}
+      data-drag-handle=""
+      draggable="true"
       data-align={align || undefined}
       data-selected={selected ? "true" : undefined}
       style={{ width: displayWidth ? `${displayWidth}px` : undefined }}
@@ -87,6 +109,17 @@ export function ArticleImageNodeView({ node, updateAttributes, selected, deleteN
               {opt === "left" ? "⇤" : opt === "center" ? "≡" : "⇥"}
             </button>
           ))}
+          {width || height ? (
+            <button
+              type="button"
+              className={`${editorStyles.articleImageAlignBtn} ${editorStyles.editorTooltip}`}
+              onClick={() => updateAttributes({ width: null, height: null })}
+              aria-label="Reset size and crop"
+              data-tooltip="Reset size and crop"
+            >
+              ↺
+            </button>
+          ) : null}
           <button
             type="button"
             className={`${editorStyles.articleImageDeleteBtn} ${editorStyles.editorTooltip}`}
@@ -104,18 +137,23 @@ export function ArticleImageNodeView({ node, updateAttributes, selected, deleteN
         ref={imgRef}
         src={src}
         alt={alt}
-        style={{ width: displayWidth ? `${displayWidth}px` : undefined, height: "auto", display: "block" }}
+        style={{
+          width: displayWidth ? `${displayWidth}px` : undefined,
+          height: displayHeight ? `${displayHeight}px` : "auto",
+          objectFit: displayHeight ? "cover" : undefined,
+          display: "block",
+        }}
         draggable={false}
       />
 
       {selected
         ? HANDLES.map((h) => (
             <div
-              key={h.corner}
+              key={h.handle}
               className={editorStyles.articleImageHandle}
               style={{ ...h.style, cursor: h.cursor }}
               contentEditable={false}
-              onMouseDown={(e) => startDrag(h.corner, e)}
+              onMouseDown={(e) => startDrag(h.handle, e)}
             />
           ))
         : null}
