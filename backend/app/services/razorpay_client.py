@@ -71,10 +71,6 @@ def list_order_payments(order_id: str) -> list[dict[str, Any]]:
     return [i for i in items if isinstance(i, dict)]
 
 
-def fetch_payment(payment_id: str) -> dict[str, Any]:
-    return _get_client().payment.fetch(payment_id)
-
-
 def verify_payment_signature(*, order_id: str, payment_id: str, signature: str) -> bool:
     """True if the client-returned signature is genuine. False (never raised) on mismatch --
     an invalid signature is an entirely expected "someone tampered with the response" case, not

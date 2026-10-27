@@ -1,5 +1,5 @@
 """
-RankMonitorService — Feature 4 (Rank Monitoring & Smart Refresh).
+RankMonitorService — Feature 4 (Rank Monitoring).
 
 v1 ships:
 
@@ -7,8 +7,6 @@ v1 ships:
   monitor row with a ``next_check_at`` 30 days from publication.
 - :meth:`mark_status` — manual flip used by the "Mark stale" / "Mark fresh" UI.
 - :meth:`due_monitors` — read-only sweep helper for the scheduler hook (no-op in v1).
-- :meth:`refresh_article` — surface the eventual one-click "Smart Refresh" entry point;
-  raises ``NotImplementedError`` until the SERP-diff + regeneration pipeline lands.
 
 The actual SERP-shift detection is intentionally not in this PR — it requires a SERP
 data source decision (research module simulator vs. paid API) that we want to make
@@ -99,10 +97,3 @@ class RankMonitorService:
 
     # ----- smart refresh (skeleton) -------------------------------------------
 
-    async def refresh_article(self, *, article_id: str) -> dict[str, Any]:
-        """One-click refresh — regenerate the article body using updated SERP signals."""
-        raise NotImplementedError(
-            "RankMonitorService.refresh_article is scheduled for the next iteration. "
-            "The schema, monitor lifecycle, and 'Mark stale' API are all in place; the "
-            "SERP-diff + regeneration pipeline lands in the follow-up PR."
-        )

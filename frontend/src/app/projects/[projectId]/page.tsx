@@ -87,6 +87,9 @@ import { scheduleMinFromNowMs } from "@/lib/scheduleTiming";
 import { ProjectTabIcon, SidebarBackIcon, type ProjectTabKey } from "@/components/ProjectTabIcon";
 import { ShopifyProjectSettings } from "@/components/ShopifyProjectSettings";
 import { IndexNowSettings } from "@/components/IndexNowSettings";
+import { GscSitemapsCard } from "@/components/GscSitemapsCard";
+import { ProjectActivityCard } from "@/components/ProjectActivityCard";
+import { WordPressBulkSyncButton } from "@/components/WordPressBulkSyncButton";
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
 import { isProjectConnected, resolveProjectPlatform } from "@/lib/projectPlatform";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
@@ -797,6 +800,7 @@ export default function ProjectPage() {
   const [seoAudit, setSeoAudit] = useState<import("@/lib/api").SeoAuditLatestResponse | null>(null);
   const [seoAuditBusy, setSeoAuditBusy] = useState<boolean>(false);
   const [seoAuditRunning, setSeoAuditRunning] = useState<boolean>(false);
+  const [seoAuditStopRequested, setSeoAuditStopRequested] = useState(false);
   const [seoAuditJustCompleted, setSeoAuditJustCompleted] = useState<boolean>(false);
   const [seoAuditErr, setSeoAuditErr] = useState<string | null>(null);
   const [seoAuditHistory, setSeoAuditHistory] = useState<import("@/lib/api").SeoAuditRun[]>([]);
@@ -2953,6 +2957,7 @@ export default function ProjectPage() {
         const res = await api.getSeoAuditLatest(projectId);
         setSeoAudit(res);
         if (!res.running) {
+          setSeoAuditStopRequested(false);
           if (res.audit?.error) {
             setSeoAuditErr(res.audit.error);
           } else {
@@ -11599,6 +11604,8 @@ export default function ProjectPage() {
 
             {gscStatus?.connected && (gscStatus?.property_url || "").trim() ? (
               <>
+                <GscSitemapsCard projectId={projectId} />
+
                 {/* Feature 3 — Site Map (Internal Linking ingestion) */}
                 <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
                   <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
@@ -12140,7 +12147,30 @@ export default function ProjectPage() {
                     a crawl is in progress -- everything else below it is the one live dashboard
                     climbing as real counts/URLs stream in from the 3s poll. */}
                 {seoAuditRunning && seoAudit?.audit ? (
-                  <SeoAuditLiveProgressBar counts={seoAudit.audit.counts} analysisProgress={seoAudit.audit.analysis_progress} styles={styles} />
+                  <>
+                    <SeoAuditLiveProgressBar counts={seoAudit.audit.counts} analysisProgress={seoAudit.audit.analysis_progress} styles={styles} />
+                    <div className={styles.row} style={{ justifyContent: "flex-end", marginTop: 6 }}>
+                      <button
+                        type="button"
+                        className={styles.button}
+                        disabled={seoAuditStopRequested}
+                        onClick={async () => {
+                          const id = seoAudit?.audit?.id;
+                          if (!id) return;
+                          setSeoAuditStopRequested(true);
+                          try {
+                            await api.cancelSeoAudit(projectId, id);
+                          } catch (e) {
+                            setSeoAuditStopRequested(false);
+                            setError(e instanceof Error ? e.message : "Could not stop the crawl");
+                          }
+                        }}
+                        title="Stop crawling now and keep the pages fetched so far (you can resume later)."
+                      >
+                        {seoAuditStopRequested ? "Stopping…" : "Stop crawl"}
+                      </button>
+                    </div>
+                  </>
                 ) : null}
 
                 {!seoAuditBusy && seoAudit && !seoAudit.audit && !seoAuditRunning ? (
@@ -12424,6 +12454,8 @@ export default function ProjectPage() {
                 )}
               </>
             )}
+
+            <ProjectActivityCard projectId={projectId} />
           </div>
         ) : null}
 
@@ -12731,6 +12763,10 @@ export default function ProjectPage() {
                   >
                     {settingsVerifying ? "Verifying…" : "Verify connection"}
                   </button>
+                  <WordPressBulkSyncButton
+                    projectId={projectId}
+                    disabled={(settings.wp_verified_status || "").toLowerCase() !== "connected"}
+                  />
                 </div>
 
                 {settingsVerify ? (

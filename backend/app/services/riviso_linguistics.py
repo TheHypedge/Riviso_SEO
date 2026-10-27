@@ -479,37 +479,6 @@ def join_markdown_paragraphs(paras: list[str]) -> str:
     return joined + ("\n" if joined else "")
 
 
-def _split_long_sentence_conservative(sentence: str, max_words: int = 48) -> str:
-    """Split only extremely long sentences at strong boundaries; return single flowing text."""
-    words = sentence.split()
-    if len(words) <= max_words:
-        return sentence
-    parts = re.split(r";\s+|\s+—\s+|\s+-\s+(?=[A-Z])", sentence, maxsplit=1)
-    if len(parts) == 2 and all(p.strip() for p in parts):
-        a, b = parts[0].strip().rstrip(","), parts[1].strip()
-        if not a.endswith((".", "!", "?")):
-            a += "."
-        if b and b[0].islower():
-            b = b[0].upper() + b[1:]
-        if not b.endswith((".", "!", "?")):
-            b += "."
-        return f"{a} {b}"
-    # Split before coordinating conjunction near middle
-    mid = len(words) // 2
-    for i in range(mid - 4, min(mid + 8, len(words) - 2)):
-        if words[i].lower() in {"and", "but", "because", "while", "although", "so"}:
-            a = " ".join(words[:i]).rstrip(",") + "."
-            b = " ".join(words[i:])
-            if b and b[0].islower():
-                b = b[0].upper() + b[1:]
-            if not b.endswith((".", "!", "?")):
-                b += "."
-            return f"{a} {b}"
-    return sentence
-
-
-
-
 def humanize_heading(line: str) -> str:
     m = _HEADING_RE.match(line.strip())
     if not m:

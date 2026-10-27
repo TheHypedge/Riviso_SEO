@@ -39,7 +39,7 @@ def test_verify_email_with_token_activates_user(monkeypatch):
         "role": "user",
         "subscription_type": "beta",
         "account_status": "pending",
-        "email_verification_token": code,
+        "email_verification_token": st._token_digest(code),
         "email_verification_expires": exp.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "created_at": "2026-01-01 00:00:00",
     }

@@ -261,6 +261,33 @@ def require_plan_action(action: PlanAction, *, consume: bool = True):
     return _dep
 
 
+def consume_article_quota_for_project(st, current_user: dict, project_id: str) -> None:
+    """Charge one article to the per-day/per-month quota of whoever's plan governs this
+    project (the owner when a collaborator acts — same rule as the plan checks above).
+    Raises 403 when the limit is reached; admins are never charged."""
+    if (current_user.get("role") or "").strip().lower() == "admin":
+        return
+    payer = _get_effective_user_for_project(st, current_user, project_id)
+    uid = (payer.get("id") or "").strip()
+    if not uid or not hasattr(st, "consume_article_usage"):
+        return
+    plan_key = (payer.get("subscription_type") or "").strip().lower() or "beta"
+    try:
+        plans = st.load_plans() or {}
+        plan = plans.get(plan_key) if isinstance(plans, dict) else {}
+    except Exception:
+        plan = {}
+    plan = plan if isinstance(plan, dict) else {}
+    ok, msg = st.consume_article_usage(
+        uid,
+        day_limit=plan.get("max_articles_per_day"),
+        month_limit=plan.get("max_articles_per_month"),
+        amount=1,
+    )
+    if not ok:
+        raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
+
+
 def _get_effective_user_for_project(st, current_user: dict, project_id: str) -> dict:
     """
     For project-scoped actions, resolve plan limits to the project *owner*'s

@@ -31,7 +31,6 @@ from app.services.shopify_api_errors import (
     REQUIRED_PUBLISH_SCOPES,
     REQUIRED_SYNC_SCOPES,
     build_scope_setup_hint,
-    parse_granted_scopes,
     resource_scope_satisfied,
     scopes_missing_for_publish,
     scopes_missing_for_sync,
@@ -89,10 +88,6 @@ async def _require_project(*, user: dict, project_id: str, allow_collaborators: 
     )
 
 
-def _platform(proj: dict) -> str:
-    return ((proj.get("platform") or "wordpress").strip().lower() or "wordpress")
-
-
 def _warnings_from_catalog(catalog: dict) -> list[ShopifySyncWarning]:
     raw = catalog.get("warnings") if isinstance(catalog.get("warnings"), list) else []
     out: list[ShopifySyncWarning] = []
@@ -107,16 +102,6 @@ def _warnings_from_catalog(catalog: dict) -> list[ShopifySyncWarning]:
                 )
             )
     return out
-
-
-def _scope_connect_note(scope_str: str) -> str:
-    missing = scopes_missing_for_sync(parse_granted_scopes(scope_str))
-    if "read_products" not in missing:
-        return ""
-    return (
-        " Your token is missing read_products — release the app version, then use Update app permissions "
-        "in Riviso (OAuth reinstall), not only Refresh connection."
-    )
 
 
 def _build_project_reauthorize_url(

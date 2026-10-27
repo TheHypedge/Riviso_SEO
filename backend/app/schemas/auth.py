@@ -54,12 +54,6 @@ class VerifyEmailResponse(BaseModel):
     expires_in: int = 0
 
 
-class CheckEmailRequest(BaseModel):
-    email: EmailStr
-
-
-class CheckEmailResponse(BaseModel):
-    exists: bool
 
 
 class ForgotPasswordRequest(BaseModel):

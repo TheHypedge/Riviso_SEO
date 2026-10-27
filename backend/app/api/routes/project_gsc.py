@@ -233,7 +233,7 @@ async def submit_sitemap(
     from app.services.gsc_actions import submit_sitemap_for_project  # local import to avoid cycles
 
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
+    proj = _require_project(st=st, user=user, project_id=project_id)  # owner-only: changes the owner's GSC property
     try:
         return await submit_sitemap_for_project(
             st=st,
@@ -254,7 +254,7 @@ async def delete_sitemap(
     from app.services.gsc_actions import delete_sitemap_for_project  # local import to avoid cycles
 
     st = get_legacy_storage_module()
-    proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)
+    proj = _require_project(st=st, user=user, project_id=project_id)  # owner-only: changes the owner's GSC property
     try:
         return await delete_sitemap_for_project(st=st, proj=proj, sitemap_url=sitemap_url)
     except Exception as e:
@@ -526,8 +526,7 @@ async def insights(
     are given and well-formed.
     """
     from datetime import datetime, timedelta
-    from app.services.google_console_service import GoogleConsoleService, _normalise_property_for_query
-    from app.services.to_thread import run_sync
+    from app.services.google_console_service import GoogleConsoleService
 
     st = get_legacy_storage_module()
     proj = _require_project(st=st, user=user, project_id=project_id, allow_collaborators=True)

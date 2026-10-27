@@ -37,9 +37,7 @@ from app.services.to_thread import run_sync
 
 from app.schemas.auth import (
 
-    CheckEmailRequest,
 
-    CheckEmailResponse,
 
     ForgotPasswordRequest,
 
@@ -706,29 +704,6 @@ async def verify_email(payload: VerifyEmailRequest, request: Request, response: 
 
 
 
-@router.post("/check-email", response_model=CheckEmailResponse)
-@limiter.limit("10/minute")
-
-async def check_email(payload: CheckEmailRequest, request: Request) -> CheckEmailResponse:
-
-    """Check whether an email address is registered. Used by the forgot-password page."""
-
-    st = get_legacy_storage_module()
-
-    email = str(payload.email).strip().lower()
-
-    try:
-
-        user = await run_sync(call_storage, st.get_user_by_email, email)
-
-    except Exception:
-
-        return CheckEmailResponse(exists=False)
-
-    return CheckEmailResponse(exists=bool(user))
-
-
-
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
 @limiter.limit("20/minute")
 
@@ -776,24 +751,9 @@ async def forgot_password(payload: ForgotPasswordRequest, request: Request) -> F
 
             return generic
 
+        # Cooldown answers exactly like success: a 429 here would reveal that the account exists.
         if retry_after > 0:
-
-            raise HTTPException(
-
-                status_code=429,
-
-                detail={
-
-                    "code": "reset_cooldown",
-
-                    "message": f"Please wait {retry_after} seconds before requesting another reset link.",
-
-                    "retry_after_seconds": retry_after,
-
-                },
-
-            )
-
+            return generic
         if ok:
 
             dispatch_password_reset_email(to=email, token=reset_token)

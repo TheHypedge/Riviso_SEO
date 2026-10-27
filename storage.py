@@ -7,6 +7,7 @@ Do not load or save `data/projects.json` / `data/articles.json` from app routes 
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
@@ -47,11 +48,6 @@ def _coerce_str_list(val: object) -> list[str]:
 _db_write_lock = threading.Lock()
 _storage_mode: str = "mongo"  # "mongo" | "json"
 _storage_init_error: str | None = None
-
-
-def _data_path(filename: str) -> str:
-    here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(here, "data", filename)
 
 
 def _data_path(filename: str) -> str:
@@ -150,14 +146,40 @@ def _load_featured_image_file_as_data_url(article_id: str) -> str | None:
     return f"data:{content_type};base64,{b64}"
 
 
+_MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
+
+
+def _fetch_public_image(url: str) -> tuple[bytes, str]:
+    """GET a user-influenced image URL safely: every redirect hop is re-checked by the SSRF
+    guard (urllib followed them blindly) and the body is capped so a huge file can't exhaust
+    memory. Returns ``(bytes, content_type)``; raises on any violation."""
+    import httpx
+
+    from app.services.url_guard import assert_public_http_url
+
+    for _ in range(6):
+        assert_public_http_url(url)
+        with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+            with client.stream("GET", url) as resp:
+                if resp.is_redirect:
+                    url = str(resp.url.join(resp.headers.get("location") or ""))
+                    continue
+                resp.raise_for_status()
+                buf = bytearray()
+                for chunk in resp.iter_bytes():
+                    buf.extend(chunk)
+                    if len(buf) > _MAX_REMOTE_IMAGE_BYTES:
+                        raise ValueError("Remote image is too large")
+                return bytes(buf), (resp.headers.get("content-type") or "")
+    raise ValueError("Too many redirects")
+
+
 def _download_and_persist_image_url(article_id: str, url: str) -> bool:
     """Download an HTTPS image URL and save it to disk as a file-backed image.
 
     Returns True on success.  Called synchronously because this runs inside
     patch_article_fields/update_article_fields which are already blocking calls.
     """
-    import urllib.request as _req
-    from app.services.url_guard import assert_public_http_url
     aid = (article_id or "").strip()
     url = (url or "").strip()
     if not url.startswith("http://") and not url.startswith("https://"):
@@ -165,15 +187,9 @@ def _download_and_persist_image_url(article_id: str, url: str) -> bool:
     try:
         # F0.3: `updates["image_url"]` reaches this function via the generic
         # patch_article_fields/update_article_fields write path, not only from
-        # OpenAI's CDN as the removed comment assumed -- validate before fetching.
-        # Note: urlopen still follows redirects on an already-validated public URL
-        # without re-checking the redirect target (unlike the httpx call sites,
-        # which use ssrf_guarded_event_hooks for that); acceptable residual risk
-        # here since it requires an attacker-controlled public host to begin with.
-        assert_public_http_url(url)
-        with _req.urlopen(url, timeout=30) as resp:
-            content_type = (resp.headers.get("content-type") or "image/png").split(";")[0].strip()
-            data = resp.read()
+        # OpenAI's CDN -- so it is fetched through the SSRF-guarded helper.
+        data, ctype = _fetch_public_image(url)
+        content_type = (ctype or "image/png").split(";")[0].strip()
         if not data:
             return False
         b64 = base64.b64encode(data).decode("ascii")
@@ -216,12 +232,7 @@ def _externalize_featured_image_in_updates(article_id: str, updates: dict[str, A
                     image_bytes = None
         elif img.startswith("http://") or img.startswith("https://"):
             try:
-                from app.services.url_guard import assert_public_http_url
-                import urllib.request as _req
-
-                assert_public_http_url(img)
-                with _req.urlopen(img, timeout=30) as resp:
-                    image_bytes = resp.read()
+                image_bytes, _ = _fetch_public_image(img)
             except Exception:
                 image_bytes = None
         if image_bytes:
@@ -1807,7 +1818,7 @@ def patch_subscription_fields(user_id: str, updates: dict[str, Any]) -> bool:
                 found = True
                 break
         if found:
-            _save_json_list("subscriptions.json", rows)
+            _save_json("subscriptions.json", rows)
         return found
     result = get_db().subscriptions.update_one({"user_id": uid}, {"$set": updates})
     return result.matched_count > 0
@@ -2012,6 +2023,22 @@ def generate_email_verification_otp() -> str:
     return f"{secrets.randbelow(900_000) + 100_000:06d}"
 
 
+_TOKEN_DIGEST_PREFIX = "hmac256:"
+
+
+def _token_digest(token: str) -> str:
+    """Password-reset tokens and email OTPs are stored only as a keyed digest, so a database
+    read (backup, leaked dump) cannot be replayed to take over an account. Keyed with
+    SECRET_KEY because a bare SHA-256 of a 6-digit OTP is brute-forced instantly."""
+    try:
+        from app.core.config import settings
+
+        key = settings.secret_key
+    except Exception:
+        key = os.environ.get("SECRET_KEY", "")
+    return _TOKEN_DIGEST_PREFIX + hmac.new(key.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def set_email_verification(*, user_id: str, token: str, expires_at: datetime, sent_at: datetime | None = None) -> bool:
     uid = (user_id or "").strip()
     tok = (token or "").strip()[:128]
@@ -2020,7 +2047,7 @@ def set_email_verification(*, user_id: str, token: str, expires_at: datetime, se
     sent = sent_at or datetime.utcnow()
     exp_iso = expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     updates = {
-        "email_verification_token": tok,
+        "email_verification_token": _token_digest(tok),
         "email_verification_attempts": 0,
         "email_verification_expires": exp_iso,
         "email_verification_expires_at": expires_at,
@@ -2091,7 +2118,7 @@ def verify_email_with_token(*, email: str, token: str) -> tuple[bool, str]:
     attempts = int(user.get("email_verification_attempts") or 0)
     if stored and attempts >= _MAX_EMAIL_OTP_ATTEMPTS:
         return False, "Too many incorrect codes. Request a new verification code."
-    if not stored or not hmac.compare_digest(stored, tok):
+    if not stored or not hmac.compare_digest(stored, _token_digest(tok)):
         if stored:
             # A 6-digit code is guessable without a per-account cap (a per-IP limit is
             # bypassed by rotating IPs): after the cap the code is void until a resend.
@@ -2156,7 +2183,7 @@ def set_password_reset_token(*, email: str, token: str, expires_at: datetime) ->
     ok = update_user_fields(
         uid,
         {
-            "password_reset_token": tok,
+            "password_reset_token": _token_digest(tok),
             "password_reset_expires": exp_iso,
             "password_reset_expires_at": expires_at,
             "password_reset_sent_at": datetime.utcnow(),
@@ -2165,55 +2192,19 @@ def set_password_reset_token(*, email: str, token: str, expires_at: datetime) ->
     return ok, 0
 
 
-def get_user_by_password_reset_token(*, email: str, token: str) -> dict[str, Any] | None:
-    em = (email or "").strip().lower()
-    tok = (token or "").strip()
-    if not em or not tok:
-        return None
-    user = get_user_by_email(em)
-    if not user:
-        return None
-    if (user.get("password_reset_token") or "").strip() != tok:
-        return None
-    exp = _parse_iso_ts((user.get("password_reset_expires") or "").strip())
-    if not exp or datetime.utcnow() > exp:
-        return None
-    return user
-
-
-def complete_password_reset(*, email: str, token: str, password_hash: str) -> tuple[bool, str]:
-    user = get_user_by_password_reset_token(email=email, token=token)
-    if not user:
-        return False, "Invalid or expired reset link."
-    uid = (user.get("id") or "").strip()
-    if not uid:
-        return False, "Invalid or expired reset link."
-    ok = update_user_fields(
-        uid,
-        {
-            "password_hash": password_hash,
-            "password_reset_token": "",
-            "password_reset_expires": "",
-            "password_reset_expires_at": None,
-            "refresh_session_jtis": [],
-        },
-    )
-    return (True, "Password updated successfully.") if ok else (False, "Could not update password.")
-
-
 def get_user_by_reset_token_only(token: str) -> dict[str, Any] | None:
     """Look up a user by reset token alone (no email required)."""
     tok = (token or "").strip()
     if not tok:
         return None
     if _storage_mode == "mongo":
-        doc = get_db().users.find_one({"password_reset_token": tok})
+        doc = get_db().users.find_one({"password_reset_token": _token_digest(tok)})
         if not doc:
             return None
         return _normalize_user_dict(doc)
     # JSON fallback: linear scan
     for u in _load_json_users():
-        if (u.get("password_reset_token") or "").strip() == tok:
+        if (u.get("password_reset_token") or "").strip() == _token_digest(tok):
             return _normalize_user_dict(u)
     return None
 
@@ -2296,6 +2287,9 @@ def complete_password_reset_by_token(*, token: str, password_hash: str) -> tuple
 
 def insert_user(user: dict[str, Any]) -> None:
     norm = _normalize_user_dict(user)
+    otp = norm.get("email_verification_token") or ""
+    if otp and not otp.startswith(_TOKEN_DIGEST_PREFIX):
+        norm["email_verification_token"] = _token_digest(otp)
     if _storage_mode == "json":
         with _db_write_lock:
             users = _load_json_users()
@@ -2489,10 +2483,6 @@ _LISTING_STATUS_AFFECTING_FIELDS = frozenset(
         "shopify_article_id",
     }
 )
-
-
-def _article_has_body(a: dict[str, Any]) -> bool:
-    return bool((a.get("article") or "").strip())
 
 
 def _article_wp_post_present(a: dict[str, Any]) -> bool:
@@ -3813,77 +3803,6 @@ def load_articles_for_cluster_links(project_id: str, article_ids: list[str]) -> 
     return out
 
 
-def load_articles_for_project_minimal(
-    project_id: str,
-    *,
-    status: str | None = None,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    limit: int = 500,
-) -> list[dict[str, Any]]:
-    """
-    Fast path for UI polling: returns minimal fields for a project's articles.
-    Uses a projection and query on project_id to avoid full collection scans.
-    """
-    pid = (project_id or "").strip()
-    if not pid:
-        return []
-    if _storage_mode != "mongo":
-        # JSON fallback is already in-memory file read; keep compatibility.
-        rows = [_normalize_article_dict(a) for a in _load_json_list("articles.json")]
-        out = [r for r in rows if (r.get("project_id") or "") == pid]
-        return out[: max(1, min(int(limit or 500), 2000))]
-
-    q: dict[str, Any] = {"project_id": pid}
-    if status:
-        s = (status or "").strip().lower()
-        if s in {"pending", "draft", "published"}:
-            q["status"] = s
-
-    # Date filtering: use posted_at when available otherwise created_at.
-    # We store these as strings, so range queries are only safe on consistent formats.
-    # Keep filtering in app for correctness; only constrain by project/status here.
-
-    proj = {
-        "_id": 0,
-        "id": 1,
-        "status": 1,
-        "posted_at": 1,
-        "created_at": 1,
-        "updated_at": 1,
-        "wp_scheduled_at": 1,
-        "wp_schedule_error": 1,
-        "gsc_status": 1,
-        "gsc_inspection_requested_at": 1,
-        "gsc_inspection_error": 1,
-    }
-    lim = max(1, min(int(limit or 500), 2000))
-    cur = (
-        get_db()
-        .articles.find(q, proj)
-        .sort("created_at", -1)
-        .limit(lim)
-    )
-    out: list[dict[str, Any]] = []
-    for d in cur:
-        out.append(
-            {
-                "id": (d.get("id") or "").strip(),
-                "project_id": pid,
-                "status": (d.get("status") or "pending"),
-                "posted_at": (d.get("posted_at") or ""),
-                "created_at": (d.get("created_at") or ""),
-                "updated_at": (d.get("updated_at") or ""),
-                "wp_scheduled_at": _coerce_wp_scheduled_at_str(d.get("wp_scheduled_at")),
-                "wp_schedule_error": (d.get("wp_schedule_error") or ""),
-                "gsc_status": (d.get("gsc_status") or "pending"),
-                "gsc_inspection_requested_at": (d.get("gsc_inspection_requested_at") or ""),
-                "gsc_inspection_error": (d.get("gsc_inspection_error") or ""),
-            }
-        )
-    return out
-
-
 def load_scheduled_pending_for_project_minimal(project_id: str, *, limit: int = 200) -> list[dict[str, Any]]:
     """Fast path: only scheduled + not posted items for sidebar polling."""
     pid = (project_id or "").strip()
@@ -4783,15 +4702,6 @@ def insert_seo_audit_urls_bulk(rows: list[dict[str, Any]]) -> None:
             non_dupe = [e for e in exc.details.get("writeErrors", []) if e.get("code") != 11000]
             if non_dupe:
                 raise
-
-
-def count_seo_audit_urls(audit_id: str) -> int:
-    aid = (audit_id or "").strip()
-    if not aid:
-        return 0
-    if _storage_mode != "mongo":
-        return sum(1 for x in _load_json_list("seo_audit_urls.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid)
-    return int(get_db().seo_audit_urls.count_documents({"audit_id": aid}))
 
 
 def load_seo_audit_urls_page(
@@ -6412,13 +6322,6 @@ def delete_project_and_articles(project_id: str) -> bool:
     return delete_project_and_resources(project_id)
 
 
-def save_articles_replace_all(articles: list[dict[str, Any]]) -> None:
-    with _db_write_lock:
-        get_db().articles.delete_many({})
-    for a in articles:
-        insert_article(a)
-
-
 def insert_article(article: dict[str, Any]) -> None:
     norm = _normalize_article_dict(article)
     doc = {**norm, "_id": norm["id"]}
@@ -6586,11 +6489,6 @@ def bulk_update_articles(updates: list[tuple[str, dict[str, Any]]]) -> None:
             res = db.articles.bulk_write(ops, ordered=False)
             if not res.acknowledged:
                 raise RuntimeError("MongoDB bulk_update_articles was not acknowledged")
-
-
-def export_tables_to_json() -> tuple[list[dict], list[dict]]:
-    """Snapshot for backup."""
-    return load_projects(), load_articles()
 
 
 # ===========================================================================
@@ -7108,21 +7006,6 @@ def list_shopify_products(
         .limit(lim)
     )
     return [_shopify_product_doc_to_catalog_row(doc) for doc in cur if isinstance(doc, dict)]
-
-
-def count_shopify_products(project_id: str) -> int:
-    pid = (project_id or "").strip()
-    if not pid:
-        return 0
-    if _storage_mode != "mongo":
-        return len(
-            [
-                r
-                for r in _load_json_list("shopify_products.json")
-                if isinstance(r, dict) and (r.get("project_id") or "").strip() == pid
-            ]
-        )
-    return int(get_db().shopify_products.count_documents({"project_id": pid}))
 
 
 def delete_shopify_products_for_project(project_id: str) -> int:

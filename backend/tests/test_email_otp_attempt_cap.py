@@ -12,7 +12,7 @@ import storage as storage_module  # noqa: E402
 
 
 def _user_store(monkeypatch, code="482913"):
-    user = {"id": "u1", "email": "a@example.com", "email_verification_token": code, "email_verification_attempts": 0,
+    user = {"id": "u1", "email": "a@example.com", "email_verification_token": storage_module._token_digest(code), "email_verification_attempts": 0,
             "email_verification_expires": (datetime.utcnow() + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ")}
     monkeypatch.setattr(storage_module, "get_user_by_email", lambda em: dict(user))
     monkeypatch.setattr(storage_module, "update_user_fields", lambda uid, f: user.update(f) or True)

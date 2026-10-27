@@ -76,32 +76,3 @@ def cached_subscription(target: Any) -> dict | None:
     return state.get(_SUB_KEY)
 
 
-def cache_project(target: Any, project_id: str, project: dict | None, *, full: bool) -> None:
-    """Memoize a resolved project for this request, keyed by id + read depth.
-
-    A ``full`` read can satisfy a later light read, but not vice versa.
-    """
-    state = _scope_state(target)
-    if state is None:
-        return
-    bag = state.get(_PROJECTS_KEY)
-    if not isinstance(bag, dict):
-        bag = {}
-        state[_PROJECTS_KEY] = bag
-    bag[(project_id or "").strip()] = {"project": project, "full": bool(full)}
-
-
-def cached_project(target: Any, project_id: str, *, full: bool) -> dict | None:
-    state = _scope_state(target)
-    if state is None:
-        return None
-    bag = state.get(_PROJECTS_KEY)
-    if not isinstance(bag, dict):
-        return None
-    entry = bag.get((project_id or "").strip())
-    if not isinstance(entry, dict):
-        return None
-    if full and not entry.get("full"):
-        return None
-    proj = entry.get("project")
-    return proj if isinstance(proj, dict) else None

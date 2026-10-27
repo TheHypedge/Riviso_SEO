@@ -104,18 +104,6 @@ def estimate_bundle_tokens(
     return estimate
 
 
-def estimate_tokens_for_generation_bundle_safe(**kwargs: Any) -> int:
-    """Always accepts ``image_prompt_text``; falls back to :func:`estimate_bundle_tokens`."""
-    img = kwargs.pop("image_prompt_text", None)
-    filtered = filter_kwargs_for_callable(estimate_tokens_for_generation_bundle, kwargs)
-    try:
-        return estimate_tokens_for_generation_bundle(**filtered, image_prompt_text=img)
-    except TypeError as e:
-        if "image_prompt_text" not in str(e) or "unexpected keyword argument" not in str(e):
-            raise
-        return estimate_bundle_tokens(**filtered, image_prompt_text=img)
-
-
 async def generate_article_bundle_safe(**kwargs: Any) -> dict:
     """Always accepts ``image_prompt_text``; strips it if the target signature cannot."""
     img = kwargs.pop("image_prompt_text", None)

@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 import httpx
-from jose import jwt
+import jwt
 
 from app.core.config import settings
 from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks

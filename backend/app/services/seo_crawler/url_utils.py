@@ -103,6 +103,3 @@ def folder_depth(url: str) -> int:
     return len([seg for seg in path.split("/") if seg])
 
 
-def is_html_content_type(content_type: str | None) -> bool:
-    ct = (content_type or "").split(";", 1)[0].strip().lower()
-    return ct in ("text/html", "application/xhtml+xml")

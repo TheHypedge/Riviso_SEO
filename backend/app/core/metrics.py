@@ -12,7 +12,6 @@ Cardinality is kept bounded by labelling on the matched *route template*
 from __future__ import annotations
 
 import time
-from typing import Callable
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -54,11 +53,6 @@ if _ENABLED:
         "riviso_generation_queue_depth",
         "Pending jobs in the generation queue.",
     )
-    EXTERNAL_LATENCY = Histogram(
-        "riviso_external_call_duration_seconds",
-        "Latency of external/storage calls.",
-        ["service", "operation"],
-    )
 
 
 def _route_template(scope: Scope) -> str:
@@ -67,13 +61,6 @@ def _route_template(scope: Scope) -> str:
     if isinstance(path, str) and path:
         return path
     return "other"
-
-
-def observe_external(service: str, operation: str) -> Callable[[float], None]:
-    """Return a callable to record an external/storage call duration (no-op if disabled)."""
-    if not _ENABLED:
-        return lambda _seconds: None
-    return lambda seconds: EXTERNAL_LATENCY.labels(service=service, operation=operation).observe(seconds)
 
 
 def set_queue_depth(depth: int) -> None:

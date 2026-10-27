@@ -37,7 +37,7 @@ from app.core.ratelimit import limiter
 from app.api.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
-from app.core.metrics import MetricsMiddleware, metrics_available, render_latest, set_queue_depth
+from app.core.metrics import MetricsMiddleware, metrics_available, render_latest
 from app.core.observability import init_sentry
 from app.core.production import run_startup_checks
 from app.middleware.request_id import RequestIdMiddleware
@@ -102,6 +102,10 @@ def _effective_cors_origins() -> list[str]:
     for o in base:
         # S1.8: never allow localhost / loopback origins in production.
         if settings.is_production and _is_local_origin(o):
+            continue
+        # Credentialed CORS from a plain-http (MITM-able) or malformed origin would let an
+        # injected script call the API with the user's cookies -- https only in production.
+        if settings.is_production and not o.lower().startswith("https://"):
             continue
         if o not in seen:
             seen.add(o)

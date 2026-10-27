@@ -69,15 +69,7 @@ function ForgotPasswordForm() {
     setLoading(true);
 
     try {
-      // Step 1 — check if email is registered
-      const check = await api.checkEmail(trimmed);
-      if (!check.exists) {
-        setError("No account found with this email address. Please check and try again, or create a new account.");
-        setLoading(false);
-        return;
-      }
-
-      // Step 2 — send the reset email
+      // Same response whether or not the email is registered (no account enumeration).
       await api.forgotPassword(trimmed);
       setSent(true);
       startCooldown(RESEND_COOLDOWN_SECONDS);
@@ -113,12 +105,12 @@ function ForgotPasswordForm() {
         </div>
         <div className={styles.authCardTitle} style={{ textAlign: "center" }}>Check your inbox</div>
         <div className={styles.authCardSub} style={{ textAlign: "center" }}>
-          A password reset link has been sent to{" "}
-          <strong style={{ color: "rgba(250,249,245,0.9)" }}>{email.trim().toLowerCase()}</strong>.
-          Click the link in the email to set a new password.
+          If an account exists for{" "}
+          <strong style={{ color: "rgba(250,249,245,0.9)" }}>{email.trim().toLowerCase()}</strong>, a password
+          reset link is on its way. Click the link in the email to set a new password.
         </div>
         <p style={{ color: "var(--aa-on-dark-soft, #a09d96)", fontSize: 13, textAlign: "center", margin: "16px 0 0", lineHeight: 1.6 }}>
-          The link expires in 1 hour. Check your spam folder if you don't see it.
+          The link expires in 1 hour. Check your spam folder if you don&apos;t see it.
         </p>
         <div style={{ marginTop: 24 }}>
           <Link href="/" className={`${styles.button} ${styles.authButton}`} style={{ display: "block", textAlign: "center" }}>
@@ -145,7 +137,7 @@ function ForgotPasswordForm() {
     <div className={styles.authCard}>
       <div className={styles.authCardTitle}>Reset your password</div>
       <div className={styles.authCardSub}>
-        Enter the email address associated with your Riviso account and we'll
+        Enter the email address associated with your Riviso account and we&apos;ll
         send you a secure link to reset your password.
       </div>
 
@@ -202,7 +194,7 @@ export default function ForgotPasswordPage() {
           </div>
           <h1 className={styles.authHero}>Regain access to your account.</h1>
           <p className={styles.authSub}>
-            We'll send a secure one-time link to your registered email so you can
+            We&apos;ll send a secure one-time link to your registered email so you can
             set a new password and get back to work.
           </p>
         </section>

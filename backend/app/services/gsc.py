@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 import httpx
-from jose import jwt
+import jwt
 
 from app.core.config import settings
 
@@ -205,13 +205,6 @@ async def request_url_inspection(*, access_token: str, site_url: str, inspection
     if not isinstance(data, dict):
         raise RuntimeError("URL Inspection returned invalid payload")
     return data
-
-
-def inspection_response_accepted(api_response: dict[str, Any]) -> bool:
-    if not isinstance(api_response, dict):
-        return False
-    ir = api_response.get("inspectionResult")
-    return isinstance(ir, dict) and bool(ir)
 
 
 # ---------------------------------------------------------------------------

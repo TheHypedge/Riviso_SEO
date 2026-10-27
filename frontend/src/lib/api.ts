@@ -1958,15 +1958,6 @@ export function clearAuth() {
   }
 }
 
-function emitGlobalLoading(delta: number) {
-  if (typeof window === "undefined") return;
-  try {
-    window.dispatchEvent(new CustomEvent("aa:loading", { detail: { delta } }));
-  } catch {
-    // ignore
-  }
-}
-
 /** Structured FastAPI `HTTPException` payload when present (e.g. duplicate title responses). */
 export class ApiError extends Error {
   readonly status: number;
@@ -2227,7 +2218,6 @@ async function apiFetch<T>(path: string, init?: RequestInit, opts?: ApiFetchOpti
       path !== "/api/auth/verify-email" &&
       path !== "/api/auth/resend-verification" &&
       path !== "/api/auth/forgot-password" &&
-      path !== "/api/auth/check-email" &&
       !path.startsWith("/api/auth/validate-reset-token") &&
       path !== "/api/auth/reset-password" &&
       path !== "/api/auth/reactivate" &&
@@ -2375,16 +2365,6 @@ export const api = {
       { skipGlobalLoading: true },
     );
   },
-  async checkEmail(email: string) {
-    return apiFetch<{ exists: boolean }>(
-      "/api/auth/check-email",
-      {
-        method: "POST",
-        body: JSON.stringify({ email }),
-      },
-      { skipGlobalLoading: true },
-    );
-  },
   async forgotPassword(email: string) {
     return apiFetch<{ ok: boolean; message: string; retry_after_seconds?: number | null }>(
       "/api/auth/forgot-password",
@@ -2493,15 +2473,6 @@ export const api = {
     _cacheProfileMe.delete("_");
     _cacheListProjects.delete("_");
   },
-  async gscStatus() {
-    return apiFetch<GscStatus>("/api/gsc/status");
-  },
-  async gscConnectUrl() {
-    return apiFetch<{ url: string }>("/api/gsc/connect-url");
-  },
-  async gscListSites() {
-    return apiFetch<GscSite[]>("/api/gsc/sites");
-  },
   async listProjects(opts?: ApiFetchOptions) {
     const key = "_";
     if (!opts?.fresh && !opts?.bypassClientCache) {
@@ -2570,17 +2541,6 @@ export const api = {
     });
   },
 
-  async resolveShopifyShop(projectId: string, shop: string) {
-    return apiFetch<{
-      ok: boolean;
-      myshopify_domain?: string | null;
-      public_url?: string | null;
-      message?: string | null;
-    }>(`/api/projects/${projectId}/shopify/resolve-shop`, {
-      method: "POST",
-      body: JSON.stringify({ shop }),
-    });
-  },
 
   async getShopifyStatus(projectId: string, opts?: ApiFetchOptions) {
     return apiFetch<{
@@ -2609,21 +2569,6 @@ export const api = {
     });
   },
 
-  async getShopifyConnectUrl(projectId: string, shop?: string, opts?: ApiFetchOptions) {
-    const return_origin =
-      typeof window !== "undefined" ? window.location.origin : undefined;
-    return apiFetch<{ url: string; shop: string }>(
-      `/api/projects/${projectId}/shopify/connect-url`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          ...(shop ? { shop } : {}),
-          ...(return_origin ? { return_origin } : {}),
-        }),
-      },
-      { skipGlobalLoading: true, ...opts },
-    );
-  },
 
   async connectShopify(
     projectId: string,
@@ -2666,17 +2611,6 @@ export const api = {
   },
 
   /** @deprecated Use connectShopify with Client ID + Secret */
-  async manualConnectShopify(projectId: string, payload: { shop: string; access_token: string }) {
-    return apiFetch<{
-      ok: boolean;
-      status: string;
-      message: string;
-      shop?: string | null;
-    }>(`/api/projects/${projectId}/shopify/manual-connect`, {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-  },
 
   async syncShopifyCatalog(projectId: string) {
     return apiFetch<{
@@ -2730,9 +2664,6 @@ export const api = {
     }>(`/api/projects/${projectId}/shopify/catalog`);
   },
 
-  async disconnectShopify(projectId: string) {
-    return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/shopify/disconnect`, { method: "POST" });
-  },
   async getProject(projectId: string, opts?: ApiFetchOptions) {
     if (!opts?.fresh && !opts?.bypassClientCache) {
       const cached = cacheGet(_cacheGetProject, projectId, 30_000);
@@ -2813,9 +2744,6 @@ export const api = {
       _cacheProjectSettings.delete(key);
       throw e;
     }
-  },
-  async getProjectSettingsWithOpts(projectId: string, opts?: ApiFetchOptions) {
-    return apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, undefined, opts);
   },
   async updateProjectSettings(
     projectId: string,
@@ -2914,9 +2842,6 @@ export const api = {
   },
   async cancelScheduledJob(projectId: string, jobId: string) {
     return apiFetch<{ ok: boolean }>(`/api/projects/${projectId}/scheduled-jobs/${jobId}`, { method: "DELETE" });
-  },
-  async clearScheduledJobs(projectId: string) {
-    return apiFetch<{ ok: boolean; deleted: number }>(`/api/projects/${projectId}/scheduled-jobs`, { method: "DELETE" });
   },
   async updateScheduledJob(
     projectId: string,
@@ -3369,26 +3294,6 @@ export const api = {
     return v;
   },
 
-  async auditArticleIntegrity(
-    projectId: string,
-    articleId: string,
-    markdown?: string,
-    opts?: ApiFetchOptions,
-  ) {
-    return apiFetch<{
-      ai_percentage: number;
-      flagged_paragraphs: { index: number; text: string; reason: string }[];
-      metrics?: Record<string, unknown>;
-    }>(
-      `/api/projects/${projectId}/articles/${articleId}/integrity/audit`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(markdown != null ? { markdown } : {}),
-      },
-      opts,
-    );
-  },
 
   async listWritingPrompts(projectId: string, opts?: ApiFetchOptions) {
     const key = projectId;
@@ -4380,32 +4285,10 @@ export const api = {
       { method: "POST", body: JSON.stringify({ status }) },
     );
   },
-  async articleSmartRefresh(projectId: string, articleId: string) {
-    // Backend currently 501s; the helper is here so the UI can render a typed CTA.
-    return apiFetch<{ ok: boolean; article_id: string }>(
-      `/api/projects/${projectId}/articles/${articleId}/monitor/refresh`,
-      { method: "POST" },
-    );
-  },
 
   // Admin
   async adminListUsers() {
     return apiFetch<AdminUserPublic[]>("/api/admin/users");
-  },
-  async adminUpdateUser(
-    userId: string,
-    patch: Partial<{
-      role: string;
-      subscription_type: string;
-      full_name: string;
-      phone: string;
-      timezone: string;
-      account_status: string;
-      is_deleted: boolean;
-      is_deactivated: boolean;
-    }>,
-  ) {
-    return apiFetch<AdminUserPublic>(`/api/admin/users/${userId}`, { method: "PATCH", body: JSON.stringify(patch) });
   },
   async adminBulkUpdateUsers(
     items: Array<{ user_id: string; role?: string; subscription_type?: string; full_name?: string }>,
@@ -4442,9 +4325,6 @@ export const api = {
   },
   async getSeoAuditHistory(projectId: string) {
     return apiFetch<{ runs: SeoAuditRun[] }>(`/api/projects/${projectId}/site-audit/seo/history`);
-  },
-  async getSeoAudit(projectId: string, auditId: string) {
-    return apiFetch<SeoAuditRun>(`/api/projects/${projectId}/site-audit/seo/${auditId}`);
   },
   async runSeoAudit(projectId: string, opts?: { full?: boolean }) {
     const qs = opts?.full ? "?full=true" : "";

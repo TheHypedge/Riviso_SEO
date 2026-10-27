@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from jose import jwt
+import jwt
 
 from app.core.config import settings
 
@@ -161,28 +161,3 @@ async def fetch_administered_organizations(*, access_token: str) -> list[dict[st
     return out
 
 
-async def fetch_organization_name(*, access_token: str, org_urn: str) -> str | None:
-    """Best-effort display name for an org URN (organizationAcls doesn't return one) --
-    a picker showing a raw urn:li:organization:12345 isn't usable, so this fills it in.
-    Returns None on any failure; caller falls back to the raw URN."""
-    tok = (access_token or "").strip()
-    org_id = (org_urn or "").rsplit(":", 1)[-1].strip()
-    if not tok or not org_id.isdigit():
-        return None
-    headers = {
-        "authorization": f"Bearer {tok}",
-        "Linkedin-Version": LINKEDIN_API_VERSION,
-        "X-Restli-Protocol-Version": "2.0.0",
-    }
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        res = await client.get(
-            f"https://api.linkedin.com/rest/organizations/{org_id}",
-            params={"projection": "(id,localizedName)"},
-            headers=headers,
-        )
-    if res.status_code != 200:
-        return None
-    data = res.json() if res.content else {}
-    if not isinstance(data, dict):
-        return None
-    return (data.get("localizedName") or "").strip() or None

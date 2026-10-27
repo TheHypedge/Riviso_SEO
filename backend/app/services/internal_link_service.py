@@ -1,17 +1,10 @@
 """
 InternalLinkService — Feature 3 (Automated Internal Linking Engine).
 
-Two responsibilities:
-
-1. **Site-map ingestion** (working in v1) — :meth:`sync_site_map_from_wp` paginates
-   the WordPress REST API and persists ``{post_url, post_title, focus_keyphrase,
-   post_modified_at}`` rows for the project. Yoast/RankMath SEO meta is harvested
-   when ``yoast_head_json`` is exposed by the site.
-2. **Link injection into generated articles** (skeleton in v1) —
-   :meth:`apply_internal_links` will walk the new article's HTML and insert ``<a>``
-   tags pointing at the most relevant existing posts. v1 ships the API surface so
-   the frontend can already display "Internal links: N" telemetry; the matching
-   logic lands in the follow-up PR.
+Site-map ingestion: :meth:`sync_site_map_from_wp` paginates the WordPress REST API and
+persists ``{post_url, post_title, focus_keyphrase, post_modified_at}`` rows for the project
+(Yoast/RankMath SEO meta is harvested when ``yoast_head_json`` is exposed). Generation then
+weaves these URLs into new drafts through the prompt (``wp_internal_link_aware_enabled``).
 
 Why pull-first: the WP plugin doesn't need any change to support v1, so every
 existing customer benefits the moment they enter their app password.
@@ -25,7 +18,6 @@ import re
 from datetime import datetime
 from typing import Any
 
-import httpx
 
 from app.legacy.storage import get_legacy_storage_module
 from app.services.wordpress_client import WordpressClient
@@ -109,7 +101,8 @@ class InternalLinkService:
         more posts than ``_MAX_POSTS`` and the UI should suggest plugin-push as a follow-up.
         """
         wp = self._wp_client()
-        client = httpx.AsyncClient(timeout=30.0, follow_redirects=True)
+        # Same SSRF guard as every other WordPress call: public host + no redirect to private IPs.
+        client = wp._guarded_client(timeout=30.0)
         out: list[dict[str, Any]] = []
         truncated = False
         try:
@@ -186,18 +179,3 @@ class InternalLinkService:
 
     # ---- v1: link injection (skeleton — see module docstring) ----------------
 
-    def apply_internal_links(
-        self,
-        *,
-        article_html: str,
-        max_links: int = 4,
-    ) -> tuple[str, int]:
-        """
-        Insert ``<a>`` tags for the best matching existing posts. v1 stub — returns the
-        HTML unchanged with ``count=0``. The next iteration plugs in scoring + injection.
-
-        Returning the stub here lets us already wire telemetry into the article generation
-        pipeline so the UI can show "Internal links: 0" today and start showing real numbers
-        the moment the matching logic lands.
-        """
-        return article_html or "", 0

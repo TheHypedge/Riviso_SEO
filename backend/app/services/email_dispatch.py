@@ -140,7 +140,6 @@ def dispatch_invitation_email(
     role: str,
     accept_url: str,
 ) -> None:
-    import json
     asyncio.create_task(
         _run_invitation_email(to, invited_by_name, project_name, project_website_url, role, accept_url)
     )
@@ -209,7 +208,3 @@ async def _run_payment_failed_email(to: str, plan_name: str, reason: str) -> Non
         log.warning("SMTP not configured; payment failed email not sent to=%s", to_clean)
 
 
-async def notify_plan_event(*, email: str, plan_name: str, event: str) -> None:
-    """Wrapper for admin/subscription managers. ``event`` reserved for future variants."""
-    _ = event
-    await _run_email("plan_notification", email, plan_name)

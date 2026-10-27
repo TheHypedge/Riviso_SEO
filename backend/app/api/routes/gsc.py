@@ -3,11 +3,10 @@ from __future__ import annotations
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import RedirectResponse
 
 from app.core.config import settings
-from app.core.deps import get_current_user
 from app.legacy.storage import get_legacy_storage_module
 from app.services import gsc
 
@@ -79,33 +78,6 @@ def _frontend_redirect_url(*, ok: bool, message: str | None = None) -> str:
         # Relative redirect (same origin). Avoid `//dashboard` which browsers treat as a hostname.
         return f"/dashboard#{frag}"
     return f"{base}/dashboard#{frag}"
-
-
-@router.get("/status")
-async def status(user: dict = Depends(get_current_user)) -> dict:
-    st = get_legacy_storage_module()
-    uid = (user.get("id") or "").strip()
-    fresh = st.get_user_by_id(uid) if hasattr(st, "get_user_by_id") else user
-    email = (fresh.get("gsc_email") or "").strip() or None
-    rt = (fresh.get("gsc_refresh_token") or "").strip()
-    return {
-        "configured": gsc.oauth_configured(),
-        "connected": bool(rt),
-        "email": email,
-    }
-
-
-@router.get("/connect-url")
-async def connect_url(request: Request, user: dict = Depends(get_current_user)) -> dict:
-    if not gsc.oauth_configured():
-        raise HTTPException(status_code=400, detail="Google OAuth client is not configured on the backend")
-    uid = (user.get("id") or "").strip()
-    if not uid:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    state = gsc.make_state_token(user_id=uid)
-    redirect_uri = _public_api_url(str(request.url_for("gsc_oauth_callback")))
-    url = gsc.build_auth_url(redirect_uri=redirect_uri, state=state)
-    return {"url": url}
 
 
 def _frontend_project_redirect_url(
@@ -264,13 +236,4 @@ async def _get_valid_access_token_for_user(*, st, uid: str) -> str:
         st.update_user_fields(uid, {"gsc_access_token": at2, "gsc_token_expires_at": str(exp2)})
     return at2
 
-
-@router.get("/sites")
-async def list_sites(user: dict = Depends(get_current_user)) -> list[dict]:
-    if not gsc.oauth_configured():
-        raise HTTPException(status_code=400, detail="Google OAuth client is not configured on the backend")
-    st = get_legacy_storage_module()
-    uid = (user.get("id") or "").strip()
-    tok = await _get_valid_access_token_for_user(st=st, uid=uid)
-    return await gsc.list_search_console_sites(access_token=tok)
 

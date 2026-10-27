@@ -331,6 +331,3 @@ def init_db() -> None:
     db.seo_audit_issues.create_index([("audit_id", 1), ("severity", 1)])
 
 
-def remove_scoped_session() -> None:
-    """No-op: kept for compatibility with any teardown hooks."""
-    pass

@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.deps import get_current_user
-from app.core.project_lookup import async_require_project_access, require_project_access
+from app.services.plan_gatekeeper import consume_article_quota_for_project
+from app.core.project_lookup import async_require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.repositories import ScheduledJobRepository
 from app.schemas.scheduled_jobs import ScheduledJobPublic, ScheduledJobPostNow, ScheduledJobUpdate
@@ -675,28 +676,6 @@ async def post_scheduled_job_now(
         await run_sync(st.update_scheduled_job_fields, jid, patch)
         row = {**row, **patch}
 
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and uid and hasattr(st, "consume_article_usage"):
-        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
-        plan = {}
-        try:
-            plans = st.load_plans() or {}
-            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
-            if not isinstance(plan, dict):
-                plan = {}
-        except Exception:
-            plan = {}
-        ok, msg = st.consume_article_usage(
-            uid,
-            day_limit=plan.get("max_articles_per_day"),
-            month_limit=plan.get("max_articles_per_month"),
-            amount=1,
-        )
-        if not ok:
-            raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
-
-
     state = (row.get("state") or "scheduled").strip().lower()
     if state == "posting":
         ts = _parse_job_timestamp(str(row.get("updated_at") or row.get("last_attempt_at") or ""))
@@ -709,6 +688,10 @@ async def post_scheduled_job_now(
                 "message": "Publish already in progress. The list refreshes automatically.",
                 "job": _to_public(row),
             }
+
+    # Charged only once a publish will actually start (a double-click while it's already
+    # posting returned above), and against the plan that governs the project.
+    await run_sync(consume_article_quota_for_project, st, user, project_id)
 
     aid = (row.get("article_id") or "").strip()
     art = _find_article_for_job(st=st, project_id=project_id, article_id=aid) if aid else None

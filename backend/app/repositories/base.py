@@ -55,34 +55,6 @@ class ArticleRepository(_Repo):
     def image_url(self, project_id: str, article_id: str) -> str | None:
         return self._call("get_article_image_url", project_id=project_id, article_id=article_id)
 
-    def generation_status(self, project_id: str, article_id: str) -> dict | None:
-        return self._call("get_article_generation_status", project_id=project_id, article_id=article_id)
-
-    # --- light list reads --------------------------------------------------
-    def listing_page(
-        self,
-        project_id: str,
-        *,
-        page: int = 1,
-        per_page: int = 10,
-        q: str | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
-        sort: str = "desc",
-        status_key: str | None = None,
-    ) -> list[dict]:
-        return self._call(
-            "load_articles_listing_page_for_project",
-            project_id,
-            page=page,
-            per_page=per_page,
-            q=q,
-            date_from=date_from,
-            date_to=date_to,
-            sort=sort,
-            status_key=status_key,
-        )
-
     def count(
         self,
         project_id: str,
@@ -107,39 +79,14 @@ class ArticleRepository(_Repo):
     def titles(self, project_id: str, *, limit: int = 20000) -> list[dict]:
         return self._call("load_article_titles_for_project", project_id, limit=limit)
 
-    def by_ids(self, project_id: str, ids: list[str]) -> list[dict]:
-        return self._call("load_articles_by_ids_for_project", project_id, ids)
-
     # --- writes ------------------------------------------------------------
     def patch(self, article_id: str, fields: dict) -> bool:
         return bool(self._call("patch_article_fields", article_id, fields))
-
-    def bulk_update(self, updates: list[tuple[str, dict]]) -> None:
-        self._call("bulk_update_articles", updates)
-
-    def delete_by_ids(self, ids: list[str]) -> None:
-        self._call("delete_articles_by_ids", ids)
-
 
 class ProjectRepository(_Repo):
     """Projects aggregate — full vs access/listing/generation projections."""
 
     def get(self, project_id: str) -> dict | None:
-        return self._call("get_project_by_id", project_id)
-
-    def for_generation(self, project_id: str) -> dict | None:
-        if self._has("get_project_for_generation"):
-            return self._call("get_project_for_generation", project_id)
-        return self._call("get_project_by_id", project_id)
-
-    def access_row(self, project_id: str) -> dict | None:
-        if self._has("get_project_access_row"):
-            return self._call("get_project_access_row", project_id)
-        return self._call("get_project_by_id", project_id)
-
-    def listing_by_id(self, project_id: str) -> dict | None:
-        if self._has("get_project_listing_by_id"):
-            return self._call("get_project_listing_by_id", project_id)
         return self._call("get_project_by_id", project_id)
 
     def listing(self, owner_user_id: str | None = None) -> list[dict]:

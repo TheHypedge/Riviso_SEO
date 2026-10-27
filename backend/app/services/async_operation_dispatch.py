@@ -105,25 +105,6 @@ def enqueue_topic_cluster_plan_job(
     return _fire_enqueue(job, dedup_key=f"cluster_plan:{project_id}:{cluster_id}")
 
 
-def enqueue_research_ideas_job(
-    *,
-    project_id: str,
-    user_id: str,
-    cache_key: str,
-    payload: dict[str, Any],
-) -> str:
-    job = GenerationJob(
-        kind=GenerationJobKind.RESEARCH_IDEAS,
-        payload={
-            "project_id": project_id,
-            "user_id": user_id,
-            "cache_key": cache_key,
-            **payload,
-        },
-    )
-    return _fire_enqueue(job, dedup_key=f"research:{project_id}:{cache_key}")
-
-
 def new_cluster_plan_id() -> str:
     return f"tc_{uuid.uuid4().hex[:14]}"
 

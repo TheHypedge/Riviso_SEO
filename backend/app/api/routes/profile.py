@@ -76,10 +76,6 @@ async def delete_me(response: Response, user: dict = Depends(get_current_user)) 
 
 
 
-class _UserLookupResult(dict):
-    pass
-
-
 from pydantic import BaseModel as _BM
 
 class UserLookupResponse(_BM):

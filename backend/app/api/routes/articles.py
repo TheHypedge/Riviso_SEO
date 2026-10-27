@@ -23,9 +23,7 @@ import uuid
 import base64
 import unicodedata
 from collections import Counter
-import binascii
-import html
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import re
 import asyncio
 import hashlib
@@ -35,16 +33,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import markdown as md
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 from pymongo.errors import PyMongoError
 
 import httpx
 
 from app.core.config import settings
 from app.core.deps import get_current_user
+from app.services.plan_gatekeeper import consume_article_quota_for_project
 from app.core.ratelimit import limiter
-from app.core.project_lookup import async_require_project_access, require_project_access
-from app.core.ids import user_ids_equal
+from app.core.project_lookup import async_require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.services.storage_db import call_storage
 from app.services.storage_http import raise_storage_http
@@ -55,7 +53,6 @@ from app.services.content_sanitizer import (
 )
 from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient, resolve_featured_media_id, rewrite_inline_media_for_wordpress
-from app.services.shopify_client import ShopifyClient
 from app.services.gsc_actions import inspect_url_status, maybe_request_url_inspection, request_url_inspection_now
 from app.services import indexnow
 from app.services.scheduler import start_scheduled_job_preparation_task
@@ -63,7 +60,6 @@ from app.services.generation_queue import generation_slot, user_generation_slot
 from app.services.to_thread import run_sync
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
 from app.services.schedule_timing import SCHEDULE_TOO_SOON_MESSAGE, is_schedule_time_allowed
-from app.services.prompt_validation import assert_writing_prompt_allowed
 from app.services.article_metadata_suggestion import (
     suggest_metadata_from_idea,
     suggest_metadata_from_source_content,
@@ -94,8 +90,7 @@ from app.services.pipeline_streamer import (
     publish_pipeline_error,
     publish_pipeline_status,
 )
-from app.services.plan_gatekeeper import PlanAction, require_plan_action, require_plan_action_for_project
-from app.services.integrity_engine import AIDetectionAuditor
+from app.services.plan_gatekeeper import PlanAction, require_plan_action_for_project
 from app.core.article_duplicates import normalize_article_title_key as _normalize_article_title_key
 from app.core.article_duplicates import sync_project_title_index as _sync_project_title_index
 from app.schemas.articles import (
@@ -253,42 +248,6 @@ def _derive_listing_status(a: dict) -> str:
             return "published"
         return "scheduled"
     return raw
-
-
-def _fetch_posted_job_overlay_map(st, project_id: str) -> dict[str, dict]:
-    """
-    For articles whose Mongo row missed wp_link/wp_post_id after a scheduled post, the scheduled_jobs
-    row may still hold state=posted + link. Map article_id -> best job doc for list/detail overlay.
-    """
-    pid = (project_id or "").strip()
-    if not pid or not hasattr(st, "load_scheduled_jobs"):
-        return {}
-    try:
-        jobs = (
-            st.load_scheduled_jobs(project_id=pid, state="posted", limit=5000)
-            if hasattr(st, "load_scheduled_jobs")
-            else []
-        ) or []
-    except Exception:
-        return {}
-    best: dict[str, dict] = {}
-    for j in jobs:
-        if not isinstance(j, dict):
-            continue
-        if (j.get("state") or "").strip().lower() != "posted":
-            continue
-        aid = (j.get("article_id") or "").strip()
-        if not aid:
-            continue
-        cur = best.get(aid)
-        if cur is None:
-            best[aid] = j
-            continue
-        jw = (j.get("wp_link") or "").strip()
-        cw = (cur.get("wp_link") or "").strip()
-        if jw and not cw:
-            best[aid] = j
-    return best
 
 
 def _fetch_posted_job_overlay_for_article_ids(
@@ -1759,7 +1718,6 @@ async def get_article_editor_shell(
         raise
     except ValidationError as e:
         _log.warning("get_article_editor_shell validation failed project=%s article=%s: %s", project_id, aid, e)
-        raise HTTPException(status_code=500, detail="Article data could not be serialized") from e
     except Exception as e:
         try:
             raise_storage_http(e)
@@ -1831,7 +1789,6 @@ async def get_article_detail(
             view_article=a_view,
             include_cluster_context=include_cluster,
         )
-        raise HTTPException(status_code=500, detail="Article data could not be serialized") from e
     except Exception as e:
         try:
             raise_storage_http(e)
@@ -2472,45 +2429,6 @@ async def remove_article_featured_image(
     return {"ok": True}
 
 
-class IntegrityMarkdownBody(BaseModel):
-    markdown: str | None = Field(default=None, max_length=500_000)
-
-
-@router.post("/{article_id}/integrity/audit", status_code=200)
-async def audit_article_integrity(
-    project_id: str,
-    article_id: str,
-    payload: IntegrityMarkdownBody | None = None,
-    user: dict = Depends(require_plan_action_for_project(PlanAction.HUMANIZE, consume=False)),
-) -> dict:
-    """
-    Integrity audit (fast heuristics): flags templated / overly-uniform paragraphs.
-    Returns: { ai_percentage, flagged_paragraphs: [{index,text,reason}], metrics }
-    """
-    st = get_legacy_storage_module()
-    await _require_project_access(st=st, user=user, project_id=project_id)
-    a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
-    md_body = ((payload.markdown if payload and payload.markdown else None) or a.get("article") or "").strip()
-    auditor = AIDetectionAuditor()
-    payload = auditor.audit_markdown(md_body)
-    try:
-        persist = getattr(st, "patch_article_fields", None) or st.update_article_fields
-        await run_sync(
-            persist,
-            (article_id or "").strip(),
-            {
-                "integrity_ai_percentage": payload.get("ai_percentage"),
-                "integrity_flagged_paragraphs": payload.get("flagged_paragraphs"),
-                "integrity_last_audited_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-            },
-        )
-    except Exception:
-        pass
-    return payload
-
-
-
-
 def _validate_bulk_schedule_cadence(*, cadence: str | None, parsed: list[tuple[str, str, datetime]]) -> None:
     """Reject weekly/monthly bulk payloads squeezed into same-day minute gaps."""
     cadence_norm = (cadence or "").strip().lower()
@@ -3094,24 +3012,9 @@ async def publish_to_live_site(
             # path that already had no guard before.
             claimed_job_id = None
 
-    # Plan enforcement: publishing consumes per-day / per-month article quota.
-    uid = (user.get("id") or "").strip()
-    role = (user.get("role") or "").strip().lower()
-    if role != "admin" and uid and hasattr(st, "consume_article_usage"):
-        plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
-        plan = {}
-        try:
-            plans = st.load_plans() or {}
-            plan = plans.get(plan_key) if isinstance(plans, dict) else {}
-            if not isinstance(plan, dict):
-                plan = {}
-        except Exception:
-            plan = {}
-        day_lim = plan.get("max_articles_per_day")
-        month_lim = plan.get("max_articles_per_month")
-        ok, msg = st.consume_article_usage(uid, day_limit=day_lim, month_limit=month_lim, amount=1)
-        if not ok:
-            raise HTTPException(status_code=403, detail=msg or "Limit reached for your plan")
+    # Plan enforcement: publishing consumes per-day / per-month article quota (owner's plan
+    # when a collaborator publishes).
+    await run_sync(consume_article_quota_for_project, st, user, project_id)
 
     return await _publish_article_core(
         st=st,
@@ -4038,25 +3941,4 @@ async def monitor_mark(
             pass
     return {"ok": True, "monitor": monitor}
 
-
-@router.post("/{article_id}/monitor/refresh", status_code=501)
-async def monitor_refresh(
-    project_id: str,
-    article_id: str,
-    user: dict = Depends(get_current_user),
-) -> dict:
-    """
-    One-click "Smart Refresh" — regenerate body using updated SERP signals. v1 stub.
-
-    Schema, monitor lifecycle, and "Mark stale" override are already in place; the
-    SERP-diff + regeneration pipeline lands in the follow-up PR.
-    """
-    raise HTTPException(
-        status_code=501,
-        detail=(
-            "Smart Refresh ships in the next iteration. Use the standard Edit / regenerate flow "
-            "in the meantime; once SERP-diff detection is live, this endpoint will return the "
-            "refreshed article without manual intervention."
-        ),
-    )
 

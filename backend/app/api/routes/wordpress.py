@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import base64
 import time
 from datetime import datetime
@@ -67,32 +68,6 @@ def _wp_upstream_error_detail(exc: httpx.HTTPStatusError) -> str:
             "Spaces in the app password are ignored; regenerate the password if unsure."
         )
     return (f"WordPress returned HTTP {code}.{suffix}").strip()
-
-
-async def _wp_get_json(wp: WordpressClient, path: str) -> Any:
-    """Fetch WP REST JSON; never crash the ASGI worker on timeouts / network errors."""
-    try:
-        return await wp.get_json(path, timeout=_WP_REST_TIMEOUT_S)
-    except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=504,
-            detail="WordPress REST API timed out (slow or overloaded site). Retry in a moment.",
-        ) from None
-    except httpx.HTTPStatusError as e:
-        code = e.response.status_code
-        detail = _wp_upstream_error_detail(e)
-        # Do not map WP 401 to HTTP 401 here: our SPA treats any API 401 as JWT expiry and refreshes the session.
-        if code in (401, 403):
-            raise HTTPException(status_code=403, detail=detail) from None
-        if code == 404:
-            raise HTTPException(status_code=404, detail=detail) from None
-        if code == 429:
-            raise HTTPException(status_code=429, detail=detail) from None
-        if code >= 500:
-            raise HTTPException(status_code=502, detail=detail) from None
-        raise HTTPException(status_code=400, detail=detail) from None
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=503, detail=f"Could not reach WordPress: {e}") from None
 
 
 async def _wp_try_get_json(wp: WordpressClient, paths: tuple[str, ...]) -> Any | None:
@@ -564,10 +539,10 @@ async def download_plugin(user: dict = Depends(get_current_user)) -> Response:
     try:
         data, filename = build_plugin_zip_bytes()
         version = get_plugin_version()
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-    except ValueError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    except (FileNotFoundError, ValueError) as e:
+        # The message names server paths/bundle internals -- log it, don't return it.
+        logging.getLogger(__name__).exception("Plugin package build failed")
+        raise HTTPException(status_code=500, detail="The plugin package is unavailable right now.") from e
     headers = {
         "content-disposition": f'attachment; filename="{filename}"',
         "cache-control": "no-store, no-cache, must-revalidate",

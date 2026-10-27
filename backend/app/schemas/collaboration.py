@@ -11,14 +11,6 @@ class CollaboratorRole(str, Enum):
     viewer = "viewer"
 
 
-class InvitationStatus(str, Enum):
-    pending = "pending"
-    accepted = "accepted"
-    declined = "declined"
-    cancelled = "cancelled"
-    expired = "expired"
-
-
 class CollaboratorPublic(BaseModel):
     id: str
     project_id: str

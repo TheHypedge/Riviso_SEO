@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import logging
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -26,9 +28,11 @@ from app.services.async_operation_dispatch import (
     new_cluster_plan_id,
     should_use_async_queue,
 )
-from app.services.plan_gatekeeper import PlanAction, require_plan_action, require_plan_action_for_project
+from app.services.plan_gatekeeper import PlanAction, require_plan_action_for_project
 from app.services.topic_cluster_service import TopicClusterService
 
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/projects/{project_id}/topic-clusters", tags=["topic-clusters"])
 
@@ -163,7 +167,8 @@ async def plan_cluster(
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cluster planning failed: {e}") from e
+        _log.exception("Cluster planning failed for project=%s", project_id)
+        raise HTTPException(status_code=500, detail="Cluster planning failed. Please try again.") from e
 
 
 @router.get("/{cluster_id}")
@@ -270,7 +275,8 @@ async def generate_all(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cluster generation failed: {e}") from e
+        _log.exception("Cluster generation failed for project=%s", project_id)
+        raise HTTPException(status_code=500, detail="Cluster generation failed. Please try again.") from e
 
 
 class TopicClusterImportPayload(BaseModel):
@@ -320,4 +326,5 @@ async def import_topics(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cluster import failed: {e}") from e
+        _log.exception("Cluster import failed for project=%s", project_id)
+        raise HTTPException(status_code=500, detail="Cluster import failed. Please try again.") from e

@@ -145,29 +145,6 @@ async def refresh_project_token_if_needed(
     return merged
 
 
-async def resolve_project_access_token(proj: dict) -> str:
-    """
-    Return a valid Admin API access token for the project.
-    Refreshes via client credentials when client ID/secret are stored and token is expired.
-    """
-    token = (proj.get("shopify_access_token") or "").strip()
-    shop = (proj.get("shopify_shop") or "").strip()
-    client_id = (proj.get("shopify_client_id") or "").strip()
-    client_secret = (proj.get("shopify_client_secret") or "").strip()
-
-    if not token or not shop:
-        return ""
-    if not client_id or not client_secret or not token_expired(proj):
-        return token
-
-    exchanged = await exchange_client_credentials(
-        shop=shop,
-        client_id=client_id,
-        client_secret=client_secret,
-    )
-    return (exchanged.get("access_token") or "").strip()
-
-
 def credential_update_fields(
     *,
     shop: str,
