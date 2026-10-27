@@ -22,6 +22,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
+from razorpay.errors import BadRequestError
+
 log = logging.getLogger(__name__)
 
 _MILESTONES = [
@@ -155,6 +157,11 @@ async def reconcile_pending_payments(st, *, older_than_minutes: int = 15) -> Non
             continue
         try:
             order = await run_sync(razorpay_client.fetch_order, order_id)
+        except BadRequestError as exc:
+            # The order doesn't exist for the current keys -- e.g. a test-mode order left over
+            # after switching to live keys. It can never be paid; close it instead of retrying
+            # (and logging) on every sweep forever.
+            order = {"status": f"not_found ({exc})"[:120]}
         except Exception as exc:
             log.warning("subscription_reconcile: fetch_order failed for %s: %s", order_id, exc)
             continue

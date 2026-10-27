@@ -114,6 +114,17 @@ def run_startup_checks(settings: Settings) -> None:
             "Set the webhook secret from the Razorpay dashboard before starting in production."
         )
 
+    # Fatal: Razorpay TEST keys in production would let anyone "buy" a plan with Razorpay's
+    # public test card numbers -- the signature verifies against the test secret, so the
+    # plan activates for free. RAZORPAY_ALLOW_TEST_KEYS=1 is an explicit, temporary opt-out.
+    if (settings.razorpay_key_id or "").strip().startswith("rzp_test_") and not _env_flag_enabled(
+        "RAZORPAY_ALLOW_TEST_KEYS"
+    ):
+        raise RuntimeError(
+            "PRODUCTION: RAZORPAY_KEY_ID is a test-mode key (rzp_test_...). Test payments would "
+            "activate paid plans for free. Use live keys (rzp_live_...) or set RAZORPAY_ALLOW_TEST_KEYS=1."
+        )
+
     if not settings.cookie_secure:
         log.warning(
             "PRODUCTION: COOKIE_SECURE is false. Set COOKIE_SECURE=true when serving the API over HTTPS."

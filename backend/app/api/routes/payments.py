@@ -316,10 +316,30 @@ async def razorpay_webhook(request: Request) -> dict:
     payment_id = (entity.get("id") or "").strip()
 
     if event == "payment.captured" and order_id:
-        try:
-            await _mark_payment_paid(order_id=order_id, payment_id=payment_id, signature=None)
-        except HTTPException:
+        existing = await run_sync(st.get_payment_by_order_id, order_id)
+        if not existing:
             log.warning("razorpay webhook: payment.captured for unknown order_id=%s", order_id)
+            return {"ok": True}
+        # Defense in depth: the order amount is fixed server-side and Razorpay enforces it,
+        # but never grant a plan unless what was actually captured matches our record.
+        captured_ok = (
+            (entity.get("status") or "") == "captured"
+            and int(entity.get("amount") or 0) == int(existing.get("amount_paise") or 0)
+            and (entity.get("currency") or "").upper() == (existing.get("currency") or "INR").upper()
+        )
+        if not captured_ok:
+            log.error(
+                "razorpay webhook: captured payment does not match order=%s (amount=%s currency=%s status=%s)",
+                order_id, entity.get("amount"), entity.get("currency"), entity.get("status"),
+            )
+            if existing.get("status") != "paid":
+                await run_sync(
+                    st.update_payment_fields,
+                    order_id,
+                    {"status": "failed", "failure_reason": "captured_amount_mismatch", "updated_at": _now_iso()},
+                )
+            return {"ok": True}
+        await _mark_payment_paid(order_id=order_id, payment_id=payment_id, signature=None)
     elif event == "payment.failed" and order_id:
         reason = entity.get("error_description") or entity.get("error_reason") or "payment_failed"
         try:

@@ -12,3 +12,7 @@ import os
 os.environ["MONGODB_URI"] = "mongodb://127.0.0.1:9/riviso-tests-blocked?serverSelectionTimeoutMS=500"
 os.environ["MONGODB_DB_NAME"] = "riviso_tests_blocked"
 os.environ.setdefault("FORCE_JSON_STORAGE", "1")
+# The local backend/.env may carry Razorpay test keys with ENVIRONMENT=production; the
+# production boot check refuses those (by design). Tests never take real payments, so opt
+# out explicitly here -- test_razorpay_live_hardening.py covers the check itself.
+os.environ.setdefault("RAZORPAY_ALLOW_TEST_KEYS", "1")
