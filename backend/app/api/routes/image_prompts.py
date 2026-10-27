@@ -23,6 +23,7 @@ from app.schemas.prompts import (
     PromptUpdate,
     SetDefaultRequest,
 )
+from app.services.seo_guardrails import image_niche_from_identifier
 from app.services.article_generation import generate_featured_image_only
 from app.services.cloudinary_storage import upload_image_bytes
 from app.services.generation_queue import generation_slot, user_generation_slot
@@ -260,7 +261,7 @@ async def test_image_prompt(
                 gen = await generate_featured_image_only(
                     title=_TEST_TITLE,
                     keywords=[],
-                    focus_keyphrase=(proj.get("niche_identifier") or "").strip() or _TEST_FOCUS_KEYPHRASE,
+                    focus_keyphrase=image_niche_from_identifier(proj.get("niche_identifier")) or _TEST_FOCUS_KEYPHRASE,
                     brand_identity=(proj.get("brand_identity") or ""),
                     niche_identifier=(proj.get("niche_identifier") or ""),
                     image_prompt_text=text,

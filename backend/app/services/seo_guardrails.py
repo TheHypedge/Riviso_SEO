@@ -152,6 +152,54 @@ def _truncate_to_token_budget(text: str, max_tokens: int) -> str:
     return cut.strip()
 
 
+# Same "no text/logos" guardrails without forcing a medium -- used when the project's image
+# prompt asks for a non-photographic style, so "photograph" never fights "flat illustration".
+NEUTRAL_IMAGE_STYLE_SUFFIX: Final[str] = (
+    "Clean composition, sharp focus, no text overlays, no logos, no watermarks, no UI elements."
+)
+
+_NON_PHOTO_STYLE = re.compile(
+    r"\b(?:illustrat\w*|vector|cartoon\w*|anime|3d|render(?:ed|ing)?|watercolou?r|sketch\w*|"
+    r"line[- ]?art|flat (?:design|style|art)|isometric|infographic|clip ?art|painting|"
+    r"pixel art|low[- ]poly|doodle|comic)\b",
+    re.IGNORECASE,
+)
+
+# Labels written by the Project Settings structured fields (projects._derive_*_text).
+_CONTEXT_LABELS = re.compile(r"\b(Niche|Audience|Target countries|Target cities|Voice|Tones|Rules):\s*")
+
+
+def _labelled_segments(text: str) -> dict[str, str]:
+    matches = list(_CONTEXT_LABELS.finditer(text or ""))
+    out: dict[str, str] = {}
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        out[m.group(1)] = text[m.end():end].strip().rstrip(".").strip()
+    return out
+
+
+def image_niche_from_identifier(niche_identifier: str | None) -> str:
+    """Only the niche topic is useful to an image model -- audience, countries and cities are
+    writing instructions and just add tokens. Legacy free text: its first sentence."""
+    ni = (niche_identifier or "").strip()
+    if not ni:
+        return ""
+    segs = _labelled_segments(ni)
+    if segs:
+        return segs.get("Niche", "")[:160]
+    return re.split(r"(?<=[.!?])\s", ni, maxsplit=1)[0][:160]
+
+
+def image_mood_from_brand(brand_identity: str | None) -> str:
+    """Only the brand voice carries over to a picture (as mood); tones/rules are prose rules."""
+    return _labelled_segments((brand_identity or "").strip()).get("Voice", "")[:60]
+
+
+def image_style_suffix(image_prompt_text: str | None) -> str:
+    custom = image_prompt_text or ""
+    return NEUTRAL_IMAGE_STYLE_SUFFIX if _NON_PHOTO_STYLE.search(custom) else STATIC_IMAGE_STYLE_SUFFIX
+
+
 def build_programmatic_image_prompt(
     *,
     title: str,
@@ -165,25 +213,26 @@ def build_programmatic_image_prompt(
     Build the final image-generation prompt from the selected image prompt plus
     server-owned article, brand, and niche context.
 
-    The user-authored image prompt is only style/visual direction. Brand/niche
-    context is appended here every time, so saved prompts cannot omit project
-    identity or drift into non-image tasks.
+    The user-authored image prompt is only style/visual direction. Project context is reduced
+    to what an image model can use (niche topic + brand voice as mood) -- rules, audience,
+    countries and cities are writing instructions and would only add tokens or contradict the
+    style. Order is by importance, so the token-budget cut only ever trims the tail.
     """
     parts: list[str] = []
-    custom = (image_prompt_text or "").strip()
-    if custom:
-        parts.append(f"Image prompt instructions: {custom[:1200]}")
     fk = (focus_keyphrase or "").strip()
     if fk:
         parts.append(f"Subject: {fk}")
-    ni = (niche_identifier or "").strip()
-    if ni:
-        parts.append(f"Industry niche: {ni}")
-    bi = (brand_identity or "").strip()
-    if bi:
-        parts.append(f"Brand context: {bi[:200]}")
+    custom = (image_prompt_text or "").strip()
+    if custom:
+        parts.append(f"Style: {custom[:400]}")
+    niche = image_niche_from_identifier(niche_identifier)
+    if niche:
+        parts.append(f"Context: {niche}")
+    mood = image_mood_from_brand(brand_identity)
+    if mood:
+        parts.append(f"Mood: {mood.lower()}")
     tt = (title or "").strip()
-    if tt:
+    if tt and tt.lower() != fk.lower():
         parts.append(f"Article title: {tt[:200]}")
     kws = [str(x).strip() for x in (keywords or []) if str(x).strip()][:10]
     if kws:
@@ -195,7 +244,7 @@ def build_programmatic_image_prompt(
     if not core:
         core = (fk or tt or "Professional editorial topic")[:120]
 
-    return f"{core}\n\n{STATIC_IMAGE_STYLE_SUFFIX}"
+    return f"{core}\n\n{image_style_suffix(custom)}"
 
 
 def validate_seo_writing_domain(text: str, *, user_id: str | None = None) -> None:

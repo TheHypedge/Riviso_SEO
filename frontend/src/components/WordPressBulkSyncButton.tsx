@@ -6,9 +6,22 @@ import styles from "@/app/page.module.css";
 import { api } from "@/lib/api";
 
 /** Pull the current WordPress state (status, link, SEO meta) into every linked article. */
-export function WordPressBulkSyncButton({ projectId, disabled }: { projectId: string; disabled?: boolean }) {
+export function WordPressBulkSyncButton({
+  projectId,
+  disabled,
+  className,
+  onMessage,
+}: {
+  projectId: string;
+  disabled?: boolean;
+  className?: string;
+  /** When given, the result is reported to the parent instead of rendered inline. */
+  onMessage?: (msg: string | null) => void;
+}) {
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [ownMsg, setOwnMsg] = useState<string | null>(null);
+  const setMsg = onMessage ?? setOwnMsg;
+  const msg = onMessage ? null : ownMsg;
 
   async function run() {
     setBusy(true);
@@ -31,13 +44,13 @@ export function WordPressBulkSyncButton({ projectId, disabled }: { projectId: st
   return (
     <>
       <button
-        className={styles.button}
+        className={className ?? styles.button}
         type="button"
         onClick={() => void run()}
         disabled={busy || disabled}
         title="Pull status, link and SEO fields from WordPress for every article already published there."
       >
-        {busy ? "Syncing…" : "Sync articles from WordPress"}
+        {busy ? "Syncing…" : "Sync from WordPress"}
       </button>
       {msg ? (
         <span className={styles.muted} style={{ fontSize: 13, flexBasis: "100%" }} role="status">

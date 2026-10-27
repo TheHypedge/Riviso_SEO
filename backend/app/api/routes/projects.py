@@ -138,8 +138,10 @@ def _derive_niche_text(
         if country_codes:
             names = [_country_display(c) for c in country_codes]
             parts.append("Target countries: " + ", ".join(names) + ".")
-    if cities_all:
-        parts.append("Target cities: all major cities in the listed countries.")
+    if cities_all and not countries_all:
+        # "All major cities" only means something next to a concrete country list;
+        # for global targeting the countries line already says everything.
+        parts.append("Target cities: all major cities in the target countries.")
     else:
         clean_cities = [str(c).strip() for c in (cities or []) if str(c).strip()][:500]
         if clean_cities:

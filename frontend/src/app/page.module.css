@@ -2344,35 +2344,6 @@
   text-overflow: ellipsis;
 }
 
-.articlesTableCategorySelect {
-  width: 100%;
-  min-width: 0;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--aa-hairline);
-  border-radius: 6px;
-  color: var(--aa-body-strong);
-  font-size: 12px;
-  font-family: inherit;
-  padding: 4px 22px 4px 7px;
-  cursor: pointer;
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a09d96' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 6px center;
-  background-size: 10px 6px;
-  transition: border-color 0.15s ease;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
-
-.articlesTableCategorySelect:focus {
-  outline: none;
-  border-color: var(--aa-primary);
-}
-
 .articlesTableCategoryDirty {
   border-color: var(--aa-primary);
   background-color: rgba(217, 119, 87, 0.08);
@@ -3967,11 +3938,11 @@
   border: 0;
 }
 
-.projectSwitcherCaption {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--aa-muted);
-  padding: 0 2px;
+.projectSwitcherLabelRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
 .projectSwitcherField {
@@ -7315,17 +7286,6 @@
   border-color: color-mix(in oklab, #2f6bff, transparent 55%);
 }
 
-/* Stacks the credentials pill and the plugin pill in the header so they
- * read top-to-bottom on the right side of the WordPress connection card.
- * Falls into a single column on narrow screens (below tablet width). */
-.wpStatusPillStack {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
 .wpConnectionActions {
   display: flex;
   flex-wrap: wrap;
@@ -7335,103 +7295,19 @@
   margin-top: 14px;
 }
 
-.wpVerifyResultOk {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in oklab, var(--aa-success), transparent 55%);
-  background: color-mix(in oklab, var(--aa-success), transparent 82%);
-  color: var(--aa-body-strong, var(--aa-ink));
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.wpVerifyResultErr {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in oklab, #b53d29, transparent 50%);
-  background: color-mix(in oklab, #b53d29, transparent 78%);
-  color: #ffe1dc;
-  font-size: 13px;
-  line-height: 1.55;
-}
-
 /* ---------------------------------------------------------------------------
  * Structured Brand identity & Niche editor (Project Settings).
  *
  * Used to render the chip-style multi-selects that replaced the two free-text
  * brand/niche textareas. Every field has a clear label, generous padding, and
  * states that match the rest of the Project Settings card (light hairline
- * borders, off-white labels, soft surface fill).
- * --------------------------------------------------------------------------- */
-
-.brandSection {
+ * borders, off-white labels{
   display: flex;
   flex-direction: column;
   gap: 14px;
   margin-top: 14px;
   border-top: 1px solid var(--button-secondary-border);
   padding-top: 14px;
-}
-
-.brandSectionTitle {
-  color: var(--aa-ink);
-  font-size: 14px;
-  font-weight: 900;
-  margin: 0;
-}
-
-.brandSectionSub {
-  color: var(--aa-muted);
-  font-size: 12.5px;
-  line-height: 1.55;
-  margin: 0;
-}
-
-.brandFieldGrid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-@media (max-width: 720px) {
-  .brandFieldGrid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.brandFieldLabel {
-  color: var(--aa-body-strong, var(--aa-ink));
-  font-size: 12.5px;
-  font-weight: 700;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.brandFieldHelp {
-  color: var(--aa-muted);
-  font-size: 11.5px;
-  font-weight: 500;
-  line-height: 1.45;
-}
-
-.chipPickerBox {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px;
-  border-radius: 10px;
-  border: 1px solid var(--aa-hairline);
-  background: color-mix(in oklab, var(--aa-surface-soft), transparent 35%);
-  min-height: 44px;
-}
-
-.chipPickerEmpty {
-  color: var(--aa-muted);
-  font-size: 12px;
-  padding: 4px 6px;
 }
 
 .chipOption {
@@ -7467,55 +7343,6 @@
   font-size: 13px;
   margin-left: 2px;
   opacity: 0.85;
-}
-
-.chipFreeRow {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.chipFreeInput {
-  flex: 1;
-  padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--aa-hairline);
-  background: var(--aa-surface);
-  color: var(--aa-ink);
-  font-size: 13px;
-}
-.chipFreeInput:focus {
-  outline: none;
-  border-color: color-mix(in oklab, var(--aa-primary), transparent 50%);
-}
-
-.chipFreeAddBtn {
-  padding: 8px 14px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in oklab, var(--aa-primary), transparent 60%);
-  background: color-mix(in oklab, var(--aa-primary), transparent 65%);
-  color: var(--aa-primary);
-  font-size: 12.5px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.chipFreeAddBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.brandToggleRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12.5px;
-  color: var(--aa-body-strong, var(--aa-ink));
-  font-weight: 600;
-}
-.brandToggleRow input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--aa-primary);
 }
 
 /* ---------------------------------------------------------------------------
@@ -7714,8 +7541,28 @@
   }
 }
 
-.settingsFieldFull {
-  grid-column: 1 / -1;
+/* WordPress defaults: post type · status · categories on one row (categories widest). */
+.wpDefaultsGrid {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(130px, 0.8fr) minmax(260px, 2fr);
+  gap: 14px 16px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+@media (max-width: 860px) {
+  .wpDefaultsGrid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .wpDefaultsGrid > :last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .wpDefaultsGrid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settingsFieldLabel {
@@ -7730,57 +7577,9 @@
 
 .settingsFieldLabel .input,
 .settingsFieldLabel select,
-.settingsFieldLabel textarea,
-.settingsFieldLabel .chipFreeInput {
+.settingsFieldLabel textarea {
   font-weight: 500;
   color: var(--aa-body-strong);
-}
-
-.settingsLockedBanner {
-  padding: 14px 16px;
-  border-radius: var(--aa-r-md);
-  border: 1px solid color-mix(in oklab, var(--aa-warning), transparent 48%);
-  background: color-mix(in oklab, var(--aa-warning), transparent 90%);
-  color: color-mix(in oklab, var(--aa-body-strong), #fff 6%);
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.settingsLockedBanner strong {
-  color: var(--aa-body-strong);
-}
-
-.settingsInfoCard {
-  padding: 16px 20px;
-  border-radius: var(--aa-r-lg);
-  border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%);
-  background: var(--aa-surface-soft);
-}
-
-.settingsInfoCardTitle {
-  margin: 0 0 6px;
-  font-size: 14px;
-  font-weight: 750;
-  color: var(--aa-body-strong);
-}
-
-.settingsInfoCardDesc {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.55;
-  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 22%);
-}
-
-.settingsInfoLink {
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--aa-primary);
-  font: inherit;
-  font-weight: 650;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-  cursor: pointer;
 }
 
 .settingsDangerCard {
@@ -7902,12 +7701,6 @@
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 30%);
 }
 
-.settingsChipScroll {
-  max-height: 200px;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-}
-
 .settingsChipRegionLabel {
   display: block;
   width: 100%;
@@ -7919,52 +7712,10 @@
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 30%);
 }
 
-.settingsPage .brandSection {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: none;
-  gap: 18px;
-}
-
-.settingsPage .brandSectionTitle {
-  color: var(--aa-body-strong);
-  font-size: 17px;
-  font-weight: 750;
-}
-
-.settingsPage .brandSectionSub {
-  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 22%);
-  font-size: 13px;
-}
-
-.settingsPage .brandFieldHelp {
-  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 28%);
-  font-size: 12px;
-}
-
-.settingsPage .brandFieldLabel {
-  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 10%);
-}
-
-.settingsPage .chipPickerBox {
-  background: var(--aa-surface-soft);
-  border-color: color-mix(in oklab, var(--aa-hairline), transparent 10%);
-}
-
 .settingsPage .chipOption {
   color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 15%);
   background: var(--aa-surface-card);
   border-color: color-mix(in oklab, var(--aa-hairline), transparent 15%);
-}
-
-.settingsPage .chipPickerEmpty {
-  color: color-mix(in oklab, var(--aa-body-strong), var(--aa-muted) 32%);
-}
-
-.settingsPage .chipFreeInput {
-  background: var(--aa-surface-soft);
-  color: var(--aa-body-strong);
-  border-color: color-mix(in oklab, var(--aa-hairline), transparent 12%);
 }
 
 .settingsPage .clusterCardSubtitle {
@@ -12173,4 +11924,79 @@ a.secondary {
   .siteAuditChip,
   .siteAuditMetricChip,
   .siteAuditIconButton { transition: none; }
+}
+
+/* Delete-project confirmation (GitHub-style typed phrase). */
+.deleteModal {
+  max-width: 480px;
+}
+
+.deleteWarning {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--aa-r-md);
+  border: 1px solid color-mix(in oklab, var(--aa-error), transparent 65%);
+  background: color-mix(in oklab, var(--aa-error), transparent 92%);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--aa-body-strong, var(--aa-ink));
+}
+.deleteWarning strong {
+  color: var(--aa-error);
+}
+
+.deleteList {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 16px;
+  margin: 2px 0 0;
+  padding-left: 18px;
+  color: color-mix(in oklab, var(--aa-body-strong, var(--aa-ink)), var(--aa-muted) 25%);
+}
+
+.deleteConfirmLabel {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--aa-body-strong, var(--aa-ink));
+}
+
+.deletePhrase {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--aa-surface-soft);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+  font-weight: 600;
+  user-select: all;
+}
+
+.deleteModal .modalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.deleteActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+@media (max-width: 480px) {
+  .deleteList {
+    grid-template-columns: 1fr;
+  }
+  .deleteActions {
+    flex-direction: column-reverse;
+  }
+}
+
+/* Project Settings → Integrations: Search Console, Sitemaps, IndexNow, Internal linking. */
+.integrationsStack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }

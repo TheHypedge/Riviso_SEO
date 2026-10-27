@@ -9,7 +9,7 @@ import styles from "../../page.module.css";
 import { formatDayMonYearTime } from "@/lib/dateFormat";
 import InnerImageCountField from "@/components/InnerImageCountField";
 import projectsDark from "../projectsDark.module.css";
-import { CategorySelect } from "@/components/CategorySelect";
+import { CategoryMultiSelect } from "@/components/wordpress/CategoryMultiSelect";
 import { ArticlesOverview } from "@/components/ArticlesOverview";
 import { ArticlesTableSkeleton, FormFieldsSkeleton, InlineListSkeleton, TextLinesSkeleton } from "@/components/skeleton";
 import { BulkScheduleForm, type BulkScheduleFormValues } from "@/components/bulkSchedule/BulkScheduleForm";
@@ -75,12 +75,6 @@ import {
   TopicCluster,
 } from "@/lib/api";
 import { COUNTRIES, DEFAULT_COUNTRY_CODE } from "@/lib/countries";
-import {
-  AUDIENCE_PRESETS,
-  BRAND_TONES,
-  BRAND_VOICES,
-  citiesForCountry,
-} from "@/lib/brand_dictionaries";
 import { useClusterValidation, type ValidatableTopic } from "@/hooks/useClusterValidation";
 import { parseDatetimeLocal } from "@/lib/bulkScheduleDates";
 import { scheduleMinFromNowMs } from "@/lib/scheduleTiming";
@@ -89,7 +83,12 @@ import { ShopifyProjectSettings } from "@/components/ShopifyProjectSettings";
 import { IndexNowSettings } from "@/components/IndexNowSettings";
 import { GscSitemapsCard } from "@/components/GscSitemapsCard";
 import { ProjectActivityCard } from "@/components/ProjectActivityCard";
-import { WordPressBulkSyncButton } from "@/components/WordPressBulkSyncButton";
+import { WordPressConnectionSection } from "@/components/wordpress/WordPressConnectionSection";
+import { ContentTargetingSection } from "@/components/settings/ContentTargetingSection";
+import { Hint } from "@/components/settings/Hint";
+import { DeleteProjectDialog } from "@/components/settings/DeleteProjectDialog";
+import { SearchConsoleSection } from "@/components/settings/SearchConsoleSection";
+import { SiteMapSection } from "@/components/settings/SiteMapSection";
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
 import { isProjectConnected, resolveProjectPlatform } from "@/lib/projectPlatform";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
@@ -144,7 +143,6 @@ const SIDEBAR_TAB_ORDER: TabKey[] = [
   "scheduled_articles",
   "prompts",
   "context_links",
-  "tools",
   "social",
   "members",
   "project_settings",
@@ -160,7 +158,7 @@ const SIDEBAR_TAB_ORDER: TabKey[] = [
  * checks, not a growing list of top-level items. */
 const NAV_GROUPS: { label: string; tabs: TabKey[] }[] = [
   { label: "Content", tabs: ["overview", "articles", "research", "scheduled_articles", "prompts", "context_links", "social"] },
-  { label: "Workspace", tabs: ["tools", "site_audit", "members", "project_settings"] },
+  { label: "Workspace", tabs: ["site_audit", "members", "project_settings"] },
 ];
 
 const RESEARCH_SUBTAB_KEYS: ReadonlySet<ResearchSubTabKey> = new Set<ResearchSubTabKey>([
@@ -344,6 +342,8 @@ type PersistedResearchState = {
   intent: ResearchIntent;
   tone: ResearchTone;
   country: string;
+  /** True once the user picked the Research country themselves (otherwise it follows the project's first target country). */
+  countryChosen?: boolean;
   language: string;
   filter: ResearchFilter;
 };
@@ -513,6 +513,8 @@ export default function ProjectPage() {
   // of the ~1200 lines of settings logic inside those groups.
   type SettingsSubTab = "connection" | "content" | "integrations" | "danger";
   const [settingsSubTab, setSettingsSubTab] = useState<SettingsSubTab>("connection");
+  // Search Console, IndexNow, sitemaps and the site map live in Project Settings → Integrations.
+  const integrationsOpen = tab === "project_settings" && settingsSubTab === "integrations";
   const [overviewArticles, setOverviewArticles] = useState<ArticlePublic[]>([]);
   const [overviewScheduledJobs, setOverviewScheduledJobs] = useState<import("@/lib/api").ScheduledJobPublic[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(false);
@@ -638,7 +640,6 @@ export default function ProjectPage() {
   const [settingsVerify, setSettingsVerify] = useState<import("@/lib/api").WordpressVerifyResponse | null>(null);
   const [settingsVerifying, setSettingsVerifying] = useState(false);
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
-  const confirmDeleteProjectTrapRef = useFocusTrap(confirmDeleteProject);
   const [deletingProject, setDeletingProject] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone: "success" | "error" } | null>(null);
   const toastTimerRef = useRef<number | null>(null);
@@ -707,7 +708,6 @@ export default function ProjectPage() {
   const [sSchemaMarkupEnabled, setSSchemaMarkupEnabled] = useState(true);
   const [sWpUser, setSWpUser] = useState("");
   const [sWpPass, setSWpPass] = useState("");
-  const [showWpAppPassword, setShowWpAppPassword] = useState(false);
   const [sWpDefaultPostType, setSWpDefaultPostType] = useState("posts");
   const [sWpDefaultStatus, setSWpDefaultStatus] = useState<"draft" | "publish">("draft");
   const [sWpDefaultCategoryIds, setSWpDefaultCategoryIds] = useState<number[]>([]);
@@ -720,13 +720,10 @@ export default function ProjectPage() {
   // Structured Niche identifier inputs.
   const [nicheTopic, setNicheTopic] = useState("");
   const [audienceList, setAudienceList] = useState<string[]>([]);
-  const [audienceCustomDraft, setAudienceCustomDraft] = useState("");
   const [targetCountries, setTargetCountries] = useState<string[]>([]);
   const [targetCountriesAll, setTargetCountriesAll] = useState(false);
   const [targetCitiesAll, setTargetCitiesAll] = useState(false);
   const [targetCities, setTargetCities] = useState<string[]>([]);
-  const [cityCustomDraft, setCityCustomDraft] = useState("");
-  const [countryFilter, setCountryFilter] = useState("");
   const [settingsPostTypes, setSettingsPostTypes] = useState<import("@/lib/api").WordpressPostType[]>([]);
   const [settingsCategories, setSettingsCategories] = useState<import("@/lib/api").WordpressCategory[]>([]);
   const [gscStatus, setGscStatus] = useState<import("@/lib/api").ProjectGscStatus | null>(null);
@@ -1104,6 +1101,7 @@ export default function ProjectPage() {
   const [researchSeeds, setResearchSeeds] = useState<string[]>([]);
   const [researchSeedInput, setResearchSeedInput] = useState("");
   const [researchCountry, setResearchCountry] = useState(DEFAULT_COUNTRY_CODE);
+  const [researchCountryChosen, setResearchCountryChosen] = useState(false);
   const [researchLanguage, setResearchLanguage] = useState("en");
   const [researchBusy, setResearchBusy] = useState(false);
   const [researchGeneratingMore, setResearchGeneratingMore] = useState(false);
@@ -1371,6 +1369,7 @@ export default function ProjectPage() {
       if (persisted.intent) setResearchIntent(persisted.intent);
       if (persisted.tone) setResearchTone(persisted.tone);
       if (persisted.country) setResearchCountry(persisted.country);
+      setResearchCountryChosen(Boolean(persisted.countryChosen));
       if (persisted.language) setResearchLanguage(persisted.language);
       if (persisted.filter) setResearchFilter(persisted.filter);
     }
@@ -1430,6 +1429,7 @@ export default function ProjectPage() {
       intent: researchIntent,
       tone: researchTone,
       country: researchCountry,
+      countryChosen: researchCountryChosen,
       language: researchLanguage,
       filter: researchFilter,
     });
@@ -1443,9 +1443,18 @@ export default function ProjectPage() {
     researchIntent,
     researchTone,
     researchCountry,
+    researchCountryChosen,
     researchLanguage,
     researchFilter,
   ]);
+
+  // Research / Topic Cluster country follows the project's first target country until the
+  // user picks one in Research themselves (Project Settings → Content & targeting).
+  const firstTargetCountry = ((projectMeta?.target_countries || []) as string[])[0]?.toUpperCase() || "";
+  useEffect(() => {
+    if (!researchHydrated || researchCountryChosen || !firstTargetCountry) return;
+    if (COUNTRIES.some((c) => c.code === firstTargetCountry)) setResearchCountry(firstTargetCountry);
+  }, [researchHydrated, researchCountryChosen, firstTargetCountry]);
 
   useEffect(() => {
     if (!token) {
@@ -2214,9 +2223,6 @@ export default function ProjectPage() {
       setTargetCountriesAll(Boolean(pm?.target_countries_all));
       setTargetCitiesAll(Boolean(pm?.target_cities_all));
       setTargetCities(((pm?.target_cities || []) as string[]).slice());
-      setAudienceCustomDraft("");
-      setCityCustomDraft("");
-      setCountryFilter("");
       setSWpDefaultPostType((s.default_wp_rest_base || "posts") as string);
       setSWpDefaultStatus(((s.default_wp_status || "draft") as "draft" | "publish"));
       setSWpDefaultCategoryIds((s.default_wp_category_ids || []) as number[]);
@@ -3174,20 +3180,20 @@ export default function ProjectPage() {
 
   useEffect(() => {
     if (!token) return;
-    if (tab !== "tools") return;
+    if (!integrationsOpen) return;
     setGscSaveMsg(null);
     setGscMsg(null);
     void reloadGscForProject({ showLoading: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, tab, token]);
+  }, [projectId, integrationsOpen, token]);
 
-  // Feature 1: load analytics when the Tools tab is open AND a property is linked —
+  // Feature 1: load analytics when Integrations is open AND a property is linked —
   // feeds the Overview tab's ``gscTotals`` card too, since it's the same ``analytics``
   // state. The Performance & Analysis tab that used to be its other trigger was removed
   // (no Figma coverage; see quirky-nibbling-owl.md step 10).
   useEffect(() => {
     if (!token) return;
-    if (tab !== "tools") return;
+    if (!integrationsOpen) return;
     if (!gscStatus?.connected || !gscStatus?.property_url) {
       setAnalytics(null);
       setAnalyticsErr(null);
@@ -3200,7 +3206,7 @@ export default function ProjectPage() {
     }
     void reloadAnalytics();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, tab, token, gscStatus?.connected, gscStatus?.property_url, analyticsRangePreset]);
+  }, [projectId, integrationsOpen, token, gscStatus?.connected, gscStatus?.property_url, analyticsRangePreset]);
 
   // Load Technical Audit when the Site Audit tab is first opened for this project.
   // Refreshing the browser must not trigger a new PageSpeed run -- only /latest here.
@@ -3230,13 +3236,13 @@ export default function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, tab, siteAuditSubTab, token]);
 
-  // Feature 3: load the stored site map whenever Tools opens. Sync is manual (button).
+  // Feature 3: load the stored site map whenever Integrations opens. Sync is manual (button).
   useEffect(() => {
     if (!token) return;
-    if (tab !== "tools") return;
+    if (!integrationsOpen) return;
     void reloadSiteMap({ silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, tab, token]);
+  }, [projectId, integrationsOpen, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -3421,7 +3427,7 @@ export default function ProjectPage() {
           window.history.replaceState({}, "", url.toString());
         }
       } else if (flag === "connected" || flag === "error") {
-        setTab("tools");
+        setTab("tools"); // redirected to Project Settings → Integrations below
         if (flag === "connected") {
           setGscOpenedFromOAuth(true);
           setGscMsg(null);
@@ -5019,6 +5025,13 @@ export default function ProjectPage() {
     social: "Social",
   };
 
+  // "tools" survives only as a legacy alias (old bookmarks, the GSC OAuth return URL).
+  useEffect(() => {
+    if (tab !== "tools") return;
+    setTab("project_settings");
+    setSettingsSubTab("integrations");
+  }, [tab]);
+
   function goTab(next: TabKey) {
     if (next === tab) return;
     if ((tab === "tools" || tab === "project_settings") && !confirmLoseChanges()) return;
@@ -6488,13 +6501,15 @@ export default function ProjectPage() {
                 "Current project";
               return (
                 <div className={styles.projectSwitcherBlock}>
-                  <label
-                    className={styles.sidebarTitle}
-                    htmlFor="aa-project-switcher"
-                    style={{ marginBottom: 8 }}
-                  >
-                    CURRENT PROJECT
-                  </label>
+                  <div className={styles.projectSwitcherLabelRow}>
+                    <label className={styles.sidebarTitle} htmlFor="aa-project-switcher">
+                      CURRENT PROJECT
+                    </label>
+                    <Hint label="About the project switcher">
+                      Change your project from here. Pick another project to switch to it — you stay
+                      on the same section (Articles, Research, …).
+                    </Hint>
+                  </div>
                   <div className={styles.projectSwitcherField}>
                     <select
                       id="aa-project-switcher"
@@ -6513,9 +6528,6 @@ export default function ProjectPage() {
                     <span className={styles.projectSwitcherChevron} aria-hidden="true">
                       ▾
                     </span>
-                  </div>
-                  <div className={styles.projectSwitcherCaption}>
-                    Switch to another project — your active section is preserved.
                   </div>
                 </div>
               );
@@ -9338,7 +9350,14 @@ export default function ProjectPage() {
 
                 <label className={styles.label}>
                   Country
-                  <select className={styles.select} value={researchCountry} onChange={(e) => setResearchCountry(e.target.value)}>
+                  <select
+                    className={styles.select}
+                    value={researchCountry}
+                    onChange={(e) => {
+                      setResearchCountry(e.target.value);
+                      setResearchCountryChosen(true);
+                    }}
+                  >
                     {COUNTRIES.map((c) => (
                       <option key={c.code} value={c.code}>
                         {c.name} ({c.code})
@@ -11465,235 +11484,6 @@ export default function ProjectPage() {
           </>
         ) : null}
 
-        {tab === "tools" ? (
-          <>
-            <div className={`${styles.card} ${styles.cardWide}`}>
-              <h2 className={styles.clusterCardTitle} style={{ marginTop: 0 }}>Search Console</h2>
-              <p className={styles.clusterCardSubtitle}>
-                Connect this project to its own Google account and Search Console property. After a
-                live publish we automatically request indexing for the post URL — and each project
-                can use a different Google account.
-              </p>
-
-              {gscMsg ? <div className={styles.error} style={{ marginTop: 10 }}>{gscMsg}</div> : null}
-              {gscOpenedFromOAuth && gscStatus?.connected ? (
-                <div className={styles.muted} style={{ marginTop: 10, fontWeight: 700, color: "var(--aa-success, #16a34a)" }}>
-                  Connected{gscStatus?.email ? ` (${gscStatus.email})` : ""}.
-                </div>
-              ) : null}
-
-              <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center" }}>
-                <div>
-                  <div style={{ fontWeight: 800 }}>
-                    {gscLoading
-                      ? "Loading…"
-                      : gscApiUnavailable
-                      ? "Backend update required"
-                      : gscStatus?.connected
-                      ? `Connected${gscStatus.email ? ` (${gscStatus.email})` : ""}`
-                      : "Not connected"}
-                  </div>
-                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 4 }}>
-                    {gscApiUnavailable
-                      ? "The deployed backend doesn’t expose /api/projects/:id/gsc/* yet. Pull the latest code on the VPS and restart the backend (Docker: docker compose up -d --build backend; systemd: sudo systemctl restart auto-articles-backend)."
-                      : gscStatus?.configured
-                      ? gscStatus?.connected
-                        ? `Linked${gscStatus.connected_at ? ` on ${gscStatus.connected_at} UTC` : ""}.`
-                        : "Click Connect Google to authorize Search Console for this project."
-                      : "Google OAuth client is not configured on the server. Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in the backend env, then restart the FastAPI service. Verify by curl-ing /api/health — gsc_oauth_configured should be true."}
-                  </div>
-                </div>
-                <div className={styles.row} style={{ gap: 8 }}>
-                  {gscStatus?.connected ? (
-                    <button
-                      type="button"
-                      className={styles.btnSecondary}
-                      onClick={() => setGscConfirmDisconnect(true)}
-                      disabled={gscDisconnecting}
-                    >
-                      {gscDisconnecting ? "Disconnecting…" : "Disconnect"}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className={styles.button}
-                    onClick={connectGscForProject}
-                    disabled={
-                      gscConnecting ||
-                      gscApiUnavailable ||
-                      // Hide-disable when backend explicitly reports configured=false.
-                      gscStatus?.configured === false
-                    }
-                    title={
-                      gscApiUnavailable
-                        ? "Redeploy the backend to enable per-project Search Console connections."
-                        : gscStatus?.configured === false
-                        ? "Set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET in the backend env, then restart the FastAPI service."
-                        : undefined
-                    }
-                  >
-                    {gscConnecting
-                      ? "Opening Google…"
-                      : gscStatus?.connected
-                      ? "Reconnect"
-                      : "Connect Google"}
-                  </button>
-                </div>
-              </div>
-
-              <div style={{ marginTop: 18 }}>
-                <label className={styles.label}>
-                  Property for this project
-                  <select
-                    className={styles.input}
-                    value={sGscPropertyUrl}
-                    onChange={(e) => setSGscPropertyUrl(e.target.value)}
-                    disabled={!gscStatus?.connected}
-                  >
-                    <option value="">— None —</option>
-                    {gscSites.map((s) => (
-                      <option key={s.siteUrl} value={s.siteUrl}>
-                        {s.siteUrl}
-                        {s.permissionLevel ? ` (${s.permissionLevel})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                  {!gscStatus?.connected ? (
-                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                      Connect Google for this project first.
-                    </div>
-                  ) : gscSites.length === 0 ? (
-                    <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                      No properties available. Add/verify a Search Console property under this Google account, then click Reconnect.
-                    </div>
-                  ) : null}
-                </label>
-
-                <label className={styles.label} style={{ marginTop: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <input
-                      type="checkbox"
-                      checked={sGscIndexOnPublish}
-                      onChange={(e) => setSGscIndexOnPublish(e.target.checked)}
-                      disabled={!gscStatus?.connected}
-                    />
-                    <span>Submit URL to Google for indexing automatically after a live publish</span>
-                  </div>
-                </label>
-
-                <div className={styles.row} style={{ gap: 8, marginTop: 12, justifyContent: "flex-end" }}>
-                  <button
-                    type="button"
-                    className={styles.button}
-                    onClick={() => saveGscPropertyForProject(sGscPropertyUrl, sGscIndexOnPublish)}
-                    disabled={!gscStatus?.connected}
-                  >
-                    Save
-                  </button>
-                </div>
-
-                {gscSaveMsg ? (
-                  <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }}>
-                    {gscSaveMsg}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            {!isShopifyProject ? <IndexNowSettings projectId={projectId} /> : null}
-
-            {gscStatus?.connected && (gscStatus?.property_url || "").trim() ? (
-              <>
-                <GscSitemapsCard projectId={projectId} />
-
-                {/* Feature 3 — Site Map (Internal Linking ingestion) */}
-                <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-                  <div className={styles.row} style={{ justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                    <h3 style={{ marginTop: 0, marginBottom: 0 }} className={`${styles.sectionSecondaryTitle}`}>Internal linking — Site map</h3>
-                    <button type="button" className={styles.button} onClick={syncSiteMap} disabled={siteMapBusy}>
-                      {siteMapBusy ? "Syncing…" : "Sync from WordPress"}
-                    </button>
-                  </div>
-                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
-                    Riviso pulls every published post from your WordPress REST API and stores
-                    <code> URL · title · focus keyphrase · featured image</code>. When{" "}
-                    <strong>Internal-link aware articles</strong> is on, generation can weave these URLs into new drafts
-                    and use a page featured image as a hero-image style reference.
-                  </div>
-                  {!isShopifyProject ? (
-                    <label
-                      className={styles.label}
-                      style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12, marginBottom: 0 }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={sWpInternalLinkAware}
-                        onChange={(e) => setSWpInternalLinkAware(e.target.checked)}
-                      />
-                      <span style={{ fontSize: 13 }}>Internal-link aware articles</span>
-                    </label>
-                  ) : null}
-                  {siteMapMsg ? (
-                    <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }}>{siteMapMsg}</div>
-                  ) : null}
-                  <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>
-                    {siteMap
-                      ? `Stored: ${siteMap.count} post${siteMap.count === 1 ? "" : "s"}` + (siteMap.wp_site_url ? ` from ${siteMap.wp_site_url}` : "")
-                      : "Site map not synced yet."}
-                  </div>
-                </div>
-
-              </>
-            ) : (
-              <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-                <p className={styles.clusterCardSubtitle} style={{ margin: 0, lineHeight: 1.55 }}>
-                  <strong>Internal site-map sync</strong> appears here after you connect Google above, pick a Search Console property, and click <strong>Save</strong> so this project is
-                  fully linked to a verified property.
-                </p>
-              </div>
-            )}
-
-            {gscConfirmDisconnect ? (
-              <>
-                <button
-                  type="button"
-                  className={styles.modalBackdrop}
-                  aria-label="Close"
-                  onClick={() => setGscConfirmDisconnect(false)}
-                />
-                <div ref={gscDisconnectModalTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Disconnect Search Console">
-                  <div className={styles.modalHead}>
-                    <h3 className={styles.modalTitle}>Disconnect Search Console?</h3>
-                  </div>
-                  <div className={styles.modalBody}>
-                    <p>
-                      The connection for this project will be removed. The Google account itself stays connected (revoke it from your Google account if needed).
-                    </p>
-                  </div>
-                  <div className={styles.modalFooter}>
-                    <button
-                      type="button"
-                      className={styles.btnSecondary}
-                      onClick={() => setGscConfirmDisconnect(false)}
-                      disabled={gscDisconnecting}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.btnDanger}
-                      onClick={disconnectGscForProject}
-                      disabled={gscDisconnecting}
-                    >
-                      {gscDisconnecting ? "Disconnecting…" : "Disconnect"}
-                    </button>
-                  </div>
-                </div>
-              </>
-            ) : null}
-          </>
-        ) : null}
-
         {tab === "social" ? (
           <>
             <div className={`${styles.card} ${styles.cardWide}`}>
@@ -12546,239 +12336,31 @@ export default function ProjectPage() {
                 />
               ) : null}
               {!isShopifyProject ? (
-              <section className={styles.settingsSectionCard}>
-                {/*
-                  WordPress connection block: header + clear status pill so a user
-                  who skipped the "Connect WordPress" popup at project creation
-                  can see exactly what's missing and fix it from here. The pill
-                  reads from the persisted ``wp_verified_at`` snapshot the
-                  backend records on every successful verify call, so it stays
-                  honest across reloads.
-                */}
-                <div className={styles.wpConnectionHead}>
-                  <div>
-                    <p className={styles.settingsSectionKicker}>Website</p>
-                    <h3 className={styles.settingsSectionTitle}>
-                      WordPress connection
-                    </h3>
-                    <p className={styles.settingsSectionDesc}>
-                      Riviso publishes generated articles via WordPress&apos;s REST API. Provide
-                      your site URL, username, and an{" "}
-                      <a
-                        href="https://wordpress.org/documentation/article/application-passwords/"
-                        target="_blank"
-                        rel="noreferrer"
-                        className={styles.clusterOpenLink}
-                      >
-                        Application Password
-                      </a>{" "}
-                      (Users → Profile → Application Passwords), then click <strong>Verify
-                      connection</strong>.
-                    </p>
-                  </div>
-                  {(() => {
-                    const status = (settings.wp_verified_status || "").toLowerCase();
-                    const verifiedAt = (settings.wp_verified_at || "").trim();
-                    let label = "Not connected";
-                    let dataState: "verified" | "warning" | "failed" | "pending" = "pending";
-                    let title = "No WordPress credentials saved yet. Fill in the fields below and click Verify connection.";
-                    if (status === "connected" && verifiedAt) {
-                      label = "Verified";
-                      dataState = "verified";
-                      title = `Last verified ${verifiedAt} UTC.`;
-                    } else if (status === "auth_failed") {
-                      label = "Auth failed";
-                      dataState = "failed";
-                      title = settings.wp_verified_message || "Authentication failed. Check username and application password.";
-                    } else if (status === "failed" || status === "error") {
-                      label = "Verification failed";
-                      dataState = "failed";
-                      title = settings.wp_verified_message || "Could not verify WordPress connection.";
-                    } else if (settings.wp_app_password_set && (settings.wp_site_url || settings.website_url)) {
-                      label = "Not verified yet";
-                      dataState = "warning";
-                      title = "Credentials are saved but no successful verify on record. Click Verify connection.";
+                <WordPressConnectionSection
+                  projectId={projectId}
+                  settings={settings}
+                  name={sName}
+                  onName={setSName}
+                  url={sUrl}
+                  onUrl={setSUrl}
+                  user={sWpUser}
+                  onUser={setSWpUser}
+                  pass={sWpPass}
+                  onPass={setSWpPass}
+                  schemaEnabled={sSchemaMarkupEnabled}
+                  onSchemaEnabled={setSSchemaMarkupEnabled}
+                  verifying={settingsVerifying}
+                  onVerify={verifySettings}
+                  verifyResult={settingsVerify}
+                  onDownloadPlugin={async () => {
+                    try {
+                      setError(null);
+                      await downloadWordpressPlugin(settings?.plugin_download_url);
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "Could not download plugin.");
                     }
-
-                    // Independent plugin pill — only meaningful once a verify
-                    // has run (i.e. the credentials pill is no longer in the
-                    // "Not connected" state).
-                    const pluginStatus = (settings.wp_plugin_status || "").toLowerCase();
-                    const pluginMsg = (settings.wp_plugin_message || "").trim();
-                    let pluginLabel = "";
-                    let pluginState: "verified" | "warning" | "failed" | "pending" = "pending";
-                    let pluginTitle = pluginMsg;
-                    if (pluginStatus === "active") {
-                      pluginLabel = "Plugin verified";
-                      pluginState = "verified";
-                      pluginTitle =
-                        pluginMsg ||
-                        "Riviso connector /ping and /publish routes verified on this site.";
-                    } else if (pluginStatus === "upgrade_required") {
-                      pluginLabel = "Plugin upgrade required";
-                      pluginState = "warning";
-                      pluginTitle =
-                        pluginMsg ||
-                        "An older or incomplete Riviso connector was detected. Download v0.2.0+ and verify again.";
-                    } else if (pluginStatus === "installed") {
-                      pluginLabel = "Plugin registered, /ping unreachable";
-                      pluginState = "warning";
-                      pluginTitle = pluginMsg || "Plugin REST namespace is registered but /ping was rejected.";
-                    } else if (pluginStatus === "capability") {
-                      pluginLabel = "Plugin: capability blocked";
-                      pluginState = "failed";
-                      pluginTitle = pluginMsg || "Plugin is installed but the WordPress user lacks edit_posts.";
-                    } else if (pluginStatus === "missing") {
-                      pluginLabel = "Plugin not active";
-                      pluginState = "failed";
-                      pluginTitle = pluginMsg || "Connector plugin not detected on the site.";
-                    } else if (pluginStatus === "unknown") {
-                      pluginLabel = "Plugin: unknown";
-                      pluginState = "warning";
-                      pluginTitle = pluginMsg || "Could not reach the WordPress REST index.";
-                    }
-
-                    return (
-                      <span className={styles.wpStatusPillStack}>
-                        <span className={styles.wpStatusPill} data-state={dataState} title={title}>
-                          {label}
-                          {dataState === "verified" && verifiedAt ? (
-                            <span className={styles.wpStatusPillTime}>· {verifiedAt} UTC</span>
-                          ) : null}
-                        </span>
-                        {pluginLabel ? (
-                          <span
-                            className={styles.wpStatusPill}
-                            data-state={pluginState}
-                            title={pluginTitle}
-                          >
-                            {pluginLabel}
-                          </span>
-                        ) : null}
-                      </span>
-                    );
-                  })()}
-                </div>
-
-                <label
-                  className={styles.label}
-                  style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4, marginBottom: 0 }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={sSchemaMarkupEnabled}
-                    onChange={(e) => setSSchemaMarkupEnabled(e.target.checked)}
-                  />
-                  <span style={{ fontSize: 13 }}>Add schema markup (JSON-LD) when publishing</span>
-                </label>
-                <div className={styles.muted} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
-                  Adds Article + FAQ structured data to every published post, plugin-compatible
-                  with Yoast and Rank Math.{" "}
-                  {settings.wp_schema_supported
-                    ? "✓ Schema markup active on this site."
-                    : "Update the Riviso plugin (Download plugin above, then re-upload and activate it in WordPress → Plugins) to enable schema markup."}
-                </div>
-
-                <div className={styles.settingsFieldsGrid}>
-                  <label className={styles.settingsFieldLabel}>
-                    Project display name
-                    <input className={styles.input} value={sName} onChange={(e) => setSName(e.target.value)} />
-                  </label>
-                  <label className={styles.settingsFieldLabel}>
-                    WordPress site URL
-                    <input
-                      className={styles.input}
-                      value={sUrl}
-                      onChange={(e) => setSUrl(e.target.value)}
-                      placeholder="https://example.com"
-                      autoComplete="url"
-                      inputMode="url"
-                    />
-                  </label>
-                  <label className={styles.settingsFieldLabel}>
-                    WordPress username
-                    <input
-                      className={styles.input}
-                      value={sWpUser}
-                      onChange={(e) => setSWpUser(e.target.value)}
-                      placeholder="Login username (not always your email)"
-                      autoComplete="username"
-                    />
-                  </label>
-                  <label className={styles.settingsFieldLabel}>
-                    Application password
-                    <span className={styles.authPasswordWrap}>
-                      <input
-                        className={`${styles.input} ${styles.authPasswordInput}`}
-                        value={sWpPass}
-                        type={showWpAppPassword ? "text" : "password"}
-                        onChange={(e) => setSWpPass(e.target.value)}
-                        placeholder="Paste from WordPress → Users → Profile → Application Passwords"
-                        autoComplete="off"
-                        spellCheck={false}
-                      />
-                      <button
-                        type="button"
-                        className={styles.authToggle}
-                        onClick={() => setShowWpAppPassword((v) => !v)}
-                        aria-label={showWpAppPassword ? "Hide application password" : "Show application password"}
-                        title={showWpAppPassword ? "Hide password" : "Show password"}
-                      >
-                        {showWpAppPassword ? "×" : "👁"}
-                      </button>
-                    </span>
-                  </label>
-                </div>
-
-                <div className={styles.wpConnectionActions}>
-                  <button
-                    className={styles.btnSecondary}
-                    type="button"
-                    onClick={async () => {
-                      try {
-                        setError(null);
-                        await downloadWordpressPlugin(settings?.plugin_download_url);
-                      } catch (e) {
-                        setError(e instanceof Error ? e.message : "Could not download plugin.");
-                      }
-                    }}
-                  >
-                    Download plugin
-                  </button>
-                  <button
-                    className={styles.button}
-                    type="button"
-                    onClick={verifySettings}
-                    disabled={
-                      settingsVerifying ||
-                      !sUrl.trim() ||
-                      !sWpUser.trim() ||
-                      (!sWpPass.trim() && !settings.wp_app_password_set)
-                    }
-                    title={
-                      !sWpPass.trim() && !settings.wp_app_password_set
-                        ? "Enter the application password first."
-                        : "Save credentials and check the WordPress REST API responds."
-                    }
-                  >
-                    {settingsVerifying ? "Verifying…" : "Verify connection"}
-                  </button>
-                  <WordPressBulkSyncButton
-                    projectId={projectId}
-                    disabled={(settings.wp_verified_status || "").toLowerCase() !== "connected"}
-                  />
-                </div>
-
-                {settingsVerify ? (
-                  <div
-                    className={settingsVerify.ok ? styles.wpVerifyResultOk : styles.wpVerifyResultErr}
-                    style={{ whiteSpace: "pre-wrap" }}
-                  >
-                    {settingsVerify.message}
-                  </div>
-                ) : null}
-
-                </section>
+                  }}
+                />
               ) : null}
 
               {!isShopifyProject && settings &&
@@ -12791,7 +12373,7 @@ export default function ProjectPage() {
                   Pre-selected when publishing articles. You can still override per article.
                 </p>
 
-                <div className={styles.settingsFieldsGrid} style={{ marginTop: 16 }}>
+                <div className={styles.wpDefaultsGrid}>
                   <label className={styles.label}>
                     Default post type
                     <select className={styles.input} value={sWpDefaultPostType} onChange={(e) => setSWpDefaultPostType(e.target.value)}>
@@ -12814,567 +12396,125 @@ export default function ProjectPage() {
                       <option value="publish">Publish</option>
                     </select>
                   </label>
-                </div>
-
-                <label className={styles.label} style={{ marginTop: 10 }}>
-                  Default category
-                  <select
-                    className={styles.input}
-                    multiple
-                    value={sWpDefaultCategoryIds.map(String)}
-                    onChange={(e) => {
-                      const ids = Array.from(e.target.selectedOptions).map((o) => Number(o.value)).filter((n) => Number.isFinite(n));
-                      setSWpDefaultCategoryIds(ids);
-                    }}
-                    style={{ minHeight: 120 }}
-                  >
-                    {settingsCategories.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 6 }}>
-                    Hold Cmd/Ctrl to select multiple categories.
+                  <div className={styles.label}>
+                    <span>Default categories</span>
+                    <CategoryMultiSelect
+                      categories={settingsCategories}
+                      value={sWpDefaultCategoryIds}
+                      onChange={setSWpDefaultCategoryIds}
+                      ariaLabel="Default categories"
+                    />
                   </div>
-                </label>
+                </div>
               </section>
               ) : null}
               </div>
 
               <div id="settings-group-content" className={styles.settingsGroup} style={settingsSubTab === "content" ? undefined : { display: "none" }}>
               <h2 className={styles.settingsGroupHeading}>Content &amp; targeting</h2>
-                {(() => {
-                  if (!settings) return null;
-                  const wpVerifiedOk = isShopifyProject
-                    ? (settings.shopify_verified_status || "").toLowerCase() === "connected" &&
-                      !!(settings.shopify_verified_at || "").trim()
-                    : (settings.wp_verified_status || "").toLowerCase() === "connected" &&
-                      !!(settings.wp_verified_at || "").trim();
-                  if (!wpVerifiedOk) {
-                    return (
-                      <div className={styles.settingsLockedBanner}>
-                        <strong>Brand identity</strong>, <strong>niche</strong>, and{" "}
-                        {isShopifyProject ? <strong>catalog tools</strong> : <strong>WordPress defaults</strong>} unlock
-                        after {isShopifyProject ? "Shopify is connected" : "WordPress returns a successful verify (green Verified pill above)"}.
-                        {isShopifyProject ? (
-                          <>
-                            {" "}
-                            Enter your shop URL, Client ID, and Client secret above, then click{" "}
-                            <strong>Verify connection</strong> or <strong>Refresh connection</strong>.
-                          </>
-                        ) : (
-                          <> Finish connecting your site, then click <strong>Verify connection</strong> again if credentials changed.</>
-                        )}
-                      </div>
-                    );
-                  }
-                  return (
-                    <>
-                      <section className={styles.settingsSectionCard}>
-                      {/* ----------------------------------------------------------------
-                       * Brand identity — structured form
-                       * Replaces the old free-text textarea with three discrete inputs
-                       * (voice / tones / rules). The backend rebuilds the legacy
-                       * `brand_identity` plain-text string from these every time we
-                       * save, so downstream consumers (article generation, image
-                       * prompt builder) keep working without changes.
-                       * ---------------------------------------------------------------- */}
-                      <div className={styles.brandSection}>
-                        <p className={styles.settingsSectionKicker}>Content</p>
-                        <h4 className={styles.brandSectionTitle}>Brand identity</h4>
-                        <p className={styles.brandSectionSub}>
-                          Sets <strong>how</strong> the AI writes for this project. Choose the
-                          posture (voice), the modes you want it to mix (tones), and any
-                          do/don&apos;t rules it should respect on every article.
-                        </p>
-                        <div className={styles.brandFieldGrid}>
-                          <label className={styles.brandFieldLabel}>
-                            Voice
-                            <select
-                              className={styles.input}
-                              value={brandVoice}
-                              onChange={(e) => setBrandVoice(e.target.value)}
-                            >
-                              <option value="">Pick a voice…</option>
-                              {BRAND_VOICES.map((v) => (
-                                <option key={v.id} value={v.label}>
-                                  {v.label}
-                                </option>
-                              ))}
-                            </select>
-                            <span className={styles.brandFieldHelp}>
-                              The overall posture every article should carry — pick one.
-                            </span>
-                          </label>
-                          <label className={`${styles.brandFieldLabel} ${styles.settingsFieldFull}`}>
-                            Tones <span className={styles.brandFieldHelp} style={{ fontWeight: 500, opacity: 1 }}>(pick up to 5)</span>
-                            <div className={styles.chipPickerBox}>
-                              {BRAND_TONES.map((t) => {
-                                const selected = brandTones.includes(t.label);
-                                const disabled = !selected && brandTones.length >= 5;
-                                return (
-                                  <button
-                                    key={t.id}
-                                    type="button"
-                                    className={styles.chipOption}
-                                    data-selected={selected}
-                                    data-disabled={disabled}
-                                    aria-pressed={selected}
-                                    disabled={disabled}
-                                    title={disabled ? "Pick up to 5 tones — remove one to add another." : undefined}
-                                    onClick={() => {
-                                      if (selected) {
-                                        setBrandTones((xs) => xs.filter((x) => x !== t.label));
-                                      } else if (!disabled) {
-                                        setBrandTones((xs) => [...xs, t.label]);
-                                      }
-                                    }}
-                                  >
-                                    {t.label}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            <span className={styles.brandFieldHelp}>
-                              Selected: {brandTones.length}/5. The AI mixes these as it
-                              writes — e.g. &quot;Direct + Evidence-driven + No hype&quot;.
-                            </span>
-                          </label>
-                        </div>
-                        <label className={`${styles.brandFieldLabel} ${styles.settingsFieldFull}`}>
-                          Rules
-                          <textarea
-                            className={styles.input}
-                            value={brandRules}
-                            onChange={(e) => setBrandRules(e.target.value.slice(0, 4000))}
-                            rows={4}
-                            placeholder={
-                              "Examples — keep it short and concrete:\n" +
-                              "• Avoid buzzwords (synergy, leverage, game-changer).\n" +
-                              "• Always cite a source when quoting numbers.\n" +
-                              "• Use short paragraphs and bullet checklists.\n" +
-                              "• Never promise outcomes; describe likelihoods."
-                            }
-                            style={{ resize: "vertical" }}
-                          />
-                          <span className={styles.brandFieldHelp}>
-                            {brandRules.trim().length}/4000 chars · One bullet per line.
-                            These are appended to the AI&apos;s system prompt on every
-                            article.
-                          </span>
-                        </label>
-                      </div>
-                      </section>
-
-                      <section className={styles.settingsSectionCard}>
-                      {/* ----------------------------------------------------------------
-                       * Niche identifier — structured form
-                       * Topic + audience + countries + cities. The backend rebuilds the
-                       * legacy `niche_identifier` plain-text string from this every save.
-                       * ---------------------------------------------------------------- */}
-                      <div className={styles.brandSection}>
-                        <p className={styles.settingsSectionKicker}>Targeting</p>
-                        <h4 className={styles.brandSectionTitle}>Niche identifier</h4>
-                        <p className={styles.brandSectionSub}>
-                          Sets <strong>what</strong> and <strong>who</strong> every article is
-                          about. Pin the topic universe, the audience, and the geographies
-                          you want examples and references to come from.
-                        </p>
-
-                        <label className={styles.brandFieldLabel}>
-                          Niche
-                          <input
-                            className={styles.input}
-                            value={nicheTopic}
-                            onChange={(e) => setNicheTopic(e.target.value.slice(0, 500))}
-                            placeholder="e.g. Mutual divorce advocacy in India · MSME dispute resolution · DTC home decor"
-                          />
-                          <span className={styles.brandFieldHelp}>
-                            One line. Industry + sub-topic + the differentiator that
-                            distinguishes you from generic content in the same space.
-                          </span>
-                        </label>
-
-                        <label className={styles.brandFieldLabel}>
-                          Audience <span style={{ opacity: 0.6, fontWeight: 500 }}>(multi-select)</span>
-                          <div className={styles.chipPickerBox}>
-                            {AUDIENCE_PRESETS.map((a) => {
-                              const selected = audienceList.includes(a.label);
-                              return (
-                                <button
-                                  key={a.id}
-                                  type="button"
-                                  className={styles.chipOption}
-                                  data-selected={selected}
-                                  aria-pressed={selected}
-                                  onClick={() => {
-                                    if (selected) {
-                                      setAudienceList((xs) => xs.filter((x) => x !== a.label));
-                                    } else {
-                                      setAudienceList((xs) => [...xs, a.label]);
-                                    }
-                                  }}
-                                >
-                                  {a.label}
-                                </button>
-                              );
-                            })}
-                            {/* Custom audiences — render as removable chips alongside the presets. */}
-                            {audienceList
-                              .filter(
-                                (x) => !AUDIENCE_PRESETS.some((p) => p.label === x),
-                              )
-                              .map((custom) => (
-                                <button
-                                  key={`custom-${custom}`}
-                                  type="button"
-                                  className={styles.chipOption}
-                                  data-selected={true}
-                                  data-removable="true"
-                                  aria-label={`Remove custom audience “${custom}”`}
-                                  onClick={() =>
-                                    setAudienceList((xs) => xs.filter((x) => x !== custom))
-                                  }
-                                >
-                                  {custom}
-                                </button>
-                              ))}
-                          </div>
-                          <div className={styles.chipFreeRow}>
-                            <input
-                              className={styles.chipFreeInput}
-                              value={audienceCustomDraft}
-                              onChange={(e) =>
-                                setAudienceCustomDraft(e.target.value.slice(0, 120))
-                              }
-                              placeholder="Add a custom audience and press Enter…"
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  const v = audienceCustomDraft.trim();
-                                  if (v && !audienceList.includes(v)) {
-                                    setAudienceList((xs) => [...xs, v]);
-                                  }
-                                  setAudienceCustomDraft("");
-                                }
-                              }}
-                            />
-                            <button
-                              type="button"
-                              className={styles.chipFreeAddBtn}
-                              disabled={
-                                !audienceCustomDraft.trim() ||
-                                audienceList.includes(audienceCustomDraft.trim())
-                              }
-                              onClick={() => {
-                                const v = audienceCustomDraft.trim();
-                                if (v && !audienceList.includes(v)) {
-                                  setAudienceList((xs) => [...xs, v]);
-                                }
-                                setAudienceCustomDraft("");
-                              }}
-                            >
-                              Add
-                            </button>
-                          </div>
-                        </label>
-
-                        <label className={styles.brandFieldLabel}>
-                          Target countries
-                          <div className={styles.brandToggleRow}>
-                            <input
-                              type="checkbox"
-                              checked={!!targetCountriesAll}
-                              onChange={(e) => {
-                                const next = e.target.checked;
-                                setTargetCountriesAll(next);
-                                if (next) {
-                                  // Single sentinel — don't enumerate 250+ codes.
-                                  // Drop the country list AND any cities tied to
-                                  // specific countries (we keep custom-typed cities
-                                  // because the user explicitly added those).
-                                  setTargetCountries([]);
-                                  setTargetCities([]);
-                                  setTargetCitiesAll(false);
-                                }
-                              }}
-                            />
-                            Select all countries (global targeting)
-                          </div>
-                          {!targetCountriesAll ? (
-                            <>
-                              <input
-                                className={styles.chipFreeInput}
-                                value={countryFilter}
-                                onChange={(e) => setCountryFilter(e.target.value)}
-                                placeholder="Filter countries…"
-                                style={{ marginTop: 6 }}
-                              />
-                              <div
-                                className={`${styles.chipPickerBox} ${styles.settingsChipScroll}`}
-                              >
-                                {(() => {
-                                  const q = countryFilter.trim().toLowerCase();
-                                  const items = q
-                                    ? COUNTRIES.filter(
-                                        (c) =>
-                                          c.name.toLowerCase().includes(q) ||
-                                          c.code.toLowerCase().includes(q),
-                                      )
-                                    : COUNTRIES;
-                                  if (items.length === 0) {
-                                    return (
-                                      <span className={styles.chipPickerEmpty}>
-                                        No matches
-                                      </span>
-                                    );
-                                  }
-                                  return items.map((c) => {
-                                    const selected = targetCountries.includes(c.code);
-                                    return (
-                                      <button
-                                        key={c.code}
-                                        type="button"
-                                        className={styles.chipOption}
-                                        data-selected={selected}
-                                        aria-pressed={selected}
-                                        onClick={() => {
-                                          if (selected) {
-                                            setTargetCountries((xs) =>
-                                              xs.filter((x) => x !== c.code),
-                                            );
-                                            // Drop any cities tied to this country.
-                                            const cities = citiesForCountry(c.code);
-                                            if (cities.length > 0) {
-                                              setTargetCities((xs) =>
-                                                xs.filter((x) => !cities.includes(x)),
-                                              );
-                                            }
-                                          } else {
-                                            setTargetCountries((xs) => [...xs, c.code]);
-                                          }
-                                        }}
-                                      >
-                                        {c.name}
-                                      </button>
-                                    );
-                                  });
-                                })()}
-                              </div>
-                              <span className={styles.brandFieldHelp}>
-                                {targetCountries.length === 0
-                                  ? "No countries selected — articles won't be pinned to any geography."
-                                  : `${targetCountries.length} selected.`}
-                              </span>
-                            </>
-                          ) : (
-                            <span className={styles.brandFieldHelp}>
-                              Articles will be written for a global audience. The country
-                              list and country-scoped city pickers are disabled while
-                              this is on.
-                            </span>
-                          )}
-                        </label>
-
-                        {/* City targeting only makes sense when at least one country
-                         * is in scope. Globally-targeted projects skip this section
-                         * entirely so we never show a meaningless "pick a country
-                         * first" hint right under "Select all countries". */}
-                        {!targetCountriesAll && (
-                        <label className={styles.brandFieldLabel}>
-                          Target cities
-                          <div className={styles.brandToggleRow}>
-                            <input
-                              type="checkbox"
-                              checked={targetCitiesAll}
-                              onChange={(e) => {
-                                setTargetCitiesAll(e.target.checked);
-                                if (e.target.checked) setTargetCities([]);
-                              }}
-                            />
-                            Use all major cities of the selected countries
-                          </div>
-                          {!targetCitiesAll && (
-                            <>
-                              {targetCountries.length === 0 ? (
-                                <div className={styles.chipPickerBox}>
-                                  <span className={styles.chipPickerEmpty}>
-                                    Pick one or more target countries first.
-                                  </span>
-                                </div>
-                              ) : (
-                                <>
-                                  <div
-                                    className={styles.chipPickerBox}
-                                    style={{ maxHeight: 220, overflowY: "auto" }}
-                                  >
-                                    {(() => {
-                                      const cityGroups: { country: string; cities: string[] }[] =
-                                        targetCountries
-                                          .map((code) => ({
-                                            country: code,
-                                            cities: citiesForCountry(code),
-                                          }))
-                                          .filter((g) => g.cities.length > 0);
-                                      const customCities = targetCities.filter(
-                                        (c) =>
-                                          !cityGroups.some((g) => g.cities.includes(c)),
-                                      );
-                                      if (cityGroups.length === 0 && customCities.length === 0) {
-                                        return (
-                                          <span className={styles.chipPickerEmpty}>
-                                            No curated city list for the selected
-                                            countries — type cities below to add them.
-                                          </span>
-                                        );
-                                      }
-                                      return (
-                                        <>
-                                          {cityGroups.map((g) => (
-                                            <div
-                                              key={g.country}
-                                              style={{
-                                                display: "flex",
-                                                flexDirection: "column",
-                                                gap: 4,
-                                                width: "100%",
-                                              }}
-                                            >
-                                              <div
-                                                className={styles.chipPickerEmpty}
-                                                style={{
-                                                  fontWeight: 700,
-                                                  textTransform: "uppercase",
-                                                  letterSpacing: "0.04em",
-                                                  fontSize: 11,
-                                                }}
-                                              >
-                                                {(COUNTRIES.find((c) => c.code === g.country)?.name) ||
-                                                  g.country}
-                                              </div>
-                                              <div
-                                                style={{
-                                                  display: "flex",
-                                                  flexWrap: "wrap",
-                                                  gap: 6,
-                                                }}
-                                              >
-                                                {g.cities.map((city) => {
-                                                  const selected = targetCities.includes(city);
-                                                  return (
-                                                    <button
-                                                      key={`${g.country}-${city}`}
-                                                      type="button"
-                                                      className={styles.chipOption}
-                                                      data-selected={selected}
-                                                      aria-pressed={selected}
-                                                      onClick={() => {
-                                                        if (selected) {
-                                                          setTargetCities((xs) =>
-                                                            xs.filter((x) => x !== city),
-                                                          );
-                                                        } else {
-                                                          setTargetCities((xs) => [...xs, city]);
-                                                        }
-                                                      }}
-                                                    >
-                                                      {city}
-                                                    </button>
-                                                  );
-                                                })}
-                                              </div>
-                                            </div>
-                                          ))}
-                                          {customCities.map((city) => (
-                                            <button
-                                              key={`custom-city-${city}`}
-                                              type="button"
-                                              className={styles.chipOption}
-                                              data-selected={true}
-                                              data-removable="true"
-                                              aria-label={`Remove custom city “${city}”`}
-                                              onClick={() =>
-                                                setTargetCities((xs) =>
-                                                  xs.filter((x) => x !== city),
-                                                )
-                                              }
-                                            >
-                                              {city}
-                                            </button>
-                                          ))}
-                                        </>
-                                      );
-                                    })()}
-                                  </div>
-                                  <div className={styles.chipFreeRow}>
-                                    <input
-                                      className={styles.chipFreeInput}
-                                      value={cityCustomDraft}
-                                      onChange={(e) =>
-                                        setCityCustomDraft(e.target.value.slice(0, 120))
-                                      }
-                                      placeholder="Add a city not in the list…"
-                                      onKeyDown={(e) => {
-                                        if (e.key === "Enter") {
-                                          e.preventDefault();
-                                          const v = cityCustomDraft.trim();
-                                          if (v && !targetCities.includes(v)) {
-                                            setTargetCities((xs) => [...xs, v]);
-                                          }
-                                          setCityCustomDraft("");
-                                        }
-                                      }}
-                                    />
-                                    <button
-                                      type="button"
-                                      className={styles.chipFreeAddBtn}
-                                      disabled={
-                                        !cityCustomDraft.trim() ||
-                                        targetCities.includes(cityCustomDraft.trim())
-                                      }
-                                      onClick={() => {
-                                        const v = cityCustomDraft.trim();
-                                        if (v && !targetCities.includes(v)) {
-                                          setTargetCities((xs) => [...xs, v]);
-                                        }
-                                        setCityCustomDraft("");
-                                      }}
-                                    >
-                                      Add
-                                    </button>
-                                  </div>
-                                </>
-                              )}
-                              <span className={styles.brandFieldHelp}>
-                                {targetCities.length === 0
-                                  ? "No specific cities selected."
-                                  : `${targetCities.length} cities selected.`}
-                              </span>
-                            </>
-                          )}
-                        </label>
-                        )}
-                      </div>
-                      </section>
-
-                    </>
-                  );
-                })()}
+                {settings ? (
+                  <ContentTargetingSection
+                    voice={brandVoice}
+                    onVoice={setBrandVoice}
+                    tones={brandTones}
+                    onTones={setBrandTones}
+                    rules={brandRules}
+                    onRules={setBrandRules}
+                    niche={nicheTopic}
+                    onNiche={setNicheTopic}
+                    audience={audienceList}
+                    onAudience={setAudienceList}
+                    countries={targetCountries}
+                    onCountries={setTargetCountries}
+                    countriesAll={targetCountriesAll}
+                    onCountriesAll={setTargetCountriesAll}
+                    cities={targetCities}
+                    onCities={setTargetCities}
+                    citiesAll={targetCitiesAll}
+                    onCitiesAll={setTargetCitiesAll}
+                  />
+                ) : null}
               </div>
 
               <div id="settings-group-integrations" className={styles.settingsGroup} style={settingsSubTab === "integrations" ? undefined : { display: "none" }}>
               <h2 className={styles.settingsGroupHeading}>Integrations</h2>
-                <div className={styles.settingsInfoCard}>
-                  <h3 className={styles.settingsInfoCardTitle}>Google Search Console</h3>
-                  <p className={styles.settingsInfoCardDesc}>
-                    Search Console connection moved to{" "}
-                    <button type="button" className={styles.settingsInfoLink} onClick={() => setTab("tools")}>
-                      Tools → Search Console
+              <div className={styles.integrationsStack}>
+            <SearchConsoleSection
+              status={gscStatus}
+              sites={gscSites}
+              loading={gscLoading}
+              apiUnavailable={gscApiUnavailable}
+              connecting={gscConnecting}
+              disconnecting={gscDisconnecting}
+              justConnected={gscOpenedFromOAuth}
+              error={gscMsg}
+              saveMessage={gscSaveMsg}
+              propertyUrl={sGscPropertyUrl}
+              onPropertyUrl={setSGscPropertyUrl}
+              indexOnPublish={sGscIndexOnPublish}
+              onIndexOnPublish={setSGscIndexOnPublish}
+              onConnect={connectGscForProject}
+              onDisconnect={() => setGscConfirmDisconnect(true)}
+              onSave={() => saveGscPropertyForProject(sGscPropertyUrl, sGscIndexOnPublish)}
+            />
+
+            {gscStatus?.connected && (gscStatus?.property_url || "").trim() ? (
+              <GscSitemapsCard projectId={projectId} />
+            ) : null}
+
+            {!isShopifyProject ? <IndexNowSettings projectId={projectId} /> : null}
+
+            {!isShopifyProject ? (
+              <SiteMapSection
+                siteMap={siteMap}
+                busy={siteMapBusy}
+                message={siteMapMsg}
+                onSync={() => void syncSiteMap()}
+                linkAware={sWpInternalLinkAware}
+                onLinkAware={setSWpInternalLinkAware}
+                canSync={(settings?.wp_verified_status || "").toLowerCase() === "connected"}
+              />
+            ) : null}
+              </div>
+
+            {gscConfirmDisconnect ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.modalBackdrop}
+                  aria-label="Close"
+                  onClick={() => setGscConfirmDisconnect(false)}
+                />
+                <div ref={gscDisconnectModalTrapRef} className={styles.modalPanel} role="dialog" aria-modal="true" aria-label="Disconnect Search Console">
+                  <div className={styles.modalHead}>
+                    <h3 className={styles.modalTitle}>Disconnect Search Console?</h3>
+                  </div>
+                  <div className={styles.modalBody}>
+                    <p>
+                      The connection for this project will be removed. The Google account itself stays connected (revoke it from your Google account if needed).
+                    </p>
+                  </div>
+                  <div className={styles.modalFooter}>
+                    <button
+                      type="button"
+                      className={styles.btnSecondary}
+                      onClick={() => setGscConfirmDisconnect(false)}
+                      disabled={gscDisconnecting}
+                    >
+                      Cancel
                     </button>
-                    . Each project connects to its own Google account and chooses its property there.
-                  </p>
+                    <button
+                      type="button"
+                      className={styles.btnDanger}
+                      onClick={disconnectGscForProject}
+                      disabled={gscDisconnecting}
+                    >
+                      {gscDisconnecting ? "Disconnecting…" : "Disconnect"}
+                    </button>
+                  </div>
                 </div>
+              </>
+            ) : null}
               </div>
 
               <div
@@ -13400,40 +12540,13 @@ export default function ProjectPage() {
         ) : null}
 
         {confirmDeleteProject ? (
-          <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Confirm delete project">
-            <div ref={confirmDeleteProjectTrapRef} className={styles.modalPanel}>
-              <div className={styles.modalHead}>
-                <h3 className={styles.modalTitle}>Delete project?</h3>
-                <button type="button" className={styles.btnSecondary} onClick={() => (deletingProject ? null : setConfirmDeleteProject(false))}>
-                  Close
-                </button>
-              </div>
-              <div className={styles.modalBody}>
-                <div style={{ lineHeight: 1.55 }}>
-                  This will permanently delete the project and all its data:
-                  <ul style={{ margin: "10px 0 0", paddingLeft: 18 }}>
-                    <li>Project settings and website connections</li>
-                    <li>Writing prompts and image prompts</li>
-                    <li>Context links</li>
-                    <li>Scheduled jobs</li>
-                    <li>All articles in this project</li>
-                  </ul>
-                  <div style={{ marginTop: 10 }}>
-                    <strong>This action cannot be undone.</strong>
-                  </div>
-                </div>
-                {error ? <p className={styles.error} style={{ marginTop: 10 }}>{error}</p> : null}
-              </div>
-              <div className={styles.modalFooter}>
-                <button type="button" className={styles.btnSecondary} onClick={() => setConfirmDeleteProject(false)} disabled={deletingProject}>
-                  Cancel
-                </button>
-                <button type="button" className={`${styles.miniBtn} ${styles.miniDanger}`} onClick={() => void deleteProjectNow()} disabled={deletingProject}>
-                  {deletingProject ? "Deleting…" : "Yes, delete project"}
-                </button>
-              </div>
-            </div>
-          </div>
+          <DeleteProjectDialog
+            projectName={settings?.name || projectMeta?.name || ""}
+            deleting={deletingProject}
+            error={error}
+            onCancel={() => setConfirmDeleteProject(false)}
+            onConfirm={() => void deleteProjectNow()}
+          />
         ) : null}
 
         {clusterErrorModal ? (

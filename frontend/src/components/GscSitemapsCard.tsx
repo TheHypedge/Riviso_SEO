@@ -2,17 +2,36 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import styles from "@/app/page.module.css";
+import { Hint } from "@/components/settings/Hint";
+import s from "@/components/settings/settingsCard.module.css";
 import { api, type GscSitemap } from "@/lib/api";
+import { formatDateOnly } from "@/lib/dateFormat";
 
-/** Sitemaps registered on the project's Search Console property: list, (re)submit, remove. */
+type RowState = { label: string; state: "ok" | "warn" | "error" | "idle" };
+
+function rowStatus(sm: GscSitemap): RowState {
+  if (sm.errors) return { label: `${sm.errors} error${sm.errors === 1 ? "" : "s"}`, state: "error" };
+  if (sm.warnings) return { label: `${sm.warnings} warning${sm.warnings === 1 ? "" : "s"}`, state: "warn" };
+  if (sm.is_pending || !sm.last_downloaded) return { label: "Pending", state: "idle" };
+  return { label: "Success", state: "ok" };
+}
+
+function splitUrl(raw: string): { host: string; path: string } {
+  try {
+    const u = new URL(raw);
+    return { host: u.host, path: `${u.pathname}${u.search}` || "/" };
+  } catch {
+    return { host: "", path: raw };
+  }
+}
+
+/** Sitemaps registered on the project's Search Console property: list, resubmit, remove, add. */
 export function GscSitemapsCard({ projectId }: { projectId: string }) {
   const [sitemaps, setSitemaps] = useState<GscSitemap[] | null>(null);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState<string>("");
   const [confirmRemove, setConfirmRemove] = useState<string>("");
-  const [msg, setMsg] = useState<string | null>(null);
-
+  const [msg, setMsg] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const load = useCallback(() => setReloadKey((k) => k + 1), []);
 
@@ -23,27 +42,29 @@ export function GscSitemapsCard({ projectId }: { projectId: string }) {
       .then((res) => {
         if (!alive) return;
         setSitemaps(res.sitemaps || []);
-        setUrl((cur) => cur || res.suggested_sitemap_url || "");
+        // Pre-fill the suggestion on first load only -- not after the user just submitted one.
+        if (reloadKey === 0) setUrl((cur) => cur || res.suggested_sitemap_url || "");
       })
       .catch((e) => {
         if (!alive) return;
         setSitemaps([]);
-        setMsg(e instanceof Error ? e.message : "Could not load sitemaps");
+        setMsg({ tone: "error", text: e instanceof Error ? e.message : "Could not load sitemaps" });
       });
     return () => {
       alive = false;
     };
   }, [projectId, reloadKey]);
 
-  async function submit(target: string) {
+  async function submit(target: string, isNew: boolean) {
     setBusy(`submit:${target}`);
     setMsg(null);
     try {
       const res = await api.gscProjectSubmitSitemap(projectId, target);
-      setMsg(`Submitted ${res.sitemap_url}. Google will re-read it on its next crawl.`);
+      setMsg({ tone: "ok", text: `${isNew ? "Submitted" : "Resubmitted"} ${res.sitemap_url}. Google will read it on its next crawl.` });
+      if (isNew) setUrl("");
       load();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Sitemap submission failed");
+      setMsg({ tone: "error", text: e instanceof Error ? e.message : "Sitemap submission failed" });
     } finally {
       setBusy("");
     }
@@ -55,107 +76,157 @@ export function GscSitemapsCard({ projectId }: { projectId: string }) {
     try {
       await api.gscProjectDeleteSitemap(projectId, path);
       setConfirmRemove("");
-      setMsg(`Removed ${path} from Search Console.`);
+      setMsg({ tone: "ok", text: `Removed ${path} from Search Console.` });
       load();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : "Sitemap removal failed");
+      setMsg({ tone: "error", text: e instanceof Error ? e.message : "Sitemap removal failed" });
     } finally {
       setBusy("");
     }
   }
 
+  const count = sitemaps?.length ?? 0;
+
   return (
-    <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 14 }}>
-      <h3 style={{ marginTop: 0, marginBottom: 0 }} className={styles.sectionSecondaryTitle}>
-        Search Console sitemaps
-      </h3>
-      <div className={styles.muted} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5 }}>
-        Riviso resubmits these after every live publish so Google re-reads them. Submit your site&apos;s sitemap
-        once if none is listed (Yoast: <code>sitemap_index.xml</code>, Rank Math: <code>sitemap_index.xml</code>,
-        WordPress core: <code>wp-sitemap.xml</code>).
-      </div>
+    <section className={s.card} aria-labelledby="gsc-sitemaps-title">
+      <header className={s.head}>
+        <div className={s.titleRow}>
+          <h3 id="gsc-sitemaps-title" className={s.title}>
+            Sitemaps
+          </h3>
+          <Hint label="About sitemaps">
+            Sitemaps registered on your Search Console property. Riviso resubmits them after every
+            live publish so Google re-reads them. Yoast and Rank Math use sitemap_index.xml;
+            WordPress core uses wp-sitemap.xml.
+          </Hint>
+        </div>
+        {sitemaps ? (
+          <span className={s.badge} data-state={count ? "ok" : "warn"}>
+            <span className={s.badgeDot} aria-hidden="true" />
+            {count ? `${count} registered` : "None registered"}
+          </span>
+        ) : null}
+      </header>
 
       {sitemaps === null ? (
-        <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>Loading…</div>
-      ) : sitemaps.length === 0 ? (
-        <div className={styles.muted} style={{ fontSize: 13, marginTop: 10 }}>No sitemaps registered yet.</div>
+        <p className={s.fieldHelp}>Loading sitemaps…</p>
+      ) : count === 0 ? (
+        <div className={s.empty}>
+          <strong>No sitemaps yet.</strong>
+          <span>Submit your site&apos;s sitemap below so Google can discover every article.</span>
+        </div>
       ) : (
-        <div style={{ overflowX: "auto", marginTop: 10 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ textAlign: "left" }}>
-                <th style={{ padding: "6px 8px" }}>Sitemap</th>
-                <th style={{ padding: "6px 8px" }}>Submitted / indexed</th>
-                <th style={{ padding: "6px 8px" }}>Last read by Google</th>
-                <th style={{ padding: "6px 8px" }}>Status</th>
-                <th style={{ padding: "6px 8px" }} aria-label="Actions" />
-              </tr>
-            </thead>
-            <tbody>
-              {sitemaps.map((s) => (
-                <tr key={s.path} style={{ borderTop: "1px solid var(--aa-hairline)" }}>
-                  <td style={{ padding: "6px 8px", wordBreak: "break-all" }}>{s.path}</td>
-                  <td style={{ padding: "6px 8px" }}>
-                    {s.submitted_urls || "–"} / {s.indexed_urls || "–"}
+        <table className={s.table}>
+          <thead>
+            <tr>
+              <th scope="col">Sitemap</th>
+              <th scope="col">Indexed / submitted</th>
+              <th scope="col">Last read</th>
+              <th scope="col">Status</th>
+              <th scope="col">
+                <span className="sr-only">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {sitemaps.map((sm) => {
+              const { host, path } = splitUrl(sm.path);
+              const submitted = Number(sm.submitted_urls) || 0;
+              const indexed = Number(sm.indexed_urls) || 0;
+              const pct = submitted ? Math.min(100, Math.round((indexed / submitted) * 100)) : 0;
+              const st = rowStatus(sm);
+              const confirming = confirmRemove === sm.path;
+              return (
+                <tr key={sm.path}>
+                  <td data-label="Sitemap">
+                    <a className={s.urlCell} href={sm.path} target="_blank" rel="noopener noreferrer">
+                      <span className={s.urlPath}>{path}</span>
+                      {host ? <span className={s.urlHost}>{host}</span> : null}
+                    </a>
                   </td>
-                  <td style={{ padding: "6px 8px" }}>{(s.last_downloaded || "").slice(0, 10) || "Not yet"}</td>
-                  <td style={{ padding: "6px 8px" }}>
-                    {s.errors ? `${s.errors} error(s)` : s.warnings ? `${s.warnings} warning(s)` : s.is_pending ? "Pending" : "OK"}
+                  <td data-label="Indexed / submitted">
+                    {submitted ? (
+                      <span className={s.meter}>
+                        <span className={s.meterText}>
+                          {indexed.toLocaleString()} / {submitted.toLocaleString()}
+                        </span>
+                        <span className={s.meterTrack} aria-hidden="true">
+                          <span className={s.meterFill} style={{ width: `${pct}%` }} />
+                        </span>
+                      </span>
+                    ) : (
+                      <span className={s.fieldHelp}>—</span>
+                    )}
                   </td>
-                  <td style={{ padding: "6px 8px", whiteSpace: "nowrap", textAlign: "right" }}>
-                    <button type="button" className={styles.button} disabled={busy !== ""} onClick={() => void submit(s.path)}>
-                      {busy === `submit:${s.path}` ? "Resubmitting…" : "Resubmit"}
-                    </button>{" "}
-                    {confirmRemove === s.path ? (
+                  <td data-label="Last read">{sm.last_downloaded ? formatDateOnly(sm.last_downloaded) : "Not yet"}</td>
+                  <td data-label="Status">
+                    <span className={s.badge} data-state={st.state}>
+                      <span className={s.badgeDot} aria-hidden="true" />
+                      {st.label}
+                    </span>
+                  </td>
+                  <td className={s.rowActions}>
+                    {confirming ? (
                       <>
-                        <button type="button" className={styles.button} data-tone="danger" disabled={busy !== ""} onClick={() => void remove(s.path)}>
-                          {busy === `remove:${s.path}` ? "Removing…" : "Confirm remove"}
-                        </button>{" "}
-                        <button type="button" className={styles.button} disabled={busy !== ""} onClick={() => setConfirmRemove("")}>
+                        <button type="button" className={`${s.btnGhost} ${s.btnSm}`} disabled={busy !== ""} onClick={() => setConfirmRemove("")}>
                           Cancel
+                        </button>
+                        <button type="button" className={`${s.btnDanger} ${s.btnSm}`} disabled={busy !== ""} onClick={() => void remove(sm.path)}>
+                          {busy === `remove:${sm.path}` ? "Removing…" : "Confirm remove"}
                         </button>
                       </>
                     ) : (
-                      <button type="button" className={styles.button} disabled={busy !== ""} onClick={() => setConfirmRemove(s.path)}>
-                        Remove
-                      </button>
+                      <>
+                        <button type="button" className={`${s.btnSecondary} ${s.btnSm}`} disabled={busy !== ""} onClick={() => void submit(sm.path, false)}>
+                          {busy === `submit:${sm.path}` ? "Resubmitting…" : "Resubmit"}
+                        </button>
+                        <button
+                          type="button"
+                          className={`${s.btnDangerGhost} ${s.btnSm}`}
+                          disabled={busy !== ""}
+                          onClick={() => setConfirmRemove(sm.path)}
+                          aria-label={`Remove ${sm.path}`}
+                        >
+                          Remove
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              );
+            })}
+          </tbody>
+        </table>
       )}
 
       <form
-        className={styles.row}
-        style={{ gap: 8, marginTop: 12, flexWrap: "wrap" }}
+        className={s.addRow}
         onSubmit={(e) => {
           e.preventDefault();
-          if (url.trim()) void submit(url.trim());
+          if (url.trim()) void submit(url.trim(), true);
         }}
       >
-        <label className={styles.label} style={{ flex: "1 1 280px", margin: 0 }}>
-          <span className="sr-only">Sitemap URL</span>
-          <input
-            className={styles.input}
-            type="url"
-            placeholder="https://example.com/sitemap_index.xml"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
+        <label className="sr-only" htmlFor="gsc-sitemap-url">
+          Sitemap URL
         </label>
-        <button type="submit" className={styles.button} disabled={busy !== "" || !url.trim()}>
+        <input
+          id="gsc-sitemap-url"
+          className={s.input}
+          type="url"
+          placeholder="https://example.com/sitemap_index.xml"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+        />
+        <button type="submit" className={s.btnPrimary} disabled={busy !== "" || !url.trim()}>
           {busy === `submit:${url.trim()}` ? "Submitting…" : "Submit sitemap"}
         </button>
       </form>
 
       {msg ? (
-        <div className={styles.muted} style={{ fontSize: 13, marginTop: 8 }} role="status">
-          {msg}
+        <div className={s.alert} data-tone={msg.tone} role="status">
+          {msg.text}
         </div>
       ) : null}
-    </div>
+    </section>
   );
 }
