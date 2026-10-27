@@ -1,7 +1,7 @@
 .backdrop {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: var(--z-modal-bg);
   border: none;
   cursor: pointer;
   background: rgba(4, 4, 8, 0.72);
@@ -13,7 +13,7 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  z-index: 81;
+  z-index: var(--z-modal);
   display: flex;
   flex-direction: column;
   width: min(920px, calc(100vw - 28px));

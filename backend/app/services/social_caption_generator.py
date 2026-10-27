@@ -113,6 +113,15 @@ def _article_context(article: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_MD_EMPHASIS = re.compile(r"(\*\*|__)(?=\S)(.+?)(?<=\S)\1")
+
+
+def _strip_markdown_emphasis(text: str) -> str:
+    """LinkedIn has no markdown: `**bold**` would post with literal asterisks. The preview
+    shows the cleaned text, so what the user sees is what gets published."""
+    return _MD_EMPHASIS.sub(r"\2", text or "")
+
+
 async def generate_linkedin_caption(article: dict[str, Any]) -> str:
     ctx = _article_context(article)
     body_excerpt = (article.get("article") or "").strip()[:3000]
@@ -135,7 +144,7 @@ async def generate_linkedin_caption(article: dict[str, Any]) -> str:
         # a literal "{{ARTICLE_LINK}}" token visible to the user.
         text = "\n".join(line for line in text.split("\n") if line.strip() != "{{ARTICLE_LINK}}")
         text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    return _strip_markdown_emphasis(text).strip()
 
 
 async def generate_quora_answer(*, question: str, article: dict[str, Any]) -> str:

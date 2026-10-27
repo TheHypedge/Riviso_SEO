@@ -12,7 +12,7 @@ from app.services.context_links import apply_context_links_html
 from app.services.shopify_product_pipeline import is_shopify_project
 from app.services.wordpress_content_pipeline import is_wordpress_project
 from app.services.gsc_actions import maybe_request_url_inspection
-from app.services import indexnow
+from app.services import indexnow, linkedin_autopost
 from app.services.to_thread import run_sync
 from app.services.pipeline_streamer import (
     MSG_PUBLISH_COMPLETE,
@@ -960,6 +960,8 @@ async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_c
                     "status": shopify_pub_status,
                 },
             )
+            if shopify_pub_status == "published":
+                await linkedin_autopost.schedule_after_publish(st=st, proj=proj, article_id=aid)
             msg = "Published to Shopify." if shopify_pub_status == "published" else "Saved to Shopify as draft."
             if needs_generation:
                 msg = f"Generated content and {msg[0].lower()}{msg[1:]}"
@@ -1028,6 +1030,7 @@ async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_c
                 pass
             if created_wp_status == "publish" and wp_link:
                 indexnow.submit_in_background(proj=proj, urls=[str(wp_link)])
+                await linkedin_autopost.schedule_after_publish(st=st, proj=proj, article_id=aid)
 
             msg = "Published to WordPress." if created_wp_status == "publish" else "Saved to WordPress as draft."
             if needs_generation:
@@ -1505,6 +1508,8 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                                 jid,
                                 aid,
                             )
+                        elif shopify_pub_status == "published":
+                            await linkedin_autopost.schedule_after_publish(st=st, proj=proj, article_id=aid)
                     else:
                         # categories
                         cats: list[int] = []
@@ -1583,6 +1588,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                         # Best-effort: IndexNow (Bing & co.) after live publish.
                         if created_wp_status == "publish" and wp_link:
                             indexnow.submit_in_background(proj=proj, urls=[str(wp_link)])
+                            await linkedin_autopost.schedule_after_publish(st=st, proj=proj, article_id=aid)
                 except Exception as e:
                     log.exception("Scheduled job failed jid=%s", jid)
                     # If the post already succeeded on the platform, do not leave the job as failed.

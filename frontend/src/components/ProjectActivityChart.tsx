@@ -209,7 +209,7 @@ export function ProjectActivityChart(props: {
   const tooltipEl = tooltip ? (
     <div
       className={s.projectActivityTooltip}
-      style={{ position: "fixed", left: tooltip.clientX, top: tooltip.clientY, transform: tooltip.placementTransform, zIndex: 10000 }}
+      style={{ position: "fixed", left: tooltip.clientX, top: tooltip.clientY, transform: tooltip.placementTransform, zIndex: "var(--z-tooltip)" }}
       role="tooltip"
     >
       <div className={s.projectActivityTooltipPanel}>

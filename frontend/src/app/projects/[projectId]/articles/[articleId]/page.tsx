@@ -49,6 +49,10 @@ import { resolveFeaturedImageFileForWordPress } from "@/lib/featuredImageFile";
 import { formatShopifyBlogOptionLabel, SHOPIFY_BLOG_CHANNEL_HELP } from "@/lib/shopifyBlogLabel";
 import { ProjectSidebar, ProjectSidebarStyles } from "@/components/ProjectSidebar";
 import { LinkedInPostPreview } from "@/components/LinkedInPostPreview";
+import { useFocusTrap } from "@/lib/useFocusTrap";
+
+/** LinkedIn Posts API commentary limit (backend enforces the same). */
+const LINKEDIN_MAX_CHARS = 3000;
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/DropdownMenu";
 import type { ProfilePublic, ProjectPublic } from "@/lib/api";
 
@@ -495,12 +499,21 @@ export default function ArticleEditPage() {
   const [linkedinShareMsg, setLinkedinShareMsg] = useState<string | null>(null);
   const [linkedinShareMode, setLinkedinShareMode] = useState<"now" | "schedule">("now");
   const [linkedinScheduleAt, setLinkedinScheduleAt] = useState("");
+  // Set right after a successful "Post Now" so the button flips without a reload.
+  const [linkedinPostedUrl, setLinkedinPostedUrl] = useState<string | null>(null);
   const [imageRegenBusy, setImageRegenBusy] = useState(false);
   const [imageGenPhase, setImageGenPhase] = useState<"idle" | "generating" | "saving">("idle");
   const [wpPublishBusy, setWpPublishBusy] = useState(false);
   const [wpUpdateBusy, setWpUpdateBusy] = useState(false);
   const [wpSyncBusy, setWpSyncBusy] = useState(false);
   const [showWpSyncConfirm, setShowWpSyncConfirm] = useState(false);
+  // Every dialog on this page keeps keyboard focus inside itself (CLAUDE.md modal rule).
+  const productMapTrapRef = useFocusTrap(Boolean(productMapBeforeGenerateOpen));
+  const regenConfirmTrapRef = useFocusTrap(Boolean(showRegenConfirm));
+  const wpSyncTrapRef = useFocusTrap(Boolean(showWpSyncConfirm));
+  const imageRegenTrapRef = useFocusTrap(Boolean(showImageRegenModal));
+  const linkedinTrapRef = useFocusTrap(Boolean(linkedinShareModal));
+  const websiteConnTrapRef = useFocusTrap(Boolean(websiteConnectionModal));
   const [liveUrlCopied, setLiveUrlCopied] = useState(false);
   const wpAutoSyncKeyRef = useRef<string | null>(null);
   const toastTimerRef = useRef<number | null>(null);
@@ -1984,6 +1997,7 @@ export default function ArticleEditPage() {
         setNotice("LinkedIn post scheduled.");
       } else {
         const res = await api.linkedinPost(params.projectId, params.articleId, commentary);
+        setLinkedinPostedUrl(res.post_url || null);
         setLinkedinShareModal(false);
         setNotice(
           res.image_attached === false
@@ -2019,6 +2033,38 @@ export default function ArticleEditPage() {
     }
   }
 
+  const linkedinLiveUrl = linkedinPostedUrl || article?.linkedin_post_url || "";
+  // Shared already → open the live post on LinkedIn; otherwise offer to share.
+  function renderLinkedinButton() {
+    const icon = (
+      <svg viewBox="0 0 24 24" fill="currentColor" className={editorStyles.commandBarUtilityIcon} aria-hidden="true">
+        <path d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.3V9h3.42v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.07 2.07 0 1 1 0-4.14 2.07 2.07 0 0 1 0 4.14zM7.12 20.45H3.56V9h3.56v11.45z" />
+      </svg>
+    );
+    if (linkedinLiveUrl) {
+      return (
+        <a
+          href={linkedinLiveUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={editorStyles.commandBarUtilityBtn}
+          data-shared="true"
+          title="Shared on LinkedIn — open the live post"
+        >
+          {icon}
+          View on LinkedIn
+          <span aria-hidden="true">↗</span>
+        </a>
+      );
+    }
+    return (
+      <button type="button" className={editorStyles.commandBarUtilityBtn} onClick={() => void openLinkedinShareModal()} disabled={!body.trim()}>
+        {icon}
+        Share to LinkedIn
+      </button>
+    );
+  }
+
   if (!editorPath) {
     return (
       <div className={`${styles.page} ${styles.pageTop}`}>
@@ -2041,7 +2087,8 @@ export default function ArticleEditPage() {
   const seoScoreColor = seoScore.total >= 70 ? "var(--aa-success)" : seoScore.total >= 40 ? "var(--aa-warning)" : "var(--aa-error)";
   const seoArcLength = (seoScore.total / 100) * 188.5;
 
-  const articleSlug = useMemo(() => slugFromTitle(title || article?.title || ""), [title, article?.title]);
+  // Plain computation (cheap): a hook here would run after the early return above.
+  const articleSlug = slugFromTitle(title || article?.title || "");
   const canonicalUrl = wpLink || (projectSettings?.website_url ? `${projectSettings.website_url.replace(/\/$/, "")}/${articleSlug}/` : "");
 
   const sidebarEmail = (sidebarProfile?.email || "").trim();
@@ -2091,7 +2138,7 @@ export default function ArticleEditPage() {
 
         {productMapBeforeGenerateOpen ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label={isShopifyProject ? "Map products before generation" : "Map pages before generation"}>
-            <div className={styles.modalPanel}>
+            <div ref={productMapTrapRef} className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>
                   {hasGeneratedContent
@@ -2149,7 +2196,7 @@ export default function ArticleEditPage() {
 
         {showRegenConfirm ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Regenerate article">
-            <div className={styles.modalPanel}>
+            <div ref={regenConfirmTrapRef} className={styles.modalPanel}>
               <div className={styles.modalHead}><h3 className={styles.modalTitle}>Regenerate article?</h3></div>
               <div className={styles.modalBody} style={{ display: "grid", gap: 16 }}>
                 <p style={{ margin: 0, lineHeight: 1.6, fontSize: 14, color: "var(--aa-ink)" }}>
@@ -2193,7 +2240,7 @@ export default function ArticleEditPage() {
 
         {showWpSyncConfirm ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Sync from WordPress">
-            <div className={styles.modalPanel}>
+            <div ref={wpSyncTrapRef} className={styles.modalPanel}>
               <div className={styles.modalHead}><div className={styles.modalTitle}>Sync from WordPress?</div></div>
               <div className={styles.modalBody}>
                 <p style={{ margin: 0, lineHeight: 1.55 }}>You have unsaved edits in Riviso. Syncing will replace the title, body, SEO fields, and live URL with the current version on WordPress.</p>
@@ -2208,7 +2255,7 @@ export default function ArticleEditPage() {
 
         {showImageRegenModal ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Regenerate featured image">
-            <div className={styles.modalPanel} style={{ maxWidth: 520 }}>
+            <div ref={imageRegenTrapRef} className={styles.modalPanel} style={{ maxWidth: 520 }}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>{hasFeaturedImage ? "Regenerate featured image" : "Generate featured image"}</h3>
                 <button type="button" className={styles.iconButton} aria-label="Close" disabled={imageRegenBusy} onClick={() => setShowImageRegenModal(false)}>×</button>
@@ -2256,7 +2303,7 @@ export default function ArticleEditPage() {
 
         {linkedinShareModal ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Share to LinkedIn">
-            <div className={styles.modalPanel} style={{ maxWidth: 640, maxHeight: "85vh", overflowY: "auto" }}>
+            <div ref={linkedinTrapRef} className={styles.modalPanel} style={{ maxWidth: 640, maxHeight: "85vh", overflowY: "auto" }}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>Share to LinkedIn</h3>
                 <button type="button" className={styles.iconButton} aria-label="Close" disabled={linkedinShareBusy} onClick={() => setLinkedinShareModal(false)}>×</button>
@@ -2284,6 +2331,16 @@ export default function ArticleEditPage() {
                         articleImageUrl={generatedImageUrl || article?.image_url || null}
                         articleDomain={linkedinArticleDomain}
                       />
+                      <div className={styles.linkedinCaptionMeta}>
+                        <span>
+                          {linkedinArticleUrl && !linkedinCaption.includes(linkedinArticleUrl)
+                            ? "No article link in the caption — readers can't click through to your article."
+                            : ""}
+                        </span>
+                        <span data-over={linkedinCaption.trim().length > LINKEDIN_MAX_CHARS || undefined}>
+                          {linkedinCaption.trim().length.toLocaleString()} / {LINKEDIN_MAX_CHARS.toLocaleString()}
+                        </span>
+                      </div>
                     </div>
                     <div style={{ display: "flex", gap: 16 }}>
                       <label className={styles.label} style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
@@ -2307,7 +2364,7 @@ export default function ArticleEditPage() {
               <div className={styles.modalFooter}>
                 <button className={styles.btnSecondary} type="button" disabled={linkedinShareBusy} onClick={() => setLinkedinShareModal(false)}>Cancel</button>
                 {linkedinShareStatus?.connected ? (
-                  <button className={styles.button} type="button" disabled={linkedinShareBusy || linkedinCaptionLoading || !linkedinCaption.trim()} onClick={() => void submitLinkedinShare()}>
+                  <button className={styles.button} type="button" disabled={linkedinShareBusy || linkedinCaptionLoading || !linkedinCaption.trim() || linkedinCaption.trim().length > LINKEDIN_MAX_CHARS} onClick={() => void submitLinkedinShare()}>
                     {linkedinShareBusy ? "Sharing…" : linkedinShareMode === "schedule" ? "Schedule" : "Post Now"}
                   </button>
                 ) : null}
@@ -2318,7 +2375,7 @@ export default function ArticleEditPage() {
 
         {websiteConnectionModal ? (
           <div className={styles.modalBackdrop} role="dialog" aria-modal="true" aria-label="Website not connected">
-            <div className={styles.modalPanel}>
+            <div ref={websiteConnTrapRef} className={styles.modalPanel}>
               <div className={styles.modalHead}>
                 <h3 className={styles.modalTitle}>Website not connected</h3>
                 <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setWebsiteConnectionModal(false)}>×</button>
@@ -2406,12 +2463,7 @@ export default function ArticleEditPage() {
                     </svg>
                     {exportingPdf ? "Exporting…" : "Export PDF"}
                   </button>
-                  <button type="button" className={editorStyles.commandBarUtilityBtn} onClick={() => void openLinkedinShareModal()} disabled={!body.trim()}>
-                    <svg viewBox="0 0 24 24" fill="currentColor" className={editorStyles.commandBarUtilityIcon} aria-hidden="true">
-                      <path d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.3V9h3.42v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.07 2.07 0 1 1 0-4.14 2.07 2.07 0 0 1 0 4.14zM7.12 20.45H3.56V9h3.56v11.45z" />
-                    </svg>
-                    Share to LinkedIn
-                  </button>
+                  {renderLinkedinButton()}
                 </div>
               </div>
             </div>
@@ -2439,12 +2491,7 @@ export default function ArticleEditPage() {
                   </svg>
                   {exportingPdf ? "Exporting…" : "Export PDF"}
                 </button>
-                <button type="button" className={editorStyles.commandBarUtilityBtn} onClick={() => void openLinkedinShareModal()} disabled={!body.trim()}>
-                  <svg viewBox="0 0 24 24" fill="currentColor" className={editorStyles.commandBarUtilityIcon} aria-hidden="true">
-                    <path d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.3V9h3.42v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.45v6.29zM5.34 7.43a2.07 2.07 0 1 1 0-4.14 2.07 2.07 0 0 1 0 4.14zM7.12 20.45H3.56V9h3.56v11.45z" />
-                  </svg>
-                  Share to LinkedIn
-                </button>
+                {renderLinkedinButton()}
                 {isDirty ? (
                   <button type="button" className={styles.btnSecondary} onClick={save} disabled={editorLocked}>
                     Save draft

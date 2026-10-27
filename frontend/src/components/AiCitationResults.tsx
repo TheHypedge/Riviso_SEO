@@ -423,7 +423,7 @@ export function AiCitationTrendChart({ points, styles }: { points: AiCitationTre
 
   const tooltipEl =
     tooltip && hoverWeek ? (
-      <div role="tooltip" style={{ position: "fixed", left: tooltip.x, top: tooltip.y, transform: tooltip.transform, zIndex: 10000 }} className={styles.siteAuditChartTooltip}>
+      <div role="tooltip" style={{ position: "fixed", left: tooltip.x, top: tooltip.y, transform: tooltip.transform, zIndex: "var(--z-tooltip)" }} className={styles.siteAuditChartTooltip}>
         <div className={styles.siteAuditChartTooltipDate}>Week of {hoverWeek}</div>
         {engines.map((engine) => {
           const p = byEngineWeek.get(`${engine}|${hoverWeek}`);

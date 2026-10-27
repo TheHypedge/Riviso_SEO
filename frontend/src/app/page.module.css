@@ -849,7 +849,7 @@
   position: fixed;
   inset: 0;
   background: rgba(20, 20, 19, 0.35);
-  z-index: 70;
+  z-index: var(--z-modal-bg);
 }
 
 .offcanvasPanel {
@@ -861,7 +861,7 @@
   width: min(340px, calc(100% - 42px));
   background: var(--aa-canvas);
   border-left: 1px solid var(--aa-hairline);
-  z-index: 71;
+  z-index: var(--z-modal);
   display: flex;
   flex-direction: column;
   box-shadow: -14px 0 46px rgba(20, 20, 19, 0.12);
@@ -946,7 +946,7 @@
   position: fixed;
   inset: 0;
   background: rgba(19, 19, 19, 0.652);
-  z-index: 50;
+  z-index: var(--z-modal-bg);
 }
 
 .bulkPopup {
@@ -959,7 +959,7 @@
   border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-xl);
   padding: 16px;
-  z-index: 51;
+  z-index: var(--z-modal);
   box-shadow: 0 18px 60px rgba(20, 20, 19, 0.14);
 }
 
@@ -2380,7 +2380,7 @@
   position: absolute;
   top: calc(100% + 8px);
   left: 50%;
-  z-index: 40;
+  z-index: var(--z-tooltip);
   max-width: min(240px, 42vw);
   padding: 6px 10px;
   border-radius: 8px;
@@ -2411,7 +2411,7 @@
   position: absolute;
   top: calc(100% + 3px);
   left: 50%;
-  z-index: 41;
+  z-index: var(--z-tooltip);
   border: 5px solid transparent;
   border-bottom-color: #16161c;
   transform: translateX(-50%);
@@ -3646,7 +3646,7 @@
   position: fixed;
   inset: 0;
   background: rgba(20, 20, 19, 0.20);
-  z-index: 60;
+  z-index: var(--z-modal-bg);
   border: 0;
 }
 
@@ -3679,7 +3679,7 @@
     border-radius: 0;
     transform: translateX(-105%);
     transition: transform 200ms ease;
-    z-index: 70;
+    z-index: var(--z-modal);
     overflow: auto;
   }
   .sidebarOpen {
@@ -4127,7 +4127,7 @@
   position: absolute;
   right: 0;
   top: calc(100% + 8px);
-  z-index: 20;
+  z-index: var(--z-dropdown);
   min-width: 180px;
   padding: 6px;
   border: 1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%);
@@ -7410,7 +7410,7 @@
   position: fixed;
   top: 18px;
   right: 18px;
-  z-index: 1200;
+  z-index: var(--z-toast);
   padding: 10px 12px;
   border-radius: 12px;
   border: 1px solid var(--aa-hairline);
@@ -8848,7 +8848,7 @@
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.55);
-  z-index: 60;
+  z-index: var(--z-modal-bg);
 }
 
 /* Shell for ~20 modals in the project workspace -- was the one modal in the
@@ -8873,7 +8873,7 @@
   border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-lg);
   padding: 16px;
-  z-index: 61;
+  z-index: var(--z-modal);
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
 }
 
@@ -9885,7 +9885,7 @@ a.secondary {
   --tip-muted: #b4b4be;
   --tip-border: rgba(255, 255, 255, 0.22);
   position: fixed;
-  z-index: 10000;
+  z-index: var(--z-tooltip);
   width: 220px;
   pointer-events: none;
   color: var(--tip-ink);
@@ -11999,4 +11999,22 @@ a.secondary {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* Share to LinkedIn: link hint + character counter under the preview. */
+.linkedinCaptionMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--aa-muted);
+}
+.linkedinCaptionMeta > span:last-child {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.linkedinCaptionMeta > span[data-over] {
+  color: var(--aa-error);
+  font-weight: 600;
 }

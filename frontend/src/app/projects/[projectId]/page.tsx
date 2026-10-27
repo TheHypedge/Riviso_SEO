@@ -89,10 +89,10 @@ import { Hint } from "@/components/settings/Hint";
 import { DeleteProjectDialog } from "@/components/settings/DeleteProjectDialog";
 import { SearchConsoleSection } from "@/components/settings/SearchConsoleSection";
 import { SiteMapSection } from "@/components/settings/SiteMapSection";
+import { LinkedInSection } from "@/components/settings/LinkedInSection";
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
 import { isProjectConnected, resolveProjectPlatform } from "@/lib/projectPlatform";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
-import { LinkedInPostPreview } from "@/components/LinkedInPostPreview";
 
 type StatusFilter = "" | "pending" | "draft" | "scheduled" | "published";
 
@@ -11486,113 +11486,25 @@ export default function ProjectPage() {
 
         {tab === "social" ? (
           <>
-            <div className={`${styles.card} ${styles.cardWide}`}>
-              <h2 className={styles.clusterCardTitle} style={{ marginTop: 0 }}>LinkedIn</h2>
-              <p className={styles.clusterCardSubtitle}>
-                Connect a LinkedIn account to share published articles as posts. Note: links shared on
-                LinkedIn are marked &ldquo;nofollow&rdquo; by LinkedIn — this drives referral traffic and visibility,
-                not a direct SEO backlink.
-              </p>
-
-              {linkedinMsg ? <div className={styles.error} style={{ marginTop: 10 }}>{linkedinMsg}</div> : null}
-              {linkedinOpenedFromOAuth && linkedinStatus?.connected ? (
-                <div className={styles.muted} style={{ marginTop: 10, fontWeight: 700, color: "var(--aa-success, #16a34a)" }}>
-                  Connected{linkedinStatus?.member_name ? ` as ${linkedinStatus.member_name}` : ""}.
-                </div>
-              ) : null}
-
-              <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center" }}>
-                <div>
-                  <div style={{ fontWeight: 800 }}>
-                    {linkedinLoading
-                      ? "Loading…"
-                      : linkedinStatus?.connected
-                      ? `Connected${linkedinStatus.member_name ? ` (${linkedinStatus.member_name})` : ""}`
-                      : "Not connected"}
-                  </div>
-                  <div className={styles.muted} style={{ fontSize: 12, marginTop: 4 }}>
-                    {linkedinStatus?.configured === false
-                      ? "LinkedIn OAuth client is not configured on the server. Set LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET in the backend env, then restart the FastAPI service."
-                      : linkedinStatus?.connected
-                      ? `Linked${linkedinStatus.connected_at ? ` on ${linkedinStatus.connected_at}` : ""}.${linkedinStatus.token_expires_at ? " You'll get a reminder before this expires." : ""}`
-                      : "Click Connect LinkedIn to authorize posting for this project."}
-                  </div>
-                </div>
-                <div className={styles.row} style={{ gap: 8 }}>
-                  {linkedinStatus?.connected ? (
-                    <button
-                      type="button"
-                      className={styles.btnSecondary}
-                      onClick={disconnectLinkedinForProject}
-                      disabled={linkedinDisconnecting}
-                    >
-                      {linkedinDisconnecting ? "Disconnecting…" : "Disconnect"}
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className={styles.button}
-                    onClick={connectLinkedinForProject}
-                    disabled={linkedinConnecting || linkedinStatus?.configured === false}
-                  >
-                    {linkedinConnecting
-                      ? "Redirecting…"
-                      : linkedinStatus?.connected
-                      ? "Reconnect"
-                      : "Connect LinkedIn"}
-                  </button>
-                </div>
-              </div>
-
-              {linkedinStatus?.connected && linkedinStatus.organizations.length > 0 ? (
-                <div style={{ marginTop: 14 }}>
-                  <div className={styles.muted} style={{ fontSize: 12, marginBottom: 6 }}>Post as</div>
-                  <select
-                    className={styles.input}
-                    value={linkedinStatus.selected_author_urn || linkedinStatus.person_urn || ""}
-                    onChange={(e) => void selectLinkedinAuthor(e.target.value)}
-                  >
-                    {linkedinStatus.person_urn ? (
-                      <option value={linkedinStatus.person_urn}>
-                        {linkedinStatus.member_name || "You"} (personal profile)
-                      </option>
-                    ) : null}
-                    {linkedinStatus.organizations.map((org) => (
-                      <option key={org.urn} value={org.urn}>
-                        {org.name || org.urn}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : null}
-
-              {socialPosts.filter((p) => p.platform === "linkedin").length > 0 ? (
-                <div style={{ marginTop: 18 }}>
-                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Recent LinkedIn posts</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                    {socialPosts
-                      .filter((p) => p.platform === "linkedin")
-                      .slice(0, 10)
-                      .map((p) => (
-                        <a
-                          key={p.id}
-                          href={p.external_url}
-                          target="_blank"
-                          rel="noopener noreferrer nofollow"
-                          style={{ display: "block", textDecoration: "none", color: "inherit" }}
-                          title="Open this post on LinkedIn"
-                        >
-                          <LinkedInPostPreview
-                            authorName={linkedinStatus?.member_name || "You"}
-                            captionText={p.content_text}
-                            articleTitle={socialArticleOptions.find((a) => a.id === p.article_id)?.title || null}
-                          />
-                        </a>
-                      ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
+            <LinkedInSection
+              status={linkedinStatus}
+              loading={linkedinLoading}
+              error={linkedinMsg}
+              justConnected={linkedinOpenedFromOAuth}
+              connecting={linkedinConnecting}
+              disconnecting={linkedinDisconnecting}
+              onConnect={connectLinkedinForProject}
+              onDisconnect={() => void disconnectLinkedinForProject()}
+              onSelectAuthor={(urn) => void selectLinkedinAuthor(urn)}
+              posts={socialPosts}
+              articleTitle={(id) => socialArticleOptions.find((a) => a.id === id)?.title || null}
+              onSaveSettings={async (enabled, delay) => {
+                const res = await api.linkedinSaveSettings(projectId, { auto_post_enabled: enabled, auto_post_delay_minutes: delay });
+                setLinkedinStatus((cur) =>
+                  cur ? { ...cur, auto_post_enabled: res.auto_post_enabled, auto_post_delay_minutes: res.auto_post_delay_minutes } : cur,
+                );
+              }}
+            />
 
             <div className={`${styles.card} ${styles.cardWide}`} style={{ marginTop: 16 }}>
               <h2 className={styles.clusterCardTitle} style={{ marginTop: 0 }}>Quora</h2>

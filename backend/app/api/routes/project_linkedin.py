@@ -30,13 +30,16 @@ from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
-from app.services import linkedin_client, linkedin_oauth
+from app.services import linkedin_client, linkedin_oauth, linkedin_autopost
 from app.services.quora_question_finder import discover_quora_questions
 from app.services.schedule_timing import SCHEDULE_TOO_SOON_MESSAGE, is_schedule_time_allowed
 from app.services.shopify_oauth import validate_return_origin
 from app.services.social_caption_generator import generate_linkedin_caption, generate_quora_answer
 from app.services.to_thread import run_sync
 from app.services.user_timezone import parse_schedule_input_to_utc, zoneinfo_for_user
+
+# LinkedIn Posts API commentary limit.
+LINKEDIN_MAX_CHARS = 3000
 
 router = APIRouter(prefix="/projects/{project_id}/linkedin", tags=["linkedin-project"])
 quora_router = APIRouter(prefix="/projects/{project_id}/quora", tags=["quora-project"])
@@ -101,7 +104,33 @@ async def linkedin_status(project_id: str, user: dict = Depends(get_current_user
         "token_expires_at": (proj.get("linkedin_token_expires_at") or "").strip() or None,
         "organizations": organizations,
         "selected_author_urn": (proj.get("linkedin_selected_author_urn") or "").strip() or None,
+        "auto_post_enabled": linkedin_autopost.auto_post_settings(proj)[0],
+        "auto_post_delay_minutes": linkedin_autopost.auto_post_settings(proj)[1],
+        "auto_post_delay_options": list(linkedin_autopost.AUTO_POST_DELAYS_MIN),
     }
+
+
+class LinkedInSettingsRequest(BaseModel):
+    auto_post_enabled: bool
+    auto_post_delay_minutes: int
+
+
+@router.post("/settings")
+async def linkedin_settings(project_id: str, payload: LinkedInSettingsRequest, user: dict = Depends(get_current_user)) -> dict:
+    """Owner-only: auto-post every published article to LinkedIn after N minutes."""
+    st = get_legacy_storage_module()
+    proj = await run_sync(_require_project, st=st, user=user, project_id=project_id)
+    delay = int(payload.auto_post_delay_minutes)
+    if delay not in linkedin_autopost.AUTO_POST_DELAYS_MIN:
+        raise HTTPException(status_code=400, detail="Choose a delay between 5 minutes and 24 hours.")
+    if payload.auto_post_enabled and not (proj.get("linkedin_access_token") or "").strip():
+        raise HTTPException(status_code=400, detail="Connect LinkedIn before turning on auto-post.")
+    await run_sync(
+        st.update_project_fields,
+        project_id,
+        {"linkedin_auto_post_enabled": bool(payload.auto_post_enabled), "linkedin_auto_post_delay_minutes": delay},
+    )
+    return {"ok": True, "auto_post_enabled": bool(payload.auto_post_enabled), "auto_post_delay_minutes": delay}
 
 
 @router.get("/connect-url")
@@ -261,6 +290,8 @@ async def linkedin_post(project_id: str, article_id: str, payload: LinkedInPostR
     commentary = (payload.commentary or "").strip()
     if not commentary:
         raise HTTPException(status_code=400, detail="commentary is required")
+    if len(commentary) > LINKEDIN_MAX_CHARS:
+        raise HTTPException(status_code=400, detail=f"LinkedIn posts can be at most {LINKEDIN_MAX_CHARS:,} characters (yours is {len(commentary):,}).")
 
     try:
         result = await linkedin_client.share_article(
@@ -291,6 +322,13 @@ async def linkedin_post(project_id: str, article_id: str, payload: LinkedInPostR
             "posted_at": now,
         },
     )
+    # Same as the scheduler: the article row remembers its post, so the editor can show
+    # "View on LinkedIn" instead of offering to share it again.
+    if hasattr(st, "patch_article_fields"):
+        await run_sync(
+            st.patch_article_fields, article_id,
+            {"linkedin_post_urn": result.get("post_urn") or "", "linkedin_post_url": result["post_url"]},
+        )
     return {"id": post_id, "post_url": result["post_url"], "image_attached": result["image_attached"]}
 
 
@@ -311,6 +349,8 @@ async def linkedin_schedule(project_id: str, article_id: str, payload: LinkedInS
     commentary = (payload.commentary or "").strip()
     if not commentary:
         raise HTTPException(status_code=400, detail="commentary is required")
+    if len(commentary) > LINKEDIN_MAX_CHARS:
+        raise HTTPException(status_code=400, detail=f"LinkedIn posts can be at most {LINKEDIN_MAX_CHARS:,} characters (yours is {len(commentary):,}).")
 
     tz_name = (payload.user_timezone or "").strip() or (user.get("timezone") or "").strip()
     try:

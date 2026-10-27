@@ -508,6 +508,9 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         "linkedin_member_name": (d.get("linkedin_member_name") or "").strip()[:200],
         "linkedin_org_urns": list(d.get("linkedin_org_urns") or []),
         "linkedin_selected_author_urn": (d.get("linkedin_selected_author_urn") or "").strip()[:200],
+        # Social → LinkedIn → Settings: auto-post every published article after N minutes.
+        "linkedin_auto_post_enabled": bool(d.get("linkedin_auto_post_enabled", False)),
+        "linkedin_auto_post_delay_minutes": _clamped_int(d.get("linkedin_auto_post_delay_minutes") or 30, 5, 1440),
         "linkedin_connected_at": (d.get("linkedin_connected_at") or "").strip()[:64],
         "linkedin_reconnect_notified": bool(d.get("linkedin_reconnect_notified", False)),
         "default_wp_rest_base": (d.get("default_wp_rest_base") or "")[:200],
@@ -2742,6 +2745,8 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
             "linkedin_member_name",
             "linkedin_org_urns",
             "linkedin_selected_author_urn",
+            "linkedin_auto_post_enabled",
+            "linkedin_auto_post_delay_minutes",
             "linkedin_connected_at",
             "linkedin_reconnect_notified",
             "default_wp_rest_base",
@@ -2953,6 +2958,8 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "linkedin_member_name": d.get("linkedin_member_name") or "",
         "linkedin_org_urns": list(d.get("linkedin_org_urns") or []),
         "linkedin_selected_author_urn": d.get("linkedin_selected_author_urn") or "",
+        "linkedin_auto_post_enabled": bool(d.get("linkedin_auto_post_enabled", False)),
+        "linkedin_auto_post_delay_minutes": d.get("linkedin_auto_post_delay_minutes") or 30,
         "linkedin_connected_at": d.get("linkedin_connected_at") or "",
         "linkedin_reconnect_notified": bool(d.get("linkedin_reconnect_notified", False)),
         "default_wp_rest_base": d.get("default_wp_rest_base") or "",
@@ -5521,6 +5528,29 @@ def load_social_posts_for_project(project_id: str, *, platform: str | None = Non
         query["platform"] = plat
     cur = get_db().social_posts.find(query, {"_id": 0}).sort("created_at", -1).limit(int(limit))
     return [dict(d) for d in cur]
+
+
+def get_latest_social_post_url(article_id: str, *, platform: str = "linkedin") -> str:
+    """URL of the newest posted social_posts row for one article ("" if never shared) --
+    lets the editor show "View on LinkedIn" even for shares made before the article row
+    itself recorded linkedin_post_url."""
+    aid = (article_id or "").strip()
+    if not aid:
+        return ""
+    if _storage_mode != "mongo":
+        rows = [
+            r for r in _load_json_list_dicts("social_posts.json")
+            if (r.get("article_id") or "") == aid and (r.get("platform") or "") == platform
+            and (r.get("status") or "") == "posted" and (r.get("external_url") or "")
+        ]
+        rows.sort(key=lambda r: str(r.get("created_at") or ""), reverse=True)
+        return str(rows[0].get("external_url") or "") if rows else ""
+    doc = get_db().social_posts.find_one(
+        {"article_id": aid, "platform": platform, "status": "posted", "external_url": {"$nin": [None, ""]}},
+        {"_id": 0, "external_url": 1},
+        sort=[("created_at", -1)],
+    )
+    return str((doc or {}).get("external_url") or "")
 
 
 def load_ai_citation_checked_keywords(project_id: str) -> set[str]:

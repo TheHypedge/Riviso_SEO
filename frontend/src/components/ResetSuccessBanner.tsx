@@ -14,7 +14,7 @@ export default function ResetSuccessBanner() {
         top: 16,
         left: "50%",
         transform: "translateX(-50%)",
-        zIndex: 9999,
+        zIndex: "var(--z-toast)",
         background: "rgba(93,184,114,0.15)",
         border: "1px solid rgba(93,184,114,0.4)",
         borderRadius: 8,

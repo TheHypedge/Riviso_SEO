@@ -397,6 +397,10 @@ export type LinkedInStatus = {
   token_expires_at?: string | null;
   organizations: LinkedInOrganization[];
   selected_author_urn?: string | null;
+  /** Social → LinkedIn → Settings: auto-post each published article after a delay. */
+  auto_post_enabled?: boolean;
+  auto_post_delay_minutes?: number;
+  auto_post_delay_options?: number[];
 };
 
 export type QuoraQuestion = {
@@ -1340,6 +1344,8 @@ export type ClusterLinkContext = {
 };
 
 export type ArticleDetail = ArticlePublic & {
+  /** Live LinkedIn post for this article, when it has been shared. */
+  linkedin_post_url?: string | null;
   article: string;
   meta_title?: string | null;
   meta_description?: string | null;
@@ -3988,6 +3994,12 @@ export const api = {
   },
 
   // Social Media module — LinkedIn
+  async linkedinSaveSettings(projectId: string, body: { auto_post_enabled: boolean; auto_post_delay_minutes: number }) {
+    return apiFetch<{ ok: boolean; auto_post_enabled: boolean; auto_post_delay_minutes: number }>(
+      `/api/projects/${projectId}/linkedin/settings`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  },
   async linkedinStatus(projectId: string) {
     return apiFetch<LinkedInStatus>(`/api/projects/${projectId}/linkedin/status`);
   },

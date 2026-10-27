@@ -54,7 +54,7 @@ from app.services.content_sanitizer import (
 from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient, resolve_featured_media_id, rewrite_inline_media_for_wordpress
 from app.services.gsc_actions import inspect_url_status, maybe_request_url_inspection, request_url_inspection_now
-from app.services import indexnow
+from app.services import indexnow, linkedin_autopost
 from app.services.scheduler import start_scheduled_job_preparation_task
 from app.services.generation_queue import generation_slot, user_generation_slot
 from app.services.to_thread import run_sync
@@ -454,6 +454,16 @@ def _article_image_regeneration_usage(*, st, user: dict, article: dict) -> dict:
     )
 
 
+def _linkedin_post_url(st, article: dict) -> str | None:
+    url = (article.get("linkedin_post_url") or "").strip()
+    if not url and hasattr(st, "get_latest_social_post_url"):
+        try:
+            url = st.get_latest_social_post_url((article.get("id") or "").strip())
+        except Exception:
+            _log.debug("linkedin post lookup failed", exc_info=True)
+    return url or None
+
+
 def _to_detail_response(
     *,
     st,
@@ -521,6 +531,7 @@ def _to_detail_response(
             topic_slot_id=(article.get("topic_slot_id") or "").strip() or None,
             topic_role=(article.get("topic_role") or "").strip() or None,
             cluster_link_context=cluster_ctx,
+            linkedin_post_url=_linkedin_post_url(st, article),
         )
     except ValidationError as e:
         _log.warning(
@@ -3221,6 +3232,7 @@ async def _publish_article_core(
     # Best-effort: IndexNow (Bing & co.) so the new URL is crawled without waiting for discovery.
     if created_wp_status == "publish" and wp_link:
         indexnow.submit_in_background(proj=proj, urls=[str(wp_link)])
+        await linkedin_autopost.schedule_after_publish(st=st, proj=proj, article_id=article_id)
 
     # If this article had a pending scheduled job, mark it posted so Scheduled Articles stays in sync.
     try:
@@ -3540,6 +3552,8 @@ async def publish_to_shopify_blog(
     }
     await run_sync(st.update_article_fields, article_id, updates)
     await publish_pipeline_status(article_id, MSG_PUBLISH_COMPLETE, STAGE_COMPLETE)
+    if publish_now and not is_update:
+        await linkedin_autopost.schedule_after_publish(st=st, proj=proj, article_id=article_id)
     if is_update:
         msg = "Updated on Shopify." if publish_now else "Draft updated on Shopify."
     else:

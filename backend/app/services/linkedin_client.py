@@ -157,12 +157,13 @@ async def create_post(
     title: str | None = None,
     description: str | None = None,
 ) -> dict[str, Any]:
-    """Creates a LinkedIn Post. With `image_urn`: an image post (full-size featured image,
-    article link appended to the text). Else with `article_url`: a link card. Else plain
-    text. Returns {"post_urn", "post_url"}."""
+    """Creates a LinkedIn Post. With `image_urn`: an image post (full-size featured image).
+    Else with `article_url`: a link card. Else plain text. Returns {"post_urn", "post_url"}.
+
+    The commentary is published exactly as the user saw and edited it in the share
+    preview -- nothing is appended (the generated caption already carries the article
+    link; if the user removed it, that was their choice)."""
     text = commentary or ""
-    if image_urn and article_url and article_url not in text:
-        text = f"{text.rstrip()}\n\n{article_url}"
     body: dict[str, Any] = {
         "author": author_urn,
         "commentary": _escape_little_text(text),

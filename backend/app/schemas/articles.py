@@ -228,6 +228,7 @@ class ArticleDetailResponse(ArticlePublic):
     """Full editor payload including HTML body and meta."""
 
     article: str = ""
+    linkedin_post_url: str | None = Field(default=None, description="Live LinkedIn post for this article, when shared.")
     generated_at: str | None = Field(
         default=None,
         description="UTC timestamp of the last successful generation — used by the frontend "

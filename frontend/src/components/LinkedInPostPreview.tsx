@@ -91,7 +91,10 @@ export function LinkedInPostPreview({
 }) {
   const name = (authorName || "You").trim() || "You";
   const initial = name.charAt(0).toUpperCase();
-  const showLinkCard = Boolean((articleTitle || "").trim() || (articleImageUrl || "").trim());
+  // Mirrors what LinkedIn actually renders: an image post shows the picture only (no
+  // title/domain card); without an image the post becomes a link card.
+  const hasImage = Boolean((articleImageUrl || "").trim());
+  const showLinkCard = !hasImage && Boolean((articleTitle || "").trim() || (articleDomain || "").trim());
 
   return (
     <div
@@ -152,16 +155,16 @@ export function LinkedInPostPreview({
         )}
       </div>
 
+      {hasImage ? (
+        // eslint-disable-next-line @next/next/no-img-element -- external/user-generated image URL, not a local asset
+        <img
+          src={articleImageUrl || ""}
+          alt=""
+          style={{ width: "100%", display: "block", background: "var(--aa-surface-soft)", borderTop: "1px solid var(--aa-hairline)" }}
+        />
+      ) : null}
       {showLinkCard ? (
         <div style={{ borderTop: "1px solid var(--aa-hairline)" }}>
-          {articleImageUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- external/user-generated image URL, not a local asset
-            <img
-              src={articleImageUrl}
-              alt=""
-              style={{ width: "100%", maxHeight: 260, objectFit: "cover", display: "block", background: "var(--aa-surface-soft)" }}
-            />
-          ) : null}
           <div style={{ padding: "10px 14px", background: "var(--aa-surface-soft)" }}>
             {articleTitle ? (
               <div

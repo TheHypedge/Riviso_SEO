@@ -216,6 +216,21 @@
   transition: color 0.15s ease, background 0.15s ease;
 }
 
+/* Article already shared: LinkedIn-blue link to the live post. */
+.commandBarUtilityBtn[data-shared] {
+  color: #0a66c2;
+  background: color-mix(in oklab, #0a66c2, transparent 88%);
+  border-color: color-mix(in oklab, #0a66c2, transparent 70%);
+  text-decoration: none;
+}
+.commandBarUtilityBtn[data-shared]:hover {
+  color: #fff;
+  background: #0a66c2;
+}
+:global(html[data-theme="dark"]) .commandBarUtilityBtn[data-shared]:not(:hover) {
+  color: #70b5f9;
+}
+
 .commandBarUtilityBtn:hover:not(:disabled) {
   color: var(--aa-on-primary);
   background: var(--aa-primary);

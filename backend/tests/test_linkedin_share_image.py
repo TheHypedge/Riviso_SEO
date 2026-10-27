@@ -75,12 +75,13 @@ def _share(image: bytes | None, **article_kw):
     )
 
 
-def test_published_article_posts_featured_image_with_link_in_text(linkedin):
+def test_image_post_publishes_the_caption_exactly_as_previewed(linkedin):
+    # Nothing is appended behind the user's back: the share preview IS the post.
     res = _share(PNG, wp_link=LIVE_URL)
     assert res["image_attached"] is True
     post = linkedin["posts"][-1]
     assert post["content"]["media"]["id"] == IMAGE_URN
-    assert LIVE_URL in post["commentary"]
+    assert LIVE_URL not in post["commentary"]
 
 
 def test_unpublished_article_still_gets_the_image(linkedin):
