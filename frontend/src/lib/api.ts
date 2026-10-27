@@ -28,6 +28,17 @@ export type VerifyEmailResponse = {
   expires_in?: number;
 };
 
+export type IndexNowStatus = {
+  supported: boolean;
+  enabled: boolean;
+  ready: boolean;
+  key: string | null;
+  key_location: string | null;
+  error: string | null;
+  last_submit_at: string | null;
+  last_result: string | null;
+};
+
 export type UserPublic = {
   id: string;
   email: string;
@@ -4143,6 +4154,23 @@ export const api = {
   async siteMapList(projectId: string) {
     return apiFetch<SiteMapListResponse>(`/api/projects/${projectId}/site-map`);
   },
+  // IndexNow (Bing & co.)
+  async indexNowStatus(projectId: string) {
+    return apiFetch<IndexNowStatus>(`/api/projects/${projectId}/indexnow/status`);
+  },
+  async indexNowSetup(projectId: string) {
+    return apiFetch<IndexNowStatus>(`/api/projects/${projectId}/indexnow/setup`, { method: "POST" });
+  },
+  async indexNowSetEnabled(projectId: string, enabled: boolean) {
+    return apiFetch<IndexNowStatus>(`/api/projects/${projectId}/indexnow/settings`, {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    });
+  },
+  async indexNowSubmitAll(projectId: string) {
+    return apiFetch<IndexNowStatus>(`/api/projects/${projectId}/indexnow/submit-all`, { method: "POST" });
+  },
+
   async siteMapSync(projectId: string) {
     return apiFetch<SiteMapSyncResponse>(`/api/projects/${projectId}/site-map/sync`, {
       method: "POST",

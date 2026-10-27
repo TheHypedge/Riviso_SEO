@@ -31,7 +31,8 @@ from typing import Any
 
 from app.services import gsc
 from app.services import google_indexing
-from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
+from app.services import indexnow
+from app.services.sitemap_ping import default_sitemap_url
 
 
 log = logging.getLogger(__name__)
@@ -138,7 +139,7 @@ async def _mark_article(*, st, article_id: str | None, patch: dict[str, Any]) ->
 
 
 async def request_url_inspection_now(
-    *, st, proj: dict, live_url: str, article_id: str | None
+    *, st, proj: dict, live_url: str, article_id: str | None, submit_indexnow: bool = True
 ) -> dict[str, Any]:
     """
     Manual "Index now" trigger.
@@ -150,8 +151,9 @@ async def request_url_inspection_now(
        / ``BroadcastEvent`` content; for general articles Google may accept the
        call but it is **not** echoed into URL Inspection's "Indexing requested"
        history. We track this in ``indexing_api`` regardless.
-    2. **Sitemap ping** (Google + Bing): best-effort discovery hint based on the
-       project's WordPress site URL. Not a guarantee of indexing.
+    2. **Sitemap resubmit** via the Search Console Sitemaps API (the property's
+       registered sitemaps), plus **IndexNow** for Bing & co. when set up.
+       Discovery hints, not a guarantee of indexing.
     3. **Manual handoff**: we always return a deep link to the GSC URL Inspection
        panel pre-filled with ``live_url``. Pressing "REQUEST INDEXING" there is
        the **only** action that produces the visible entry in the user's URL
@@ -197,17 +199,18 @@ async def request_url_inspection_now(
             indexing_api_error = f"{e}"[:460]
             log.info("Indexing API publish failed for %s: %s", url, indexing_api_error)
 
-    # Best-effort sitemap ping — never throws, and works whether or not Indexing API is set up.
-    sitemap_attempted = False
+    # Sitemap resubmit through the Search Console API (google.com/ping was retired in 2023).
+    sitemap_attempted = bool(prop)
     sitemap_ok = False
-    sitemap_url = default_sitemap_url(wp_site_url=(proj.get("wp_site_url") or ""))
-    if sitemap_url:
-        sitemap_attempted = True
+    sitemap_url = ""
+    if prop:
         try:
-            await ping_sitemap(sitemap_url=sitemap_url)
+            sitemap_url = await _resubmit_sitemaps(st=st, proj=proj)
             sitemap_ok = True
         except Exception as e:
-            log.info("Sitemap ping failed for %s: %s", sitemap_url, e)
+            log.info("Sitemap resubmit failed for project=%s: %s", proj.get("id"), e)
+
+    indexnow_ok = await indexnow.maybe_submit(proj=proj, urls=[url]) if submit_indexnow else False
 
     inspect_panel_url = gsc.build_inspection_panel_url(site_url=prop, inspection_url=url) if prop else ""
 
@@ -223,10 +226,10 @@ async def request_url_inspection_now(
     elif sitemap_ok:
         new_status = "sitemap_pinged"
         note = (
-            "Sitemap ping sent to Google and Bing as a discovery hint. Google does not expose a "
-            "public API equivalent of the 'Request Indexing' button in URL Inspection — open the "
-            "URL in Search Console and press REQUEST INDEXING to actually queue a crawl request "
-            "you can see in URL Inspection."
+            f"Sitemap resubmitted to Google Search Console ({sitemap_url}) so Google recrawls it. "
+            "Google does not expose a public API equivalent of the 'Request Indexing' button in URL "
+            "Inspection — open the URL in Search Console and press REQUEST INDEXING to queue a crawl "
+            "request you can see in URL Inspection."
         )
     else:
         new_status = "manual_required"
@@ -260,9 +263,20 @@ async def request_url_inspection_now(
             "ok": sitemap_ok,
             "sitemap_url": sitemap_url,
         },
+        "indexnow": {"ok": indexnow_ok},
         "inspect_panel_url": inspect_panel_url,
-        "note": note,
+        "note": note + (" Also submitted to Bing via IndexNow." if indexnow_ok else ""),
     }
+
+
+async def _resubmit_sitemaps(*, st, proj: dict) -> str:
+    """Resubmit the property's registered sitemaps (or ``<site>/sitemap.xml`` when none are
+    registered yet). Returns the first sitemap URL submitted."""
+    registered = [s["path"] for s in await list_sitemaps_for_project(st=st, proj=proj) if s.get("path")]
+    targets = registered[:5] or [default_sitemap_url(wp_site_url=(proj.get("wp_site_url") or ""))]
+    for su in targets:
+        await submit_sitemap_for_project(st=st, proj=proj, sitemap_url=su)
+    return targets[0]
 
 
 async def maybe_request_url_inspection(
@@ -285,7 +299,10 @@ async def maybe_request_url_inspection(
     prop = (proj.get("gsc_property_url") or "").strip()
     if not prop:
         return False
-    result = await request_url_inspection_now(st=st, proj=proj, live_url=url, article_id=article_id)
+    # Publish paths submit IndexNow themselves (it must work without a GSC property too).
+    result = await request_url_inspection_now(
+        st=st, proj=proj, live_url=url, article_id=article_id, submit_indexnow=False
+    )
     return bool(
         (result.get("indexing_api") or {}).get("ok")
         or (result.get("sitemap_ping") or {}).get("ok")

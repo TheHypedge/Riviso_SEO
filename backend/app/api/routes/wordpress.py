@@ -9,13 +9,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.core.project_lookup import async_require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.wordpress import WordpressCategory, WordpressPostType
+from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
 from app.services.wordpress_client import RIVISO_WP_USER_AGENT, WordpressClient
 from app.schemas.project_settings import (
     ProjectSettingsPublic,
@@ -23,6 +24,8 @@ from app.schemas.project_settings import (
     WordpressVerifyRequest,
     WordpressVerifyResponse,
 )
+from app.core.config import settings
+from app.core.ratelimit import limiter
 from app.services import gsc
 
 router = APIRouter(tags=["wordpress"])
@@ -384,7 +387,7 @@ async def _probe_riviso_plugin(
     ping_hit: dict[str, Any] | None = None
     ping_ns = ""
 
-    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=12.0, follow_redirects=True, event_hooks=ssrf_guarded_event_hooks()) as client:
         for ns in _RIVISO_PLUGIN_NAMESPACES:
             try:
                 pres = await client.get(
@@ -573,6 +576,52 @@ async def download_plugin(user: dict = Depends(get_current_user)) -> Response:
         "x-riviso-plugin-slug": "riviso-content-operations",
     }
     return Response(content=data, media_type="application/zip", headers=headers)
+
+
+def _project_for_update_token(token: str) -> str:
+    """Plugin self-update auth: the site's HMAC token (pushed on Verify) instead of a user login."""
+    from app.services.wordpress_plugin_packager import update_token_project_id
+
+    pid = update_token_project_id(token)
+    st = get_legacy_storage_module()
+    if not pid or not st.get_project_by_id(pid):
+        raise HTTPException(status_code=404, detail="Not found")
+    return pid
+
+
+@router.get("/wordpress/plugin/release")
+@limiter.limit("30/minute")
+async def plugin_release(request: Request, token: str = "") -> dict:
+    """Version manifest polled by the installed plugin (WordPress update checks run ~2x/day)."""
+    from urllib.parse import quote
+
+    from app.services.wordpress_plugin_packager import get_plugin_version
+
+    _project_for_update_token(token)
+    base = (str(settings.public_base_url) if settings.public_base_url else str(request.base_url)).rstrip("/")
+    return {
+        "version": get_plugin_version(),
+        "package": f"{base}/api/wordpress/plugin/package?token={quote(token, safe='')}",
+        "requires": "5.8",
+        "tested": "6.8",
+        "requires_php": "7.4",
+        "changelog": "Security hardening for publish/update permissions and post meta; IndexNow; schema markup output; automatic updates.",
+    }
+
+
+@router.get("/wordpress/plugin/package")
+@limiter.limit("10/minute")
+async def plugin_package(request: Request, token: str = "") -> Response:
+    """Plugin ZIP for WordPress's updater (token-gated, same bytes as the logged-in download)."""
+    from app.services.wordpress_plugin_packager import build_plugin_zip_bytes
+
+    _project_for_update_token(token)
+    data, filename = build_plugin_zip_bytes()
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"content-disposition": f'attachment; filename="{filename}"', "cache-control": "no-store"},
+    )
 
 
 @router.get("/projects/{project_id}/settings", response_model=ProjectSettingsPublic)
@@ -827,6 +876,10 @@ async def verify_wordpress_connection(
         raise HTTPException(status_code=400, detail="Missing WordPress site URL")
     if not wp_username or not wp_app_password:
         raise HTTPException(status_code=400, detail="Missing WordPress username or application password")
+    try:
+        assert_public_http_url(wp_site_url)
+    except SsrfError as e:
+        raise HTTPException(status_code=400, detail=f"WordPress site URL is not allowed: {e}") from e
 
     basic = base64.b64encode(f"{wp_username}:{wp_app_password}".encode("utf-8")).decode("ascii")
     headers = {
@@ -872,7 +925,7 @@ async def verify_wordpress_connection(
             pass
 
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True, event_hooks=ssrf_guarded_event_hooks()) as client:
             ok, err_msg, _res = await _verify_wp_rest_credentials(
                 client=client,
                 wp_site_url=wp_site_url,
@@ -929,6 +982,16 @@ async def verify_wordpress_connection(
                     "Plugin: could not be checked (unexpected error while contacting "
                     "the WordPress REST API).",
                 )
+
+            # Give the plugin (>= 0.7.0) its self-update token; older plugins 404 harmlessly.
+            try:
+                from app.services.wordpress_plugin_packager import make_update_token
+
+                await WordpressClient(
+                    site_url=resolved_site_url, username=wp_username, app_password=wp_app_password
+                ).post_json("/wp-json/riviso/v1/update-token", {"token": make_update_token(project_id)}, timeout=15.0)
+            except Exception:
+                pass
 
             full_msg = "Verified WordPress connection successfully.\n" + plugin_msg
             if not can_publish:

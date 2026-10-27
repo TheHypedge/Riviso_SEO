@@ -3,7 +3,7 @@
  * Plugin Name: RivisoSEO
  * Plugin URI: https://riviso.com
  * Description: Connect WordPress to Riviso for SEO meta in REST, publish/update endpoints, and connection verification.
- * Version: 0.6.3
+ * Version: 0.7.0
  * Requires at least: 5.8
  * Requires PHP: 7.4
  * Author: Riviso
@@ -86,6 +86,16 @@ function riviso_render_settings_page() {
 				<tr>
 					<th scope="row"><?php esc_html_e( 'SEO platform', 'riviso-content-operations' ); ?></th>
 					<td><?php echo esc_html( $seo_label ); ?></td>
+				</tr>
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Updates from Riviso', 'riviso-content-operations' ); ?></th>
+					<td>
+						<?php
+						echo get_option( RivisoContentOperationsConnector::OPTION_UPDATE_TOKEN, '' ) !== ''
+							? esc_html__( 'Connected — new versions appear under Plugins → Updates.', 'riviso-content-operations' )
+							: esc_html__( 'Not connected — click "Verify connection" in Riviso Project Settings.', 'riviso-content-operations' );
+						?>
+					</td>
 				</tr>
 			</tbody>
 		</table>

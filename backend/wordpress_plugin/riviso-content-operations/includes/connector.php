@@ -19,14 +19,24 @@ final class RivisoContentOperationsConnector {
 	const LEGACY_REST_NAMESPACE = 'auto-articles/v1';
 	const OPTION_CONNECTOR_ID = 'riviso_content_ops_connector_id';
 	const LEGACY_OPTION_CONNECTOR_ID = 'auto_articles_connector_id';
-	const VERSION = '0.6.3';
+	const VERSION = '0.7.0';
+	const OPTION_INDEXNOW_KEY = 'riviso_indexnow_key';
+	const OPTION_UPDATE_TOKEN = 'riviso_update_token';
+	const SCHEMA_META_KEYS = array( '_riviso_schema_faq', '_riviso_schema_article' );
+	const DEFAULT_API_BASE = 'https://api.riviso.cloud';
 
 	/** @var bool */
 	private static $routes_registered = false;
 
 	public static function init() {
+		add_action( 'init', array( __CLASS__, 'serve_indexnow_key' ), 0 );
 		add_action( 'init', array( __CLASS__, 'register_seo_meta_rest_support' ) );
 		add_action( 'rest_api_init', array( __CLASS__, 'register_rest_routes' ) );
+		// Priority 20: after Yoast/Rank Math's own wp_head schema output; we only add
+		// our own separate nodes (FAQPage, and Article only when neither is active).
+		add_action( 'wp_head', array( __CLASS__, 'output_schema_markup' ), 20 );
+		add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'check_for_update' ) );
+		add_filter( 'plugins_api', array( __CLASS__, 'plugin_info' ), 10, 3 );
 
 		if ( defined( 'RIVISO_PLUGIN_FILE' ) ) {
 			$basename = plugin_basename( RIVISO_PLUGIN_FILE );
@@ -139,6 +149,33 @@ final class RivisoContentOperationsConnector {
 	 *
 	 * @return string[]
 	 */
+	/**
+	 * Every meta key Riviso may write. Anything else in a request is dropped, so an
+	 * authenticated caller cannot touch protected keys (_wp_page_template, _thumbnail_id, ...).
+	 *
+	 * @return string[]
+	 */
+	private static function allowed_meta_keys() {
+		$keys = array_merge(
+			self::riviso_seo_source_meta_keys(),
+			array(
+				'_yoast_wpseo_canonical',
+				'_yoast_wpseo_opengraph-title',
+				'_yoast_wpseo_opengraph-description',
+				'_yoast_wpseo_twitter-title',
+				'_yoast_wpseo_twitter-description',
+				'_yoast_wpseo_schema_page_type',
+				'_yoast_wpseo_schema_article_type',
+				'rank_math_canonical_url',
+				'rank_math_rich_snippet',
+				'_aioseo_title',
+				'_aioseo_description',
+			),
+			self::SCHEMA_META_KEYS
+		);
+		return array_values( array_unique( array_map( 'strval', (array) apply_filters( 'riviso_content_ops_allowed_meta_keys', $keys ) ) ) );
+	}
+
 	private static function riviso_seo_source_meta_keys() {
 		return array(
 			'_yoast_wpseo_title',
@@ -289,8 +326,10 @@ final class RivisoContentOperationsConnector {
 						'show_in_rest'  => true,
 						'single'        => true,
 						'type'          => 'string',
-						'auth_callback' => function () {
-							return current_user_can( 'edit_posts' );
+						// Per-post check: edit_posts alone would let a Contributor change SEO
+						// meta on posts they cannot edit.
+						'auth_callback' => function ( $allowed, $meta_key, $object_id ) {
+							return current_user_can( 'edit_post', (int) $object_id );
 						},
 					)
 				);
@@ -311,6 +350,39 @@ final class RivisoContentOperationsConnector {
 		return $t ? $t : 'post';
 	}
 
+	/**
+	 * Only public, front-end content types (post, page, CPTs) — never attachments, menus,
+	 * templates, changesets or other internal types.
+	 *
+	 * @param string $post_type Post type slug.
+	 * @return WP_Post_Type|null
+	 */
+	private static function content_post_type( $post_type ) {
+		$pto = get_post_type_object( $post_type );
+		if ( ! $pto || $post_type === 'attachment' || ! is_post_type_viewable( $pto ) ) {
+			return null;
+		}
+		return $pto;
+	}
+
+	/**
+	 * Statuses that make content visible need the type's publish capability.
+	 *
+	 * @param string       $status Requested status.
+	 * @param WP_Post_Type $pto    Post type object.
+	 * @return WP_Error|null
+	 */
+	private static function status_permission_error( $status, $pto ) {
+		if ( in_array( $status, array( 'publish', 'future', 'private' ), true ) && ! current_user_can( $pto->cap->publish_posts ) ) {
+			return new WP_Error(
+				'riviso_forbidden',
+				'This WordPress user cannot publish posts. Use an Editor or Administrator account.',
+				array( 'status' => 403 )
+			);
+		}
+		return null;
+	}
+
 	public static function handle_publish( WP_REST_Request $request ) {
 		$params = $request->get_json_params();
 		if ( ! is_array( $params ) ) {
@@ -328,18 +400,22 @@ final class RivisoContentOperationsConnector {
 		}
 
 		$post_type = self::normalize_post_type( isset( $params['post_type'] ) ? $params['post_type'] : 'post' );
-		$title     = sanitize_text_field( isset( $params['title'] ) ? $params['title'] : '' );
-		$content   = isset( $params['content'] ) ? wp_kses_post( (string) $params['content'] ) : '';
-		$status    = sanitize_key( isset( $params['status'] ) ? $params['status'] : 'draft' );
+		$pto       = self::content_post_type( $post_type );
+		if ( ! $pto ) {
+			return new WP_Error( 'riviso_invalid', 'Unsupported post type', array( 'status' => 400 ) );
+		}
+		if ( ! current_user_can( $pto->cap->create_posts ) ) {
+			return new WP_Error( 'riviso_forbidden', 'This WordPress user cannot create this post type.', array( 'status' => 403 ) );
+		}
+		$title   = sanitize_text_field( isset( $params['title'] ) ? $params['title'] : '' );
+		$content = isset( $params['content'] ) ? wp_kses_post( (string) $params['content'] ) : '';
+		$status  = sanitize_key( isset( $params['status'] ) ? $params['status'] : 'draft' );
 		if ( ! in_array( $status, array( 'publish', 'draft', 'pending', 'future', 'private' ), true ) ) {
 			$status = 'draft';
 		}
-		if ( $status === 'publish' && ! current_user_can( 'publish_posts' ) ) {
-			return new WP_Error(
-				'riviso_forbidden',
-				'This WordPress user cannot publish posts. Use an Editor or Administrator account.',
-				array( 'status' => 403 )
-			);
+		$denied = self::status_permission_error( $status, $pto );
+		if ( $denied ) {
+			return $denied;
 		}
 
 		$postarr = array(
@@ -348,13 +424,6 @@ final class RivisoContentOperationsConnector {
 			'post_status'  => $status,
 			'post_type'    => $post_type,
 		);
-
-		if ( ! empty( $params['categories'] ) && is_array( $params['categories'] ) ) {
-			$cats = array_filter( array_map( 'intval', $params['categories'] ) );
-			if ( $cats ) {
-				$postarr['post_category'] = $cats;
-			}
-		}
 
 		$post_id = wp_insert_post( $postarr, true );
 		if ( is_wp_error( $post_id ) ) {
@@ -390,7 +459,9 @@ final class RivisoContentOperationsConnector {
 		}
 
 		$existing = get_post( $post_id );
-		if ( ! $existing instanceof WP_Post ) {
+		$pto      = $existing instanceof WP_Post ? self::content_post_type( $existing->post_type ) : null;
+		// Same 404 for "missing", "not a content type" and "not yours" — no ID probing.
+		if ( ! $pto || ! current_user_can( 'edit_post', $post_id ) ) {
 			return new WP_Error( 'riviso_not_found', 'Post not found', array( 'status' => 404 ) );
 		}
 
@@ -404,6 +475,12 @@ final class RivisoContentOperationsConnector {
 		if ( isset( $params['status'] ) ) {
 			$status = sanitize_key( (string) $params['status'] );
 			if ( in_array( $status, array( 'publish', 'draft', 'pending', 'future', 'private', 'trash' ), true ) ) {
+				$denied = $status === 'trash'
+					? ( current_user_can( 'delete_post', $post_id ) ? null : new WP_Error( 'riviso_forbidden', 'This WordPress user cannot delete this post.', array( 'status' => 403 ) ) )
+					: self::status_permission_error( $status, $pto );
+				if ( $denied ) {
+					return $denied;
+				}
 				$postarr['post_status'] = $status;
 			}
 		}
@@ -429,22 +506,51 @@ final class RivisoContentOperationsConnector {
 		);
 	}
 
+	/**
+	 * @param string $taxonomy Taxonomy slug.
+	 * @param int    $post_id  Post the terms go on (taxonomy must be registered for its type).
+	 * @return bool
+	 */
+	private static function can_assign_terms( $taxonomy, $post_id ) {
+		$tax = get_taxonomy( $taxonomy );
+		return $tax && is_object_in_taxonomy( get_post_type( $post_id ), $taxonomy ) && current_user_can( $tax->cap->assign_terms );
+	}
+
+	/**
+	 * Existing term IDs of $taxonomy only (unknown IDs are dropped, never created).
+	 *
+	 * @param mixed  $raw      Incoming IDs.
+	 * @param string $taxonomy Taxonomy slug.
+	 * @return int[]
+	 */
+	private static function existing_term_ids( $raw, $taxonomy ) {
+		$ids = array();
+		foreach ( (array) $raw as $id ) {
+			$id = (int) $id;
+			if ( $id > 0 && term_exists( $id, $taxonomy ) ) {
+				$ids[] = $id;
+			}
+		}
+		return $ids;
+	}
+
 	private static function apply_post_extras( $post_id, array $params ) {
-		if ( ! empty( $params['categories'] ) && is_array( $params['categories'] ) ) {
-			$cats = array_filter( array_map( 'intval', $params['categories'] ) );
+		if ( ! empty( $params['categories'] ) && is_array( $params['categories'] ) && self::can_assign_terms( 'category', $post_id ) ) {
+			$cats = self::existing_term_ids( $params['categories'], 'category' );
 			if ( $cats ) {
 				wp_set_post_categories( (int) $post_id, $cats, false );
 			}
 		}
 
-		if ( ! empty( $params['tags'] ) && is_array( $params['tags'] ) ) {
-			$tag_ids = array_filter( array_map( 'intval', $params['tags'] ) );
+		$can_tag = self::can_assign_terms( 'post_tag', $post_id );
+		if ( $can_tag && ! empty( $params['tags'] ) && is_array( $params['tags'] ) ) {
+			$tag_ids = self::existing_term_ids( $params['tags'], 'post_tag' );
 			if ( $tag_ids ) {
 				wp_set_object_terms( (int) $post_id, $tag_ids, 'post_tag', false );
 			}
 		}
 
-		if ( ! empty( $params['tag_names'] ) && is_array( $params['tag_names'] ) ) {
+		if ( $can_tag && ! empty( $params['tag_names'] ) && is_array( $params['tag_names'] ) ) {
 			$names = array();
 			foreach ( $params['tag_names'] as $raw_name ) {
 				$name = sanitize_text_field( (string) $raw_name );
@@ -458,7 +564,11 @@ final class RivisoContentOperationsConnector {
 		}
 
 		if ( ! empty( $params['featured_media'] ) && is_numeric( $params['featured_media'] ) ) {
-			set_post_thumbnail( (int) $post_id, (int) $params['featured_media'] );
+			$media_id = (int) $params['featured_media'];
+			// Must be an image attachment this user may read (not someone's private file).
+			if ( wp_attachment_is_image( $media_id ) && current_user_can( 'read_post', $media_id ) ) {
+				set_post_thumbnail( (int) $post_id, $media_id );
+			}
 		}
 
 		if ( ! empty( $params['meta'] ) && is_array( $params['meta'] ) ) {
@@ -485,12 +595,26 @@ final class RivisoContentOperationsConnector {
 			'_yoast_wpseo_twitter-description',
 		);
 
+		$allowed      = array_flip( self::allowed_meta_keys() );
+
 		foreach ( $mapped_seo as $key => $val ) {
 			update_post_meta( $post_id, $key, $val );
 		}
 
 		foreach ( $meta as $key => $val ) {
-			if ( ! is_string( $key ) || $key === '' || isset( $skip_keys[ $key ] ) ) {
+			if ( ! is_string( $key ) || $key === '' || isset( $skip_keys[ $key ] ) || ! isset( $allowed[ $key ] ) ) {
+				continue;
+			}
+			if ( ! is_scalar( $val ) ) {
+				continue;
+			}
+			if ( in_array( $key, self::SCHEMA_META_KEYS, true ) ) {
+				// JSON-LD is stored re-encoded from a decoded schema.org object, never as the
+				// raw string (sanitize_text_field would mangle it; raw could carry markup).
+				$schema = self::decode_schema( (string) $val );
+				if ( $schema ) {
+					update_post_meta( $post_id, $key, wp_slash( wp_json_encode( $schema ) ) );
+				}
 				continue;
 			}
 			if ( $platform === 'rank_math' && in_array( $key, $yoast_extras, true ) ) {
@@ -500,6 +624,48 @@ final class RivisoContentOperationsConnector {
 				continue;
 			}
 			update_post_meta( $post_id, $key, sanitize_text_field( (string) $val ) );
+		}
+	}
+
+	/**
+	 * Decode a JSON-LD string; only schema.org objects (max 64 KB) are accepted.
+	 *
+	 * @param string $raw JSON string.
+	 * @return array|null
+	 */
+	private static function decode_schema( $raw ) {
+		if ( $raw === '' || strlen( $raw ) > 65536 ) {
+			return null;
+		}
+		$data = json_decode( $raw, true );
+		if ( ! is_array( $data ) || ! isset( $data['@context'] ) || ! is_string( $data['@context'] ) ) {
+			return null;
+		}
+		return preg_match( '#^https?://schema\.org/?$#', $data['@context'] ) ? $data : null;
+	}
+
+	/**
+	 * Print Riviso JSON-LD (FAQPage; Article only when no SEO plugin handles it) in <head>.
+	 * Re-encoded with JSON_HEX_TAG so no stored value can close the <script> element.
+	 */
+	public static function output_schema_markup() {
+		if ( ! is_singular() ) {
+			return;
+		}
+		$post_id = get_the_ID();
+		if ( ! $post_id || get_post_status( $post_id ) !== 'publish' ) {
+			return;
+		}
+		foreach ( self::SCHEMA_META_KEYS as $key ) {
+			$raw    = get_post_meta( $post_id, $key, true );
+			$schema = is_string( $raw ) ? self::decode_schema( $raw ) : null;
+			if ( ! $schema ) {
+				continue;
+			}
+			$json = wp_json_encode( $schema, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE );
+			if ( $json ) {
+				echo '<script type="application/ld+json">' . $json . '</script>' . "\n"; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hex-escaped JSON.
+			}
 		}
 	}
 
@@ -549,8 +715,179 @@ final class RivisoContentOperationsConnector {
 				'yoast_active'     => ( $platform === 'yoast' ),
 				'rank_math_active' => ( $platform === 'rank_math' ),
 				'rest_meta_fields' => apply_filters( 'riviso_content_ops_seo_fields', $fields ),
+				'auto_update'      => get_option( self::OPTION_UPDATE_TOKEN, '' ) !== '',
+				'indexnow'         => get_option( self::OPTION_INDEXNOW_KEY, '' ) !== '',
 			),
 			200
+		);
+	}
+
+	/**
+	 * IndexNow key format: 8-128 chars of a-z, A-Z, 0-9 and dashes.
+	 *
+	 * @param mixed $key Candidate key.
+	 * @return bool
+	 */
+	private static function is_valid_indexnow_key( $key ) {
+		return is_string( $key ) && (bool) preg_match( '/^[A-Za-z0-9-]{8,128}$/', $key );
+	}
+
+	/**
+	 * Serve {home}/{key}.txt so IndexNow (Bing & co.) can verify site ownership.
+	 * No physical file is written; the request is answered before WordPress routing.
+	 */
+	public static function serve_indexnow_key() {
+		$key = (string) get_option( self::OPTION_INDEXNOW_KEY, '' );
+		if ( ! self::is_valid_indexnow_key( $key ) || empty( $_SERVER['REQUEST_URI'] ) ) {
+			return;
+		}
+		$path      = (string) wp_parse_url( wp_unslash( $_SERVER['REQUEST_URI'] ), PHP_URL_PATH ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		$home_path = rtrim( (string) wp_parse_url( home_url( '/' ), PHP_URL_PATH ), '/' );
+		if ( $path !== $home_path . '/' . $key . '.txt' ) {
+			return;
+		}
+		status_header( 200 );
+		header( 'Content-Type: text/plain; charset=utf-8' );
+		header( 'X-Robots-Tag: noindex' );
+		echo $key; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- validated [A-Za-z0-9-] only.
+		exit;
+	}
+
+	public static function handle_indexnow_key( WP_REST_Request $request ) {
+		$params = $request->get_json_params();
+		$key    = is_array( $params ) && isset( $params['key'] ) ? (string) $params['key'] : '';
+		if ( ! self::is_valid_indexnow_key( $key ) ) {
+			return new WP_Error( 'riviso_invalid', 'Invalid IndexNow key', array( 'status' => 400 ) );
+		}
+		update_option( self::OPTION_INDEXNOW_KEY, $key, true );
+		return new WP_REST_Response(
+			array(
+				'ok'           => true,
+				'key_location' => home_url( '/' . $key . '.txt' ),
+			),
+			200
+		);
+	}
+
+	public static function handle_update_token( WP_REST_Request $request ) {
+		$params = $request->get_json_params();
+		$token  = is_array( $params ) && isset( $params['token'] ) ? (string) $params['token'] : '';
+		if ( ! preg_match( '/^[A-Za-z0-9_-]{1,100}\.[a-f0-9]{40}$/', $token ) ) {
+			return new WP_Error( 'riviso_invalid', 'Invalid update token', array( 'status' => 400 ) );
+		}
+		update_option( self::OPTION_UPDATE_TOKEN, $token, false );
+		delete_site_transient( 'riviso_release' );
+		return new WP_REST_Response( array( 'ok' => true ), 200 );
+	}
+
+	/**
+	 * Riviso API origin. HTTPS only; overridable with define( 'RIVISO_API_BASE', ... ) in wp-config.php.
+	 *
+	 * @return string
+	 */
+	private static function api_base() {
+		$base = defined( 'RIVISO_API_BASE' ) ? (string) RIVISO_API_BASE : self::DEFAULT_API_BASE;
+		$base = untrailingslashit( esc_url_raw( $base ) );
+		return strpos( $base, 'https://' ) === 0 ? $base : self::DEFAULT_API_BASE;
+	}
+
+	/**
+	 * Latest release manifest from Riviso (cached 6h; failures cached 1h).
+	 *
+	 * @return array|null
+	 */
+	private static function remote_release() {
+		$token = (string) get_option( self::OPTION_UPDATE_TOKEN, '' );
+		if ( $token === '' ) {
+			return null;
+		}
+		$cached = get_site_transient( 'riviso_release' );
+		if ( is_array( $cached ) ) {
+			return $cached ? $cached : null;
+		}
+		$base = self::api_base();
+		$res  = wp_remote_get(
+			add_query_arg( 'token', rawurlencode( $token ), $base . '/api/wordpress/plugin/release' ),
+			array( 'timeout' => 10 )
+		);
+		$data = ( ! is_wp_error( $res ) && wp_remote_retrieve_response_code( $res ) === 200 )
+			? json_decode( wp_remote_retrieve_body( $res ), true )
+			: null;
+		$ok = is_array( $data )
+			&& isset( $data['version'] )
+			&& is_string( $data['version'] ) && preg_match( '/^\d+(\.\d+){1,3}$/', $data['version'] );
+		if ( $ok ) {
+			// Built here from the fixed HTTPS origin — the manifest can never point the download elsewhere.
+			$data['package'] = add_query_arg( 'token', rawurlencode( $token ), $base . '/api/wordpress/plugin/package' );
+		}
+		set_site_transient( 'riviso_release', $ok ? $data : array(), $ok ? 6 * HOUR_IN_SECONDS : HOUR_IN_SECONDS );
+		return $ok ? $data : null;
+	}
+
+	/**
+	 * Hook into WordPress's own plugin update check, so "Update now" and auto-updates work
+	 * exactly like wordpress.org plugins (the admin stays in control).
+	 *
+	 * @param object $transient update_plugins transient.
+	 * @return object
+	 */
+	public static function check_for_update( $transient ) {
+		if ( ! is_object( $transient ) || ! defined( 'RIVISO_PLUGIN_FILE' ) ) {
+			return $transient;
+		}
+		$release = self::remote_release();
+		if ( ! $release ) {
+			return $transient;
+		}
+		$basename = plugin_basename( RIVISO_PLUGIN_FILE );
+		$item     = (object) array(
+			'id'           => 'riviso-content-operations',
+			'slug'         => 'riviso-content-operations',
+			'plugin'       => $basename,
+			'new_version'  => $release['version'],
+			'url'          => 'https://riviso.com',
+			'package'      => $release['package'],
+			'tested'       => isset( $release['tested'] ) ? (string) $release['tested'] : '',
+			'requires_php' => isset( $release['requires_php'] ) ? (string) $release['requires_php'] : '',
+		);
+		if ( version_compare( $release['version'], self::VERSION, '>' ) ) {
+			$transient->response[ $basename ] = $item;
+		} else {
+			// Listing it under no_update enables the "Enable auto-updates" toggle.
+			$transient->no_update[ $basename ] = $item;
+		}
+		return $transient;
+	}
+
+	/**
+	 * "View details" modal on the Plugins screen.
+	 *
+	 * @param mixed  $result Default result.
+	 * @param string $action plugins_api action.
+	 * @param object $args   Request args.
+	 * @return mixed
+	 */
+	public static function plugin_info( $result, $action, $args ) {
+		if ( $action !== 'plugin_information' || ! isset( $args->slug ) || $args->slug !== 'riviso-content-operations' ) {
+			return $result;
+		}
+		$release = self::remote_release();
+		if ( ! $release ) {
+			return $result;
+		}
+		return (object) array(
+			'name'          => 'RivisoSEO',
+			'slug'          => 'riviso-content-operations',
+			'version'       => $release['version'],
+			'author'        => 'Riviso',
+			'homepage'      => 'https://riviso.com',
+			'requires'      => isset( $release['requires'] ) ? (string) $release['requires'] : '',
+			'tested'        => isset( $release['tested'] ) ? (string) $release['tested'] : '',
+			'requires_php'  => isset( $release['requires_php'] ) ? (string) $release['requires_php'] : '',
+			'download_link' => $release['package'],
+			'sections'      => array(
+				'changelog' => esc_html( isset( $release['changelog'] ) ? (string) $release['changelog'] : '' ),
+			),
 		);
 	}
 
@@ -595,6 +932,30 @@ final class RivisoContentOperationsConnector {
 						return current_user_can( 'edit_posts' );
 					},
 					'callback'            => array( __CLASS__, 'handle_ping' ),
+				)
+			);
+
+			register_rest_route(
+				$namespace,
+				'/indexnow-key',
+				array(
+					'methods'             => 'POST',
+					'permission_callback' => function () {
+						return current_user_can( 'edit_others_posts' );
+					},
+					'callback'            => array( __CLASS__, 'handle_indexnow_key' ),
+				)
+			);
+
+			register_rest_route(
+				$namespace,
+				'/update-token',
+				array(
+					'methods'             => 'POST',
+					'permission_callback' => function () {
+						return current_user_can( 'edit_others_posts' );
+					},
+					'callback'            => array( __CLASS__, 'handle_update_token' ),
 				)
 			);
 		}

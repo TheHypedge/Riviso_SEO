@@ -474,6 +474,13 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         "context_links": list(d.get("context_links") or []),
         "gsc_property_url": (d.get("gsc_property_url") or "")[:2048],
         "gsc_index_on_publish": bool(d.get("gsc_index_on_publish", True)),
+        # IndexNow (Bing & co.) — key_location is only set once the key file was verified.
+        "indexnow_enabled": bool(d.get("indexnow_enabled", True)),
+        "indexnow_key": (d.get("indexnow_key") or "").strip()[:128],
+        "indexnow_key_location": (d.get("indexnow_key_location") or "").strip()[:2048],
+        "indexnow_error": (d.get("indexnow_error") or "")[:1000],
+        "indexnow_last_submit_at": (d.get("indexnow_last_submit_at") or "")[:64],
+        "indexnow_last_result": (d.get("indexnow_last_result") or "")[:500],
         # Per-project Google Search Console OAuth (each project can be linked to a separate Google account / property).
         "gsc_access_token": (d.get("gsc_access_token") or "").strip()[:5000],
         "gsc_refresh_token": (d.get("gsc_refresh_token") or "").strip()[:5000],
@@ -2937,6 +2944,13 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "context_links": list(d.get("context_links") or []),
         "gsc_property_url": d.get("gsc_property_url") or "",
         "gsc_index_on_publish": bool(d.get("gsc_index_on_publish", True)),
+        # IndexNow (Bing & co.) — key_location is only set once the key file was verified.
+        "indexnow_enabled": bool(d.get("indexnow_enabled", True)),
+        "indexnow_key": (d.get("indexnow_key") or "").strip()[:128],
+        "indexnow_key_location": (d.get("indexnow_key_location") or "").strip()[:2048],
+        "indexnow_error": (d.get("indexnow_error") or "")[:1000],
+        "indexnow_last_submit_at": (d.get("indexnow_last_submit_at") or "")[:64],
+        "indexnow_last_result": (d.get("indexnow_last_result") or "")[:500],
         "gsc_access_token": d.get("gsc_access_token") or "",
         "gsc_refresh_token": d.get("gsc_refresh_token") or "",
         "gsc_token_expires_at": str(d.get("gsc_token_expires_at") or ""),

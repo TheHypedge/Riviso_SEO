@@ -57,7 +57,7 @@ from app.services.context_links import apply_context_links_html
 from app.services.wordpress_client import WordpressClient, resolve_featured_media_id, rewrite_inline_media_for_wordpress
 from app.services.shopify_client import ShopifyClient
 from app.services.gsc_actions import inspect_url_status, maybe_request_url_inspection, request_url_inspection_now
-from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
+from app.services import indexnow
 from app.services.scheduler import start_scheduled_job_preparation_task
 from app.services.generation_queue import generation_slot, user_generation_slot
 from app.services.to_thread import run_sync
@@ -3315,13 +3315,9 @@ async def _publish_article_core(
     except Exception:
         pass
 
-    # Best-effort: ping sitemap so crawlers discover the new URL via sitemap updates.
-    # (This is not a guarantee of indexing.)
-    try:
-        if created_wp_status == "publish":
-            asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
-    except Exception:
-        pass
+    # Best-effort: IndexNow (Bing & co.) so the new URL is crawled without waiting for discovery.
+    if created_wp_status == "publish" and wp_link:
+        indexnow.submit_in_background(proj=proj, urls=[str(wp_link)])
 
     # If this article had a pending scheduled job, mark it posted so Scheduled Articles stays in sync.
     try:
@@ -3843,6 +3839,8 @@ async def update_wordpress_post(
         db_updates["wp_featured_media_id"] = featured_media_id
         db_updates["wp_featured_image_url"] = resolved_image_url
     await run_sync(call_storage, st.update_article_fields, article_id, db_updates)
+    if updated_wp_status == "publish" and db_updates["wp_link"]:
+        indexnow.submit_in_background(proj=proj, urls=[db_updates["wp_link"]])
 
     message = "WordPress post updated successfully."
     if featured_image_warning:

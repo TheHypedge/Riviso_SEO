@@ -86,6 +86,7 @@ import { parseDatetimeLocal } from "@/lib/bulkScheduleDates";
 import { scheduleMinFromNowMs } from "@/lib/scheduleTiming";
 import { ProjectTabIcon, SidebarBackIcon, type ProjectTabKey } from "@/components/ProjectTabIcon";
 import { ShopifyProjectSettings } from "@/components/ShopifyProjectSettings";
+import { IndexNowSettings } from "@/components/IndexNowSettings";
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
 import { isProjectConnected, resolveProjectPlatform } from "@/lib/projectPlatform";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
@@ -11593,6 +11594,8 @@ export default function ProjectPage() {
                 ) : null}
               </div>
             </div>
+
+            {!isShopifyProject ? <IndexNowSettings projectId={projectId} /> : null}
 
             {gscStatus?.connected && (gscStatus?.property_url || "").trim() ? (
               <>

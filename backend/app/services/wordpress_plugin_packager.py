@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import io
 import os
 import re
@@ -49,6 +51,27 @@ def get_plugin_version() -> str:
     if not match:
         return "0.0.0"
     return match.group(1).decode("ascii", errors="replace")
+
+
+def _update_sig(project_id: str) -> str:
+    from app.core.config import settings
+
+    msg = f"wp-plugin-update:{project_id}".encode("utf-8")
+    return hmac.new(settings.secret_key.encode("utf-8"), msg, hashlib.sha256).hexdigest()[:40]
+
+
+def make_update_token(project_id: str) -> str:
+    """Per-site token the plugin sends when checking for/downloading updates (keeps the
+    package off anonymous access, S1.13). Stateless: ``<project_id>.<hmac>``."""
+    return f"{project_id}.{_update_sig(project_id)}"
+
+
+def update_token_project_id(token: str) -> str | None:
+    """Project id the token was issued for, or ``None`` if it is not a valid token."""
+    pid, _, sig = (token or "").strip().rpartition(".")
+    if not pid or not sig or not hmac.compare_digest(sig, _update_sig(pid)):
+        return None
+    return pid
 
 
 def _arcname_for(rel_path: str) -> str:

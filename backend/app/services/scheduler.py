@@ -12,7 +12,7 @@ from app.services.context_links import apply_context_links_html
 from app.services.shopify_product_pipeline import is_shopify_project
 from app.services.wordpress_content_pipeline import is_wordpress_project
 from app.services.gsc_actions import maybe_request_url_inspection
-from app.services.sitemap_ping import default_sitemap_url, ping_sitemap
+from app.services import indexnow
 from app.services.to_thread import run_sync
 from app.services.pipeline_streamer import (
     MSG_PUBLISH_COMPLETE,
@@ -1026,12 +1026,8 @@ async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_c
                 )
             except Exception:
                 pass
-            try:
-                if created_wp_status == "publish":
-                    wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
-                    asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
-            except Exception:
-                pass
+            if created_wp_status == "publish" and wp_link:
+                indexnow.submit_in_background(proj=proj, urls=[str(wp_link)])
 
             msg = "Published to WordPress." if created_wp_status == "publish" else "Saved to WordPress as draft."
             if needs_generation:
@@ -1584,13 +1580,9 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                         except Exception:
                             pass
 
-                        # Best-effort: ping sitemap after live publish for discovery.
-                        try:
-                            if created_wp_status == "publish":
-                                wp_site_url = (proj.get("wp_site_url") or proj.get("website_url") or "").strip()
-                                asyncio.create_task(ping_sitemap(sitemap_url=default_sitemap_url(wp_site_url=wp_site_url)))
-                        except Exception:
-                            pass
+                        # Best-effort: IndexNow (Bing & co.) after live publish.
+                        if created_wp_status == "publish" and wp_link:
+                            indexnow.submit_in_background(proj=proj, urls=[str(wp_link)])
                 except Exception as e:
                     log.exception("Scheduled job failed jid=%s", jid)
                     # If the post already succeeded on the platform, do not leave the job as failed.

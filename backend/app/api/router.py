@@ -24,6 +24,7 @@ from app.api.routes import scheduled_jobs
 from app.api.routes import gsc
 from app.api.routes import shopify
 from app.api.routes import project_gsc
+from app.api.routes import project_indexnow
 from app.api.routes import project_shopify
 from app.api.routes import project_cluster_validation
 from app.api.routes import project_site_map
@@ -59,6 +60,7 @@ api_router.include_router(scheduled_jobs.router)
 api_router.include_router(gsc.router)
 api_router.include_router(shopify.router)
 api_router.include_router(project_gsc.router)
+api_router.include_router(project_indexnow.router)
 api_router.include_router(project_shopify.connect_router)
 api_router.include_router(project_shopify.router)
 api_router.include_router(project_site_map.router)
