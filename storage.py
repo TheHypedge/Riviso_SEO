@@ -2619,6 +2619,8 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         # (double-post guard for the scheduler; also surfaced in the editor).
         "linkedin_post_urn": (d.get("linkedin_post_urn") or "")[:200],
         "linkedin_post_url": (d.get("linkedin_post_url") or "")[:2048],
+        # Structure/rhythm/link measurements from the last generation (article_quality.py).
+        "quality_report": d.get("quality_report") if isinstance(d.get("quality_report"), dict) else {},
         "topic_cluster_id": (d.get("topic_cluster_id") or "")[:64],
         "topic_slot_id": (d.get("topic_slot_id") or "")[:64],
         "topic_role": (d.get("topic_role") or "")[:16],
@@ -2849,6 +2851,7 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "wp_mapped_pages",
             "linkedin_post_urn",
             "linkedin_post_url",
+            "quality_report",
             "topic_cluster_id",
             "topic_slot_id",
             "topic_role",
@@ -3063,6 +3066,7 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
         # Social Media module.
         "linkedin_post_urn": d.get("linkedin_post_urn") or "",
         "linkedin_post_url": d.get("linkedin_post_url") or "",
+        "quality_report": d.get("quality_report") if isinstance(d.get("quality_report"), dict) else {},
         # Featured-image storage backend -- also missing from this explicit dict before
         # now (pre-existing gap, same class as the shopify_link one fixed earlier this
         # session); needed by _cleanup_article_media to know what to delete on article

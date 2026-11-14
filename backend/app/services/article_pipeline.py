@@ -298,6 +298,7 @@ async def execute_article_generation(
         "meta_title": gen["meta_title"],
         "meta_description": gen["meta_description"],
         "generated_at": gen["generated_at"],
+        "quality_report": gen.get("quality_report") or {},
         # image_url is NOT set here by default — it is only written when a new
         # image was successfully generated so we never erase an existing image.
         "status": "published" if resting_status(row) == "published" else "draft",

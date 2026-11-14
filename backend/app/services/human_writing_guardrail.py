@@ -65,11 +65,36 @@ AI_DETECTOR_BANNED_PHRASES: tuple[str, ...] = (
     "let us explore",
 )
 
+# How a professional editor builds every section. Bullet-first output (heading, one short
+# line, a wall of fragments) is the strongest "AI wrote this" tell, so prose leads and lists
+# are earned. Shared by the guardrail template and the system prompt's structure block.
+SECTION_ANATOMY_RULES = """
+- Every ## H2 section opens with an explanatory lead paragraph of 3-5 sentences (roughly 50-90 words) that explains the idea, why it matters and the context, BEFORE any list, table or ### H3.
+- A heading is never followed directly by a list, a table, another heading, or a one-line paragraph.
+- Every ### H3 opens with at least 2 full sentences before any list.
+- Lists are earned, not the default. Use one only for genuinely parallel content (steps, options, a checklist) that the lead paragraph has already explained. At most one list per H2 section (the FAQ section is exempt).
+- A list has 3-6 items. Each item is a complete thought of 1-2 sentences that explains something, never a 2-4 word fragment.
+- After a list, add 1-2 sentences that interpret it: what to prioritise, the trade-off, or the common mistake.
+- Lists still belong in a good article: most articles carry 2-4 well-placed lists (steps, a checklist, options compared), each introduced by its lead paragraph. A prose-only article reads as a wall of text.
+- At least 70% of the article's words are in prose paragraphs, not in lists or tables.
+- Body paragraphs are 2-5 sentences and vary in length. An occasional one-sentence paragraph for emphasis is fine, never two in a row.
+- Never stack a list directly after another list or a table.
+""".strip()
+
+EXTERNAL_LINK_RULES = """
+- Back up factual, legal, medical, financial, statistical or regulatory claims with 2-4 inline links to authoritative external sources, spread across different sections.
+- Prefer official primary sources: government sites (.gov, .gov.in, .nic.in, gov.uk, europa.eu), regulators, standards bodies, universities (.edu, .ac.in), WHO / UN / World Bank, and the official site or documentation of the organisation or product being discussed.
+- Link only URLs you are certain exist and are stable. Prefer the organisation's main page or a well-known section page over a guessed deep link. Never invent paths, query strings or document IDs; if unsure, link the official homepage or leave the link out. Every external link is checked and broken ones are removed.
+- Anchor text says what the reader will find (e.g. [RBI's digital lending guidelines](https://www.rbi.org.in/)). Never "click here", "source", "this link" or a bare URL.
+- Never link to competitors of the brand, content farms, affiliate pages or URL shorteners. Never put a link inside a heading, and link each source only once.
+""".strip()
+
 HUMAN_FIRST_SYSTEM_ANCHOR = (
     "PRIMARY DIRECTIVE: Write body copy that reads as human-written under AI detectors. "
     "Use natural, specific voice and concrete details — not generic AI blog phrasing. "
-    "Well-structured articles with H2/H3 headings, bullet points, and numbered lists ARE "
-    "human writing; avoid structure only when it adds no value, not as a default.\n\n"
+    "Human editors lead every section with explanatory prose and use lists only where content is "
+    "genuinely parallel; a heading followed by one short line and a stack of bullet fragments is "
+    "the clearest AI tell, so never write that shape.\n\n"
 )
 
 HUMAN_WRITING_GUARDRAIL_TEMPLATE = """
@@ -95,10 +120,9 @@ Supporting keywords (weave lightly): {supporting_keywords}
 ### Structure (mandatory — apply to every article)
 - Divide the article into at least 4 main sections using ## H2 headings.
 - Use ### H3 sub-headings when a section contains 2 or more distinct sub-topics.
-- Use a bullet list (- item) for any group of 3 or more parallel items, features, tips, or options.
-- Use a numbered list (1. step) for any sequential process, how-to steps, or ranked items.
+{section_anatomy_rules}
+- Numbered lists (1. step) are for sequential processes; bullets (- item) for parallel options.
 - Use **bold** for 2–4 key terms, statistics, or critical phrases per article.
-- Keep body paragraphs to 2–4 sentences. Break longer content into bullets or a sub-section.
 - Open each section with a direct sentence — not "In this section…" or "Here we discuss…".
 - Open the article with a real situation, concrete problem, or specific observation — not a definition and not "In today's world".
 - Headings must be plain and specific (not formulaic). Bad: "Practical Occasions for X". Good: "When to Wear a Kurta at Work".
@@ -125,6 +149,9 @@ Also avoid:
 - Break any sentence over 28 words into two.
 - Include at least one question to the reader in the whole article.
 - Include at least one short standalone sentence (under 8 words) in the body.
+
+### External references (trust signals)
+{external_link_rules}
 
 ### SEO (only after human voice is satisfied)
 - Target keyword in title, intro, one heading, body, and conclusion—woven in, not repeated.
@@ -180,6 +207,8 @@ def build_human_writing_guardrail(
         target_keyword=target,
         supporting_keywords=supporting,
         forbidden_phrase_bullets=_forbidden_phrase_bullets(),
+        section_anatomy_rules=SECTION_ANATOMY_RULES,
+        external_link_rules=EXTERNAL_LINK_RULES,
     )
 
 

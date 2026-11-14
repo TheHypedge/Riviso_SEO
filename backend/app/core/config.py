@@ -225,6 +225,12 @@ class Settings(BaseSettings):
     # to detect "intent overlap" between proposed topics and existing content.
     openai_embedding_model: str = "text-embedding-3-small"
 
+    # Article text provider: "openai" (default) or "anthropic" (Claude). Images, embeddings and
+    # the other LLM features stay on OpenAI either way.
+    llm_text_provider: str = Field(default="openai", validation_alias="LLM_TEXT_PROVIDER")
+    anthropic_api_key: str = Field(default="", validation_alias="ANTHROPIC_API_KEY")
+    anthropic_text_model: str = Field(default="claude-opus-5-5", validation_alias="ANTHROPIC_TEXT_MODEL")
+
     # AI Citation Tracking (AI Toolkit-style brand-mention monitoring) — each engine is
     # independently flagged so ChatGPT (which reuses openai_api_key above) can ship without
     # waiting on the others' keys. See app/services/ai_citation/.
@@ -265,6 +271,7 @@ class Settings(BaseSettings):
         "shopify_api_key",
         "shopify_api_secret",
         "openai_api_key",
+        "anthropic_api_key",
         "google_pagespeed_api_key",
         "perplexity_api_key",
         "gemini_api_key",

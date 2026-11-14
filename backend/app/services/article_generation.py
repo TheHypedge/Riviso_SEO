@@ -19,6 +19,7 @@ from app.services.openai_client import OpenAIClient
 from app.services.generation_blocklist import format_banned_phrases_for_prompt
 from app.services.human_writing_guardrail import (
     HUMAN_FIRST_SYSTEM_ANCHOR,
+    SECTION_ANATOMY_RULES,
     format_ai_detector_banned_phrases_for_prompt,
     format_human_writing_guardrail_for_system_prompt,
 )
@@ -32,7 +33,7 @@ from app.services.seo_guardrails import (
 log = logging.getLogger(__name__)
 
 # Bump when generation/token-estimate signatures change; surfaced on /api/health for deploy checks.
-GENERATION_REVISION = "2026-09-27-intro-para-single-h1"
+GENERATION_REVISION = "2026-11-14-prose-led-sections-verified-links"
 
 @lru_cache(maxsize=16)
 def _callable_param_names(fn: Callable[..., Any]) -> frozenset[str]:
@@ -116,6 +117,14 @@ async def generate_article_bundle_safe(**kwargs: Any) -> dict:
         return await generate_article_bundle(**filtered)
 
 
+def _use_claude() -> bool:
+    return (settings.llm_text_provider or "").strip().lower() in {"anthropic", "claude"}
+
+
+def _article_text_model() -> str:
+    return settings.anthropic_text_model if _use_claude() else settings.openai_text_model
+
+
 def _is_compiled_template(text: str) -> bool:
     """True when the prompt was compiled by compile_prompt_template() (guided builder).
 
@@ -185,7 +194,9 @@ def build_generation_messages(
             "- Use ONLY the pages listed in the page context.\n"
             "- Link with markdown using the exact post URLs given "
             "(e.g. [Page title](https://yoursite.com/post-slug/)).\n"
-            "- Include at least one natural inline internal link in the article body.\n"
+            "- Place 2-4 natural inline internal links (fewer only if fewer pages fit), each in a body "
+            "paragraph of a different section, never in a heading. The anchor text describes the "
+            "linked page's topic, never 'click here' or 'read more'.\n"
             "- Do not invent posts, slugs, or URLs that are not in the context.\n"
         )
 
@@ -252,10 +263,9 @@ def build_generation_messages(
         "the article title given in the user message — reword it. Do not add a second H1 anywhere else.\n"
         + h2_requirement
         + "- Use ### H3 sub-headings when a section has 2 or more distinct sub-topics.\n"
-        "- Use bullet points (- item) for any list of 3 or more parallel items, tips, or features.\n"
-        "- Use numbered lists (1. step) for sequential processes or step-by-step instructions.\n"
+        + SECTION_ANATOMY_RULES
+        + "\n- Numbered lists (1. step) are for sequential processes; bullets (- item) for parallel options.\n"
         "- Use **bold** for 2–4 key terms, statistics, or critical phrases per article.\n"
-        "- Keep paragraphs to 2–4 sentences. Long text must be broken into bullets or sub-sections.\n"
         "- Never use em dashes (—) anywhere in the article. Use a comma, plain hyphen (-), or rewrite the sentence.\n"
         "- Never use semicolons as sentence connectors (e.g. 'X; however, Y'). Use a full stop or comma instead.\n"
         "- Never use a colon as a dramatic mid-sentence pause (e.g. 'The answer: it works'). Write a complete sentence.\n"
@@ -426,7 +436,13 @@ async def generate_article_bundle(
         reference_source_content=reference_source_content,
     )
 
-    obj = await client.chat_json(model=settings.openai_text_model, system=sys, user=user)
+    text_model = _article_text_model()
+    if _use_claude():
+        from app.services.anthropic_client import AnthropicClient
+
+        obj = await AnthropicClient().chat_json(model=text_model, system=sys, user=user)
+    else:
+        obj = await client.chat_json(model=text_model, system=sys, user=user)
     obj = enforce_strict_article_json(dict(obj))
 
     article_md = sanitize_article_body(obj.get("article_markdown"))
@@ -451,6 +467,20 @@ async def generate_article_bundle(
             article_md = ensure_wordpress_page_injection(article_md, wp_for_injection)
         except Exception:
             log.exception("WordPress post-generation page injection failed")
+
+    from app.services.article_quality import structure_report, verify_external_links
+
+    removed_links: list[str] = []
+    try:
+        trusted = {str((p.as_dict() if hasattr(p, "as_dict") else p).get("post_url") or "") for p in wp_for_injection}
+        article_md, removed_links = await asyncio.wait_for(
+            verify_external_links(article_md, trusted_urls=trusted), timeout=30.0
+        )
+    except Exception:
+        log.warning("External link verification skipped", exc_info=True)
+    quality_report = structure_report(article_md)
+    quality_report["dead_links_removed"] = removed_links
+    log.info("Article quality report for %r: %s", title[:80], quality_report)
 
     image_url: str | None = None
     image_error: str | None = None
@@ -488,7 +518,8 @@ async def generate_article_bundle(
         "image_url": image_url,
         "image_error": image_error,
         "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        "models": {"text": settings.openai_text_model, "image": settings.openai_image_model},
+        "models": {"text": text_model, "image": settings.openai_image_model},
+        "quality_report": quality_report,
         "shopify_mapped_products": [
             p.as_dict() if hasattr(p, "as_dict") else dict(p) for p in (shopify_for_injection or [])
         ],
