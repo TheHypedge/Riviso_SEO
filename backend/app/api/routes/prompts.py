@@ -5,6 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 
+from app.services.to_thread import run_sync
 from app.core.deps import get_current_user
 from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
@@ -313,7 +314,7 @@ async def create_prompt(project_id: str, payload: PromptCreate, user: dict = Dep
     pid = str(uuid.uuid4())
     row = {"id": pid, "name": payload.name.strip()[:200], "text": text}
     prompts.append(row)
-    st.update_project_fields(project_id, {"prompts": prompts})
+    (await run_sync(st.update_project_fields, project_id, {"prompts": prompts}))
     return PromptItem(**row)
 
 
@@ -346,7 +347,7 @@ async def update_prompt(
             break
     if not found:
         raise HTTPException(status_code=404, detail="Prompt not found")
-    st.update_project_fields(project_id, {"prompts": prompts})
+    (await run_sync(st.update_project_fields, project_id, {"prompts": prompts}))
     return PromptItem(id=(found.get("id") or "").strip(), name=(found.get("name") or "").strip(), text=(found.get("text") or "").strip())
 
 
@@ -362,7 +363,7 @@ async def delete_prompt(project_id: str, prompt_id: str, user: dict = Depends(ge
     updates = {"prompts": prompts2}
     if (proj.get("default_prompt_id") or "").strip() == pid:
         updates["default_prompt_id"] = ""
-    st.update_project_fields(project_id, updates)
+    (await run_sync(st.update_project_fields, project_id, updates))
     return Response(status_code=204)
 
 
@@ -390,6 +391,6 @@ async def set_default_prompt(project_id: str, payload: SetDefaultRequest, user: 
     prompts = [p for p in (proj.get("prompts") or []) if isinstance(p, dict)]
     if not any((p.get("id") or "").strip() == pid for p in prompts):
         raise HTTPException(status_code=404, detail="Prompt not found")
-    st.update_project_fields(project_id, {"default_prompt_id": pid})
+    (await run_sync(st.update_project_fields, project_id, {"default_prompt_id": pid}))
     return {"ok": True, "default_id": pid}
 

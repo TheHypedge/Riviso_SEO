@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+from app.services.to_thread import run_sync
 from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
@@ -255,7 +256,7 @@ async def list_projects(user: dict = Depends(get_current_user)) -> list[ProjectP
             continue
         collab_count = 0
         try:
-            collabs = st.get_project_collaborators(p.get("id") or "")
+            collabs = (await run_sync(st.get_project_collaborators, p.get("id") or ""))
             collab_count = len(collabs)
         except Exception:
             pass
@@ -264,7 +265,7 @@ async def list_projects(user: dict = Depends(get_current_user)) -> list[ProjectP
 
     # Append shared projects (owned by others, shared with this user)
     try:
-        shared_rows = st.load_shared_projects_listing(uid)
+        shared_rows = (await run_sync(st.load_shared_projects_listing, uid))
         for p in shared_rows:
             if not isinstance(p, dict):
                 continue
@@ -272,7 +273,7 @@ async def list_projects(user: dict = Depends(get_current_user)) -> list[ProjectP
             owner_uid = (p.get("owner_user_id") or "").strip()
             owner_name: str | None = None
             try:
-                owner_user = st.get_user_by_id(owner_uid)
+                owner_user = (await run_sync(st.get_user_by_id, owner_uid))
                 if owner_user:
                     owner_name = (owner_user.get("full_name") or owner_user.get("email") or "").strip() or None
             except Exception:
@@ -298,7 +299,7 @@ async def create_project(
         plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
         plan = {}
         try:
-            plans = st.load_plans() or {}
+            plans = (await run_sync(st.load_plans)) or {}
             plan = plans.get(plan_key) if isinstance(plans, dict) else {}
             if not isinstance(plan, dict):
                 plan = {}
@@ -311,7 +312,7 @@ async def create_project(
             max_projects_i = None
         if max_projects_i is not None and max_projects_i > 0 and hasattr(st, "project_ids_for_owner"):
             try:
-                existing = st.project_ids_for_owner(uid) or []
+                existing = (await run_sync(st.project_ids_for_owner, uid)) or []
             except Exception:
                 existing = []
             if len(existing) >= max_projects_i:
@@ -338,8 +339,7 @@ async def create_project(
             shop = ""
         else:
             url = ""
-    st.insert_project(
-        {
+    (await run_sync(st.insert_project, {
             "id": pid,
             "owner_user_id": uid,
             "name": payload.name.strip()[:200],
@@ -367,11 +367,10 @@ async def create_project(
             "gsc_property_url": "",
             "gsc_index_on_publish": True,
             "created_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-    )
-    proj = st.get_project_listing_by_id(pid) if hasattr(st, "get_project_listing_by_id") else None
+        }))
+    proj = (await run_sync(st.get_project_listing_by_id, pid)) if hasattr(st, "get_project_listing_by_id") else None
     if not proj and hasattr(st, "get_project_access_row"):
-        proj = st.get_project_access_row(pid)
+        proj = (await run_sync(st.get_project_access_row, pid))
     if not proj:
         raise HTTPException(status_code=500, detail="Project creation failed")
     return _to_public(proj)
@@ -386,12 +385,12 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user)) -
     uid = (user.get("id") or "").strip()
     sys_role = (user.get("role") or "").strip().lower()
 
-    proj = st.get_project_listing_by_id(pid) if hasattr(st, "get_project_listing_by_id") else None
+    proj = (await run_sync(st.get_project_listing_by_id, pid)) if hasattr(st, "get_project_listing_by_id") else None
     if not proj:
         projects = (
-            st.load_projects_listing(uid)
+            (await run_sync(st.load_projects_listing, uid))
             if hasattr(st, "load_projects_listing")
-            else st.load_projects() or []
+            else (await run_sync(st.load_projects)) or []
         )
         proj = next((p for p in projects if isinstance(p, dict) and (p.get("id") or "") == pid), None)
     if not proj:
@@ -400,7 +399,7 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user)) -
     if sys_role == "admin":
         return _to_public(proj, your_role="owner")
 
-    ctx = st.get_project_member_context(pid, uid) if hasattr(st, "get_project_member_context") else None
+    ctx = (await run_sync(st.get_project_member_context, pid, uid)) if hasattr(st, "get_project_member_context") else None
     if not ctx or not ctx["has_access"]:
         raise HTTPException(status_code=404, detail="Not found")
 
@@ -408,7 +407,7 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user)) -
     owner_name: str | None = None
     if is_shared:
         try:
-            ou = st.get_user_by_id(ctx["owner_user_id"])
+            ou = (await run_sync(st.get_user_by_id, ctx["owner_user_id"]))
             if ou:
                 owner_name = (ou.get("full_name") or ou.get("email") or "").strip() or None
         except Exception:
@@ -417,7 +416,7 @@ async def get_project(project_id: str, user: dict = Depends(get_current_user)) -
     collab_count = 0
     if ctx["is_owner"]:
         try:
-            collab_count = len(st.get_project_collaborators(pid))
+            collab_count = len((await run_sync(st.get_project_collaborators, pid)))
         except Exception:
             pass
 
@@ -435,11 +434,11 @@ async def update_project(project_id: str, payload: ProjectUpdate, user: dict = D
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
     if hasattr(st, "get_project_listing_by_id"):
-        proj = st.get_project_listing_by_id(pid)
+        proj = (await run_sync(st.get_project_listing_by_id, pid))
     else:
-        proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+        proj = next((p for p in ((await run_sync(st.load_projects)) or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
     if not proj and hasattr(st, "get_project_access_row"):
-        proj = st.get_project_access_row(pid)
+        proj = (await run_sync(st.get_project_access_row, pid))
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
@@ -561,10 +560,10 @@ async def update_project(project_id: str, payload: ProjectUpdate, user: dict = D
         updates["niche_identifier"] = derived_n[:20000]
 
     if updates:
-        st.update_project_fields(pid, updates)
-    proj2 = st.get_project_listing_by_id(pid) if hasattr(st, "get_project_listing_by_id") else None
+        (await run_sync(st.update_project_fields, pid, updates))
+    proj2 = (await run_sync(st.get_project_listing_by_id, pid)) if hasattr(st, "get_project_listing_by_id") else None
     if not proj2 and hasattr(st, "get_project_access_row"):
-        proj2 = st.get_project_access_row(pid)
+        proj2 = (await run_sync(st.get_project_access_row, pid))
     if not proj2:
         raise HTTPException(status_code=404, detail="Not found")
     return _to_public(proj2)
@@ -583,14 +582,14 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
     """
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
-    proj = st.get_project_access_row(pid) if hasattr(st, "get_project_access_row") else None
+    proj = (await run_sync(st.get_project_access_row, pid)) if hasattr(st, "get_project_access_row") else None
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
     sys_role = (user.get("role") or "").strip().lower()
 
     if sys_role != "admin":
-        ctx = st.get_project_member_context(pid, uid) if hasattr(st, "get_project_member_context") else None
+        ctx = (await run_sync(st.get_project_member_context, pid, uid)) if hasattr(st, "get_project_member_context") else None
         if not ctx or not ctx["has_access"]:
             raise HTTPException(status_code=404, detail="Not found")
         # For collaborators, use owner's subscription for plan limits
@@ -601,7 +600,7 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
     plan_key = (effective_sub or "beta").strip().lower()
     plan: dict = {}
     try:
-        plans = st.load_plans() or {}
+        plans = (await run_sync(st.load_plans)) or {}
         plan = plans.get(plan_key) if isinstance(plans, dict) else {}
         if not isinstance(plan, dict):
             plan = {}
@@ -640,11 +639,9 @@ async def get_article_quota(project_id: str, user: dict = Depends(get_current_us
             "month_reset_at": _utc_month_reset_at(),
         }
 
-    snap = st.peek_article_usage_remaining(
-        uid,
+    snap = (await run_sync(st.peek_article_usage_remaining, uid,
         day_limit=plan.get("max_articles_per_day"),
-        month_limit=plan.get("max_articles_per_month"),
-    )
+        month_limit=plan.get("max_articles_per_month")))
     return {
         "plan_key": plan_key,
         "is_admin": False,
@@ -666,14 +663,14 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
     """
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
-    proj = st.get_project_access_row(pid) if hasattr(st, "get_project_access_row") else None
+    proj = (await run_sync(st.get_project_access_row, pid)) if hasattr(st, "get_project_access_row") else None
     if not proj:
         raise HTTPException(status_code=404, detail="Not found")
     uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
 
     if role != "admin":
-        ctx = st.get_project_member_context(pid, uid) if hasattr(st, "get_project_member_context") else None
+        ctx = (await run_sync(st.get_project_member_context, pid, uid)) if hasattr(st, "get_project_member_context") else None
         if not ctx or not ctx["has_access"]:
             raise HTTPException(status_code=404, detail="Not found")
         effective_sub = ctx.get("owner_subscription_type") or (user.get("subscription_type") or "beta")
@@ -682,7 +679,7 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
 
     plan_key = (effective_sub or "beta").strip().lower()
     try:
-        plans = st.load_plans() or {}
+        plans = (await run_sync(st.load_plans)) or {}
         plan = plans.get(plan_key) if isinstance(plans, dict) else {}
         if not isinstance(plan, dict):
             plan = {}
@@ -836,7 +833,7 @@ async def get_project_feature_limits(project_id: str, user: dict = Depends(get_c
 async def delete_project(project_id: str, user: dict = Depends(get_current_user)) -> Response:
     st = get_legacy_storage_module()
     pid = (project_id or "").strip()
-    proj = st.get_project_access_row(pid) if hasattr(st, "get_project_access_row") else None
+    proj = (await run_sync(st.get_project_access_row, pid)) if hasattr(st, "get_project_access_row") else None
     if not proj:
         return Response(status_code=204)
     uid = (user.get("id") or "").strip()
@@ -844,14 +841,14 @@ async def delete_project(project_id: str, user: dict = Depends(get_current_user)
     if role != "admin" and not user_ids_equal(proj.get("owner_user_id"), uid):
         # Collaborators cannot delete — return 403 instead of silent 204
         if hasattr(st, "get_collaborator_for_user"):
-            collab = st.get_collaborator_for_user(pid, uid)
+            collab = (await run_sync(st.get_collaborator_for_user, pid, uid))
             if collab:
                 raise HTTPException(status_code=403, detail="Only the project owner can delete a project")
         return Response(status_code=204)
     # Delete the project and all resources that reference it (articles, scheduled jobs, settings, prompts, etc.).
     if hasattr(st, "delete_project_and_resources"):
-        st.delete_project_and_resources(pid)
+        (await run_sync(st.delete_project_and_resources, pid))
     else:
-        st.delete_project_and_articles(pid)
+        (await run_sync(st.delete_project_and_articles, pid))
     return Response(status_code=204)
 

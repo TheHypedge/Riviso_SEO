@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.services.to_thread import run_sync
 from app.core.deps import get_current_user
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.collaboration import NotificationCountResponse, NotificationPublic
@@ -22,7 +23,7 @@ async def list_notifications(
 ) -> list[NotificationPublic]:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
-    records = st.get_notifications_for_user(uid, limit=limit, before=before)
+    records = (await run_sync(st.get_notifications_for_user, uid, limit=limit, before=before))
     return [
         NotificationPublic(
             id=r["id"],
@@ -41,7 +42,7 @@ async def list_notifications(
 async def get_unread_count(user: dict = Depends(get_current_user)) -> NotificationCountResponse:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
-    count = st.get_unread_notification_count(uid)
+    count = (await run_sync(st.get_unread_notification_count, uid))
     return NotificationCountResponse(count=count)
 
 
@@ -49,11 +50,11 @@ async def get_unread_count(user: dict = Depends(get_current_user)) -> Notificati
 async def mark_read(notification_id: str, user: dict = Depends(get_current_user)) -> NotificationPublic:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
-    ok = st.mark_notification_read(notification_id, uid)
+    ok = (await run_sync(st.mark_notification_read, notification_id, uid))
     if not ok:
         raise HTTPException(status_code=404, detail="Notification not found")
     # Reload to return updated record
-    records = st.get_notifications_for_user(uid, limit=100)
+    records = (await run_sync(st.get_notifications_for_user, uid, limit=100))
     for r in records:
         if r.get("id") == notification_id:
             return NotificationPublic(
@@ -72,5 +73,5 @@ async def mark_read(notification_id: str, user: dict = Depends(get_current_user)
 async def mark_all_read(user: dict = Depends(get_current_user)) -> NotificationCountResponse:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
-    count = st.mark_all_notifications_read(uid)
+    count = (await run_sync(st.mark_all_notifications_read, uid))
     return NotificationCountResponse(count=count)

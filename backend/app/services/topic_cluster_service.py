@@ -19,7 +19,7 @@ import asyncio
 import hashlib
 import logging
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import HTTPException
@@ -505,7 +505,7 @@ class TopicClusterService:
                     run_at = scheduled_dt_utc + timedelta(minutes=5 * slot_offset)
                     norm_utc = run_at.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
                     cat_raw = (proj.get("wp_category_ids") or "").strip()
-                    stable = hashlib.sha1(f"{pid}:{aid}".encode("utf-8")).hexdigest()[:20]
+                    stable = hashlib.sha1(f"{pid}:{aid}".encode("utf-8"), usedforsecurity=False).hexdigest()[:20]
                     job_id = f"job_{stable}"
                     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
                     job_updates = {

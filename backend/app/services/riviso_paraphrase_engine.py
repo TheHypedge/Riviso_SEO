@@ -295,7 +295,7 @@ _STRUCTURE_RULES: list[tuple[re.Pattern[str], str]] = [
 def _stable_pick(key: str, options: tuple[str, ...]) -> str:
     if not options:
         return key
-    h = int(hashlib.md5(key.encode("utf-8")).hexdigest(), 16)
+    h = int(hashlib.md5(key.encode("utf-8"), usedforsecurity=False).hexdigest(), 16)
     return options[h % len(options)]
 
 
@@ -348,7 +348,7 @@ def _apply_synonyms(sentence: str, strength: float, protected: set[str], sent_id
         options = _SYNONYMS.get(low)
         if not options:
             return word
-        gate = int(hashlib.md5(f"{sent_idx}:{low}".encode()).hexdigest(), 16) % 100
+        gate = int(hashlib.md5(f"{sent_idx}:{low}".encode(), usedforsecurity=False).hexdigest(), 16) % 100
         # Higher strength => more replacements (was inverted before).
         keep_threshold = int((1.0 - min(0.95, strength)) * 100)
         if gate >= keep_threshold:

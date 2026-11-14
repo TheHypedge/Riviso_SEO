@@ -76,7 +76,7 @@ def _user_to_public(u: dict, *, total_projects: int = 0) -> AdminUserPublic:
 @router.get("/users", response_model=list[AdminUserPublic])
 async def list_users(_: dict = Depends(require_admin)) -> list[AdminUserPublic]:
     st = get_legacy_storage_module()
-    items = st.list_users() or []
+    items = (await run_sync(st.list_users)) or []
     out: list[AdminUserPublic] = []
     for u in items:
         if isinstance(u, dict):
@@ -84,7 +84,7 @@ async def list_users(_: dict = Depends(require_admin)) -> list[AdminUserPublic]:
             nproj = 0
             if uid and hasattr(st, "project_ids_for_owner"):
                 try:
-                    nproj = len(st.project_ids_for_owner(uid) or [])
+                    nproj = len((await run_sync(st.project_ids_for_owner, uid)) or [])
                 except Exception:
                     nproj = 0
             out.append(_user_to_public(u, total_projects=nproj))
@@ -100,7 +100,7 @@ async def update_user(user_id: str, payload: AdminUserUpdate, admin: dict = Depe
         raise HTTPException(status_code=400, detail="user_id is required")
 
     updates = payload.model_dump(exclude_unset=True)
-    prev = st.get_user_by_id(uid) if uid else None
+    prev = (await run_sync(st.get_user_by_id, uid)) if uid else None
     if prev and (prev.get("role") or "").strip().lower() == "admin":
         new_status = (updates.get("account_status") or "").strip().lower()
         if new_status in {"deleted", "deactivated"}:
@@ -118,10 +118,10 @@ async def update_user(user_id: str, payload: AdminUserUpdate, admin: dict = Depe
         if status == "active":
             updates.setdefault("is_deleted", False)
             updates.setdefault("is_deactivated", False)
-    ok = st.update_user_fields(uid, updates)
+    ok = (await run_sync(st.update_user_fields, uid, updates))
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")
-    u = st.get_user_by_id(uid)
+    u = (await run_sync(st.get_user_by_id, uid))
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
     if (
@@ -132,14 +132,14 @@ async def update_user(user_id: str, payload: AdminUserUpdate, admin: dict = Depe
     ):
         from app.services.email_dispatch import dispatch_plan_notification_email
 
-        plans = st.load_plans() or {}
+        plans = (await run_sync(st.load_plans)) or {}
         plan_key = (updates.get("subscription_type") or u.get("subscription_type") or "").strip().lower()
         plan_name = (plans.get(plan_key) or {}).get("name") if isinstance(plans.get(plan_key), dict) else plan_key
         dispatch_plan_notification_email(to=(u.get("email") or "").strip(), plan_name=str(plan_name or plan_key))
     nproj = 0
     if hasattr(st, "project_ids_for_owner"):
         try:
-            nproj = len(st.project_ids_for_owner(uid) or [])
+            nproj = len((await run_sync(st.project_ids_for_owner, uid)) or [])
         except Exception:
             nproj = 0
     return _user_to_public(u, total_projects=nproj)
@@ -168,7 +168,7 @@ async def bulk_update_users(
             patch["full_name"] = item.full_name
         if not patch:
             continue
-        prev = st.get_user_by_id(uid)
+        prev = (await run_sync(st.get_user_by_id, uid))
         if not prev:
             errors.append({"user_id": uid, "error": "User not found"})
             continue
@@ -177,11 +177,11 @@ async def bulk_update_users(
             if new_role and new_role != "admin":
                 errors.append({"user_id": uid, "error": "Admin role cannot be changed via bulk update"})
                 continue
-        ok = st.update_user_fields(uid, patch)
+        ok = (await run_sync(st.update_user_fields, uid, patch))
         if not ok:
             errors.append({"user_id": uid, "error": "Update failed"})
             continue
-        u = st.get_user_by_id(uid)
+        u = (await run_sync(st.get_user_by_id, uid))
         if not u:
             errors.append({"user_id": uid, "error": "User not found after update"})
             continue
@@ -192,14 +192,14 @@ async def bulk_update_users(
         ):
             from app.services.email_dispatch import dispatch_plan_notification_email
 
-            plans = st.load_plans() or {}
+            plans = (await run_sync(st.load_plans)) or {}
             plan_key = (patch.get("subscription_type") or "").strip().lower()
             plan_name = (plans.get(plan_key) or {}).get("name") if isinstance(plans.get(plan_key), dict) else plan_key
             dispatch_plan_notification_email(to=(u.get("email") or "").strip(), plan_name=str(plan_name or plan_key))
         nproj = 0
         if hasattr(st, "project_ids_for_owner"):
             try:
-                nproj = len(st.project_ids_for_owner(uid) or [])
+                nproj = len((await run_sync(st.project_ids_for_owner, uid)) or [])
             except Exception:
                 nproj = 0
         updated.append(_user_to_public(u, total_projects=nproj))
@@ -220,7 +220,7 @@ async def delete_user(user_id: str, admin: dict = Depends(require_admin)) -> Res
         raise HTTPException(status_code=404, detail="User not found")
     if (target.get("role") or "").strip().lower() == "admin":
         raise HTTPException(status_code=403, detail="Admin accounts cannot be deleted from the admin panel")
-    ok = st.delete_user(uid)
+    ok = (await run_sync(st.delete_user, uid))
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")
     return Response(status_code=204)
@@ -232,11 +232,11 @@ async def user_details(user_id: str, _: dict = Depends(require_admin)) -> AdminU
     uid = (user_id or "").strip()
     if not uid:
         raise HTTPException(status_code=400, detail="user_id is required")
-    u = st.get_user_by_id(uid)
+    u = (await run_sync(st.get_user_by_id, uid))
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
-    pids = st.project_ids_for_owner(uid) if hasattr(st, "project_ids_for_owner") else []
-    counts = st.count_articles_by_project_ids(pids) if hasattr(st, "count_articles_by_project_ids") else {"total": 0, "pending": 0, "draft": 0, "published": 0, "active": 0}
+    pids = (await run_sync(st.project_ids_for_owner, uid)) if hasattr(st, "project_ids_for_owner") else []
+    counts = (await run_sync(st.count_articles_by_project_ids, pids)) if hasattr(st, "count_articles_by_project_ids") else {"total": 0, "pending": 0, "draft": 0, "published": 0, "active": 0}
     stats = AdminUserStats(
         total_projects=len(pids),
         total_articles=int(counts.get("total") or 0),
@@ -258,11 +258,11 @@ async def user_workspace(user_id: str, _: dict = Depends(require_admin)) -> Admi
     uid = (user_id or "").strip()
     if not uid:
         raise HTTPException(status_code=400, detail="user_id is required")
-    u = st.get_user_by_id(uid)
+    u = (await run_sync(st.get_user_by_id, uid))
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
 
-    projs = [p for p in (st.load_projects(uid) or []) if isinstance(p, dict)]
+    projs = [p for p in ((await run_sync(st.load_projects, uid)) or []) if isinstance(p, dict)]
     by_id: dict[str, dict] = {}
     for p in projs:
         pid = (p.get("id") or "").strip()
@@ -273,7 +273,7 @@ async def user_workspace(user_id: str, _: dict = Depends(require_admin)) -> Admi
     counts: dict[str, int] = {}
     if hasattr(st, "article_totals_per_project"):
         try:
-            counts = dict(st.article_totals_per_project(pids))
+            counts = dict((await run_sync(st.article_totals_per_project, pids)))
         except Exception:
             counts = {pid: 0 for pid in pids}
 
@@ -281,14 +281,14 @@ async def user_workspace(user_id: str, _: dict = Depends(require_admin)) -> Admi
     raw_articles: list[dict] = []
     if hasattr(st, "load_recent_article_listings_for_projects"):
         try:
-            raw_articles = list(st.load_recent_article_listings_for_projects(pids, limit=listing_limit) or [])
+            raw_articles = list((await run_sync(st.load_recent_article_listings_for_projects, pids, limit=listing_limit)) or [])
         except Exception:
             raw_articles = []
     else:
         for pid in pids:
             if hasattr(st, "load_articles_listing_for_project"):
                 try:
-                    raw_articles.extend(st.load_articles_listing_for_project(pid, limit=300) or [])
+                    raw_articles.extend((await run_sync(st.load_articles_listing_for_project, pid, limit=300)) or [])
                 except Exception:
                     pass
 
@@ -379,7 +379,7 @@ def _plan_to_public(key: str, d: dict) -> PlanPublic:
 @router.get("/plans", response_model=list[PlanPublic])
 async def list_plans(_: dict = Depends(require_admin)) -> list[PlanPublic]:
     st = get_legacy_storage_module()
-    plans = st.load_plans() or {}
+    plans = (await run_sync(st.load_plans)) or {}
     out: list[PlanPublic] = []
     for k, v in plans.items():
         if isinstance(v, dict):
@@ -395,10 +395,10 @@ async def upsert_plan(plan_key: str, payload: PlanUpsert, _: dict = Depends(requ
     if not key:
         raise HTTPException(status_code=400, detail="plan_key is required")
     try:
-        st.upsert_plan(key, payload.model_dump(exclude_unset=True))
+        (await run_sync(st.upsert_plan, key, payload.model_dump(exclude_unset=True)))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    plans = st.load_plans() or {}
+    plans = (await run_sync(st.load_plans)) or {}
     d = plans.get(key) or {"key": key}
     return _plan_to_public(key, d if isinstance(d, dict) else {"key": key})
 

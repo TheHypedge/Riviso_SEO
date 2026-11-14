@@ -99,7 +99,7 @@ _TRANSITIONS: tuple[str, ...] = (
 def _stable_pick(key: str, options: tuple[str, ...]) -> str:
     if not options:
         return key
-    h = int(hashlib.md5(key.encode("utf-8")).hexdigest(), 16)
+    h = int(hashlib.md5(key.encode("utf-8"), usedforsecurity=False).hexdigest(), 16)
     return options[h % len(options)]
 
 
@@ -228,8 +228,8 @@ def _add_rhythmic_short_sentence(text: str) -> str:
                 noun = nouns[0]
                 short = _stable_pick(sent[:20], (
                     f"{noun} matters.",
-                    f"That counts.",
-                    f"It adds up.",
+                    "That counts.",
+                    "It adds up.",
                 ))
             else:
                 # No clear noun — skip to avoid any template residue.

@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from app.services.shopify_api_errors import RECOMMENDED_SCOPES, REQUIRED_SYNC_SCOPES, scopes_missing_for_sync
+from app.services.shopify_api_errors import RECOMMENDED_SCOPES, scopes_missing_for_sync
 from app.services.shopify_client import ShopifyClient
 from app.services.shopify_oauth import normalize_shop_domain
 

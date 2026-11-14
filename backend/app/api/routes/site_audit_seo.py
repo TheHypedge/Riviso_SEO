@@ -134,7 +134,8 @@ async def get_seo_audit_urls(
 async def get_seo_audit_url_detail(project_id: str, audit_id: str, url_id: str, user: dict = Depends(get_current_user)) -> dict[str, Any]:
     st = get_legacy_storage_module()
     await async_require_project_access(user=user, project_id=project_id, full=False, allow_collaborators=True)
-    url_doc = await run_sync(st.load_seo_audit_url_by_id, url_id)
+    await _audit_in_project(st, audit_id, project_id)
+    url_doc = await run_sync(st.load_seo_audit_url_by_id, url_id, audit_id)
     if not url_doc or url_doc.get("audit_id") != audit_id:
         raise HTTPException(status_code=404, detail="URL not found in this audit")
     inlinks = await run_sync(st.load_seo_audit_inlinks_for_url, audit_id, url_doc.get("normalized_url") or "", 200)
@@ -155,11 +156,21 @@ async def get_seo_audit_issues(
 ) -> dict[str, Any]:
     st = get_legacy_storage_module()
     await async_require_project_access(user=user, project_id=project_id, full=False, allow_collaborators=True)
+    await _audit_in_project(st, audit_id, project_id)
     if rule_id:
         rows = await run_sync(st.load_seo_audit_issues, audit_id, severity=severity, rule_id=rule_id, limit=limit)
         return {"issues": rows}
     groups = await run_sync(st.aggregate_seo_audit_issue_groups, audit_id)
     return {"groups": [_with_rule_copy(g) for g in groups or []]}
+
+
+async def _audit_in_project(st, audit_id: str, project_id: str) -> dict[str, Any]:
+    """404 unless the audit belongs to this project (project access alone is not enough:
+    without it any user could read another project's audit by id)."""
+    audit = await run_sync(st.load_seo_audit_by_id, audit_id)
+    if not audit or audit.get("project_id") != project_id:
+        raise HTTPException(status_code=404, detail="Audit not found")
+    return audit
 
 
 def _with_rule_copy(group: dict[str, Any]) -> dict[str, Any]:

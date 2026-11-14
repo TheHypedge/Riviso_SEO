@@ -1,4 +1,4 @@
-"""Typed repositories by aggregate (P4.6).
+"""Repository facade over ``storage`` (P4.6). Only the scheduled-jobs aggregate is adopted.
 
 The data layer is otherwise ~4,800 lines of flat module-level functions over raw
 dicts (see RIVISO_PERFORMANCE_OPTIMIZATION_AUDIT §2.1/2.2). These repository
@@ -34,90 +34,6 @@ class _Repo:
         if not callable(fn):
             raise AttributeError(f"storage backend has no {name!r}")
         return fn(*args, **kwargs)
-
-    def _has(self, name: str) -> bool:
-        return callable(getattr(self.st, name, None))
-
-
-class ArticleRepository(_Repo):
-    """Articles aggregate — light listings vs heavy body/image reads."""
-
-    # --- heavy / single-document reads -------------------------------------
-    def get(self, project_id: str, article_id: str) -> dict | None:
-        return self._call("get_article", project_id=project_id, article_id=article_id)
-
-    def shell(self, project_id: str, article_id: str) -> dict | None:
-        return self._call("get_article_editor_shell", project_id=project_id, article_id=article_id)
-
-    def body_text(self, project_id: str, article_id: str) -> str | None:
-        return self._call("get_article_body_text", project_id=project_id, article_id=article_id)
-
-    def image_url(self, project_id: str, article_id: str) -> str | None:
-        return self._call("get_article_image_url", project_id=project_id, article_id=article_id)
-
-    def count(
-        self,
-        project_id: str,
-        *,
-        q: str | None = None,
-        date_from: str | None = None,
-        date_to: str | None = None,
-        status_key: str | None = None,
-    ) -> int:
-        return int(
-            self._call(
-                "count_articles_listing_for_project",
-                project_id,
-                q=q,
-                date_from=date_from,
-                date_to=date_to,
-                status_key=status_key,
-            )
-            or 0
-        )
-
-    def titles(self, project_id: str, *, limit: int = 20000) -> list[dict]:
-        return self._call("load_article_titles_for_project", project_id, limit=limit)
-
-    # --- writes ------------------------------------------------------------
-    def patch(self, article_id: str, fields: dict) -> bool:
-        return bool(self._call("patch_article_fields", article_id, fields))
-
-class ProjectRepository(_Repo):
-    """Projects aggregate — full vs access/listing/generation projections."""
-
-    def get(self, project_id: str) -> dict | None:
-        return self._call("get_project_by_id", project_id)
-
-    def listing(self, owner_user_id: str | None = None) -> list[dict]:
-        if self._has("load_projects_listing"):
-            return self._call("load_projects_listing", owner_user_id)
-        return self._call("load_projects", owner_user_id)
-
-    def update(self, project_id: str, fields: dict) -> bool:
-        return bool(self._call("update_project_fields", project_id, fields))
-
-
-class UserRepository(_Repo):
-    """Users aggregate."""
-
-    def get(self, user_id: str) -> dict | None:
-        return self._call("get_user_by_id", user_id)
-
-    def by_email(self, email: str) -> dict | None:
-        if self._has("get_user_by_email"):
-            return self._call("get_user_by_email", email)
-        em = (email or "").strip().lower()
-        return next(
-            (u for u in (self._call("load_users") or []) if (u.get("email") or "").strip().lower() == em),
-            None,
-        )
-
-    def update(self, user_id: str, fields: dict) -> bool:
-        for name in ("update_user_fields", "patch_user_fields"):
-            if self._has(name):
-                return bool(self._call(name, user_id, fields))
-        raise AttributeError("storage backend cannot update users")
 
 
 class ScheduledJobRepository(_Repo):

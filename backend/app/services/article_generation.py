@@ -72,9 +72,6 @@ def estimate_bundle_tokens(
 ) -> int:
     """
     Canonical token budget for article + optional custom image prompt.
-
-    Does not depend on ``estimate_tokens_for_generation_bundle``'s parameter list,
-    so scheduled jobs and the editor never fail when only callers were updated.
     """
     sys, user = build_generation_messages(
         title=title,
@@ -316,46 +313,6 @@ def build_generation_messages(
         )
     return sys, user
 
-
-def estimate_tokens_for_generation_bundle(
-    *,
-    title: str,
-    keywords: list[str],
-    focus_keyphrase: str,
-    writing_prompt_text: str,
-    brand_identity: str | None = None,
-    niche_identifier: str | None = None,
-    product_context: str | None = None,
-    generate_image: bool,
-    image_prompt_text: str | None = None,
-    max_completion_tokens: int = 6_000,
-    **extra_kwargs: Any,
-) -> int:
-    """
-    Token budget estimate for a full article + optional image.
-
-    ``image_prompt_text`` is a first-class parameter (scheduled jobs and the editor
-    pass it). ``**extra_kwargs`` absorbs any other forward-compatible keys.
-    """
-    if image_prompt_text is None and "image_prompt_text" in extra_kwargs:
-        image_prompt_text = extra_kwargs.pop("image_prompt_text")
-    else:
-        extra_kwargs.pop("image_prompt_text", None)
-    extra_kwargs.pop("content_optimization_profile", None)
-    if extra_kwargs:
-        log.debug("estimate_tokens_for_generation_bundle ignored keys: %s", sorted(extra_kwargs.keys()))
-    return estimate_bundle_tokens(
-        title=title,
-        keywords=keywords,
-        focus_keyphrase=focus_keyphrase,
-        writing_prompt_text=writing_prompt_text,
-        brand_identity=brand_identity,
-        niche_identifier=niche_identifier,
-        product_context=product_context,
-        generate_image=generate_image,
-        image_prompt_text=image_prompt_text,
-        max_completion_tokens=max_completion_tokens,
-    )
 
 
 async def generate_article_bundle(

@@ -83,9 +83,36 @@ def _decode_inline_data_url(raw: str) -> tuple[bytes, str] | None:
         return None
 
 
+_FEATURED_FIELDS = {"_id": 0, "id": 1, "project_id": 1, "image_url": 1, "featured_image_storage": 1}
+
+
+def _iter_featured_candidates(project_id: str | None):
+    """Stream only rows that still need migrating, one document at a time: loading every
+    article (bodies + multi-MB base64 images) in one go times out against Atlas."""
+    q: dict = {"featured_image_storage": {"$ne": "cloudinary"}, "image_url": {"$nin": [None, ""]}}
+    if project_id:
+        q["project_id"] = project_id
+    if getattr(st, "_storage_mode", "mongo") == "mongo":
+        col = st.get_db().articles
+        ids = [d["id"] for d in col.find(q, {"_id": 0, "id": 1}) if d.get("id")]
+        print(f"  {len(ids)} candidate row(s)")
+        for aid in ids:
+            doc = col.find_one({"id": aid}, _FEATURED_FIELDS)
+            if doc:
+                yield doc
+        return
+    for a in st.load_articles():
+        if not project_id or (a.get("project_id") or "").strip() == project_id:
+            yield a
+
+
 def _migrate_featured_image(article: dict, *, dry_run: bool, delete_local: bool) -> str:
     aid = (article.get("id") or "").strip()
     storage_mode = (article.get("featured_image_storage") or "").strip()
+    # Older rows stored the base64 data URL straight in image_url without ever setting
+    # featured_image_storage (112 None + 5 "" in prod, 2026-11-14) -- treat any data: URL as inline.
+    if (article.get("image_url") or "").startswith("data:"):
+        storage_mode = "inline"
     if storage_mode == "cloudinary":
         return "skip-already-cloudinary"
 
@@ -219,9 +246,7 @@ def main() -> None:
 
     if not args.skip_featured:
         print("=== Featured images ===")
-        articles = st.load_articles()
-        if args.project_id:
-            articles = [a for a in articles if (a.get("project_id") or "").strip() == args.project_id]
+        articles = _iter_featured_candidates(args.project_id)
         stats: dict[str, int] = {}
         migrated = 0
         for a in articles:

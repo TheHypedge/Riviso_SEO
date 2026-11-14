@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+from app.services.to_thread import run_sync
 from app.core.deps import get_current_user
 from app.core.config import settings
 from app.legacy.storage import get_legacy_storage_module
@@ -38,8 +39,8 @@ async def update_me(payload: ProfileUpdate, user: dict = Depends(get_current_use
     updates = payload.model_dump(exclude_unset=True)
     if "timezone" in updates and isinstance(updates.get("timezone"), str):
         updates["timezone"] = normalize_user_timezone(updates["timezone"])
-    st.update_user_fields(uid, updates)
-    fresh = st.get_user_by_id(uid) or user
+    (await run_sync(st.update_user_fields, uid, updates))
+    fresh = (await run_sync(st.get_user_by_id, uid)) or user
     return _to_public(fresh)
 
 
@@ -47,7 +48,7 @@ async def update_me(payload: ProfileUpdate, user: dict = Depends(get_current_use
 async def deactivate_me(response: Response, user: dict = Depends(get_current_user)) -> Response:
     st = get_legacy_storage_module()
     uid = (user.get("id") or "").strip()
-    ok = st.deactivate_user(uid) if hasattr(st, "deactivate_user") else st.update_user_fields(uid, {"account_status": "deactivated", "is_deactivated": True})
+    ok = (await run_sync(st.deactivate_user, uid)) if hasattr(st, "deactivate_user") else (await run_sync(st.update_user_fields, uid, {"account_status": "deactivated", "is_deactivated": True}))
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")
     response.delete_cookie("aa_access", path="/", domain=settings.cookie_domain)
@@ -66,7 +67,7 @@ async def delete_me(response: Response, user: dict = Depends(get_current_user)) 
     if purge_fn is not None:
         ok = purge_fn(uid)
     else:
-        ok = st.delete_user(uid)
+        ok = (await run_sync(st.delete_user, uid))
     if not ok:
         raise HTTPException(status_code=404, detail="User not found")
     response.delete_cookie("aa_access", path="/", domain=settings.cookie_domain)
@@ -96,7 +97,7 @@ async def lookup_user_by_email(
     em = (email or "").strip().lower()
     if not em:
         return UserLookupResponse(found=False)
-    target = st.get_user_by_email(em)
+    target = (await run_sync(st.get_user_by_email, em))
     if not target:
         return UserLookupResponse(found=False)
     # Don't expose the caller's own details back (redundant but safe)

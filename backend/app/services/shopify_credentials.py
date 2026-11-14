@@ -131,8 +131,7 @@ async def refresh_project_token_if_needed(
         shop=shop,
         client_id=client_id,
         client_secret=client_secret,
-    )
-    now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    )
     scope_raw = (exchanged.get("scope") or "").strip()
     updates = {
         "shopify_access_token": (exchanged.get("access_token") or "").strip(),

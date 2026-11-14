@@ -9,7 +9,7 @@ import { DashboardNavIcon } from "@/components/DashboardNavIcon";
 import { ShopifyManualConnectGuide } from "@/components/shopify/ShopifyManualConnectGuide";
 import { TutorialStepperModal } from "@/components/TutorialStepperModal";
 import { ProjectOverviewDashboardLight } from "@/components/overview/ProjectOverviewDashboardLight";
-import { DashboardProjectsSkeleton, DetailPanelSkeleton, FormFieldsSkeleton } from "@/components/skeleton";
+import { DashboardProjectsSkeleton, DetailPanelSkeleton } from "@/components/skeleton";
 import NotificationBell from "@/components/NotificationBell";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatCard, NavGroup, NavItem } from "@/components/ui";
@@ -26,7 +26,6 @@ import {
   downloadWordpressPlugin,
   getAccessToken,
   invalidateProjectSettingsCache,
-  InvitationPublic,
   MembersResponse,
   PlanPublic,
   ProjectPlatform,
@@ -35,7 +34,7 @@ import {
   WordpressVerifyResponse,
 } from "@/lib/api";
 import { cachedProjectsAgeMs, loadCachedProjects, saveCachedProjects } from "@/lib/projectsCache";
-import { connectionErrorMessage, isAuthError, isNetworkError } from "@/lib/networkErrors";
+import { connectionErrorMessage, isAuthError } from "@/lib/networkErrors";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { AdminPlansModule } from "@/components/admin/AdminPlansModule";
 import { UserProfileModule } from "@/components/profile/UserProfileModule";
@@ -419,6 +418,10 @@ export default function DashboardPage() {
     (async () => {
       setError(null);
       setLoading(true);
+      // /me and the project list are independent: fetch both at once so the list renders as
+      // soon as it lands instead of waiting a full round trip behind /me.
+      const projectsReq = api.listProjects({ fresh: true, skipGlobalLoading: true });
+      projectsReq.catch(() => undefined); // handled below; avoid an unhandled-rejection warning
       try {
         const me = await api.me({ fresh: true, skipGlobalLoading: true });
         setMeEmail(me.email);
@@ -433,7 +436,7 @@ export default function DashboardPage() {
             router.replace("/dashboard");
           }
         }
-        const items = await api.listProjects({ fresh: true, skipGlobalLoading: true });
+        const items = await projectsReq;
         setProjects(items);
         saveCachedProjects(items);
         setLastSyncedAt(Date.now());

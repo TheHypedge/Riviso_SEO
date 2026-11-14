@@ -11,8 +11,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
+from app.services.to_thread import run_sync
 from app.core.deps import get_current_user
-from app.core.ids import user_ids_equal
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.collaboration import (
     ActivityRecord,
@@ -144,9 +144,9 @@ async def list_members(
     ctx = _get_member_context_or_403(st, project_id, uid)
     _require_owner_or_admin(ctx)
 
-    collaborators = st.get_project_collaborators(project_id)
+    collaborators = (await run_sync(st.get_project_collaborators, project_id))
     invitations = [
-        inv for inv in st.get_project_invitations(project_id)
+        inv for inv in (await run_sync(st.get_project_invitations, project_id))
         if inv.get("status") == "pending"
     ]
 
@@ -183,26 +183,26 @@ async def invite_collaborator(
         raise HTTPException(status_code=422, detail="You cannot invite yourself")
 
     # Load project details for display
-    proj = st.get_project_access_row(project_id)
+    proj = (await run_sync(st.get_project_access_row, project_id))
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Cannot invite the project owner
-    owner_user = st.get_user_by_id(ctx["owner_user_id"])
+    owner_user = (await run_sync(st.get_user_by_id, ctx["owner_user_id"]))
     owner_email = (owner_user.get("email") or "").strip().lower() if owner_user else ""
     if invited_email == owner_email:
         raise HTTPException(status_code=422, detail="The project owner already has full access")
 
     # Check for existing active collaborator
-    invited_user = st.get_user_by_email(invited_email)
+    invited_user = (await run_sync(st.get_user_by_email, invited_email))
     if invited_user:
-        existing = st.get_collaborator_for_user(project_id, invited_user.get("id") or "")
+        existing = (await run_sync(st.get_collaborator_for_user, project_id, invited_user.get("id") or ""))
         if existing:
             raise HTTPException(status_code=409, detail="This user is already a collaborator")
 
     # Check for existing pending invitation
     existing_invites = [
-        i for i in st.get_project_invitations(project_id)
+        i for i in (await run_sync(st.get_project_invitations, project_id))
         if i.get("invited_email") == invited_email and i.get("status") == "pending"
     ]
     if existing_invites:
@@ -229,7 +229,7 @@ async def invite_collaborator(
         "expires_at": _expires_iso(7),
         "responded_at": "",
     }
-    st.insert_invitation(invitation)
+    (await run_sync(st.insert_invitation, invitation))
 
     # In-app notification for existing user
     if invited_user:
@@ -292,12 +292,12 @@ async def change_collaborator_role(
     ctx = _get_member_context_or_403(st, project_id, uid)
     _require_owner(ctx)
 
-    collab = st.get_collaborator(collab_id)
+    collab = (await run_sync(st.get_collaborator, collab_id))
     if not collab or collab.get("project_id") != project_id:
         raise HTTPException(status_code=404, detail="Collaborator not found")
 
     new_role = payload.role.value
-    st.patch_collaborator_fields(collab_id, {"role": new_role})
+    (await run_sync(st.patch_collaborator_fields, collab_id, {"role": new_role}))
 
     collab["role"] = new_role
 
@@ -335,12 +335,12 @@ async def remove_collaborator(
     ctx = _get_member_context_or_403(st, project_id, uid)
     _require_owner(ctx)
 
-    collab = st.get_collaborator(collab_id)
+    collab = (await run_sync(st.get_collaborator, collab_id))
     if not collab or collab.get("project_id") != project_id:
         raise HTTPException(status_code=404, detail="Collaborator not found")
 
     removed_user_id = collab.get("user_id") or ""
-    st.delete_collaborator(collab_id)
+    (await run_sync(st.delete_collaborator, collab_id))
 
     actor_name = (user.get("full_name") or user.get("email") or "Owner").strip()
     if removed_user_id:
@@ -376,7 +376,7 @@ async def resend_invitation(
     ctx = _get_member_context_or_403(st, project_id, uid)
     _require_owner(ctx)
 
-    inv = st.get_invitation(invite_id)
+    inv = (await run_sync(st.get_invitation, invite_id))
     if not inv or inv.get("project_id") != project_id:
         raise HTTPException(status_code=404, detail="Invitation not found")
     if inv.get("status") != "pending":
@@ -420,13 +420,13 @@ async def cancel_invitation(
     ctx = _get_member_context_or_403(st, project_id, uid)
     _require_owner(ctx)
 
-    inv = st.get_invitation(invite_id)
+    inv = (await run_sync(st.get_invitation, invite_id))
     if not inv or inv.get("project_id") != project_id:
         raise HTTPException(status_code=404, detail="Invitation not found")
     if inv.get("status") != "pending":
         raise HTTPException(status_code=409, detail="Invitation is not pending")
 
-    st.patch_invitation_fields(invite_id, {"status": "cancelled", "responded_at": _utcnow_iso()})
+    (await run_sync(st.patch_invitation_fields, invite_id, {"status": "cancelled", "responded_at": _utcnow_iso()}))
 
     # Notify invited user if they have an account
     invited_uid = (inv.get("invited_user_id") or "").strip()
@@ -456,7 +456,7 @@ async def get_activity(
     uid = (user.get("id") or "").strip()
     _get_member_context_or_403(st, project_id, uid)
 
-    records = st.get_project_activity(project_id, limit=limit, before=before)
+    records = (await run_sync(st.get_project_activity, project_id, limit=limit, before=before))
     return [
         ActivityRecord(
             id=r["id"],

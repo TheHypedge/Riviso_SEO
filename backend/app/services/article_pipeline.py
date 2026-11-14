@@ -408,7 +408,6 @@ async def execute_featured_image_regeneration(
     custom_image_prompt: str | None = None,
 ) -> dict:
     """Regenerate only the stored featured image and enforce the per-article plan cap."""
-    uid = (user.get("id") or "").strip()
     role = (user.get("role") or "").strip().lower()
     plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
     plan: dict = {}

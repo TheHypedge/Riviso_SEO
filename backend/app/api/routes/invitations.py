@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 
+from app.services.to_thread import run_sync
 from app.core.deps import get_current_user
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.collaboration import InvitationPublic
@@ -104,8 +105,8 @@ async def list_my_invitations(
     email = (user.get("email") or "").strip().lower()
 
     # Collect by user_id (existing user) + by email (in case id wasn't stamped)
-    by_id = st.get_pending_invitations_for_user_id(uid) if uid else []
-    by_email = st.get_pending_invitations_for_email(email) if email else []
+    by_id = (await run_sync(st.get_pending_invitations_for_user_id, uid)) if uid else []
+    by_email = (await run_sync(st.get_pending_invitations_for_email, email)) if email else []
 
     # Merge, deduplicate by id
     seen: set[str] = set()
@@ -116,7 +117,7 @@ async def list_my_invitations(
             seen.add(iid)
             # Auto-expire
             if _is_expired(inv) and inv.get("status") == "pending":
-                st.patch_invitation_fields(iid, {"status": "expired", "responded_at": _utcnow_iso()})
+                (await run_sync(st.patch_invitation_fields, iid, {"status": "expired", "responded_at": _utcnow_iso()}))
                 continue
             merged.append(inv)
 
@@ -136,13 +137,13 @@ async def accept_invitation(
     uid = (user.get("id") or "").strip()
     email = (user.get("email") or "").strip().lower()
 
-    inv = st.get_invitation(invite_id)
+    inv = (await run_sync(st.get_invitation, invite_id))
     if not inv:
         raise HTTPException(status_code=404, detail="Invitation not found")
     if inv.get("status") != "pending":
         raise HTTPException(status_code=409, detail=f"Invitation is already {inv.get('status')}")
     if _is_expired(inv):
-        st.patch_invitation_fields(invite_id, {"status": "expired", "responded_at": _utcnow_iso()})
+        (await run_sync(st.patch_invitation_fields, invite_id, {"status": "expired", "responded_at": _utcnow_iso()}))
         raise HTTPException(status_code=410, detail="Invitation has expired")
 
     # Verify this invitation belongs to the current user
@@ -156,12 +157,12 @@ async def accept_invitation(
     now = _utcnow_iso()
 
     # Check not already a collaborator
-    existing = st.get_collaborator_for_user(project_id, uid)
+    existing = (await run_sync(st.get_collaborator_for_user, project_id, uid))
     if existing:
         raise HTTPException(status_code=409, detail="You already have access to this project")
 
     # Insert collaborator record
-    st.insert_collaborator({
+    (await run_sync(st.insert_collaborator, {
         "id": str(uuid.uuid4()),
         "project_id": project_id,
         "user_id": uid,
@@ -170,15 +171,15 @@ async def accept_invitation(
         "invited_at": inv.get("created_at") or now,
         "joined_at": now,
         "invited_by_user_id": inv.get("invited_by_user_id") or "",
-    })
+    }))
 
     # Mark invitation accepted
-    st.patch_invitation_fields(invite_id, {"status": "accepted", "responded_at": now, "invited_user_id": uid})
+    (await run_sync(st.patch_invitation_fields, invite_id, {"status": "accepted", "responded_at": now, "invited_user_id": uid}))
 
     # Notify owner
     owner_uid = ""
     try:
-        proj = st.get_project_access_row(project_id)
+        proj = (await run_sync(st.get_project_access_row, project_id))
         if proj:
             owner_uid = (proj.get("owner_user_id") or "").strip()
     except Exception:
@@ -203,7 +204,7 @@ async def accept_invitation(
     )
 
     # Return the project so the frontend can redirect
-    proj_data = st.get_project_listing_by_id(project_id) if hasattr(st, "get_project_listing_by_id") else None
+    proj_data = (await run_sync(st.get_project_listing_by_id, project_id)) if hasattr(st, "get_project_listing_by_id") else None
     project_out = _to_project_public(proj_data) if proj_data else None
 
     return {
@@ -225,7 +226,7 @@ async def decline_invitation(
     uid = (user.get("id") or "").strip()
     email = (user.get("email") or "").strip().lower()
 
-    inv = st.get_invitation(invite_id)
+    inv = (await run_sync(st.get_invitation, invite_id))
     if not inv:
         raise HTTPException(status_code=404, detail="Invitation not found")
     if inv.get("status") != "pending":
@@ -237,11 +238,11 @@ async def decline_invitation(
         raise HTTPException(status_code=403, detail="This invitation is not for your account")
 
     now = _utcnow_iso()
-    st.patch_invitation_fields(invite_id, {"status": "declined", "responded_at": now})
+    (await run_sync(st.patch_invitation_fields, invite_id, {"status": "declined", "responded_at": now}))
 
     # Notify owner
     try:
-        proj = st.get_project_access_row(inv.get("project_id") or "")
+        proj = (await run_sync(st.get_project_access_row, inv.get("project_id") or ""))
         if proj:
             owner_uid = (proj.get("owner_user_id") or "").strip()
             decliner = (user.get("full_name") or user.get("email") or "A user").strip()
@@ -264,7 +265,7 @@ async def decline_invitation(
 @router.get("/by-token/{token}", response_model=InvitationPublic)
 async def get_invitation_by_token(token: str) -> InvitationPublic:
     st = get_legacy_storage_module()
-    inv = st.get_invitation_by_token(token.strip())
+    inv = (await run_sync(st.get_invitation_by_token, token.strip()))
     if not inv:
         raise HTTPException(status_code=404, detail="Invitation not found")
     return _enrich_invitation(inv)

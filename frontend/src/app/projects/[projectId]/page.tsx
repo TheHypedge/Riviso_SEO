@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import styles from "../../page.module.css";
 import { formatDayMonYearTime } from "@/lib/dateFormat";
@@ -76,8 +76,6 @@ import {
 } from "@/lib/api";
 import { COUNTRIES, DEFAULT_COUNTRY_CODE } from "@/lib/countries";
 import { useClusterValidation, type ValidatableTopic } from "@/hooks/useClusterValidation";
-import { parseDatetimeLocal } from "@/lib/bulkScheduleDates";
-import { scheduleMinFromNowMs } from "@/lib/scheduleTiming";
 import { ProjectTabIcon, SidebarBackIcon, type ProjectTabKey } from "@/components/ProjectTabIcon";
 import { ShopifyProjectSettings } from "@/components/ShopifyProjectSettings";
 import { IndexNowSettings } from "@/components/IndexNowSettings";
@@ -223,12 +221,6 @@ function toDatetimeLocalValue(d: Date) {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 }
 
-function addMinutesToDatetimeLocal(value: string, minutes: number) {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return value;
-  d.setMinutes(d.getMinutes() + minutes);
-  return toDatetimeLocalValue(d);
-}
 
 /** Align with backend: NFKC + trim + lowercase (Python uses casefold server-side). */
 function normalizeArticleTitleKey(s: string): string {
@@ -629,7 +621,6 @@ export default function ProjectPage() {
     featureLimits?.inner_images && !featureLimits.inner_images.unlimited && typeof featureLimits.inner_images.month_limit === "number"
       ? (featureLimits.inner_images.month_remaining ?? 0)
       : null;
-  const [articleQuota, setArticleQuota] = useState<import("@/lib/api").ArticleQuota | null>(null);
   const [websiteConnectionModal, setWebsiteConnectionModal] = useState<{
     title: string;
     message: string;
@@ -692,9 +683,7 @@ export default function ProjectPage() {
 
   async function refreshArticleQuota() {
     try {
-      const quota = await api.articleQuota(projectId, { fresh: true });
-      setArticleQuota(quota);
-      return quota;
+      return await api.articleQuota(projectId, { fresh: true });
     } catch {
       return null;
     }
@@ -740,6 +729,12 @@ export default function ProjectPage() {
   // backend wasn't restarted with the latest code. Surfaced with an actionable hint
   // so the user does not chase the (misleading) "OAuth not configured" message.
   const [gscApiUnavailable, setGscApiUnavailable] = useState(false);
+  // Overview's Search Console sections: each request reports its own state so the cards
+  // render as soon as their own data lands, and a failure shows a retry instead of a blank.
+  const [gscStatusLoaded, setGscStatusLoaded] = useState(false);
+  const [gscDataLoading, setGscDataLoading] = useState(false);
+  const [gscDataError, setGscDataError] = useState<string | null>(null);
+  const [gscReloadKey, setGscReloadKey] = useState(0);
   // ---- Social Media module (LinkedIn + Quora) --------------------------------
   const [linkedinStatus, setLinkedinStatus] = useState<import("@/lib/api").LinkedInStatus | null>(null);
   const [linkedinLoading, setLinkedinLoading] = useState(false);
@@ -757,33 +752,13 @@ export default function ProjectPage() {
   const [quoraAnswerBusy, setQuoraAnswerBusy] = useState<Record<string, boolean>>({});
   const [quoraAnswerResult, setQuoraAnswerResult] = useState<Record<string, { id: string; text: string; question_url: string }>>({});
   const [socialArticleOptions, setSocialArticleOptions] = useState<import("@/lib/api").ArticleListItem[]>([]);
-  const [articleIndexBusy, setArticleIndexBusy] = useState<Record<string, "request" | "check" | undefined>>({});
-  const [articleIndexMsg, setArticleIndexMsg] = useState<Record<string, string | null>>({});
-  const [articleIndexStatus, setArticleIndexStatus] = useState<Record<string, import("@/lib/api").GscIndexingStatus | null>>({});
-  // Per-article result of the most recent "Index now" call. Holds the deep link to GSC's URL
-  // Inspection panel (where the user must press REQUEST INDEXING — Google has no public API
-  // equivalent) plus a structured trace of which channels we actually pinged.
-  const [articleIndexResult, setArticleIndexResult] = useState<
-    Record<string, import("@/lib/api").RequestIndexingResponse | null>
-  >({});
   // ---- Feature 1: GSC ROI Dashboard ----------------------------------------
-  // Kept for the Overview tab's ``gscTotals`` card — the Performance tab that
-  // used to be the primary consumer of ``analytics`` was removed (no Figma
-  // coverage; see quirky-nibbling-owl.md step 10). ``analyticsRangePreset`` /
-  // ``analyticsCustomStart`` / ``analyticsCustomEnd`` / ``analyticsBusy`` are
-  // now unreachable dead knobs inside ``reloadAnalytics`` (always the 28-day
-  // default since no UI can change them) — left as-is rather than touching
-  // that shared function for a cosmetic-only cleanup.
+  // Search Console data for the Overview tab, fetched for the Overview's selected range.
   const [analytics, setAnalytics] = useState<import("@/lib/api").GscAnalyticsResponse | null>(null);
   // Overview tab's Search Performance section — headline ctr/position, trending
   // pages/queries, country/device breakdowns. Fetched alongside `analytics` in
   // the same tab-independent bootstrap effect below.
   const [gscInsights, setGscInsights] = useState<import("@/lib/api").GscInsightsResponse | null>(null);
-  const [analyticsBusy, setAnalyticsBusy] = useState<boolean>(false);
-  const [analyticsErr, setAnalyticsErr] = useState<string | null>(null);
-  const [analyticsRangePreset, setAnalyticsRangePreset] = useState<number | "custom">(28);
-  const [analyticsCustomStart, setAnalyticsCustomStart] = useState<string>("");
-  const [analyticsCustomEnd, setAnalyticsCustomEnd] = useState<string>("");
   // Site Audit: "technical" = PageSpeed Insights, "seo" = Riviso crawler (Phase 2, not yet built)
   const [siteAuditSubTab, setSiteAuditSubTab] = useState<SiteAuditSubTabKey>("technical");
   const [technicalAudit, setTechnicalAudit] = useState<import("@/lib/api").TechnicalAuditLatestResponse | null>(null);
@@ -1302,9 +1277,6 @@ export default function ProjectPage() {
     } catch { /* ignore parse or storage errors */ }
     return [];
   });
-  const [articleCategoryEdits, setArticleCategoryEdits] = useState<Record<string, string>>({});
-  const [categorySaveBusy, setCategorySaveBusy] = useState(false);
-  const [categorySaveError, setCategorySaveError] = useState<string | null>(null);
   const [wpCatsSyncDone, setWpCatsSyncDone] = useState(false);
   // false when sessionStorage pre-populated; true otherwise (shows "Loading" instead of "—").
   const [wpCatsLoading, setWpCatsLoading] = useState<boolean>(() => {
@@ -1466,13 +1438,20 @@ export default function ProjectPage() {
       setLoading(true);
       try {
         const skipSettingsHere = tab === "project_settings";
-        const [ps, prof, limits, quota, pm] = await Promise.all([
+        // Independent requests in flight together; each applies its own state the moment it
+        // lands, so the header/plan badges don't wait for the slowest call.
+        const profileReq = api.profileMe({ skipGlobalLoading: true }).then((prof) => {
+          setProfile(prof);
+          setProfileTz((prof?.timezone || "").trim());
+        });
+        profileReq.catch(() => undefined); // awaited below; this only silences the early-exit case
+        const limitsReq = api
+          .projectFeatureLimits(projectId, { skipGlobalLoading: true })
+          .then(setFeatureLimits, () => setFeatureLimits(null));
+        const [ps, pm] = await Promise.all([
           skipSettingsHere
             ? Promise.resolve(null)
             : api.getProjectSettings(projectId, { skipGlobalLoading: true }),
-          api.profileMe({ skipGlobalLoading: true }),
-          api.projectFeatureLimits(projectId, { skipGlobalLoading: true }).catch(() => null),
-          api.articleQuota(projectId, { skipGlobalLoading: true }).catch(() => null),
           api.getProject(projectId, { skipGlobalLoading: true }).catch(() => null),
         ]);
         if (ps) {
@@ -1502,16 +1481,13 @@ export default function ProjectPage() {
             setSUrl((ps.wp_site_url || ps.website_url || "").trim());
           }
         }
-        setFeatureLimits(limits);
-        setArticleQuota(quota);
-        setProfile(prof);
-        setProfileTz((prof?.timezone || "").trim());
         if (ps) {
           setWpDefaults({
             post_type: (ps.default_wp_rest_base || "posts") as string,
             wp_status: ((ps.default_wp_status || "draft") as "draft" | "publish"),
           });
         }
+        await Promise.all([profileReq, limitsReq]);
       } catch (e) {
         if (isAuthError(e)) {
           clearAuth();
@@ -1690,23 +1666,30 @@ export default function ProjectPage() {
         ? { start: overviewRange.start, end: overviewRange.end }
         : { days: overviewRange.days };
     (async () => {
+      // A new range must never show the previous range's numbers under the new label.
+      setAnalytics(null);
+      setGscInsights(null);
+      setGscDataError(null);
       try {
         const gs = await api.gscProjectStatus(projectId);
         if (cancelled) return;
         setGscStatus(gs);
         setGscApiUnavailable(false);
         if (gs?.connected && (gs?.property_url || "").trim()) {
-          try {
-            const res = await api.gscProjectAnalytics(projectId, callOpts);
-            if (!cancelled) setAnalytics(res);
-          } catch {
-            // Silent — the Performance tab simply won't appear until data is available.
-          }
-          try {
-            const insightsRes = await api.gscProjectInsights(projectId, callOpts);
-            if (!cancelled) setGscInsights(insightsRes);
-          } catch {
-            // Silent — Overview's Search Performance section just won't render until data is available.
+          setGscDataLoading(true);
+          // Independent requests, in parallel: each card fills in as soon as its own data lands.
+          const results = await Promise.allSettled([
+            api.gscProjectAnalytics(projectId, callOpts).then((res) => {
+              if (!cancelled) setAnalytics(res);
+            }),
+            api.gscProjectInsights(projectId, callOpts).then((res) => {
+              if (!cancelled) setGscInsights(res);
+            }),
+          ]);
+          if (cancelled) return;
+          const failed = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
+          if (failed) {
+            setGscDataError(failed.reason instanceof Error ? failed.reason.message : "Could not load Search Console data.");
           }
         }
       } catch (e) {
@@ -1714,12 +1697,17 @@ export default function ProjectPage() {
         if (e instanceof ApiError && e.status === 404) {
           setGscApiUnavailable(true);
         }
+      } finally {
+        if (!cancelled) {
+          setGscStatusLoaded(true);
+          setGscDataLoading(false);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [projectId, token, overviewRange]);
+  }, [projectId, token, overviewRange, gscReloadKey]);
 
   async function ensureScheduleMetaLoaded(): Promise<{
     writingPrompts: PromptListResponse | null;
@@ -1778,42 +1766,7 @@ export default function ProjectPage() {
     return { ...promptResult, ...wpMetaResult };
   }
 
-  function formatInProfileTz(utcLike: string | null | undefined) {
-    const v = (utcLike || "").trim();
-    if (!v) return "—";
-    const iso = v.includes("T") ? v : v.replace(" ", "T") + "Z";
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return v;
-    const tz = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
-    try {
-      return new Intl.DateTimeFormat(undefined, {
-        timeZone: tz,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      }).format(d);
-    } catch {
-      return d.toLocaleString();
-    }
-  }
 
-  function formatBulkScheduleWhenDisplay(when: string): { date: string; time: string; tz: string } {
-    const p = parseDatetimeLocal(when);
-    if (!p) return { date: (when || "").trim() || "—", time: "", tz: "" };
-    const d = new Date(p.y, p.m - 1, p.d);
-    const date = new Intl.DateTimeFormat(undefined, {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    }).format(d);
-    const h12 = p.h % 12 || 12;
-    const time = `${h12}:${String(p.min).padStart(2, "0")} ${p.h >= 12 ? "PM" : "AM"}`;
-    const tz = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return { date, time, tz };
-  }
 
   function formatScheduledRunAt(utcLike: string | null | undefined): { date: string; time: string; tz: string } {
     const v = (utcLike || "").trim();
@@ -2688,52 +2641,6 @@ export default function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, token, tab]);
 
-  // ---- Feature 1: GSC ROI Dashboard handlers -------------------------------
-  async function reloadAnalytics(opts: { silent?: boolean } = {}) {
-    if (!projectId) return;
-    if (!opts.silent) setAnalyticsBusy(true);
-    setAnalyticsErr(null);
-    try {
-      // Resolve the active window: explicit [start,end] when both are filled and the
-      // ``"custom"`` chip is selected; otherwise the active preset's day count.
-      const callOpts: { days?: number; start?: string; end?: string } = {};
-      if (
-        analyticsRangePreset === "custom" &&
-        analyticsCustomStart &&
-        analyticsCustomEnd
-      ) {
-        callOpts.start = analyticsCustomStart;
-        callOpts.end = analyticsCustomEnd;
-      } else {
-        callOpts.days =
-          typeof analyticsRangePreset === "number" ? analyticsRangePreset : 28;
-      }
-      const res = await api.gscProjectAnalytics(projectId, callOpts);
-      setAnalytics(res);
-      // Seed the custom-range pickers with whatever the server actually used so the
-      // user can tweak from a sensible starting point without re-typing dates.
-      if (res?.range?.start_date && !analyticsCustomStart) {
-        setAnalyticsCustomStart(res.range.start_date);
-      }
-      if (res?.range?.end_date && !analyticsCustomEnd) {
-        setAnalyticsCustomEnd(res.range.end_date);
-      }
-    } catch (e) {
-      // Backend versions before this rollout will 404 the route — surface a clear message.
-      const status = e instanceof ApiError ? e.status : null;
-      if (status === 404) {
-        setAnalyticsErr(
-          "Backend is missing the new analytics route. Pull the latest code on the VPS and restart the FastAPI service (or recreate the Docker container).",
-        );
-      } else {
-        setAnalyticsErr(e instanceof Error ? e.message : "Failed to load analytics");
-      }
-      setAnalytics(null);
-    } finally {
-      if (!opts.silent) setAnalyticsBusy(false);
-    }
-  }
-
   // ---- Site Audit: Technical Audit (PageSpeed Insights) handlers ----------
   async function reloadTechnicalAudit(opts: { silent?: boolean } = {}) {
     if (!projectId) return;
@@ -3021,20 +2928,6 @@ export default function ProjectPage() {
   }
 
   // ---- Feature 4: monitor mark (used in articles list) ---------------------
-  async function markArticleMonitor(articleId: string, status: "fresh" | "stale" | "unknown") {
-    if (!projectId || !articleId) return;
-    try {
-      const res = await api.articleMarkMonitor(projectId, articleId, status);
-      const newStatus = res?.monitor?.status || status;
-      // Optimistic local update so the list re-renders immediately.
-      setListItems((rows) =>
-        rows.map((r) => (r.id === articleId ? { ...r, monitor_status: newStatus } : r)),
-      );
-    } catch (e) {
-      // Errors here surface in the row's tooltip via the next list reload.
-      console.warn("Mark monitor failed:", e);
-    }
-  }
 
   async function saveGscPropertyForProject(propertyUrl: string, indexOnPublish: boolean) {
     setGscSaveMsg(null);
@@ -3060,55 +2953,7 @@ export default function ProjectPage() {
     }
   }
 
-  async function requestArticleIndexing(articleId: string) {
-    if (!articleId) return;
-    setArticleIndexBusy((m) => ({ ...m, [articleId]: "request" }));
-    setArticleIndexMsg((m) => ({ ...m, [articleId]: null }));
-    setArticleIndexResult((m) => ({ ...m, [articleId]: null }));
-    try {
-      const res = await api.requestIndexing(projectId, articleId);
-      setArticleIndexResult((m) => ({ ...m, [articleId]: res }));
-      // Build a short, accurate one-liner that does not claim more than what really happened.
-      const parts: string[] = [];
-      if (res?.indexing_api?.attempted) {
-        parts.push(res.indexing_api.ok ? "Indexing API ping sent." : "Indexing API ping failed.");
-      }
-      if (res?.sitemap_ping?.attempted) {
-        parts.push(res.sitemap_ping.ok ? "Sitemap pinged." : "Sitemap ping failed.");
-      }
-      parts.push("Click 'Open in Search Console' to finish via the manual Request Indexing button.");
-      setArticleIndexMsg((m) => ({ ...m, [articleId]: parts.join(" ") }));
-      setListItems((prev) =>
-        prev.map((a) => (a.id === articleId ? { ...a, gsc_status: res?.gsc_status || a.gsc_status } : a)),
-      );
-    } catch (e) {
-      setArticleIndexMsg((m) => ({
-        ...m,
-        [articleId]: e instanceof Error ? e.message : "Indexing request failed",
-      }));
-    } finally {
-      setArticleIndexBusy((m) => ({ ...m, [articleId]: undefined }));
-    }
-  }
 
-  async function checkArticleIndexing(articleId: string) {
-    if (!articleId) return;
-    setArticleIndexBusy((m) => ({ ...m, [articleId]: "check" }));
-    setArticleIndexMsg((m) => ({ ...m, [articleId]: null }));
-    try {
-      const res = await api.checkArticleIndexingStatus(projectId, articleId);
-      setArticleIndexStatus((m) => ({ ...m, [articleId]: res }));
-      const verdict = (res.verdict || res.coverage_state || "").trim() || "Unknown";
-      setArticleIndexMsg((m) => ({ ...m, [articleId]: `Status: ${verdict}` }));
-    } catch (e) {
-      setArticleIndexMsg((m) => ({
-        ...m,
-        [articleId]: e instanceof Error ? e.message : "Status check failed",
-      }));
-    } finally {
-      setArticleIndexBusy((m) => ({ ...m, [articleId]: undefined }));
-    }
-  }
 
   async function deleteProjectNow() {
     setError(null);
@@ -3187,26 +3032,6 @@ export default function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, integrationsOpen, token]);
 
-  // Feature 1: load analytics when Integrations is open AND a property is linked —
-  // feeds the Overview tab's ``gscTotals`` card too, since it's the same ``analytics``
-  // state. The Performance & Analysis tab that used to be its other trigger was removed
-  // (no Figma coverage; see quirky-nibbling-owl.md step 10).
-  useEffect(() => {
-    if (!token) return;
-    if (!integrationsOpen) return;
-    if (!gscStatus?.connected || !gscStatus?.property_url) {
-      setAnalytics(null);
-      setAnalyticsErr(null);
-      return;
-    }
-    if (analyticsRangePreset === "custom") {
-      // Custom range fetches are explicit (button click) — skip the auto-fetch.
-      if (!analytics) void reloadAnalytics();
-      return;
-    }
-    void reloadAnalytics();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, integrationsOpen, token, gscStatus?.connected, gscStatus?.property_url, analyticsRangePreset]);
 
   // Load Technical Audit when the Site Audit tab is first opened for this project.
   // Refreshing the browser must not trigger a new PageSpeed run -- only /latest here.
@@ -3871,21 +3696,6 @@ export default function ProjectPage() {
     setListTotal(res.total || 0);
   }
 
-  async function saveArticleCategories() {
-    const items = Object.entries(articleCategoryEdits).map(([article_id, wp_category_ids]) => ({ article_id, wp_category_ids }));
-    if (!items.length) return;
-    setCategorySaveBusy(true);
-    setCategorySaveError(null);
-    try {
-      await api.updateArticleCategories(projectId, items);
-      setArticleCategoryEdits({});
-      await refreshArticlesList();
-    } catch (e) {
-      setCategorySaveError(e instanceof Error ? e.message : "Failed to save categories");
-    } finally {
-      setCategorySaveBusy(false);
-    }
-  }
 
   async function reloadArticleTitles() {
     const titles = await api.listArticleTitles(projectId);
@@ -4302,11 +4112,7 @@ export default function ProjectPage() {
     router.push(`/projects/${projectId}/articles/${aid}`);
   }
 
-  const scheduleTimeZone = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-  const buildScheduleMinStr = useCallback(() => {
-    return toDatetimeLocalFromDateInProfileTz(scheduleMinFromNowMs());
-  }, [profileTz]);
 
   function bulkSchedule() {
     if (!selectedIds.length) return;
@@ -4817,10 +4623,6 @@ export default function ProjectPage() {
     return `${styles.statusPill} ${styles.statusNeutral}`;
   }
 
-  function formatSupportingKeywords(keywords?: string[] | null): string {
-    const parts = (keywords || []).map((k) => String(k).trim()).filter(Boolean);
-    return parts.length ? parts.join(", ") : "—";
-  }
 
   function syncBadgeClass(status: string): string {
     switch (status) {
@@ -6337,25 +6139,6 @@ export default function ProjectPage() {
     isProjectConnected(isShopifyProject ? "shopify" : "wordpress", settings) ||
     (!isShopifyProject && wpCatsForSchedule.length > 0);
 
-  function formatRenewalDate(raw?: string | null) {
-    const v = (raw || "").trim();
-    if (!v) return "the next plan renewal";
-    const d = new Date(v);
-    if (Number.isNaN(d.getTime())) return v;
-    const tz = profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone;
-    try {
-      return new Intl.DateTimeFormat(undefined, {
-        timeZone: tz,
-        year: "numeric",
-        month: "short",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      }).format(d);
-    } catch {
-      return d.toLocaleString();
-    }
-  }
 
   function openWebsiteConnectionPopup(message?: string) {
     setWebsiteConnectionModal({
@@ -6385,15 +6168,6 @@ export default function ProjectPage() {
     return false;
   }
 
-  function contextLinksLimitStatus() {
-    const cap = featureLimits?.context_links;
-    if (!cap) return null;
-    if (cap.unlimited) return "Context links: unlimited for this plan.";
-    if ((cap.remaining ?? 0) <= 0) {
-      return `the max limit of Context links is exhausted and will be renewed on ${formatRenewalDate(cap.renews_at)}.`;
-    }
-    return `Context links: ${cap.used}/${cap.limit} used (${cap.remaining} remaining).`;
-  }
 
   return (
     <div className={`${styles.page} ${styles.pageTop}`}>
@@ -6907,6 +6681,10 @@ export default function ProjectPage() {
             gscConnected={Boolean(gscStatus?.connected && (gscStatus?.property_url || "").trim())}
             gscInsights={gscInsights}
             analytics={analytics}
+            gscStatusLoaded={gscStatusLoaded}
+            gscDataLoading={gscDataLoading}
+            gscDataError={gscDataError}
+            onRetryGsc={() => setGscReloadKey((k) => k + 1)}
             aiCitationChecks={aiCitation?.checks ?? []}
             aiCitationEnginesConfigured={aiCitation?.engines_configured ?? []}
             aiCitationTrend={aiCitationTrend}

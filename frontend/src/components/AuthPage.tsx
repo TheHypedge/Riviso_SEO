@@ -141,8 +141,8 @@ export default function AuthPage() {
     try {
       if (awaitingVerification) {
         const verified = await api.verifyEmail(email, verificationCode.trim());
-        if (verified.access_token) setAccessToken(verified.access_token, verified.expires_in);
-        if (verified.refresh_token) setRefreshToken(verified.refresh_token);
+        // Session lives in httpOnly cookies; expires_in is set only when the backend signed us in.
+        if (verified.expires_in) setAccessToken(undefined, verified.expires_in);
         router.push("/dashboard");
         return;
       }

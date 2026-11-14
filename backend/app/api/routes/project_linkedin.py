@@ -183,15 +183,14 @@ async def linkedin_oauth_callback(request: Request) -> RedirectResponse:
     org_urns = [o["urn"] for o in orgs if o.get("urn")]
 
     st = get_legacy_storage_module()
-    proj = st.get_project_by_id(pid) if pid and hasattr(st, "get_project_by_id") else None
+    proj = (await run_sync(st.get_project_by_id, pid)) if pid and hasattr(st, "get_project_by_id") else None
     if not pid or not isinstance(proj, dict):
         return RedirectResponse(_frontend_project_redirect_url(project_id=pid, ok=False, message="Project not found", origin_override=origin), status_code=302)
     owner = (proj.get("owner_user_id") or "").strip()
     if owner and owner != uid:
         return RedirectResponse(_frontend_project_redirect_url(project_id=pid, ok=False, message="Project owner mismatch", origin_override=origin), status_code=302)
 
-    st.update_project_fields(
-        pid,
+    (await run_sync(st.update_project_fields, pid,
         {
             "linkedin_access_token": access_token,
             "linkedin_token_expires_at": str(expires_at),
@@ -202,8 +201,7 @@ async def linkedin_oauth_callback(request: Request) -> RedirectResponse:
             "linkedin_selected_author_urn": person_urn,
             "linkedin_connected_at": _now_iso(),
             "linkedin_reconnect_notified": False,
-        },
-    )
+        }))
     return RedirectResponse(_frontend_project_redirect_url(project_id=pid, ok=True, origin_override=origin), status_code=302)
 
 

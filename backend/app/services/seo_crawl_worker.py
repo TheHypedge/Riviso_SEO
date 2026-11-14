@@ -248,6 +248,19 @@ async def _run_one_audit(st, audit: dict) -> None:
     log.info("seo_crawl_worker: audit %s %s (%s URLs, %s issues, %sms)", audit_id, "cancelled" if cancelled else "completed", len(urls), len(found_issues), duration_ms)
 
 
+async def _archive_older_audits(st, project_id: str) -> None:
+    """Compress this project's previous audits now that a newer one exists (best-effort:
+    a failure leaves the raw rows in place and is retried after the next crawl)."""
+    if not project_id or not hasattr(st, "archive_old_seo_audits"):
+        return
+    try:
+        archived = await _storage(st.archive_old_seo_audits, project_id)
+        if archived:
+            log.info("seo_crawl_worker: archived %d older audit(s) for project %s", len(archived), project_id)
+    except Exception:
+        log.warning("seo_crawl_worker: archiving older audits failed for %s", project_id, exc_info=True)
+
+
 async def seo_crawl_loop(*, poll_seconds: float = 5.0) -> None:
     """In-process loop; run only inside the dedicated seo-crawl worker container."""
     consecutive_failures = 0
@@ -258,6 +271,7 @@ async def seo_crawl_loop(*, poll_seconds: float = 5.0) -> None:
             claimed = await _storage(st.claim_next_queued_seo_audit, _now_iso())
             if claimed:
                 await _run_one_audit(st, claimed)
+                await _archive_older_audits(st, claimed.get("project_id") or "")
             consecutive_failures = 0
         except Exception as e:
             consecutive_failures += 1

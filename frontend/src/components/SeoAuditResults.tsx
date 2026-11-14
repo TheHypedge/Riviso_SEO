@@ -921,13 +921,6 @@ function LevelChip({ level }: { level?: string }) {
 
 /* ── Issue list: grouped by rule, expandable to the affected URLs ──────── */
 
-const SEVERITY_FILTERS: { key: "" | "issue" | "warning" | "opportunity"; label: string }[] = [
-  { key: "", label: "All" },
-  { key: "issue", label: "Errors" },
-  { key: "warning", label: "Warnings" },
-  { key: "opportunity", label: "Opportunities" },
-];
-
 function levelColor(level: string | undefined): string {
   if (level === "high") return "var(--aa-error, #c64545)";
   if (level === "medium") return "var(--aa-warning, #d4a017)";

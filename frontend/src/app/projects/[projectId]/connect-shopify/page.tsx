@@ -8,7 +8,7 @@ import styles from "@/app/page.module.css";
 import projectsDark from "@/app/projects/projectsDark.module.css";
 import { FormFieldsSkeleton } from "@/components/skeleton";
 import { ShopifyManualConnectGuide } from "@/components/shopify/ShopifyManualConnectGuide";
-import { api, clearAuth, getAccessToken, invalidateProjectSettingsCache } from "@/lib/api";
+import { api, getAccessToken, invalidateProjectSettingsCache } from "@/lib/api";
 
 export default function ConnectShopifyPage() {
   const params = useParams<{ projectId: string }>();

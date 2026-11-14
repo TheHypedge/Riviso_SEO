@@ -23,8 +23,6 @@ from app.schemas.wordpress_sync import (
 )
 from app.services.to_thread import run_sync
 from app.services.wordpress_sync import (
-    SYNC_MISSING,
-    SYNC_NEEDS_ATTENTION,
     SYNC_SYNCED,
     SYNC_UNKNOWN,
     check_article_sync,

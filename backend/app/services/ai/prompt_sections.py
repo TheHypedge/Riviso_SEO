@@ -21,18 +21,15 @@ doesn't appear rather than appearing as an empty heading.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.schemas.content_brief import (
-    BriefBrandPersonality,
     BriefContentDepth,
     BriefTargetAudience,
     BriefToneOfVoice,
     ConversationStyle,
     ContentBrief,
-    ContentOptimizationOption,
     ContentStructureOption,
-    DataResearchOption,
     ReadabilityLevel,
 )
 from app.services.ai.optimization_rules import (

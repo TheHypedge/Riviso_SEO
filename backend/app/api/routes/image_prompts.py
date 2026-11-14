@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
+from app.services.to_thread import run_sync
 from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.project_lookup import require_project_access
@@ -165,7 +166,7 @@ async def create_image_prompt(project_id: str, payload: PromptCreate, user: dict
     updates = {"image_prompts": prompts}
     if not (proj.get("default_image_prompt_id") or "").strip():
         updates["default_image_prompt_id"] = pid
-    st.update_project_fields(project_id, updates)
+    (await run_sync(st.update_project_fields, project_id, updates))
     return PromptItem(**row)
 
 
@@ -196,7 +197,7 @@ async def update_image_prompt(
             break
     if not found:
         raise HTTPException(status_code=404, detail="Image prompt not found")
-    st.update_project_fields(project_id, {"image_prompts": prompts})
+    (await run_sync(st.update_project_fields, project_id, {"image_prompts": prompts}))
     return PromptItem(id=(found.get("id") or "").strip(), name=(found.get("name") or "").strip(), text=(found.get("text") or "").strip())
 
 
@@ -212,7 +213,7 @@ async def delete_image_prompt(project_id: str, prompt_id: str, user: dict = Depe
     updates = {"image_prompts": prompts2}
     if (proj.get("default_image_prompt_id") or "").strip() == pid:
         updates["default_image_prompt_id"] = ""
-    st.update_project_fields(project_id, updates)
+    (await run_sync(st.update_project_fields, project_id, updates))
     return Response(status_code=204)
 
 
@@ -224,7 +225,7 @@ async def set_default_image_prompt(project_id: str, payload: SetDefaultRequest, 
     prompts = [p for p in (proj.get("image_prompts") or []) if isinstance(p, dict)]
     if not any((p.get("id") or "").strip() == pid for p in prompts):
         raise HTTPException(status_code=404, detail="Image prompt not found")
-    st.update_project_fields(project_id, {"default_image_prompt_id": pid})
+    (await run_sync(st.update_project_fields, project_id, {"default_image_prompt_id": pid}))
     return {"ok": True, "default_id": pid}
 
 
@@ -248,7 +249,7 @@ async def test_image_prompt(
     plan, plan_key, role = _plan_for(user, st)
     uid = (user.get("id") or "").strip()
     if role != "admin" and hasattr(st, "consume_image_prompt_test_usage"):
-        ok, msg = st.consume_image_prompt_test_usage(uid, month_limit=plan.get("max_image_prompt_tests_per_month"))
+        ok, msg = (await run_sync(st.consume_image_prompt_test_usage, uid, month_limit=plan.get("max_image_prompt_tests_per_month")))
         if not ok:
             raise HTTPException(status_code=403, detail={"code": "quota_exceeded", "message": msg or "Monthly image prompt test limit reached for your plan."})
 
@@ -312,6 +313,6 @@ async def test_image_prompt(
 async def list_image_prompt_tests(project_id: str, prompt_id: str, user: dict = Depends(get_current_user)) -> ImagePromptTestHistoryResponse:
     st = get_legacy_storage_module()
     _require_project_access(st=st, user=user, project_id=project_id)
-    items = st.load_recent_image_prompt_tests(project_id, (prompt_id or "").strip())
+    items = (await run_sync(st.load_recent_image_prompt_tests, project_id, (prompt_id or "").strip()))
     return ImagePromptTestHistoryResponse(items=[ImagePromptTestResult(**i) for i in items])
 

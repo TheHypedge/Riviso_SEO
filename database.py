@@ -329,5 +329,20 @@ def init_db() -> None:
     db.seo_audit_links.create_index([("audit_id", 1), ("source_url_id", 1)])
     db.seo_audit_issues.create_index([("audit_id", 1), ("rule_id", 1)])
     db.seo_audit_issues.create_index([("audit_id", 1), ("severity", 1)])
+    # Compressed history of non-latest audits (storage.archive_seo_audit).
+    db.seo_audit_archives.create_index([("audit_id", 1), ("kind", 1), ("part", 1)])
+
+    # Collections that were still full scans on every request (2026-11-14 audit): project
+    # access checks hit project_collaborators, invite links hit project_invitations, and the
+    # AI-citation worker claims jobs by status+queued_at.
+    db.project_collaborators.create_index("id")
+    db.project_collaborators.create_index([("project_id", 1), ("user_id", 1), ("status", 1)])
+    db.project_collaborators.create_index([("user_id", 1), ("status", 1)])
+    db.project_invitations.create_index("id")
+    db.project_invitations.create_index("token")
+    db.project_invitations.create_index("project_id")
+    db.ai_citation_checks.create_index([("project_id", 1), ("queued_at", -1)])
+    db.ai_citation_checks.create_index([("status", 1), ("queued_at", 1)])
+    db.image_prompt_tests.create_index([("project_id", 1), ("image_prompt_id", 1), ("created_at", -1)])
 
 

@@ -35,17 +35,12 @@ def _existing_title_and_keyphrase_sets(*, st, project_id: str) -> tuple[set[str]
     keyphrases: set[str] = set()
     if not pid:
         return titles, keyphrases
-    rows: list[dict[str, Any]] = []
-    if hasattr(st, "load_articles_listing_for_project"):
-        try:
-            rows = st.load_articles_listing_for_project(pid, limit=20000) or []
-        except Exception:
-            rows = []
-    if not rows:
-        try:
-            rows = st.load_articles() or []
-        except Exception:
-            rows = []
+    # Listing projection only: a project with zero articles used to fall through to
+    # load_articles(), pulling every article body in the database for each research job.
+    try:
+        rows = st.load_articles_listing_for_project(pid, limit=20000) or []
+    except Exception:
+        rows = []
     for a in rows:
         if not isinstance(a, dict) or (a.get("project_id") or "").strip() != pid:
             continue

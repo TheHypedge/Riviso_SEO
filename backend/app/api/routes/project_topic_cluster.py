@@ -17,6 +17,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.services.to_thread import run_sync
 from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.project_lookup import require_project_access
@@ -123,8 +124,7 @@ async def plan_cluster(
     if should_use_async_queue() and hasattr(st, "save_topic_cluster"):
         cluster_id = new_cluster_plan_id()
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-        st.save_topic_cluster(
-            {
+        (await run_sync(st.save_topic_cluster, {
                 "id": cluster_id,
                 "project_id": project_id,
                 "owner_user_id": uid,
@@ -136,8 +136,7 @@ async def plan_cluster(
                 "clusters": [],
                 "created_at": now,
                 "updated_at": now,
-            }
-        )
+            }))
         job_id = enqueue_topic_cluster_plan_job(
             project_id=project_id,
             cluster_id=cluster_id,
@@ -241,7 +240,7 @@ async def generate_all(
 
     if should_use_async_queue():
         if hasattr(st, "update_topic_cluster_fields"):
-            st.update_topic_cluster_fields(cid, {"status": "generating"})
+            (await run_sync(st.update_topic_cluster_fields, cid, {"status": "generating"}))
         job_id = enqueue_cluster_generate_all_job(
             project_id=project_id,
             cluster_id=cid,

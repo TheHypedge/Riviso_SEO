@@ -231,7 +231,7 @@ async def connect_shopify(
                 shop=shop,
                 return_origin=request.headers.get("origin") or "",
             )
-        except Exception as exc:
+        except Exception:
             reauth_url = ""
         msg = missing_scopes_message(missing=missing_scopes, granted=live_scopes)
         return ShopifyConnectResponse(

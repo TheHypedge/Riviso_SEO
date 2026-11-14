@@ -1862,9 +1862,6 @@ export function setAccessToken(_token?: string, expiresInSeconds?: number) {
 export function setRefreshToken(_token?: string) {
   markSession();
 }
-export function getRefreshToken(): string | null {
-  return null;
-}
 
 function clearSessionMarker() {
   if (typeof window === "undefined") return;
@@ -3251,18 +3248,6 @@ export const api = {
     return merged;
   },
 
-  async updateArticleCategories(
-    projectId: string,
-    items: Array<{ article_id: string; wp_category_ids: string }>,
-  ) {
-    return apiFetch<{ ok: boolean; results: Array<{ article_id: string; ok: boolean; wp_synced: boolean; error?: string | null }> }>(
-      `/api/projects/${projectId}/articles/batch-categories`,
-      {
-        method: "POST",
-        body: JSON.stringify({ items }),
-      },
-    );
-  },
 
   async syncWpCategories(projectId: string) {
     return apiFetch<{ ok: boolean; synced: number }>(
@@ -3888,11 +3873,6 @@ export const api = {
       { method: "POST" },
     );
   },
-  async checkArticleIndexingStatus(projectId: string, articleId: string) {
-    return apiFetch<GscIndexingStatus>(
-      `/api/projects/${projectId}/articles/${articleId}/gsc/indexing-status`,
-    );
-  },
   async gscProjectStatus(projectId: string, opts?: ApiFetchOptions) {
     if (!opts?.fresh && !opts?.bypassClientCache) {
       const cached = cacheGet(_cacheGscProjectStatus, projectId, 30_000);
@@ -4290,13 +4270,6 @@ export const api = {
     }
   },
 
-  // Feature 4 — Smart Refresh (foundations)
-  async articleMarkMonitor(projectId: string, articleId: string, status: "fresh" | "stale" | "unknown") {
-    return apiFetch<{ ok: boolean; monitor: { status: string; last_checked_at: string } }>(
-      `/api/projects/${projectId}/articles/${articleId}/monitor/mark`,
-      { method: "POST", body: JSON.stringify({ status }) },
-    );
-  },
 
   // Admin
   async adminListUsers() {

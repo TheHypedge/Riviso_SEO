@@ -265,7 +265,7 @@ def _now_iso() -> str:
 
 def _content_hash(text: str) -> str:
     normalized = re.sub(r"\s+", " ", (text or "").lower()).strip()[:3000]
-    return hashlib.md5(normalized.encode("utf-8", errors="replace")).hexdigest()
+    return hashlib.md5(normalized.encode("utf-8", errors="replace"), usedforsecurity=False).hexdigest()
 
 
 def _word_count(text: str) -> int:

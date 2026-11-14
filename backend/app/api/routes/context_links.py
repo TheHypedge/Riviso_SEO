@@ -5,6 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 
+from app.services.to_thread import run_sync
 from app.core.deps import get_current_user
 from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
@@ -153,7 +154,7 @@ async def create_context_link(project_id: str, payload: ContextLinkCreate, user:
     _reject_duplicate_label(links, payload.label)
     row = {"id": f"cl_{uuid.uuid4().hex[:16]}", "label": payload.label[:200], "url": payload.url[:2048]}
     links.append(row)
-    st.update_project_fields(project_id, {"context_links": links})
+    (await run_sync(st.update_project_fields, project_id, {"context_links": links}))
     return ContextLinkItem(**row)
 
 
@@ -180,7 +181,7 @@ async def update_context_link(
             break
     if not found:
         raise HTTPException(status_code=404, detail="Context link not found")
-    st.update_project_fields(project_id, {"context_links": links})
+    (await run_sync(st.update_project_fields, project_id, {"context_links": links}))
     return ContextLinkItem(**found)
 
 
@@ -193,6 +194,6 @@ async def delete_context_link(project_id: str, link_id: str, user: dict = Depend
     links2 = [x for x in links if (x.get("id") or "").strip() != lid]
     if len(links2) == len(links):
         return Response(status_code=204)
-    st.update_project_fields(project_id, {"context_links": links2})
+    (await run_sync(st.update_project_fields, project_id, {"context_links": links2}))
     return Response(status_code=204)
 

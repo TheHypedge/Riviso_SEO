@@ -5,7 +5,6 @@ import styles from "@/app/page.module.css";
 import {
   SHOPIFY_CONFUSABLE_SCOPES,
   SHOPIFY_PRODUCT_MAPPING_SCOPES,
-  SHOPIFY_PUBLISH_SCOPES,
 } from "@/lib/shopifyScopes";
 
 const ADMIN_API_SCOPES = [

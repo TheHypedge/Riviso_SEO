@@ -30,7 +30,6 @@ import { articleEditorPath, formatArticleLoadError } from "@/lib/articlePaths";
 import { connectionErrorMessage, isDatabaseUnavailable } from "@/lib/networkErrors";
 import {
   canPushWordPressUpdate,
-  formatWordPressRestStatus,
   isArticleLiveOnWordPress,
   isWordPressPostTrashed,
   parseWpPostId,
@@ -45,8 +44,7 @@ import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapP
 import { WordPressPageMapPicker } from "@/components/wordpress/WordPressPageMapPicker";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
 import type { MappedWordPressPage } from "@/lib/wordpressPageMapping";
-import { resolveFeaturedImageFileForWordPress } from "@/lib/featuredImageFile";
-import { formatShopifyBlogOptionLabel, SHOPIFY_BLOG_CHANNEL_HELP } from "@/lib/shopifyBlogLabel";
+import { formatShopifyBlogOptionLabel } from "@/lib/shopifyBlogLabel";
 import { ProjectSidebar, ProjectSidebarStyles } from "@/components/ProjectSidebar";
 import { LinkedInPostPreview } from "@/components/LinkedInPostPreview";
 import { useFocusTrap } from "@/lib/useFocusTrap";
@@ -1872,18 +1870,6 @@ export default function ArticleEditPage() {
     }
   }
 
-  async function copyArticleTitleAndMarkdown() {
-    const md = (body || "").trim();
-    const t = (title || article?.title || "").trim();
-    const payload = [t ? `# ${t}` : "", md].filter(Boolean).join("\n\n");
-    if (!payload.trim()) return;
-    try {
-      await navigator.clipboard.writeText(payload);
-      setNotice("Copied title + article markdown to clipboard.");
-    } catch {
-      setNotice("Could not copy to clipboard (browser permission).", "danger");
-    }
-  }
 
   async function syncShopifyCatalogFromEditor() {
     if (shopifyCatalogSyncing) return;

@@ -959,7 +959,7 @@ async def consume_export_quota(
     plan_key = ((user.get("subscription_type") or "").strip().lower() or "beta")
     plan = {}
     try:
-        plans = st.load_plans() or {}
+        plans = (await run_sync(st.load_plans)) or {}
         plan = plans.get(plan_key) if isinstance(plans, dict) else {}
         if not isinstance(plan, dict):
             plan = {}
@@ -970,7 +970,7 @@ async def consume_export_quota(
         raise HTTPException(status_code=403, detail="Export Articles is not enabled for your plan.")
 
     if hasattr(st, "consume_export_usage"):
-        ok, msg = st.consume_export_usage(uid, month_limit=plan.get("max_export_per_month"), amount=1)
+        ok, msg = (await run_sync(st.consume_export_usage, uid, month_limit=plan.get("max_export_per_month"), amount=1))
         if not ok:
             raise HTTPException(status_code=403, detail=msg or "Export limit reached for your plan")
     return {"ok": True}
@@ -1093,7 +1093,7 @@ async def create_article_from_source(
     happens once inside ``execute_article_generation`` when the queued job runs).
     """
     st = get_legacy_storage_module()
-    proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
+    await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     # Same reasoning as POST .../generate -- creating/generating an article
     # doesn't require a connected website, only publishing it does.
 
@@ -2550,7 +2550,7 @@ async def _persist_schedule_row(
 
     job_row: dict | None = None
     if hasattr(st, "insert_scheduled_job") and hasattr(st, "update_scheduled_job_fields"):
-        stable = hashlib.sha1(f"{project_id}:{article_id}".encode("utf-8")).hexdigest()[:20]
+        stable = hashlib.sha1(f"{project_id}:{article_id}".encode("utf-8"), usedforsecurity=False).hexdigest()[:20]
         job_id = f"job_{stable}"
         saved_inner = 0
         if hasattr(st, "load_scheduled_jobs"):
@@ -2709,11 +2709,9 @@ async def bulk_schedule_articles(
     _validate_bulk_schedule_cadence(cadence=payload.cadence, parsed=parsed)
 
     if role != "admin" and uid and hasattr(st, "consume_scheduled_usage"):
-        ok, msg = st.consume_scheduled_usage(
-            uid,
+        ok, msg = (await run_sync(st.consume_scheduled_usage, uid,
             month_limit=plan.get("max_scheduled_per_month"),
-            amount=len(parsed),
-        )
+            amount=len(parsed)))
         if not ok:
             raise HTTPException(status_code=403, detail=msg or "Schedule limit reached for your plan")
 
@@ -2795,7 +2793,7 @@ async def schedule_article(
         if plan.get("allow_scheduling") is False:
             raise HTTPException(status_code=403, detail="Scheduling is not enabled for your plan.")
         if hasattr(st, "consume_scheduled_usage"):
-            ok, msg = st.consume_scheduled_usage(uid, month_limit=plan.get("max_scheduled_per_month"), amount=1)
+            ok, msg = (await run_sync(st.consume_scheduled_usage, uid, month_limit=plan.get("max_scheduled_per_month"), amount=1))
             if not ok:
                 raise HTTPException(status_code=403, detail=msg or "Schedule limit reached for your plan")
 
@@ -3944,13 +3942,11 @@ async def monitor_mark(
     # Also reflect the status on the article row so list views update without a separate fetch.
     if hasattr(st, "update_article_fields"):
         try:
-            st.update_article_fields(
-                (a.get("id") or "").strip(),
+            (await run_sync(st.update_article_fields, (a.get("id") or "").strip(),
                 {
                     "monitor_status": monitor.get("status") or "",
                     "monitor_last_checked_at": monitor.get("last_checked_at") or "",
-                },
-            )
+                }))
         except Exception:
             pass
     return {"ok": True, "monitor": monitor}

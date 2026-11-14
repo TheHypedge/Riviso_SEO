@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import styles from "@/app/page.module.css";
 import { ShopifyManualConnectGuide } from "@/components/shopify/ShopifyManualConnectGuide";

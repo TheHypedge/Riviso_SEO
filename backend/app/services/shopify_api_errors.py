@@ -1,7 +1,6 @@
 """Shopify Admin API error parsing and operator-facing messages."""
 from __future__ import annotations
 
-from typing import Any
 
 import httpx
 

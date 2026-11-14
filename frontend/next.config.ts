@@ -103,14 +103,13 @@ const nextConfig: NextConfig = {
 let exportedConfig: NextConfig = nextConfig;
 try {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { withSentryConfig } = require("@sentry/nextjs");
+  const { withSentryConfig } = require("@sentry/nextjs/config");
   exportedConfig = withSentryConfig(nextConfig, {
     silent: !process.env.CI,
     org: process.env.SENTRY_ORG,
     project: process.env.SENTRY_PROJECT,
     // Only attempt source-map upload when an auth token is present.
     authToken: process.env.SENTRY_AUTH_TOKEN,
-    disableLogger: true,
   });
 } catch {
   // @sentry/nextjs not installed — ship the plain config.

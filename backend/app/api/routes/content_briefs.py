@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import ValidationError
 
+from app.services.to_thread import run_sync
 from app.core.deps import get_current_user
 from app.core.project_lookup import require_project_access
 from app.legacy.storage import get_legacy_storage_module
@@ -116,13 +117,11 @@ async def commit_content_brief(
     _require_project_access(st=st, user=user, project_id=project_id)
     _require_article(st=st, project_id=project_id, article_id=article_id)
 
-    st.patch_article_fields(
-        article_id,
+    (await run_sync(st.patch_article_fields, article_id,
         {
             "content_brief": body.model_dump(),
             "content_brief_draft": None,
-        },
-    )
+        }))
     return body
 
 
@@ -142,7 +141,7 @@ async def autosave_draft(
 
     draft_data = body.model_dump()
     draft_data["saved_at"] = _now_iso()
-    st.patch_article_fields(article_id, {"content_brief_draft": draft_data})
+    (await run_sync(st.patch_article_fields, article_id, {"content_brief_draft": draft_data}))
     return {"saved_at": draft_data["saved_at"]}
 
 
@@ -157,10 +156,8 @@ async def delete_content_brief(
     _require_project_access(st=st, user=user, project_id=project_id)
     _require_article(st=st, project_id=project_id, article_id=article_id)
 
-    st.patch_article_fields(
-        article_id,
-        {"content_brief": None, "content_brief_draft": None},
-    )
+    (await run_sync(st.patch_article_fields, article_id,
+        {"content_brief": None, "content_brief_draft": None}))
     return Response(status_code=204)
 
 
@@ -200,7 +197,7 @@ async def create_brief_template(
     new_id = str(uuid.uuid4())
     new_template = ContentBriefTemplate(id=new_id, name=body.name, brief=body.brief)
     templates.append(new_template.model_dump())
-    st.update_project_fields(project_id, {"content_brief_templates": templates})
+    (await run_sync(st.update_project_fields, project_id, {"content_brief_templates": templates}))
     return new_template
 
 
@@ -227,7 +224,7 @@ async def update_brief_template(
         }
     )
     templates[idx] = updated.model_dump()
-    st.update_project_fields(project_id, {"content_brief_templates": templates})
+    (await run_sync(st.update_project_fields, project_id, {"content_brief_templates": templates}))
     return updated
 
 
@@ -248,7 +245,7 @@ async def delete_brief_template(
     updates: dict = {"content_brief_templates": filtered}
     if (proj.get("default_content_brief_template_id") or "") == template_id:
         updates["default_content_brief_template_id"] = ""
-    st.update_project_fields(project_id, updates)
+    (await run_sync(st.update_project_fields, project_id, updates))
     return Response(status_code=204)
 
 
@@ -265,5 +262,5 @@ async def set_default_brief_template(
     if not any((t.get("id") or "") == body.id for t in templates):
         raise HTTPException(status_code=404, detail="Template not found.")
 
-    st.update_project_fields(project_id, {"default_content_brief_template_id": body.id})
+    (await run_sync(st.update_project_fields, project_id, {"default_content_brief_template_id": body.id}))
     return {"default_id": body.id}

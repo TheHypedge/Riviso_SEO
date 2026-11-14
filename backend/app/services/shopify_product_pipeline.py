@@ -12,7 +12,11 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-from app.services.shopify_product_context import format_product_context, select_relevant_shopify_products
+from app.services.shopify_product_context import (
+    _load_shopify_catalog_products,
+    format_product_context,
+    select_relevant_shopify_products,
+)
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +128,11 @@ def _catalog_fallback_products(
         log.debug("Shopify catalog product selection failed", exc_info=True)
         return []
     out: list[ShopifyMappedProduct] = []
+    images = {
+        str(p.get("handle") or "").strip(): str(p.get("image_url") or p.get("featured_image_url") or "").strip()
+        for p in (_load_shopify_catalog_products(proj) if rows else [])
+        if isinstance(p, dict)
+    }
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -134,12 +143,7 @@ def _catalog_fallback_products(
             handle = url.split("/products/", 1)[-1].split("?")[0].split("#")[0].strip()
         if not name or not handle:
             continue
-        image = ""
-        catalog_products = _load_shopify_catalog_products(proj)
-        for p in catalog_products:
-            if isinstance(p, dict) and str(p.get("handle") or "").strip() == handle:
-                image = str(p.get("image_url") or p.get("featured_image_url") or "").strip()
-                break
+        image = images.get(handle, "")
         out.append(
             ShopifyMappedProduct(
                 title=name,

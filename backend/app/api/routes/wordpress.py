@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from app.services.to_thread import run_sync
 from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
 from app.core.project_lookup import async_require_project_access
@@ -601,7 +602,6 @@ async def plugin_package(request: Request, token: str = "") -> Response:
 
 @router.get("/projects/{project_id}/settings", response_model=ProjectSettingsPublic)
 async def get_project_settings(project_id: str, user: dict = Depends(get_current_user)) -> ProjectSettingsPublic:
-    st = get_legacy_storage_module()
     # allow_collaborators=True: shared members need connection status (wp_verified_status,
     # default post type/status/categories, gsc_property_url, etc.) to use content
     # operations (generate/schedule/publish). Identifier-ish fields (wp_username,
@@ -752,7 +752,7 @@ async def update_project_settings(
             try:
                 uid = (user.get("id") or "").strip()
                 if uid and hasattr(st, "get_user_by_id"):
-                    u = st.get_user_by_id(uid) or {}
+                    u = (await run_sync(st.get_user_by_id, uid)) or {}
                     rt = (u.get("gsc_refresh_token") or "").strip()
                     if rt and gsc.oauth_configured():
                         # Use GSC routes helper to refresh token by reusing service functions directly.
@@ -821,9 +821,9 @@ async def update_project_settings(
         updates["shopify_verified_message"] = ""
 
     if updates:
-        st.update_project_fields(pid, updates)
+        (await run_sync(st.update_project_fields, pid, updates))
 
-    fresh = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    fresh = await run_sync(st.get_project_access_row, pid)
     if not fresh:
         raise HTTPException(status_code=404, detail="Project not found")
     return await get_project_settings(project_id=pid, user=user)
@@ -935,15 +935,13 @@ async def verify_wordpress_connection(
             except Exception:
                 pass
             try:
-                st.update_project_fields(
-                    project_id,
+                (await run_sync(st.update_project_fields, project_id,
                     {
                         "wp_site_url": resolved_site_url,
                         "wp_username": wp_username,
                         "wp_app_password": wp_app_password,
                         "wp_can_publish": bool(can_publish),
-                    },
-                )
+                    }))
             except Exception:
                 pass
             seo_info: dict[str, Any] = {}
@@ -992,7 +990,6 @@ async def verify_wordpress_connection(
 
 @router.get("/projects/{project_id}/wordpress/post-types", response_model=list[WordpressPostType])
 async def wordpress_post_types(project_id: str, user: dict = Depends(get_current_user)) -> list[WordpressPostType]:
-    st = get_legacy_storage_module()
     proj = await _require_project_access(user=user, project_id=project_id, allow_collaborators=True)
     if _is_shopify_project(proj):
         return []
@@ -1023,7 +1020,6 @@ async def wordpress_post_types(project_id: str, user: dict = Depends(get_current
 
 @router.get("/projects/{project_id}/wordpress/categories", response_model=list[WordpressCategory])
 async def wordpress_categories(project_id: str, user: dict = Depends(get_current_user)) -> list[WordpressCategory]:
-    st = get_legacy_storage_module()
     proj = await _require_project_access(user=user, project_id=project_id, allow_collaborators=True)
     if _is_shopify_project(proj):
         return []

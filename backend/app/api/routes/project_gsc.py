@@ -23,6 +23,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from app.services.to_thread import run_sync
 from app.core.config import settings
 from app.core.deps import get_current_user
 from app.core.project_lookup import require_project_access
@@ -130,8 +131,7 @@ async def disconnect(project_id: str, user: dict = Depends(get_current_user)) ->
     st = get_legacy_storage_module()
     proj = _require_project(st=st, user=user, project_id=project_id)
     if hasattr(st, "update_project_fields"):
-        st.update_project_fields(
-            (proj.get("id") or "").strip(),
+        (await run_sync(st.update_project_fields, (proj.get("id") or "").strip(),
             {
                 "gsc_access_token": "",
                 "gsc_refresh_token": "",
@@ -140,8 +140,7 @@ async def disconnect(project_id: str, user: dict = Depends(get_current_user)) ->
                 "gsc_email": "",
                 "gsc_connected_at": "",
                 "gsc_property_url": "",
-            },
-        )
+            }))
     return {"ok": True, "disconnected_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}
 
 
@@ -178,7 +177,7 @@ async def set_property(project_id: str, payload: GscPropertyUpdate, user: dict =
     if payload.index_on_publish is not None:
         updates["gsc_index_on_publish"] = bool(payload.index_on_publish)
     if updates and hasattr(st, "update_project_fields"):
-        st.update_project_fields((proj.get("id") or "").strip(), updates)
+        (await run_sync(st.update_project_fields, (proj.get("id") or "").strip(), updates))
     return {
         "ok": True,
         "property_url": (updates.get("gsc_property_url") or proj.get("gsc_property_url") or "") or None,

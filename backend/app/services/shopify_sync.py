@@ -13,7 +13,6 @@ from app.services.shopify_api_errors import (
     SCOPE_SETUP_MESSAGE,
     SCOPE_STALE_TOKEN_MESSAGE,
     ShopifyApiError,
-    access_denied_diagnosis,
     format_token_scopes_list,
     http_error_to_shopify_api_error,
     parse_granted_scopes,

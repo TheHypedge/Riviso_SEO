@@ -3,10 +3,7 @@ RankMonitorService — Feature 4 (Rank Monitoring).
 
 v1 ships:
 
-- :meth:`upsert_for_article` — call from article generation / publish to register the
-  monitor row with a ``next_check_at`` 30 days from publication.
 - :meth:`mark_status` — manual flip used by the "Mark stale" / "Mark fresh" UI.
-- :meth:`due_monitors` — read-only sweep helper for the scheduler hook (no-op in v1).
 
 The actual SERP-shift detection is intentionally not in this PR — it requires a SERP
 data source decision (research module simulator vs. paid API) that we want to make
@@ -43,27 +40,6 @@ class RankMonitorService:
 
     # ----- bookkeeping (working in v1) ----------------------------------------
 
-    def upsert_for_article(self, article: dict[str, Any]) -> dict[str, Any]:
-        """
-        Register / refresh a monitor row for ``article``. Idempotent.
-
-        Should be called immediately after a successful WordPress publish so the
-        article's ``wp_link`` is present.
-        """
-        st = get_legacy_storage_module()
-        return st.upsert_content_monitor(
-            {
-                "project_id": self.project_id,
-                "article_id": (article.get("id") or "").strip(),
-                "url": (article.get("wp_link") or "").strip(),
-                "status": "fresh",  # newly-published content is fresh by definition
-                "score": "",
-                "signature": "",
-                "last_checked_at": _now_iso_seconds(),
-                "next_check_at": _next_check_iso(),
-            }
-        )
-
     def mark_status(self, *, article_id: str, status: str) -> dict[str, Any]:
         """Manual override: ``status`` must be one of ``fresh``, ``stale``, ``unknown``."""
         s = (status or "").strip().lower()
@@ -87,13 +63,6 @@ class RankMonitorService:
         st = get_legacy_storage_module()
         return st.list_content_monitors_for_project(self.project_id, status=status)
 
-    # ----- scheduler sweep helper --------------------------------------------
-
-    @staticmethod
-    def due_monitors(*, before_iso: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        st = get_legacy_storage_module()
-        cutoff = before_iso or _now_iso_seconds()
-        return st.list_due_content_monitors(before_iso=cutoff, limit=limit)
 
     # ----- smart refresh (skeleton) -------------------------------------------
 

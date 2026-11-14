@@ -301,6 +301,7 @@ async def _delete_refresh_grace_chain(jti: str) -> None:
 
 
 async def _issue_tokens(st, user: dict, response: Response) -> TokenPair:
+    """Set the httpOnly auth cookies. JWTs are never echoed in the body (XSS could read it)."""
 
     uid = (user.get("id") or "").strip()
 
@@ -316,7 +317,7 @@ async def _issue_tokens(st, user: dict, response: Response) -> TokenPair:
 
     _set_auth_cookies(response, access, refresh)
 
-    return TokenPair(access_token=access, refresh_token=refresh, expires_in=settings.access_token_ttl_seconds)
+    return TokenPair(access_token="", refresh_token="", expires_in=settings.access_token_ttl_seconds)
 
 
 
@@ -512,14 +513,14 @@ async def register(payload: RegisterRequest, request: Request) -> RegisterPendin
 
         if hasattr(st, "get_default_plan_key"):
 
-            default_plan = str(st.get_default_plan_key() or "beta").strip().lower() or "beta"
+            default_plan = str((await run_sync(st.get_default_plan_key)) or "beta").strip().lower() or "beta"
 
     except Exception:
 
         default_plan = "beta"
 
     if hasattr(st, "generate_email_verification_otp"):
-        verification_code = str(st.generate_email_verification_otp())
+        verification_code = str((await run_sync(st.generate_email_verification_otp)))
     else:
         verification_code = f"{secrets.randbelow(900_000) + 100_000:06d}"
 
@@ -1046,8 +1047,8 @@ async def refresh_token(request: Request, response: Response) -> TokenPair:
         grace_access, grace_refresh = grace_hit
         _set_auth_cookies(response, grace_access, grace_refresh)
         return TokenPair(
-            access_token=grace_access,
-            refresh_token=grace_refresh,
+            access_token="",
+            refresh_token="",
             expires_in=settings.access_token_ttl_seconds,
         )
 
@@ -1065,7 +1066,7 @@ async def refresh_token(request: Request, response: Response) -> TokenPair:
 
     _set_auth_cookies(response, access, refresh)
 
-    return TokenPair(access_token=access, refresh_token=refresh, expires_in=settings.access_token_ttl_seconds)
+    return TokenPair(access_token="", refresh_token="", expires_in=settings.access_token_ttl_seconds)
 
 
 def _clear_auth_cookies(response: Response) -> None:

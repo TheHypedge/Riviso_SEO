@@ -4,9 +4,10 @@ from __future__ import annotations
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
+from app.services.to_thread import run_sync
 from app.core.config import settings
 from app.legacy.storage import get_legacy_storage_module
 from app.services import shopify_oauth
@@ -81,7 +82,7 @@ async def oauth_callback(request: Request) -> RedirectResponse:
     ret_origin = (parsed.get("return_origin") or "").strip()
 
     st = get_legacy_storage_module()
-    proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+    proj = next((p for p in ((await run_sync(st.load_projects)) or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
     proj_secret = (proj.get("shopify_client_secret") or "").strip() if isinstance(proj, dict) else ""
     proj_cid = (proj.get("shopify_client_id") or "").strip() if isinstance(proj, dict) else ""
     use_project_oauth = bool(proj_secret and proj_cid)
@@ -157,8 +158,7 @@ async def oauth_callback(request: Request) -> RedirectResponse:
             status_code=302,
         )
 
-    st.update_project_fields(
-        pid,
+    (await run_sync(st.update_project_fields, pid,
         {
             "platform": "shopify",
             "shopify_shop": shop,
@@ -171,8 +171,7 @@ async def oauth_callback(request: Request) -> RedirectResponse:
             "website_url": f"https://{shop}",
             "shopify_sync_status": "syncing",
             "shopify_sync_message": "Syncing catalog…",
-        },
-    )
+        }))
 
     try:
         catalog = await sync_shopify_catalog(shop=shop, access_token=access_token, granted_scope=scope)
@@ -191,12 +190,10 @@ async def oauth_callback(request: Request) -> RedirectResponse:
             },
         )
     except Exception as exc:
-        st.update_project_fields(
-            pid,
+        (await run_sync(st.update_project_fields, pid,
             {
                 "shopify_sync_status": "error",
                 "shopify_sync_message": f"Connected, but sync failed: {exc}"[:500],
-            },
-        )
+            }))
 
     return RedirectResponse(_frontend_redirect(project_id=pid, ok=True, return_origin=ret_origin), status_code=302)

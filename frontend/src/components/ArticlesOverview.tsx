@@ -8,7 +8,7 @@ import { ContentVsSearchChart, type ContentVsSearchPoint } from "@/components/Co
 import { GoogleSearchConsoleChart } from "@/components/GoogleSearchConsoleChart";
 import { OverviewReadinessGate } from "@/components/OverviewReadinessGate";
 import { ProjectActivityChart } from "@/components/ProjectActivityChart";
-import { OverviewPageSkeleton } from "@/components/skeleton";
+import { AnalyticsPanelSkeleton, OverviewPageSkeleton } from "@/components/skeleton";
 import { BreakdownDonut, DataTable, DataTableBody, DataTableCell, DataTableHead, DataTableHeaderCell, DataTableRow } from "@/components/ui";
 import type {
   AiCitationCheck,
@@ -255,6 +255,11 @@ type ArticlesOverviewProps = {
   gscConnected?: boolean;
   gscInsights?: GscInsightsResponse | null;
   analytics?: GscAnalyticsResponse | null;
+  /** False until the project's GSC status has been fetched (avoids a false "not connected"). */
+  gscStatusLoaded?: boolean;
+  gscDataLoading?: boolean;
+  gscDataError?: string | null;
+  onRetryGsc?: () => void;
   aiCitationChecks?: AiCitationCheck[];
   aiCitationEnginesConfigured?: AiCitationEngine[];
   aiCitationTrend?: AiCitationTrendPoint[];
@@ -276,6 +281,10 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
     gscConnected,
     gscInsights,
     analytics,
+    gscStatusLoaded = true,
+    gscDataLoading = false,
+    gscDataError = null,
+    onRetryGsc,
     aiCitationChecks = [],
     aiCitationEnginesConfigured = [],
     aiCitationTrend = [],
@@ -479,13 +488,31 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
     };
   }, [stats.scheduledJobs, stats.publishedInRange, insights.velocityPct, insights.publishedCurrent, rangeLabel]);
 
-  if (loading) {
+  if (loading && articles.length === 0) {
     return (
       <div className={styles.articlesOverviewShell}>
         <OverviewPageSkeleton label="Loading project overview" />
       </div>
     );
   }
+
+  // Shown in a connected GSC card that has no data yet: loading bones, or the error + retry.
+  const gscPlaceholder = (variant: "overview" | "insights") =>
+    !gscStatusLoaded || gscDataLoading ? (
+      <AnalyticsPanelSkeleton variant={variant} />
+    ) : gscDataError ? (
+      <div className={styles.articlesOverviewGscPrompt} role="alert">
+        <div className={styles.articlesOverviewGscPromptText}>
+          <span className={styles.articlesOverviewGscPromptTitle}>Search Console data didn&apos;t load</span>
+          <p className={styles.articlesOverviewGscPromptBody}>{gscDataError}</p>
+        </div>
+        {onRetryGsc ? (
+          <button type="button" className={styles.btnSecondary} onClick={onRetryGsc}>
+            Try again
+          </button>
+        ) : null}
+      </div>
+    ) : null;
 
   if (!readiness.isReady) {
     return (
@@ -591,7 +618,9 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
                   <p className={styles.articlesOverviewChartSub}>Clicks and impressions by day</p>
                 </div>
               </div>
-              {!gscConnected ? (
+              {!gscStatusLoaded ? (
+                gscPlaceholder("overview")
+              ) : !gscConnected ? (
                 <div className={styles.articlesOverviewGscPrompt}>
                   <div className={styles.articlesOverviewGscPromptText}>
                     <span className={styles.articlesOverviewGscPromptTitle}>Search Console not connected</span>
@@ -603,6 +632,8 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
                     Connect Search Console
                   </Link>
                 </div>
+              ) : !analytics && (gscDataLoading || gscDataError) ? (
+                gscPlaceholder("overview")
               ) : gscSeriesForChart.length === 0 ? (
                 <p className={styles.articlesOverviewListEmpty}>No Search Console data in this period.</p>
               ) : (
@@ -659,7 +690,9 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
         {/* ── Search Performance (Google Search Console) ── */}
         <section className={styles.articlesOverviewSection} aria-labelledby="overview-gsc-label">
           <div id="overview-gsc-label" className={styles.articlesOverviewSectionLabel} aria-hidden="true">Search Performance</div>
-          {!gscConnected ? (
+          {!gscStatusLoaded ? (
+            gscPlaceholder("insights")
+          ) : !gscConnected ? (
             <div className={styles.articlesOverviewGscPrompt}>
               <div className={styles.articlesOverviewGscPromptText}>
                 <span className={styles.articlesOverviewGscPromptTitle}>Search Console not connected</span>
@@ -785,7 +818,9 @@ export function ArticlesOverview(props: ArticlesOverviewProps) {
               </div>
               </div>
             </>
-          ) : null}
+          ) : (
+            gscPlaceholder("insights")
+          )}
         </section>
 
         {/* ── AI Generative Visibility (AI Citation tracking) — disabled for now per

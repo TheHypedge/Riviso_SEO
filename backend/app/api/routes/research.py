@@ -1,24 +1,22 @@
 
-from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.services.to_thread import run_sync
 from app.core.ratelimit import limiter
 
 from app.core.deps import get_current_user
-from app.core.project_lookup import async_require_project_access, require_project_access
+from app.core.project_lookup import async_require_project_access
 from app.legacy.storage import get_legacy_storage_module
 from app.schemas.research import ResearchIdeasRequest, ResearchIdeasResponse
-from app.services.async_operation_dispatch import should_use_async_queue  # retained for job-status polling path
-from app.services.plan_gatekeeper import PlanAction, require_plan_action, require_plan_action_for_project
+from app.services.plan_gatekeeper import PlanAction, require_plan_action_for_project
 from app.services.research_job_runner import (
     build_research_cache_key,
     execute_research_ideas,
     persist_research_ideas_result,
 )
-from app.services.to_thread import run_sync
 
 router = APIRouter(prefix="/projects/{project_id}/research", tags=["research"])
 
@@ -83,14 +81,14 @@ async def research_ideas_job_status(
 
     if hasattr(st, "get_research_cache"):
         try:
-            cached = st.get_research_cache(cache_key=key, max_age_s=6 * 60 * 60)
+            cached = (await run_sync(st.get_research_cache, cache_key=key, max_age_s=6 * 60 * 60))
         except Exception:
             cached = None
         if isinstance(cached, dict) and isinstance(cached.get("ideas"), list):
             return {"status": "complete", "result": _ideas_response_from_cache(cached).model_dump()}
 
     if hasattr(st, "get_research_job_status"):
-        inflight = st.get_research_job_status(cache_key=key)
+        inflight = (await run_sync(st.get_research_job_status, cache_key=key))
         if isinstance(inflight, dict):
             status = (inflight.get("status") or "queued").strip().lower()
             out: dict[str, Any] = {"status": status, "poll_cache_key": key}
@@ -153,14 +151,14 @@ async def research_ideas(
 
     if hasattr(st, "get_research_cache"):
         try:
-            cached = st.get_research_cache(cache_key=cache_key, max_age_s=6 * 60 * 60)
+            cached = (await run_sync(st.get_research_cache, cache_key=cache_key, max_age_s=6 * 60 * 60))
         except Exception:
             cached = None
         if isinstance(cached, dict) and isinstance(cached.get("ideas"), list):
             return _ideas_response_from_cache(cached)
 
     if hasattr(st, "get_research_job_status"):
-        inflight = st.get_research_job_status(cache_key=cache_key)
+        inflight = (await run_sync(st.get_research_job_status, cache_key=cache_key))
         if isinstance(inflight, dict):
             status = (inflight.get("status") or "queued").strip().lower()
             return JSONResponse(

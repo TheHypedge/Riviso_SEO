@@ -6,6 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import RedirectResponse
 
+from app.services.to_thread import run_sync
 from app.core.config import settings
 from app.legacy.storage import get_legacy_storage_module
 from app.services import gsc
@@ -159,7 +160,7 @@ async def oauth_callback(request: Request) -> RedirectResponse:
                 _frontend_project_redirect_url(project_id=pid, ok=False, message="Storage missing update_project_fields", origin_override=origin),
                 status_code=302,
             )
-        proj = next((p for p in (st.load_projects() or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
+        proj = next((p for p in ((await run_sync(st.load_projects)) or []) if isinstance(p, dict) and (p.get("id") or "") == pid), None)
         if not isinstance(proj, dict):
             return RedirectResponse(
                 _frontend_project_redirect_url(project_id=pid, ok=False, message="Project not found", origin_override=origin),
@@ -172,8 +173,7 @@ async def oauth_callback(request: Request) -> RedirectResponse:
                 _frontend_project_redirect_url(project_id=pid, ok=False, message="Project owner mismatch", origin_override=origin),
                 status_code=302,
             )
-        st.update_project_fields(
-            pid,
+        (await run_sync(st.update_project_fields, pid,
             {
                 "gsc_access_token": access_token,
                 # Google only returns refresh_token on the first consent; keep the existing
@@ -183,8 +183,7 @@ async def oauth_callback(request: Request) -> RedirectResponse:
                 "gsc_scope": scope,
                 "gsc_email": email or "",
                 "gsc_connected_at": now_str,
-            },
-        )
+            }))
         return RedirectResponse(
             _frontend_project_redirect_url(project_id=pid, ok=True, origin_override=origin),
             status_code=302,
@@ -193,8 +192,7 @@ async def oauth_callback(request: Request) -> RedirectResponse:
     # Legacy user-level flow (kept for backward compat with older clients/tabs).
     if not hasattr(st, "update_user_fields"):
         return RedirectResponse(_frontend_redirect_url(ok=False, message="Storage missing update_user_fields"), status_code=302)
-    st.update_user_fields(
-        uid,
+    (await run_sync(st.update_user_fields, uid,
         {
             "gsc_access_token": access_token,
             "gsc_refresh_token": refresh_token,
@@ -202,14 +200,13 @@ async def oauth_callback(request: Request) -> RedirectResponse:
             "gsc_scope": scope,
             "gsc_email": email or "",
             "gsc_connected_at": now_str,
-        },
-    )
+        }))
 
     return RedirectResponse(_frontend_redirect_url(ok=True), status_code=302)
 
 
 async def _get_valid_access_token_for_user(*, st, uid: str) -> str:
-    u = st.get_user_by_id(uid) if hasattr(st, "get_user_by_id") else None
+    u = (await run_sync(st.get_user_by_id, uid)) if hasattr(st, "get_user_by_id") else None
     if not isinstance(u, dict):
         raise HTTPException(status_code=400, detail="User not found")
     rt = (u.get("gsc_refresh_token") or "").strip()
@@ -233,7 +230,7 @@ async def _get_valid_access_token_for_user(*, st, uid: str) -> str:
     expires_in = int(tok.get("expires_in") or 0)
     exp2 = int(time.time()) + max(0, expires_in)
     if at2:
-        st.update_user_fields(uid, {"gsc_access_token": at2, "gsc_token_expires_at": str(exp2)})
+        (await run_sync(st.update_user_fields, uid, {"gsc_access_token": at2, "gsc_token_expires_at": str(exp2)}))
     return at2
 
 

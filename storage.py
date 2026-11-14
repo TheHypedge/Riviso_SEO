@@ -1,8 +1,7 @@
 """MongoDB-backed persistence.
 
 All project/article data is read and written here only (MongoDB is the source of truth).
-Do not load or save `data/projects.json` / `data/articles.json` from app routes — use
-`scripts/import_json_to_db.py` or opt-in startup import via AUTO_IMPORT_JSON=1.
+Do not load or save `data/projects.json` / `data/articles.json` from app routes.
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ import time
 import base64
 from datetime import date, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 from database import get_db, init_db
 from app.core.field_encryption import decrypt_field, encrypt_field
@@ -217,6 +217,11 @@ def _externalize_featured_image_in_updates(article_id: str, updates: dict[str, A
     u2 = dict(updates or {})
     img = (u2.get("image_url") or "").strip()
     if not img:
+        return u2
+    # Already permanent: re-downloading and re-uploading our own Cloudinary asset on every
+    # save was pure waste (and doubled every migration upload).
+    if u2.get("featured_image_storage") == "cloudinary" or urlsplit(img).netloc == "res.cloudinary.com":
+        u2.setdefault("featured_image_storage", "cloudinary")
         return u2
 
     from app.services.cloudinary_storage import cloudinary_configured, upload_image_bytes
@@ -2621,6 +2626,14 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "linkedin_post_url": (d.get("linkedin_post_url") or "")[:2048],
         # Structure/rhythm/link measurements from the last generation (article_quality.py).
         "quality_report": d.get("quality_report") if isinstance(d.get("quality_report"), dict) else {},
+        # Written via $set by the worker/pipeline; must survive full-document updates too.
+        "generation_error": str(d.get("generation_error") or "")[:500],
+        "integrity_ai_percentage": d.get("integrity_ai_percentage"),
+        "integrity_flagged_paragraphs": d.get("integrity_flagged_paragraphs")
+        if isinstance(d.get("integrity_flagged_paragraphs"), list)
+        else None,
+        "integrity_last_audited_at": d.get("integrity_last_audited_at") or None,
+        "wp_mapped_pages": d.get("wp_mapped_pages") if isinstance(d.get("wp_mapped_pages"), list) else [],
         "topic_cluster_id": (d.get("topic_cluster_id") or "")[:64],
         "topic_slot_id": (d.get("topic_slot_id") or "")[:64],
         "topic_role": (d.get("topic_role") or "")[:16],
@@ -4577,6 +4590,134 @@ def load_technical_audit_run(project_id: str, run_id: str) -> dict[str, Any] | N
 # ----------------------------
 
 
+# --- SEO audit archive ----------------------------------------------------------------
+# Old audits are history users pay to keep, but their raw rows (one doc per URL / link /
+# issue -- links alone ~7k per crawl) dominate the DB. Once an audit is no longer the
+# project's latest, its rows are packed into zlib-compressed BSON chunks (a handful of
+# docs instead of thousands) and the raw rows are dropped. Reads go through _seo_rows():
+# for an archived audit the chunks are inflated on first open and kept in a small
+# in-process cache, then the same Python filtering the JSON backend uses serves them.
+
+_SEO_ROW_COLLECTIONS = {"urls": "seo_audit_urls", "links": "seo_audit_links", "issues": "seo_audit_issues"}
+_SEO_ARCHIVE_CHUNK_ROWS = 2000
+_SEO_ARCHIVE_CACHE_MAX = 6
+_SEO_ARCHIVE_CACHE_TTL_S = 600.0
+_seo_archive_cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+_seo_archive_cache_lock = threading.Lock()
+
+
+def _seo_archive_rows(audit_id: str, kind: str) -> list[dict[str, Any]] | None:
+    """Rows of an archived audit, or None when the audit is not archived."""
+    key = (audit_id, kind)
+    now = time.monotonic()
+    with _seo_archive_cache_lock:
+        hit = _seo_archive_cache.get(key)
+        if hit and now - hit[0] < _SEO_ARCHIVE_CACHE_TTL_S:
+            return hit[1]
+    import bson
+    import zlib
+
+    parts = list(get_db().seo_audit_archives.find({"audit_id": audit_id, "kind": kind}, {"data": 1}).sort("part", 1))
+    if not parts:
+        return None
+    rows: list[dict[str, Any]] = []
+    for p in parts:
+        rows.extend(bson.decode(zlib.decompress(bytes(p["data"])))["rows"])
+    with _seo_archive_cache_lock:
+        _seo_archive_cache[key] = (now, rows)
+        while len(_seo_archive_cache) > _SEO_ARCHIVE_CACHE_MAX:
+            _seo_archive_cache.pop(min(_seo_archive_cache, key=lambda k: _seo_archive_cache[k][0]))
+    return rows
+
+
+def _seo_rows(kind: str, audit_id: str) -> list[dict[str, Any]] | None:
+    """Python-side rows for an audit: the JSON backend, or an archived Mongo audit.
+    None means "live Mongo rows -- query the collection". Callers must not mutate the list."""
+    aid = (audit_id or "").strip()
+    if _storage_mode != "mongo":
+        return [
+            x for x in _load_json_list(f"{_SEO_ROW_COLLECTIONS[kind]}.json")
+            if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid
+        ]
+    return _seo_archive_rows(aid, kind) if aid else None
+
+
+def archive_seo_audit(audit_id: str) -> dict[str, int]:
+    """Pack one audit's url/link/issue rows into compressed chunks, verify, then drop the
+    raw rows. Idempotent: an interrupted run is redone from the raw rows next time."""
+    import bson
+    import zlib
+
+    aid = (audit_id or "").strip()
+    db = get_db()
+    stats: dict[str, int] = {}
+    for kind, col in _SEO_ROW_COLLECTIONS.items():
+        raw_count = db[col].count_documents({"audit_id": aid})
+        if raw_count == 0:
+            continue  # nothing raw left (already archived, or an empty crawl)
+        db.seo_audit_archives.delete_many({"audit_id": aid, "kind": kind})
+        part, archived, buf, size = 0, 0, [], 0
+        docs = []
+
+        def flush() -> None:
+            nonlocal part, archived, buf, size
+            if not buf:
+                return
+            blob = zlib.compress(bson.encode({"rows": buf}), 6)
+            docs.append({"_id": f"{aid}:{kind}:{part}", "audit_id": aid, "kind": kind, "part": part, "count": len(buf), "data": bson.Binary(blob)})
+            size += len(blob)
+            archived += len(buf)
+            part += 1
+            buf = []
+
+        for d in db[col].find({"audit_id": aid}, {"_id": 0}).batch_size(500):
+            buf.append(d)
+            if len(buf) >= _SEO_ARCHIVE_CHUNK_ROWS:
+                flush()
+        flush()
+        if archived != raw_count:
+            raise RuntimeError(f"archive {aid}/{kind}: read {archived} of {raw_count} rows; raw rows kept")
+        db.seo_audit_archives.insert_many(docs, ordered=True)
+        stored = sum(int(p.get("count") or 0) for p in db.seo_audit_archives.find({"audit_id": aid, "kind": kind}, {"count": 1}))
+        if stored != raw_count:
+            raise RuntimeError(f"archive {aid}/{kind}: stored {stored} of {raw_count} rows; raw rows kept")
+        db[col].delete_many({"audit_id": aid})
+        stats[kind] = raw_count
+        stats[f"{kind}_compressed_bytes"] = size
+    db.seo_audits.update_one({"_id": aid}, {"$set": {"archived_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")}})
+    with _seo_archive_cache_lock:
+        for kind in _SEO_ROW_COLLECTIONS:
+            _seo_archive_cache.pop((aid, kind), None)
+    return stats
+
+
+_SEO_TERMINAL_STATUSES = ("completed", "partial", "cancelled", "failed")
+
+
+def archive_old_seo_audits(project_id: str | None = None, *, keep_latest: int = 1) -> list[str]:
+    """Archive every finished audit except each project's newest `keep_latest` (the one users
+    open most, and the one the next incremental crawl builds on). Returns archived ids."""
+    if _storage_mode != "mongo":
+        return []
+    db = get_db()
+    q: dict[str, Any] = {"project_id": project_id} if project_id else {}
+    by_project: dict[str, list[dict[str, Any]]] = {}
+    for a in db.seo_audits.find(q, {"_id": 1, "project_id": 1, "status": 1, "started_at": 1, "archived_at": 1}):
+        by_project.setdefault(a.get("project_id") or "", []).append(a)
+    done: list[str] = []
+    for audits in by_project.values():
+        audits.sort(key=lambda a: str(a.get("started_at") or ""), reverse=True)
+        for a in audits[max(0, keep_latest):]:
+            if a.get("archived_at") or a.get("status") not in _SEO_TERMINAL_STATUSES:
+                continue
+            try:
+                archive_seo_audit(str(a["_id"]))
+                done.append(str(a["_id"]))
+            except Exception:
+                _log.warning("SEO audit archive failed for %s", a.get("_id"), exc_info=True)
+    return done
+
+
 def create_seo_audit(audit: dict[str, Any]) -> None:
     """Insert a new SEO Audit run. Caller sets `id`/`project_id`/`status` (typically "queued")."""
     a = dict(audit or {})
@@ -4737,15 +4878,15 @@ def load_seo_audit_urls_page(
     idf = (indexability_filter or "").strip()
     sort_field = sort if sort in ("crawl_depth", "status_code", "response_time_ms", "word_count", "url") else "crawl_depth"
 
-    if _storage_mode != "mongo":
-        rows = [x for x in _load_json_list("seo_audit_urls.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid]
+    rows = _seo_rows("urls", aid)
+    if rows is not None:
         if qs:
             rows = [r for r in rows if qs in str(r.get("url") or "").lower() or qs in str(r.get("title") or "").lower()]
         if sf:
             rows = [r for r in rows if str(r.get("status_code") or "") == sf]
         if idf:
             rows = [r for r in rows if (r.get("indexability") or "") == idf]
-        rows.sort(key=lambda r: (r.get(sort_field) if r.get(sort_field) is not None else 0, str(r.get("url") or "")))
+        rows = sorted(rows, key=lambda r: (r.get(sort_field) if r.get(sort_field) is not None else 0, str(r.get("url") or "")))
         return {"items": rows[skip : skip + pp], "total": len(rows)}
 
     match: dict[str, Any] = {"audit_id": aid}
@@ -4760,19 +4901,20 @@ def load_seo_audit_urls_page(
         match["indexability"] = idf
     db = get_db()
     total = int(db.seo_audit_urls.count_documents(match))
-    cur = db.seo_audit_urls.find(match, {"_id": 0}).sort(sort_field, 1).skip(skip).limit(pp)
+    # url as tie-breaker: without it equal crawl_depth rows shuffle between pages.
+    cur = db.seo_audit_urls.find(match, {"_id": 0}).sort([(sort_field, 1), ("url", 1)]).skip(skip).limit(pp)
     return {"items": [dict(d) for d in cur], "total": total}
 
 
-def load_seo_audit_url_by_id(url_id: str) -> dict[str, Any] | None:
+def load_seo_audit_url_by_id(url_id: str, audit_id: str | None = None) -> dict[str, Any] | None:
     uid = (url_id or "").strip()
     if not uid:
         return None
-    if _storage_mode != "mongo":
-        for r in _load_json_list("seo_audit_urls.json"):
-            if isinstance(r, dict) and (r.get("id") or "").strip() == uid:
-                return r
-        return None
+    rows = _seo_rows("urls", audit_id) if audit_id else None
+    if rows is None and _storage_mode != "mongo":
+        rows = [r for r in _load_json_list("seo_audit_urls.json") if isinstance(r, dict)]
+    if rows is not None:
+        return next((r for r in rows if (r.get("id") or "").strip() == uid), None)
     doc = get_db().seo_audit_urls.find_one({"_id": uid}, {"_id": 0})
     return dict(doc) if isinstance(doc, dict) else None
 
@@ -4798,10 +4940,11 @@ def aggregate_seo_audit_inlink_counts(audit_id: str) -> dict[str, int]:
     aid = (audit_id or "").strip()
     if not aid:
         return {}
-    if _storage_mode != "mongo":
+    rows = _seo_rows("links", aid)
+    if rows is not None:
         counts: dict[str, int] = {}
-        for r in _load_json_list("seo_audit_links.json"):
-            if isinstance(r, dict) and (r.get("audit_id") or "").strip() == aid and r.get("type") == "anchor":
+        for r in rows:
+            if r.get("type") == "anchor":
                 t = (r.get("target_url") or "").strip()
                 if t:
                     counts[t] = counts.get(t, 0) + 1
@@ -4819,9 +4962,9 @@ def load_seo_audit_inlinks_for_url(audit_id: str, target_url: str, limit: int = 
     if not aid or not tu:
         return []
     lim = max(1, min(int(limit or 200), 1000))
-    if _storage_mode != "mongo":
-        rows = [x for x in _load_json_list("seo_audit_links.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid and (x.get("target_url") or "").strip() == tu]
-        return rows[:lim]
+    rows = _seo_rows("links", aid)
+    if rows is not None:
+        return [x for x in rows if (x.get("target_url") or "").strip() == tu][:lim]
     cur = get_db().seo_audit_links.find({"audit_id": aid, "target_url": tu}, {"_id": 0}).limit(lim)
     return [dict(d) for d in cur]
 
@@ -4832,9 +4975,9 @@ def load_seo_audit_outlinks_for_url(audit_id: str, source_url_id: str, limit: in
     if not aid or not sid:
         return []
     lim = max(1, min(int(limit or 200), 1000))
-    if _storage_mode != "mongo":
-        rows = [x for x in _load_json_list("seo_audit_links.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid and (x.get("source_url_id") or "").strip() == sid]
-        return rows[:lim]
+    rows = _seo_rows("links", aid)
+    if rows is not None:
+        return [x for x in rows if (x.get("source_url_id") or "").strip() == sid][:lim]
     cur = get_db().seo_audit_links.find({"audit_id": aid, "source_url_id": sid}, {"_id": 0}).limit(lim)
     return [dict(d) for d in cur]
 
@@ -4851,8 +4994,9 @@ def load_all_seo_audit_links(audit_id: str, *, batch_size: int = 50, on_progress
     aid = (audit_id or "").strip()
     if not aid:
         return []
-    if _storage_mode != "mongo":
-        return [x for x in _load_json_list("seo_audit_links.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid]
+    rows = _seo_rows("links", aid)
+    if rows is not None:
+        return list(rows)
     bs = max(1, min(int(batch_size or 50), 200))
     cur = get_db().seo_audit_links.find({"audit_id": aid}, {"_id": 0}).batch_size(bs)
     out: list[dict[str, Any]] = []
@@ -4890,8 +5034,8 @@ def load_seo_audit_issues(audit_id: str, *, severity: str | None = None, rule_id
     lim = max(1, min(int(limit or 500), 5000))
     sev = (severity or "").strip()
     rid = (rule_id or "").strip()
-    if _storage_mode != "mongo":
-        rows = [x for x in _load_json_list("seo_audit_issues.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid]
+    rows = _seo_rows("issues", aid)
+    if rows is not None:
         if sev:
             rows = [r for r in rows if (r.get("severity") or "") == sev]
         if rid:
@@ -4911,11 +5055,10 @@ def aggregate_seo_audit_issue_groups(audit_id: str) -> list[dict[str, Any]]:
     aid = (audit_id or "").strip()
     if not aid:
         return []
-    if _storage_mode != "mongo":
+    rows = _seo_rows("issues", aid)
+    if rows is not None:
         groups: dict[str, dict[str, Any]] = {}
-        for r in _load_json_list("seo_audit_issues.json"):
-            if not isinstance(r, dict) or (r.get("audit_id") or "").strip() != aid:
-                continue
+        for r in rows:
             rid = (r.get("rule_id") or "").strip()
             if not rid:
                 continue
@@ -4953,8 +5096,9 @@ def load_all_seo_audit_urls(audit_id: str, *, batch_size: int = 50, on_progress:
     aid = (audit_id or "").strip()
     if not aid:
         return []
-    if _storage_mode != "mongo":
-        return [x for x in _load_json_list("seo_audit_urls.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid]
+    rows = _seo_rows("urls", aid)
+    if rows is not None:
+        return list(rows)
     bs = max(1, min(int(batch_size or 50), 200))
     cur = get_db().seo_audit_urls.find({"audit_id": aid}, {"_id": 0}).batch_size(bs)
     out: list[dict[str, Any]] = []
@@ -4974,9 +5118,9 @@ def load_recent_seo_audit_urls(audit_id: str, limit: int = 20) -> list[dict[str,
     if not aid:
         return []
     lim = max(1, min(int(limit or 20), 100))
-    if _storage_mode != "mongo":
-        rows = [x for x in _load_json_list("seo_audit_urls.json") if isinstance(x, dict) and (x.get("audit_id") or "").strip() == aid]
-        rows.sort(key=lambda r: str(r.get("fetched_at") or ""), reverse=True)
+    rows = _seo_rows("urls", aid)
+    if rows is not None:
+        rows = sorted(rows, key=lambda r: str(r.get("fetched_at") or ""), reverse=True)
         return rows[:lim]
     cur = get_db().seo_audit_urls.find({"audit_id": aid}, {"_id": 0}).sort("fetched_at", -1).limit(lim)
     return [dict(d) for d in cur]
@@ -6164,22 +6308,6 @@ def project_ids_for_owner(user_id: str) -> list[str]:
     return out
 
 
-def save_projects_replace_all(projects: list[dict[str, Any]]) -> None:
-    """Replace all projects (import/backup only). Deletes all articles first."""
-    _invalidate_project_access_cache()
-    with _db_write_lock:
-        db = get_db()
-        db.articles.delete_many({})
-        db.projects.delete_many({})
-        if not projects:
-            return
-        docs = []
-        for p in projects:
-            norm = _encrypt_project_secrets(_normalize_project_dict(p))
-            docs.append({**norm, "_id": norm["id"]})
-        res = db.projects.insert_many(docs)
-        if not res.acknowledged or len(res.inserted_ids) != len(docs):
-            raise RuntimeError("MongoDB save_projects_replace_all insert was not fully acknowledged")
 
 
 def insert_project(project: dict[str, Any]) -> None:
@@ -6341,9 +6469,35 @@ def delete_project_and_resources(project_id: str) -> bool:
         db = get_db()
         db.articles.delete_many({"project_id": project_id})
         db.scheduled_jobs.delete_many({"project_id": project_id})
+        # Every other project-scoped collection: previously left behind as orphans (members
+        # kept seeing a deleted project; crawl data grew forever).
+        audit_ids = [d["_id"] for d in db.seo_audits.find({"project_id": project_id}, {"_id": 1})]
+        if audit_ids:
+            for col in ("seo_audit_urls", "seo_audit_links", "seo_audit_issues", "seo_audit_archives"):
+                db[col].delete_many({"audit_id": {"$in": audit_ids}})
+        for col in _PROJECT_SCOPED_COLLECTIONS:
+            db[col].delete_many({"project_id": project_id})
         db.projects.delete_one({"id": project_id})
     _invalidate_project_access_cache(project_id)
     return True
+
+
+_PROJECT_SCOPED_COLLECTIONS = (
+    "seo_audits",
+    "technical_audits",
+    "project_collaborators",
+    "project_invitations",
+    "project_activity",
+    "topic_clusters",
+    "site_maps",
+    "shopify_products",
+    "content_monitors",
+    "research_serp",
+    "research_ideas_runs",
+    "ai_citation_checks",
+    "image_prompt_tests",
+    "social_posts",
+)
 
 
 def delete_project_and_articles(project_id: str) -> bool:
@@ -6365,17 +6519,6 @@ def insert_article(article: dict[str, Any]) -> None:
             raise RuntimeError("MongoDB insert_article was not acknowledged")
 
 
-def insert_articles_batch(articles: list[dict[str, Any]]) -> None:
-    if not articles:
-        return
-    docs = []
-    for a in articles:
-        norm = _normalize_article_dict(a)
-        docs.append({**norm, "_id": norm["id"]})
-    with _db_write_lock:
-        res = get_db().articles.insert_many(docs)
-        if not res.acknowledged or len(res.inserted_ids) != len(docs):
-            raise RuntimeError("MongoDB insert_articles_batch was not fully acknowledged")
 
 
 def update_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
@@ -6398,7 +6541,11 @@ def update_article_fields(article_id: str, updates: dict[str, Any]) -> bool:
         doc = db.articles.find_one({"id": article_id})
         if not doc:
             return False
-        d = _mongo_doc_to_article(doc)
+        # Base on the raw document: _mongo_doc_to_article is a narrower API read shape, and
+        # replacing from it alone silently reset ~26 fields (sync_status, topic_cluster_id,
+        # featured_image_regeneration_count, shopify_scheduled_at, ...) on every update.
+        raw = {k: v for k, v in doc.items() if k != "_id"}
+        d = {**raw, **_mongo_doc_to_article(doc)}
         _apply_article_updates_dict(d, u2)
         norm = _normalize_article_dict(d)
         new_doc = {**norm, "_id": norm["id"]}
@@ -6859,27 +7006,6 @@ def list_content_monitors_for_project(project_id: str, *, status: str | None = N
     return list(cur)
 
 
-def list_due_content_monitors(*, before_iso: str, limit: int = 200) -> list[dict[str, Any]]:
-    """Used by the scheduler sweep: returns monitors whose ``next_check_at`` <= ``before_iso``."""
-    cutoff = (before_iso or "").strip()
-    if not cutoff:
-        return []
-    lim = max(1, min(int(limit or 200), 1000))
-    if _storage_mode != "mongo":
-        rows = [
-            r
-            for r in _load_json_list("content_monitors.json")
-            if (r.get("next_check_at") or "") and r["next_check_at"] <= cutoff
-        ]
-        rows.sort(key=lambda r: r.get("next_check_at") or "")
-        return rows[:lim]
-    cur = (
-        get_db()
-        .content_monitors.find({"next_check_at": {"$lte": cutoff}}, {"_id": 0})
-        .sort("next_check_at", 1)
-        .limit(lim)
-    )
-    return list(cur)
 
 
 # ---------------------------------------------------------------------------
