@@ -135,6 +135,7 @@
 .projectInfo {
   flex: 1;
   min-width: 0;
+  max-width: 100%; /* column layout on phones sizes this to the nowrap URL otherwise */
 }
 
 .projectName {
@@ -144,6 +145,7 @@
   color: var(--aa-on-dark, #faf9f5);
   margin: 0 0 4px;
   line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .projectUrl {
@@ -255,6 +257,7 @@
 }
 
 .modal {
+  max-height: 100%; overflow-y: auto; overscroll-behavior: contain;
   background: var(--aa-void-elevated, #121214);
   border: 1px solid var(--aa-hairline);
   border-radius: var(--aa-r-lg, 12px);

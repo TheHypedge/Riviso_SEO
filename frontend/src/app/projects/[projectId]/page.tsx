@@ -11294,10 +11294,10 @@ export default function ProjectPage() {
 
               {quoraMsg ? <div className={styles.error} style={{ marginTop: 10 }}>{quoraMsg}</div> : null}
 
-              <div style={{ marginTop: 14, display: "flex", gap: 8 }}>
+              <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 8 }}>
                 <input
                   className={styles.input}
-                  style={{ flex: 1 }}
+                  style={{ flex: "1 1 180px", minWidth: 0 }}
                   placeholder="Keywords, comma-separated (e.g. technical seo, crawl budget)"
                   value={quoraKeywordsInput}
                   onChange={(e) => setQuoraKeywordsInput(e.target.value)}

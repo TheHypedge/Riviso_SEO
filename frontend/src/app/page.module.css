@@ -961,6 +961,10 @@
   padding: 16px;
   z-index: var(--z-modal);
   box-shadow: 0 18px 60px rgba(20, 20, 19, 0.14);
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .bulkPopupCompact {
@@ -1013,7 +1017,7 @@
 .bulkPopupScheduleLayout {
   width: min(600px, calc(100% - 24px));
   padding: 16px 18px 14px;
-  max-height: min(92vh, 840px);
+  max-height: min(calc(100dvh - 24px), 840px);
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -1026,7 +1030,9 @@
   display: flex;
   flex-direction: column;
   gap: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding-top: 4px;
 }
 
@@ -1634,7 +1640,7 @@
   .bulkPopupScheduleLayout {
     padding: 14px 14px 12px;
     width: calc(100% - 16px);
-    max-height: min(94vh, 900px);
+    max-height: calc(100dvh - 16px);
   }
   .bulkScheduleArticleList {
     min-height: 160px;
@@ -8795,14 +8801,14 @@
 .twoCol {
   width: 100%;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
 }
 
 @media (max-width: 980px) {
   .twoCol {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -8851,6 +8857,14 @@
   z-index: var(--z-modal-bg);
 }
 
+/* Nested pattern (<backdrop><panel/></backdrop>): the backdrop's z-index is the
+   stacking context for its panel, so at --z-modal-bg the whole dialog rendered
+   *under* any sibling-pattern panel already open (e.g. "Website not connected"
+   hidden behind the bulk-actions popup). Lift the whole stack to the modal layer. */
+.modalBackdrop:has(> .modalPanel) {
+  z-index: var(--z-modal);
+}
+
 /* Shell for ~20 modals in the project workspace -- was the one modal in the
  * app still keyed to the base --background/--button-secondary-border alias
  * layer instead of --aa-* directly, and the only one using a raw 18px
@@ -8875,6 +8889,12 @@
   padding: 16px;
   z-index: var(--z-modal);
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  /* Tall content (guided prompt form, add-project, cluster prompts) must scroll inside
+     the panel -- a translate(-50%,-50%) box taller than the screen is clipped at both ends. */
+  max-height: calc(100vh - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .modalHead {
@@ -10816,7 +10836,7 @@ a.secondary {
   border: 1px solid rgba(255,255,255,0.10);
   border-radius: 14px;
   width: min(580px, calc(100% - 24px));
-  max-height: 85vh;
+  max-height: min(85vh, calc(100dvh - 24px));
   display: flex;
   flex-direction: column;
   z-index: var(--z-modal);
@@ -10856,6 +10876,7 @@ a.secondary {
 .syncReportClose:hover { background: rgba(255,255,255,0.06); color: var(--aa-on-dark); }
 
 .syncReportBody {
+  min-height: 0;
   padding: 16px 24px 0;
   overflow-y: auto;
   flex: 1;
@@ -11049,6 +11070,7 @@ a.secondary {
 .syncDrawerClose:hover { background: rgba(255,255,255,0.06); color: var(--aa-on-dark); }
 
 .syncDrawerBody {
+  min-height: 0;
   flex: 1;
   overflow-y: auto;
   padding: 16px 20px;
@@ -11882,6 +11904,7 @@ a.secondary {
 }
 .siteAuditDialogHead .btnSecondary { height: 36px; padding: 0 14px; font-size: 13px; }
 .siteAuditDialogBody {
+  flex: 1 1 auto; min-height: 0;
   padding: var(--aa-s-lg);
   overflow-y: auto;
   display: flex;
@@ -11907,7 +11930,7 @@ a.secondary {
     top: auto;
     left: 0;
     width: 100%;
-    max-height: 92vh;
+    max-height: min(92vh, calc(100dvh - 12px));
     border-left: none;
     border-top: 1px solid var(--aa-hairline);
     border-radius: var(--aa-r-lg) var(--aa-r-lg) 0 0;

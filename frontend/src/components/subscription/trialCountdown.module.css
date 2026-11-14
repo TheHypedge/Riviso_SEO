@@ -227,6 +227,7 @@
 }
 
 .welcomeCard {
+  max-height: 100%; overflow-y: auto; overscroll-behavior: contain;
   width: min(560px, 100%);
   border-radius: 16px;
   padding: 32px;
@@ -368,6 +369,7 @@
 }
 
 .featureCard {
+  max-height: 100%; overflow-y: auto; overscroll-behavior: contain;
   width: min(480px, 100%);
   border-radius: 16px;
   padding: 28px;
@@ -443,6 +445,7 @@
 }
 
 .upgradeCard {
+  max-height: 100%; overflow-y: auto; overscroll-behavior: contain;
   width: min(480px, 100%);
   border-radius: 16px;
   padding: 32px;

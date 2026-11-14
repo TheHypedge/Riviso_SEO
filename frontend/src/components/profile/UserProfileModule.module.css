@@ -544,6 +544,7 @@
 }
 
 .modal {
+  max-height: 100%;
   width: 100%;
   max-width: 460px;
   border-radius: var(--aa-r-lg, 12px);
@@ -586,6 +587,7 @@
 .modalClose:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .modalBody {
+  overflow-y: auto; min-height: 0;
   padding: 20px 24px;
   display: flex;
   flex-direction: column;

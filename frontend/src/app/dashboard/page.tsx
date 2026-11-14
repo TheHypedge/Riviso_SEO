@@ -1555,13 +1555,15 @@ export default function DashboardPage() {
 
                 {/* Leave confirmation modal */}
                 {showUsersLeaveModal ? (
-                  <div className={styles.modalOverlay} role="dialog" aria-modal="true" aria-labelledby="users-leave-title" aria-describedby="users-leave-desc">
-                    <div className={styles.modal} ref={usersLeaveModalTrapRef}>
+                  <>
+                  <div className={styles.modalBackdrop} aria-hidden="true" />
+                  <div className={styles.modalPanel} role="dialog" aria-modal="true" aria-labelledby="users-leave-title" aria-describedby="users-leave-desc" style={{ maxWidth: 440 }}>
+                    <div ref={usersLeaveModalTrapRef}>
                       <h2 id="users-leave-title" className={styles.modalTitle}>Unsaved changes</h2>
-                      <p id="users-leave-desc" className={styles.modalBody} style={{ color: "var(--aa-ink)" }}>
+                      <p id="users-leave-desc" style={{ color: "var(--aa-ink)", margin: "12px 0 0" }}>
                         You have {usersDirtyCount} unsaved {usersDirtyCount === 1 ? "change" : "changes"}. Leaving this page will discard all modifications.
                       </p>
-                      <div className={styles.modalActions}>
+                      <div className={styles.modalFooter}>
                         <button
                           type="button"
                           className={styles.button}
@@ -1585,6 +1587,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
                   </div>
+                  </>
                 ) : null}
               </>
             ) : null}
