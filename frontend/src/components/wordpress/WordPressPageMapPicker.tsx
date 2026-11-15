@@ -31,22 +31,22 @@ export function WordPressPageMapPicker({
 }: Props) {
   const rows = entries.filter((e) => (e.post_url || "").trim() && (e.post_title || "").trim());
 
-  if (!internalLinkAwareEnabled) {
-    return (
-      <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5, margin: "12px 0 0" }}>
-        Turn on <strong>Internal-link aware articles</strong> in Project Settings to weave synced WordPress post
-        links and optional featured-image references into generated content.
-      </p>
-    );
-  }
-
+  // Pages picked here are always honoured by the backend (explicit mapped_pages); the
+  // project's "Internal-link aware" switch only controls *automatic* selection when
+  // nothing is picked -- so it must never hide or disable this list.
   return (
     <div style={{ marginTop: compact ? 8 : 14, display: "grid", gap: 10 }}>
       <div>
-        <div style={{ fontWeight: 800, fontSize: 13, color: "rgba(255,255,255,0.92)" }}>Map site pages</div>
+        <div style={{ fontWeight: 800, fontSize: 13, color: "var(--aa-ink)" }}>Map site pages</div>
         <p className={styles.muted} style={{ margin: "6px 0 0", fontSize: 12, lineHeight: 1.5 }}>
           Select up to {maxItems} published posts from your synced site map. Riviso adds natural internal links and
           uses the first page&apos;s featured image as a style reference for the hero image when available.
+          {!internalLinkAwareEnabled ? (
+            <>
+              {" "}Pick pages here, or turn on <strong>Internal-link aware articles</strong> in Project Settings to have
+              Riviso pick them automatically.
+            </>
+          ) : null}
         </p>
       </div>
 
@@ -73,7 +73,7 @@ export function WordPressPageMapPicker({
                     borderRadius: 10,
                     border: checked
                       ? "1px solid color-mix(in oklab, var(--aa-accent, #d97757), transparent 35%)"
-                      : "1px solid rgba(255,255,255,0.10)",
+                      : "1px solid var(--aa-hairline)",
                     background: checked ? "color-mix(in oklab, var(--aa-accent, #d97757) 8%, transparent)" : "transparent",
                     cursor: "pointer",
                   }}
@@ -85,7 +85,7 @@ export function WordPressPageMapPicker({
                     style={{ marginTop: 3 }}
                   />
                   <span style={{ display: "grid", gap: 4, minWidth: 0 }}>
-                    <span style={{ fontWeight: 700, fontSize: 13, color: "rgba(255,255,255,0.92)" }}>{mapped.title}</span>
+                    <span style={{ fontWeight: 700, fontSize: 13, color: "var(--aa-ink)" }}>{mapped.title}</span>
                     <span className={styles.muted} style={{ fontSize: 11, wordBreak: "break-all" }}>
                       {mapped.post_url}
                     </span>

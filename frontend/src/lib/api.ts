@@ -2738,13 +2738,18 @@ export const api = {
       skipGlobalLoading: true,
       ...fetchOpts,
     });
-    cacheSetInflight(_cacheProjectSettings, key, p);
+    // A promise bound to the caller's AbortSignal must not be shared: when that caller
+    // unmounts (article → article navigation, React strict-mode re-run) it aborts, and
+    // the next caller would await the aborted request and never get settings -- the
+    // editor then treated the project as "not connected" and blocked Generate.
+    const shared = !fetchOpts.signal;
+    if (shared) cacheSetInflight(_cacheProjectSettings, key, p);
     try {
       const v = await p;
       cacheSetValue(_cacheProjectSettings, key, v);
       return v;
     } catch (e) {
-      _cacheProjectSettings.delete(key);
+      if (shared) _cacheProjectSettings.delete(key);
       throw e;
     }
   },

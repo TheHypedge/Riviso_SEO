@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "../../page.module.css";
 import { formatDayMonYearTime } from "@/lib/dateFormat";
 import InnerImageCountField from "@/components/InnerImageCountField";
+import BulkGenerateModal, { type BulkGenerateValues } from "@/components/BulkGenerateModal";
 import projectsDark from "../projectsDark.module.css";
 import { CategoryMultiSelect } from "@/components/wordpress/CategoryMultiSelect";
 import { ArticlesOverview } from "@/components/ArticlesOverview";
@@ -1027,6 +1028,11 @@ export default function ProjectPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showBulkPopup, setShowBulkPopup] = useState(false);
+  // Articles tab → Actions → Generate articles (also "Add & generate" in Add article).
+  const [bulkGenerateIds, setBulkGenerateIds] = useState<string[] | null>(null);
+  const [bulkGenerateBusy, setBulkGenerateBusy] = useState(false);
+  const [bulkGenerateError, setBulkGenerateError] = useState<string | null>(null);
+  const [bulkGenerateSiteMapLoading, setBulkGenerateSiteMapLoading] = useState(false);
   const [showAddArticle, setShowAddArticle] = useState(false);
   const [showExportArticles, setShowExportArticles] = useState(false);
   const [exportFrom, setExportFrom] = useState("");
@@ -3288,7 +3294,7 @@ export default function ProjectPage() {
       .filter(Boolean);
   }
 
-  async function createArticle() {
+  async function createArticle(): Promise<string | null> {
     setError(null);
     setAddArticleDupModal(null);
 
@@ -3306,7 +3312,7 @@ export default function ProjectPage() {
     }
     if (keywords.length > 10) {
       setError(`Too many keywords (${keywords.length}) — combine primary and supporting keywords to 10 or fewer.`);
-      return;
+      return null;
     }
 
     setCreating(true);
@@ -3325,6 +3331,7 @@ export default function ProjectPage() {
       setAddArticlePrimaryKeywords("");
       setAddArticleSupportingKeywords("");
       setShowAddArticle(false);
+      return a.id;
     } catch (e) {
       if (e instanceof ApiError && e.status === 409 && e.detail && typeof e.detail === "object" && e.detail !== null) {
         const d = e.detail as Record<string, unknown>;
@@ -3340,9 +3347,10 @@ export default function ProjectPage() {
               }))
           : [];
         setAddArticleDupModal({ message: msg, duplicates });
-        return;
+        return null;
       }
       setError(e instanceof Error ? e.message : "Failed to create article");
+      return null;
     } finally {
       setCreating(false);
     }
@@ -4113,6 +4121,112 @@ export default function ProjectPage() {
   }
 
 
+
+  /** Open the generate-options popup for these article ids (prompts, inner images, category, mapping). */
+  async function openBulkGenerate(ids: string[]) {
+    if (!ids.length) return;
+    setBulkGenerateError(null);
+    setShowBulkPopup(false);
+    setBulkMode("root");
+    await ensureScheduleMetaLoaded();
+    if (isShopifyProject) {
+      void loadShopifyCatalogIfNeeded();
+    } else if (!siteMap) {
+      setBulkGenerateSiteMapLoading(true);
+      void api
+        .siteMapList(projectId)
+        .then((r) => setSiteMap(r))
+        .catch(() => {
+          /* picker shows its empty state */
+        })
+        .finally(() => setBulkGenerateSiteMapLoading(false));
+    }
+    setBulkGenerateIds(ids);
+  }
+
+  function bulkGenerate() {
+    // In-flight or already-live rows would just be overwritten or rejected -- only
+    // offer the ones that still need content (same rule as bulk schedule).
+    const ids = selectedIds.filter((id) => {
+      const st = (selectedMeta[id]?.status || "").toLowerCase();
+      return !["published", "scheduled", "queued", "generating"].includes(st);
+    });
+    if (!ids.length) {
+      setError("All selected articles are already published, scheduled or generating — nothing to generate.");
+      setShowBulkPopup(false);
+      return;
+    }
+    void openBulkGenerate(ids);
+  }
+
+  async function bulkGenerateSubmit(values: BulkGenerateValues) {
+    const ids = bulkGenerateIds || [];
+    if (!ids.length || bulkGenerateBusy) return;
+    // Generating never needs a connected site; publishing straight away does.
+    if (!isShopifyProject && values.wpStatus === "publish" && !websiteConnected) {
+      setBulkGenerateError("Connect and verify WordPress in Project Settings to publish on generate, or choose Draft.");
+      return;
+    }
+    setBulkGenerateBusy(true);
+    setBulkGenerateError(null);
+    try {
+      const q = await api.articleQuota(projectId, { fresh: true }).catch(() => null);
+      if (q && !q.unlimited && (q.max_can_consume_now ?? 0) < ids.length) {
+        setBulkGenerateError(
+          `Your plan allows ${q.max_can_consume_now ?? 0} more generation${(q.max_can_consume_now ?? 0) === 1 ? "" : "s"} right now, but ${ids.length} article${ids.length === 1 ? " is" : "s are"} selected.`,
+        );
+        return;
+      }
+      // Category is an article field, not a generate option: store it first so the
+      // publish step (immediate or scheduled later) picks it up.
+      if (values.categoryIds.length) {
+        const catRes = await Promise.allSettled(
+          ids.map((id) => api.updateArticle(projectId, id, { category_ids: values.categoryIds }, { skipGlobalLoading: true })),
+        );
+        const catFail = catRes.find((r) => r.status === "rejected") as PromiseRejectedResult | undefined;
+        if (catFail) {
+          throw catFail.reason instanceof Error ? catFail.reason : new Error("Could not set the category");
+        }
+      }
+      const results = await Promise.allSettled(
+        ids.map((id) =>
+          api.generateArticle(
+            projectId,
+            id,
+            {
+              writing_prompt_id: values.writingPromptId || null,
+              image_prompt_id: values.imagePromptId || null,
+              generate_image: values.generateImage,
+              inner_image_count: values.innerImageCount,
+              post_type: isShopifyProject ? null : values.postType || null,
+              wp_status: isShopifyProject ? null : values.wpStatus,
+              mapped_products: isShopifyProject && values.mappedProducts.length ? values.mappedProducts : undefined,
+              mapped_pages: !isShopifyProject && values.mappedPages.length ? values.mappedPages : undefined,
+            },
+            { skipGlobalLoading: true, noWait: true },
+          ),
+        ),
+      );
+      const failed = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+      const queued = ids.length - failed.length;
+      void refreshArticleQuota();
+      void refreshArticlesList();
+      if (failed.length) {
+        const first = failed[0].reason;
+        setBulkGenerateError(
+          `${queued} of ${ids.length} queued. ${failed.length} failed: ${first instanceof Error ? first.message : "Generation failed"}`,
+        );
+        return;
+      }
+      setToast({ message: `${queued} article${queued === 1 ? "" : "s"} queued for generation`, tone: "success" });
+      setSelected({});
+      setBulkGenerateIds(null);
+    } catch (e) {
+      setBulkGenerateError(buildErrorModalFromApiError(e, "Generation failed").message);
+    } finally {
+      setBulkGenerateBusy(false);
+    }
+  }
 
   function bulkSchedule() {
     if (!selectedIds.length) return;
@@ -6761,6 +6875,16 @@ export default function ProjectPage() {
                           <span className={styles.bulkActionHint}>Opens the editor for one article</span>
                         </span>
                       </button>
+                      <button className={styles.bulkActionItem} type="button" role="menuitem" onClick={bulkGenerate}>
+                        <span className={styles.bulkActionIcon} aria-hidden="true">
+                          <Icon.Document className={styles.icon20} />
+                        </span>
+                        <span className={styles.bulkActionText}>
+                          <span className={styles.bulkActionLabel}>Generate articles</span>
+                          <span className={styles.bulkActionHint}>Prompts, inner images, category, linked pages</span>
+                        </span>
+                        <Icon.ChevronRight className={styles.bulkActionChevron} />
+                      </button>
                       <button
                         className={styles.bulkActionItem}
                         type="button"
@@ -7586,8 +7710,19 @@ export default function ProjectPage() {
                         <button type="button" className={styles.btnSecondary} onClick={() => setShowAddArticle(false)}>
                           Cancel
                         </button>
-                        <button className={styles.button} type="button" onClick={createArticle} disabled={creating || !title.trim()}>
-                          {creating ? "Adding…" : "Add"}
+                        <button className={styles.btnSecondary} type="button" onClick={() => void createArticle()} disabled={creating || !title.trim()}>
+                          {creating ? "Adding…" : "Add as pending"}
+                        </button>
+                        <button
+                          className={styles.button}
+                          type="button"
+                          disabled={creating || !title.trim()}
+                          onClick={async () => {
+                            const id = await createArticle();
+                            if (id) void openBulkGenerate([id]);
+                          }}
+                        >
+                          Add &amp; generate…
                         </button>
                       </div>
                     </>
@@ -7639,6 +7774,29 @@ export default function ProjectPage() {
                   ) : null}
                 </div>
               </>
+            ) : null}
+
+            {bulkGenerateIds ? (
+              <BulkGenerateModal
+                count={bulkGenerateIds.length}
+                isShopify={isShopifyProject}
+                writingPrompts={scheduleWritingPrompts}
+                imagePrompts={scheduleImagePrompts}
+                wpTypes={wpTypesForSchedule}
+                cats={wpCatsForSchedule}
+                defaults={{ postType: wpDefaults?.post_type || "posts", wpStatus: wpDefaults?.wp_status || "draft" }}
+                innerImagesLeft={innerImagesLeft}
+                siteMapEntries={siteMap?.entries || []}
+                siteMapLoading={bulkGenerateSiteMapLoading}
+                internalLinkAware={Boolean(settings?.wp_internal_link_aware_enabled)}
+                shopifyProducts={shopifyCatalog?.products || []}
+                shopifyLoading={shopifyCatalogLoading}
+                shopifyScopes={shopifyCatalog?.granted_scopes || []}
+                busy={bulkGenerateBusy}
+                error={bulkGenerateError}
+                onCancel={() => setBulkGenerateIds(null)}
+                onSubmit={(v) => void bulkGenerateSubmit(v)}
+              />
             ) : null}
 
             {showMobileFilters ? (

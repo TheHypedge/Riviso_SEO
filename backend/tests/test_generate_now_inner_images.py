@@ -126,3 +126,30 @@ def test_no_inner_images_requested_skips_them(monkeypatch):
         )
     )
     assert "<img" not in [s for s in st.saves if "article" in s][0]["article"]
+
+
+def test_worker_forwards_picked_wordpress_pages(monkeypatch):
+    """Articles → Actions → Generate and the editor send mapped_pages; the queued job
+    must hand them to generation even with the project's link-aware switch off."""
+    seen = {}
+
+    async def fake_execute(**kw):
+        seen.update(kw)
+        return {}
+
+    async def same_proj(st, pid, proj):
+        return proj
+
+    monkeypatch.setattr(worker, "get_legacy_storage_module", _Storage)
+    monkeypatch.setattr(worker, "execute_article_generation", fake_execute)
+    monkeypatch.setattr(worker, "publish_pipeline_status", _noop)
+    monkeypatch.setattr(worker, "clear_dedup", _noop)
+    monkeypatch.setattr(scheduler, "_ensure_project_prompt_defaults", same_proj)
+
+    page = {"title": "Flat feet guide", "post_url": "https://blog.example.com/flat-feet"}
+    asyncio.run(worker._handle_article_generate(
+        {"project_id": "p1", "article_id": "a1", "user_id": "u1", "generate_image": False,
+         "inner_image_count": 2, "mapped_pages": [page]}
+    ))
+    assert seen["mapped_pages"] == [page]
+    assert seen["inner_image_count"] == 2

@@ -42,6 +42,7 @@ import { runWithArticlePipelineMonitor } from "@/lib/pipelineStream";
 import { ArticleGenerationProgress } from "@/components/ArticleGenerationProgress";
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
 import { WordPressPageMapPicker } from "@/components/wordpress/WordPressPageMapPicker";
+import InnerImageCountField from "@/components/InnerImageCountField";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
 import type { MappedWordPressPage } from "@/lib/wordpressPageMapping";
 import { formatShopifyBlogOptionLabel } from "@/lib/shopifyBlogLabel";
@@ -349,6 +350,16 @@ function wpIdsKey(ids: number[]): string {
   return [...ids].sort((a, b) => a - b).join(",");
 }
 
+/** WordPress status of an already-live post: what WP last reported, else "publish" for a
+ * published row. Single source for both the live-sync effect and the WP-meta baseline,
+ * so they can never disagree (that mismatch made every live article look "unsaved"). */
+function liveWpStatusOf(a: { wp_last_wp_status?: string | null; status?: string | null } | null | undefined): "draft" | "publish" | null {
+  const last = (a?.wp_last_wp_status || "").trim().toLowerCase();
+  if (last === "publish" || last === "draft") return last;
+  if ((a?.status || "").trim().toLowerCase() === "published") return "publish";
+  return null;
+}
+
 type WpMetaBaseline = { postType: string; wpStatus: "draft" | "publish"; categoryIds: string; tagIds: string };
 
 export default function ArticleEditPage() {
@@ -419,6 +430,8 @@ export default function ArticleEditPage() {
   const [writingPromptId, setWritingPromptId] = useState<string>("");
   const [imagePromptId, setImagePromptId] = useState<string>("");
   const [generateImage, setGenerateImage] = useState(true);
+  // In-body images for the next generate/regenerate (0-5); sent as inner_image_count.
+  const [innerImageCount, setInnerImageCount] = useState(0);
   // Featured image box: pencil-icon dropdown actions (Upload/Regenerate/Remove) all
   // persist immediately via their own API calls -- no staged File waiting for publish.
   const [uploadImageBusy, setUploadImageBusy] = useState(false);
@@ -1060,14 +1073,11 @@ export default function ArticleEditPage() {
   // every already-live article the moment this runs.
   useEffect(() => {
     if (!isLiveOnWordPress || !article?.id) return;
-    const last = (article.wp_last_wp_status || "").trim().toLowerCase();
-    if (last === "publish" || last === "draft") {
-      setWpStatus(last);
-      setWpMetaBaseline((prev) => (prev ? { ...prev, wpStatus: last } : prev));
-    } else if ((article.status || "").trim().toLowerCase() === "published") {
-      setWpStatus("publish");
-      setWpMetaBaseline((prev) => (prev ? { ...prev, wpStatus: "publish" } : prev));
-    }
+    const live = liveWpStatusOf(article);
+    if (!live) return;
+    setWpStatus(live);
+    setWpMetaBaseline((prev) => (prev ? { ...prev, wpStatus: live } : prev));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [article?.id, article?.status, article?.wp_last_wp_status, isLiveOnWordPress]);
 
   const needsWpMeta = isWordPressProject && websiteConnected;
@@ -1198,7 +1208,15 @@ export default function ArticleEditPage() {
         // the article has never had its own value set.
         resolvedPostType = (article?.wp_rest_base || ps.default_wp_rest_base || "posts") as string;
         setWpPostType(resolvedPostType);
-        if (!isLiveOnWordPress) {
+        if (isLiveOnWordPress) {
+          // The baseline is built after an await, so `wpStatus` above can be the stale
+          // pre-sync value -- derive the live status here instead of trusting it.
+          const live = liveWpStatusOf(article);
+          if (live) {
+            resolvedStatus = live;
+            setWpStatus(live);
+          }
+        } else {
           resolvedStatus = (article?.wp_schedule_wp_status || ps.default_wp_status || "draft") as "draft" | "publish";
           setWpStatus(resolvedStatus);
           const articleCats = (article?.wp_category_ids || "").split(",").map(Number).filter(n => Number.isFinite(n) && n > 0);
@@ -1425,6 +1443,7 @@ export default function ArticleEditPage() {
               image_prompt_id: imagePromptId || null,
               focus_keyphrase: focus || null,
               generate_image: opts?.generateImageOverride ?? generateImage,
+              inner_image_count: innerImageCount,
               mapped_products: isShopifyProject ? pickedProducts : undefined,
               mapped_pages: isWordPressProject ? pickedPages : undefined,
             },
@@ -2134,6 +2153,7 @@ export default function ArticleEditPage() {
                 <button type="button" className={styles.iconButton} aria-label="Close" onClick={() => setProductMapBeforeGenerateOpen(false)}>×</button>
               </div>
               <div className={styles.modalBody}>
+                <InnerImageCountField value={innerImageCount} onChange={setInnerImageCount} />
                 {isWordPressProject && isClusterArticle && clusterLinkContext ? (
                   <div className={editorStyles.clusterContextCard}>
                     <div className={editorStyles.clusterContextTitle}>Topic cluster · {clusterRoleLabel} article</div>
@@ -2215,6 +2235,7 @@ export default function ArticleEditPage() {
                     {(imagePrompts?.items || []).map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
                   </select>
                 </label>
+                <InnerImageCountField value={innerImageCount} onChange={setInnerImageCount} />
               </div>
               <div className={styles.modalFooter}>
                 <button className={styles.btnSecondary} type="button" onClick={() => setShowRegenConfirm(false)}>Cancel</button>
@@ -2737,10 +2758,10 @@ export default function ArticleEditPage() {
                   <>
                     <div className={editorStyles.panelSection}>
                       <h3 className={editorStyles.panelSectionTitle}>Article title</h3>
-                      <input className={editorStyles.seoInput} value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
+                      <input className={editorStyles.seoInput} aria-label="Article title" value={title} onChange={(e) => setTitle(e.target.value)} disabled={editorLocked} />
 
                       <h3 className={editorStyles.panelSectionTitle} style={{ marginTop: 14 }}>Focus keyphrase</h3>
-                      <input className={editorStyles.seoInput} value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. FM contract handover" disabled={editorLocked} />
+                      <input className={editorStyles.seoInput} aria-label="Focus keyphrase" value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="e.g. FM contract handover" disabled={editorLocked} />
 
                       <h3 className={editorStyles.panelSectionTitle} style={{ marginTop: 14 }}>Meta title</h3>
                       <input className={editorStyles.seoInput} value={metaTitle} onChange={(e) => setMetaTitle(clampChars(e.target.value, META_TITLE_MAX))} disabled={editorLocked} />
@@ -3046,6 +3067,9 @@ export default function ArticleEditPage() {
                           </label>
                         </>
                       )}
+                      {!editorLocked ? (
+                        <InnerImageCountField value={innerImageCount} onChange={setInnerImageCount} hint="0–5 images placed between sections." />
+                      ) : null}
                       <div className={editorStyles.fieldActions} style={{ borderTop: "none", paddingTop: 10, marginTop: 10 }}>
                         <button className={styles.button} type="button" onClick={() => void generate()} disabled={editorLocked}>
                           {hasGeneratedContent ? "Regenerate article" : "Generate article"}

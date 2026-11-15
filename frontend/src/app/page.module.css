@@ -7307,14 +7307,8 @@
  * Used to render the chip-style multi-selects that replaced the two free-text
  * brand/niche textareas. Every field has a clear label, generous padding, and
  * states that match the rest of the Project Settings card (light hairline
- * borders, off-white labels{
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  margin-top: 14px;
-  border-top: 1px solid var(--button-secondary-border);
-  padding-top: 14px;
-}
+ * borders, off-white labels, soft surface fill).
+ * --------------------------------------------------------------------------- */
 
 .chipOption {
   display: inline-flex;
