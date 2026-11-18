@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
+from app.services.authors import clean_shopify_authors, list_wp_authors
 from app.services.to_thread import run_sync
 from app.core.deps import get_current_user
 from app.core.ids import user_ids_equal
@@ -676,6 +677,10 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
         wp_seo_platform=(proj.get("wp_seo_platform") or "").strip() or None,
         wp_schema_supported=bool(proj.get("wp_schema_supported", False)),
         schema_markup_enabled=bool(proj.get("schema_markup_enabled", True)),
+        default_wp_author_id=int(proj["default_wp_author_id"]) if str(proj.get("default_wp_author_id") or "").isdigit() and int(proj["default_wp_author_id"]) > 0 else None,
+        default_wp_author_name=(proj.get("default_wp_author_name") or "").strip() or None,
+        shopify_authors=clean_shopify_authors(proj.get("shopify_authors")),
+        default_shopify_author=(proj.get("default_shopify_author") or "").strip() or None,
         plugin_download_url="/api/wordpress/plugin/download",
         default_wp_rest_base=def_rest,
         default_wp_status=def_status,
@@ -683,6 +688,25 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
         gsc_property_url=gsc_prop,
         gsc_index_on_publish=gsc_index,
     )
+
+
+@router.get("/projects/{project_id}/wordpress/authors")
+async def get_wordpress_authors(project_id: str, refresh: bool = False, user: dict = Depends(get_current_user)) -> dict:
+    """WordPress users who can author posts on the project's site (for every author picker).
+
+    Cached 10 min per site; ``refresh=true`` re-reads WordPress. Collaborators may read it:
+    they generate and publish content too.
+    """
+    proj = await _require_project_access(user=user, project_id=project_id, allow_collaborators=True)
+    try:
+        data = await list_wp_authors(proj, refresh=refresh)
+    except Exception as e:
+        logging.getLogger(__name__).warning("WordPress authors lookup failed for project %s: %s", project_id, e)
+        raise HTTPException(status_code=502, detail="Could not load WordPress authors. Check the WordPress connection.") from e
+    return {
+        **data,
+        "default_author_id": int(proj["default_wp_author_id"]) if str(proj.get("default_wp_author_id") or "").isdigit() else None,
+    }
 
 
 @router.patch("/projects/{project_id}/settings", response_model=ProjectSettingsPublic)
@@ -711,6 +735,9 @@ async def update_project_settings(
         new_url = _normalize_url(payload.wp_site_url)
         if new_url != _normalize_url(proj.get("wp_site_url") or proj.get("website_url") or ""):
             creds_changed = True
+            # User ids belong to one WordPress site: a different site invalidates the default author.
+            updates["default_wp_author_id"] = None
+            updates["default_wp_author_name"] = ""
         updates["wp_site_url"] = new_url
     if payload.wp_username is not None:
         new_user = payload.wp_username.strip()[:200]
@@ -803,6 +830,20 @@ async def update_project_settings(
         if url != _normalize_url(proj.get("shopify_shop") or proj.get("website_url") or ""):
             shopify_creds_changed = True
         updates["shopify_shop"] = url
+
+    if payload.default_wp_author_id is not None and "default_wp_author_id" not in updates:
+        updates["default_wp_author_id"] = payload.default_wp_author_id or None
+        updates["default_wp_author_name"] = (payload.default_wp_author_name or "").strip()[:200] if payload.default_wp_author_id else ""
+    if payload.shopify_authors is not None:
+        updates["shopify_authors"] = clean_shopify_authors(payload.shopify_authors)
+    if payload.default_shopify_author is not None:
+        names = updates.get("shopify_authors", clean_shopify_authors(proj.get("shopify_authors")))
+        want = " ".join(payload.default_shopify_author.split())
+        if want and want not in names:
+            raise HTTPException(status_code=400, detail="Default Shopify author must be one of the project's authors.")
+        updates["default_shopify_author"] = want
+    elif "shopify_authors" in updates and (proj.get("default_shopify_author") or "") not in updates["shopify_authors"]:
+        updates["default_shopify_author"] = ""  # the default was removed from the list
 
     if creds_changed:
         # Drop the stale "verified" snapshot — the next /verify call will

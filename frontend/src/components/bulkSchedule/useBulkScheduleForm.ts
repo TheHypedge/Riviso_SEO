@@ -15,7 +15,7 @@ import {
 } from "@/lib/bulkScheduleDates";
 import { buildScheduleMinDatetimeLocal, formatBulkScheduleWhenDisplay } from "@/lib/scheduleDatetime";
 import { SCHEDULE_BUFFER_MINUTES, SCHEDULE_PREP_MINUTES } from "@/lib/scheduleTiming";
-import type { PromptListResponse } from "@/lib/api";
+import type { PromptListResponse, AuthorFields } from "@/lib/api";
 import type { WordpressPostType } from "@/lib/api";
 import type { WordpressCategory } from "@/lib/api";
 
@@ -38,6 +38,8 @@ export type BulkScheduleFormValues = {
   generateImage: boolean;
   innerImageCount: number;
   categoryIds: number[];
+  /** Null = keep each article's author (else the project default). */
+  author: AuthorFields | null;
 };
 
 type UseBulkScheduleFormArgs = {
@@ -80,6 +82,7 @@ export function useBulkScheduleForm({
   const [imagePromptId, setImagePromptId] = useState("");
   const [innerImageCount, setInnerImageCount] = useState(0);
   const [categoryIds, setCategoryIds] = useState<number[]>([]);
+  const [author, setAuthor] = useState<AuthorFields | null>(null);
 
   const initFromSeeds = useCallback(
     (rows: BulkScheduleSeedRow[]) => {
@@ -240,8 +243,9 @@ export function useBulkScheduleForm({
       generateImage: true,
       innerImageCount,
       categoryIds,
+      author,
     };
-  }, [rows, mode, wpStatus, postType, writingPromptId, imagePromptId, innerImageCount, categoryIds]);
+  }, [rows, mode, wpStatus, postType, writingPromptId, imagePromptId, innerImageCount, categoryIds, author]);
 
   return {
     rows,
@@ -272,6 +276,8 @@ export function useBulkScheduleForm({
     setInnerImageCount,
     categoryIds,
     setCategoryIds,
+    author,
+    setAuthor,
     setManualWhen,
     wpTypesForSchedule,
     wpCatsForSchedule,

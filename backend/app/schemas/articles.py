@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.services.authors import AuthorChoice
+
 
 class ArticleListItem(BaseModel):
     """Minimal fields for the paginated Articles table (no body HTML or large assets)."""
@@ -25,6 +27,7 @@ class ArticleListItem(BaseModel):
     wp_link: str | None = Field(default=None, description="Live URL when published; enables indexing/monitor actions.")
     monitor_status: str | None = Field(default=None, description="Rank monitor state for refresh actions.")
     wp_category_ids: str = Field(default="", description="Comma-separated WordPress category IDs assigned to this article.")
+    author_name: str | None = Field(default=None, description="Chosen post author (WordPress user or Shopify author name).")
     sync_status: str = Field(default="unknown", description="WordPress sync health: synced | missing | draft | trashed | url_mismatch | metadata_mismatch | content_mismatch | image_missing | category_mismatch | needs_attention | unknown")
 
 
@@ -95,6 +98,11 @@ class ArticlePublic(BaseModel):
     wp_category_ids: str = Field(default="", description="Comma-separated WordPress category IDs assigned to this article.")
     wp_tag_ids: str = Field(default="", description="Comma-separated WordPress tag IDs assigned to this article.")
     source_url: str | None = Field(default=None, description="Source URL this article was drafted from (Through Source tab), for provenance display only.")
+    # Post author (app/services/authors.py). applied = the WordPress user the live post actually has.
+    wp_author_id: int | None = None
+    wp_author_name: str | None = None
+    wp_author_applied_id: int | None = None
+    shopify_author: str | None = None
 
 
 class ArticleCreate(BaseModel):
@@ -293,7 +301,7 @@ class ArticleGenerationStatusResponse(BaseModel):
     generation_error: str | None = None
 
 
-class ArticleUpdateRequest(BaseModel):
+class ArticleUpdateRequest(AuthorChoice):
     """Partial update; omitted fields are left unchanged."""
 
     title: str | None = Field(default=None, max_length=500)
@@ -350,7 +358,7 @@ class MappedWordPressPageInput(BaseModel):
         return bool(self.effective_title() and self.effective_url())
 
 
-class GenerateRequest(BaseModel):
+class GenerateRequest(AuthorChoice):
     """Options for on-demand generation (writing + optional image)."""
 
     writing_prompt_id: str | None = Field(default=None, max_length=100)
@@ -377,7 +385,7 @@ class GenerateRequest(BaseModel):
     )
 
 
-class ShopifyPublishRequest(BaseModel):
+class ShopifyPublishRequest(AuthorChoice):
     """Publish an article to Shopify Blog (draft or live publish)."""
 
     blog_id: int | None = Field(
@@ -398,7 +406,7 @@ class RegenerateImageRequest(BaseModel):
     )
 
 
-class ScheduleRequest(BaseModel):
+class ScheduleRequest(AuthorChoice):
     """WordPress scheduling and generation options."""
 
     wp_scheduled_at: str = Field(min_length=1, max_length=64, description="ISO or legacy 'YYYY-MM-DD HH:MM' string.")
@@ -423,7 +431,7 @@ class BulkScheduleItem(BaseModel):
     wp_scheduled_at: str = Field(min_length=1, max_length=64)
 
 
-class BulkScheduleRequest(BaseModel):
+class BulkScheduleRequest(AuthorChoice):
     """Schedule many articles in one request (weekly/monthly/manual bulk UI)."""
 
     items: list[BulkScheduleItem] = Field(min_length=1, max_length=500)

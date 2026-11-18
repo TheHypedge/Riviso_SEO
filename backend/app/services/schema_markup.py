@@ -124,6 +124,9 @@ def build_article_jsonld(article: dict[str, Any], project: dict[str, Any]) -> di
         "publisher": {"@type": "Organization", "name": publisher_name},
         "author": {"@type": "Organization", "name": publisher_name},
     }
+    author_name = (article.get("wp_author_name") or article.get("shopify_author") or "").strip()
+    if author_name:
+        data["author"] = {"@type": "Person", "name": author_name}
     if description:
         data["description"] = description
     if published:

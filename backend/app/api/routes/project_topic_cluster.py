@@ -15,6 +15,7 @@ import logging
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
+from app.services.authors import AuthorChoice, author_updates
 from pydantic import BaseModel, Field
 
 from app.services.to_thread import run_sync
@@ -181,7 +182,7 @@ async def get_cluster(project_id: str, cluster_id: str, user: dict = Depends(get
     return row
 
 
-class TopicClusterGenerateAllPayload(BaseModel):
+class TopicClusterGenerateAllPayload(AuthorChoice):
     generate_image: bool = Field(
         default=True,
         description="Whether to generate a featured image per article (slower).",
@@ -236,6 +237,7 @@ async def generate_all(
         "post_type": post_type_norm,
         "wp_status": wp_status_norm,
         "mapped_products": [p.model_dump() for p in body.mapped_products] if body.mapped_products else None,
+        "author": author_updates(body) or None,
     }
 
     if should_use_async_queue():
@@ -270,6 +272,7 @@ async def generate_all(
             post_type=post_type_norm,
             wp_status=wp_status_norm,
             mapped_products=gen_payload["mapped_products"],
+            author=gen_payload["author"],
         )
     except HTTPException:
         raise

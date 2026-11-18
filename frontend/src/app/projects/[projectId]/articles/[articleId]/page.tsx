@@ -44,6 +44,7 @@ import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapP
 import { WordPressPageMapPicker } from "@/components/wordpress/WordPressPageMapPicker";
 import InnerImageCountField from "@/components/InnerImageCountField";
 import ArticleQualityPanel from "@/components/ArticleQualityPanel";
+import AuthorSelect from "@/components/AuthorSelect";
 import { projectSettingsHref } from "@/lib/articlePaths";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
 import type { MappedWordPressPage } from "@/lib/wordpressPageMapping";
@@ -55,7 +56,7 @@ import { useFocusTrap } from "@/lib/useFocusTrap";
 /** LinkedIn Posts API commentary limit (backend enforces the same). */
 const LINKEDIN_MAX_CHARS = 3000;
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/DropdownMenu";
-import type { ProfilePublic, ProjectPublic } from "@/lib/api";
+import type { AuthorFields, ProfilePublic, ProjectPublic } from "@/lib/api";
 
 
 const ArticleRichEditor = dynamic(
@@ -1368,6 +1369,20 @@ export default function ArticleEditPage() {
       : clusterLinkContext?.role === "cluster"
         ? "supporting cluster"
         : "cluster";
+
+  // The author is saved on the article the moment it is picked (no Save step), so generate,
+  // auto-publish, schedule and publish all read the same choice -- and it never marks the editor dirty.
+  async function saveArticleAuthor(next: AuthorFields) {
+    const prev = article;
+    setArticle((a) => (a ? { ...a, ...next } : a));
+    try {
+      await api.updateArticle(params.projectId, params.articleId, next);
+      setNotice(`Author set to ${next.wp_author_name || next.shopify_author || "the default"}.`);
+    } catch (e) {
+      setArticle(prev);
+      setNotice(e instanceof Error ? e.message : "Could not change the author.", "danger");
+    }
+  }
 
   async function startGenerateFlow(opts?: { regenerate?: boolean; generateImageOverride?: boolean }) {
     if (isShopifyProject || isWordPressProject) {
@@ -3053,6 +3068,22 @@ export default function ArticleEditPage() {
                           )}
                         </>
                       )}
+                    </div>
+
+                    <div className={editorStyles.panelSection}>
+                      <h3 className={editorStyles.panelSectionTitle}>Author</h3>
+                      <AuthorSelect
+                        projectId={params.projectId}
+                        value={article}
+                        disabled={editorLocked}
+                        label="Publish as"
+                        onChange={(next) => void saveArticleAuthor(next)}
+                      />
+                      {article?.wp_author_id && article?.wp_author_applied_id && article.wp_author_applied_id !== article.wp_author_id ? (
+                        <p className={styles.muted} style={{ fontSize: 12, margin: "6px 0 0", lineHeight: 1.5 }}>
+                          WordPress kept a different author on the live post (the connected user may lack the Editor role). Update the post to retry.
+                        </p>
+                      ) : null}
                     </div>
 
                     <div className={editorStyles.panelSection}>

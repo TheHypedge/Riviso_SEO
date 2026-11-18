@@ -437,6 +437,39 @@ def _mongo_owner_user_id_filter(owner_user_id: str) -> dict[str, Any]:
     return {"$or": clauses}
 
 
+_ARTICLE_AUTHOR_KEYS = ("wp_author_id", "wp_author_name", "shopify_author", "wp_author_applied_id", "published_by_user_id")
+_PROJECT_AUTHOR_KEYS = ("default_wp_author_id", "default_wp_author_name", "shopify_authors", "default_shopify_author")
+
+
+def _positive_int_or_none(v: Any) -> int | None:
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _article_author_fields(d: dict[str, Any]) -> dict[str, Any]:
+    """Author fields share one shape across the article write/read/update boundaries."""
+    return {
+        "wp_author_id": _positive_int_or_none(d.get("wp_author_id")),
+        "wp_author_name": str(d.get("wp_author_name") or "").strip()[:200],
+        "shopify_author": str(d.get("shopify_author") or "").strip()[:200],
+        "wp_author_applied_id": _positive_int_or_none(d.get("wp_author_applied_id")),
+        "published_by_user_id": str(d.get("published_by_user_id") or "").strip()[:64],
+    }
+
+
+def _project_author_fields(d: dict[str, Any]) -> dict[str, Any]:
+    names = [str(x).strip()[:200] for x in (d.get("shopify_authors") or []) if str(x).strip()][:20]
+    return {
+        "default_wp_author_id": _positive_int_or_none(d.get("default_wp_author_id")),
+        "default_wp_author_name": str(d.get("default_wp_author_name") or "").strip()[:200],
+        "shopify_authors": names,
+        "default_shopify_author": str(d.get("default_shopify_author") or "").strip()[:200],
+    }
+
+
 def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
     pid = (d.get("id") or "").strip()
     if not pid:
@@ -535,6 +568,8 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         "wp_seo_platform": (d.get("wp_seo_platform") or "")[:32],
         # Schema markup (JSON-LD Article/BlogPosting + FAQPage) on publish/update.
         "schema_markup_enabled": bool(d.get("schema_markup_enabled", True)),
+        # Default post author (app/services/authors.py).
+        **_project_author_fields(d),
         # Whether the connected site's connector plugin version is new enough to
         # actually print schema markup in <head> (_RIVISO_MIN_SCHEMA_VERSION).
         "wp_schema_supported": bool(d.get("wp_schema_supported", False)),
@@ -2626,6 +2661,9 @@ def _normalize_article_dict(d: dict[str, Any]) -> dict[str, Any]:
         "linkedin_post_url": (d.get("linkedin_post_url") or "")[:2048],
         # Structure/rhythm/link measurements from the last generation (article_quality.py).
         "quality_report": d.get("quality_report") if isinstance(d.get("quality_report"), dict) else {},
+        # Post author (app/services/authors.py): the chosen WordPress user / Shopify author name,
+        # the WordPress user actually applied on publish, and the Riviso user who published.
+        **_article_author_fields(d),
         # Written via $set by the worker/pipeline; must survive full-document updates too.
         "generation_error": str(d.get("generation_error") or "")[:500],
         "integrity_ai_percentage": d.get("integrity_ai_percentage"),
@@ -2774,6 +2812,7 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
             "wp_plugin_message",
             "wp_seo_platform",
             "schema_markup_enabled",
+            *_PROJECT_AUTHOR_KEYS,
             "wp_schema_supported",
             "platform",
             "shopify_shop",
@@ -2865,6 +2904,7 @@ def _apply_article_updates_dict(a: dict[str, Any], updates: dict[str, Any]) -> N
             "linkedin_post_urn",
             "linkedin_post_url",
             "quality_report",
+            *_ARTICLE_AUTHOR_KEYS,
             "topic_cluster_id",
             "topic_slot_id",
             "topic_role",
@@ -2987,6 +3027,7 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "wp_plugin_message": d.get("wp_plugin_message") or "",
         "wp_seo_platform": d.get("wp_seo_platform") or "",
         "schema_markup_enabled": bool(d.get("schema_markup_enabled", True)),
+        **_project_author_fields(d),
         "wp_schema_supported": bool(d.get("wp_schema_supported", False)),
         "platform": ((d.get("platform") or "wordpress").strip().lower() or "wordpress")[:32],
         "shopify_shop": (d.get("shopify_shop") or "").strip()[:2048],
@@ -3080,6 +3121,7 @@ def _mongo_doc_to_article(doc: dict[str, Any] | None) -> dict[str, Any]:
         "linkedin_post_urn": d.get("linkedin_post_urn") or "",
         "linkedin_post_url": d.get("linkedin_post_url") or "",
         "quality_report": d.get("quality_report") if isinstance(d.get("quality_report"), dict) else {},
+        **_article_author_fields(d),
         # Featured-image storage backend -- also missing from this explicit dict before
         # now (pre-existing gap, same class as the shopify_link one fixed earlier this
         # session); needed by _cleanup_article_media to know what to delete on article
@@ -3934,6 +3976,8 @@ _LISTING_PROJECTION_STAGE = {
         "shopify_link": 1,
         "shopify_article_id": 1,
         "wp_category_ids": 1,
+        "wp_author_name": 1,
+        "shopify_author": 1,
         # Prefer the persisted flag (P4.3); fall back to a body length check only
         # for rows written before the backfill ran.
         "hasBody": {"$ifNull": ["$has_body", {"$gt": [{"$strLenCP": {"$ifNull": ["$article", ""]}}, 0]}]},

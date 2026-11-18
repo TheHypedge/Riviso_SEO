@@ -19,7 +19,7 @@ final class RivisoContentOperationsConnector {
 	const LEGACY_REST_NAMESPACE = 'auto-articles/v1';
 	const OPTION_CONNECTOR_ID = 'riviso_content_ops_connector_id';
 	const LEGACY_OPTION_CONNECTOR_ID = 'auto_articles_connector_id';
-	const VERSION = '0.7.0';
+	const VERSION = '0.8.0';
 	const OPTION_INDEXNOW_KEY = 'riviso_indexnow_key';
 	const OPTION_UPDATE_TOKEN = 'riviso_update_token';
 	const SCHEMA_META_KEYS = array( '_riviso_schema_faq', '_riviso_schema_article' );
@@ -424,6 +424,10 @@ final class RivisoContentOperationsConnector {
 			'post_status'  => $status,
 			'post_type'    => $post_type,
 		);
+		$author = self::requested_author( $params, $pto );
+		if ( $author ) {
+			$postarr['post_author'] = $author;
+		}
 
 		$post_id = wp_insert_post( $postarr, true );
 		if ( is_wp_error( $post_id ) ) {
@@ -442,6 +446,7 @@ final class RivisoContentOperationsConnector {
 				'id'     => $post_id,
 				'link'   => get_permalink( $post_id ),
 				'status' => get_post_status( $post_id ),
+				'author' => (int) get_post_field( 'post_author', $post_id ),
 			),
 			201
 		);
@@ -485,6 +490,11 @@ final class RivisoContentOperationsConnector {
 			}
 		}
 
+		$author = self::requested_author( $params, $pto );
+		if ( $author ) {
+			$postarr['post_author'] = $author;
+		}
+
 		$updated_id = wp_update_post( $postarr, true );
 		if ( is_wp_error( $updated_id ) ) {
 			return new WP_Error(
@@ -501,6 +511,68 @@ final class RivisoContentOperationsConnector {
 				'id'     => $post_id,
 				'link'   => get_permalink( $post_id ),
 				'status' => get_post_status( $post_id ),
+				'author' => (int) get_post_field( 'post_author', $post_id ),
+			),
+			200
+		);
+	}
+
+	/**
+	 * Author to publish as, or 0 to leave WordPress's default (the connected user).
+	 * Publishing as someone else needs edit_others_posts, exactly like wp-admin; an author
+	 * who doesn't exist or can't write this post type is ignored rather than failing the post.
+	 *
+	 * @param array        $params Request body.
+	 * @param WP_Post_Type $pto    Target post type object.
+	 * @return int
+	 */
+	private static function requested_author( array $params, $pto ) {
+		$author = isset( $params['author'] ) ? absint( $params['author'] ) : 0;
+		if ( ! $author || ! get_userdata( $author ) ) {
+			return 0;
+		}
+		if ( $author === get_current_user_id() ) {
+			return $author;
+		}
+		if ( ! current_user_can( $pto->cap->edit_others_posts ) || ! user_can( $author, $pto->cap->edit_posts ) ) {
+			return 0;
+		}
+		return $author;
+	}
+
+	/**
+	 * Users who can write posts on this site (Riviso's author picker) and whether the
+	 * connected user may publish as them.
+	 */
+	public static function handle_authors() {
+		$args = array(
+			'fields'  => array( 'ID', 'display_name', 'user_nicename' ),
+			'number'  => 200,
+			'orderby' => 'display_name',
+		);
+		if ( version_compare( get_bloginfo( 'version' ), '5.9', '>=' ) ) {
+			$args['capability'] = array( 'edit_posts' );
+		} else {
+			$args['who'] = 'authors';
+		}
+		$authors = array();
+		foreach ( get_users( $args ) as $u ) {
+			$authors[] = array(
+				'id'   => (int) $u->ID,
+				'name' => $u->display_name,
+				'slug' => $u->user_nicename,
+			);
+		}
+		$me = wp_get_current_user();
+		return new WP_REST_Response(
+			array(
+				'authors'    => $authors,
+				'current'    => array(
+					'id'   => (int) $me->ID,
+					'name' => $me->display_name,
+					'slug' => $me->user_nicename,
+				),
+				'can_assign' => current_user_can( 'edit_others_posts' ),
 			),
 			200
 		);
@@ -920,6 +992,18 @@ final class RivisoContentOperationsConnector {
 						return current_user_can( 'edit_posts' );
 					},
 					'callback'            => array( __CLASS__, 'handle_update' ),
+				)
+			);
+
+			register_rest_route(
+				$namespace,
+				'/authors',
+				array(
+					'methods'             => 'GET',
+					'permission_callback' => function () {
+						return current_user_can( 'edit_posts' );
+					},
+					'callback'            => array( __CLASS__, 'handle_authors' ),
 				)
 			);
 

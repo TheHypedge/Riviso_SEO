@@ -357,6 +357,11 @@ export type ProjectSettings = {
   default_wp_rest_base?: string | null;
   default_wp_status?: string | null;
   default_wp_category_ids?: number[];
+  /** Default post author when an article has none chosen (null = the connected WordPress user). */
+  default_wp_author_id?: number | null;
+  default_wp_author_name?: string | null;
+  shopify_authors?: string[];
+  default_shopify_author?: string | null;
   gsc_property_url?: string | null;
   gsc_index_on_publish?: boolean;
 };
@@ -1261,6 +1266,7 @@ export type ArticleListItem = {
   wp_link?: string | null;
   monitor_status?: string | null;
   wp_category_ids?: string;
+  author_name?: string | null;
   sync_status?: string | null;
 };
 
@@ -1295,6 +1301,9 @@ export type ArticlePublic = {
   wp_category_ids?: string | null;
   wp_tag_ids?: string | null;
   source_url?: string | null;
+} & AuthorFields & {
+  /** WordPress user the live post actually has (differs from wp_author_id when WP refused the choice). */
+  wp_author_applied_id?: number | null;
 };
 
 export type ArticleListPage = {
@@ -2321,6 +2330,8 @@ async function apiFetchRaw(path: string, init: RequestInit, opts?: ApiFetchOptio
   }
 }
 
+const _wpAuthorsCache = new Map<string, { at: number; p: Promise<WordpressAuthorsResponse> }>();
+
 export const api = {
   async login(email: string, password: string) {
     return apiFetch<TokenPair>(
@@ -2769,6 +2780,11 @@ export const api = {
       shopify_product_aware_enabled: boolean;
       wp_internal_link_aware_enabled: boolean;
       schema_markup_enabled: boolean;
+      /** 0 clears the default (publish as the connected WordPress user). */
+      default_wp_author_id: number;
+      default_wp_author_name: string;
+      shopify_authors: string[];
+      default_shopify_author: string;
       shopify_shop: string;
       shopify_client_id: string;
       shopify_client_secret: string;
@@ -3288,7 +3304,7 @@ export const api = {
       wp_status: string;
       category_ids: number[];
       tag_ids: number[];
-    }>,
+    } & AuthorFields>,
     opts?: ApiFetchOptions,
   ) {
     const v = await apiFetch<ArticleDetail>(
@@ -3579,7 +3595,7 @@ export const api = {
         image_url?: string | null;
         post_id?: string | null;
       }> | null;
-    },
+    } & AuthorFields,
     opts?: ArticleGenerationWaitOptions & { previousGeneratedAt?: string | null },
   ) {
     const { previousGeneratedAt, queuedAt, expectImage, intervalMs, maxWaitMs, skipGlobalLoading, noWait, ...fetchOpts } = opts ?? {};
@@ -3729,7 +3745,7 @@ export const api = {
       generate_image?: boolean;
       inner_image_count?: number;
       user_timezone?: string;
-    },
+    } & AuthorFields,
   ) {
     return apiFetch<{ ok: boolean; status: string; message: string; wp_scheduled_at?: string; post_type?: string; wp_status?: string }>(
       `/api/projects/${projectId}/articles/${articleId}/schedule`,
@@ -3751,7 +3767,7 @@ export const api = {
       inner_image_count?: number;
       user_timezone?: string;
       category_ids?: number[];
-    },
+    } & AuthorFields,
   ) {
     return apiFetch<{
       ok: boolean;
@@ -3809,7 +3825,7 @@ export const api = {
   async publishArticleToShopify(
     projectId: string,
     articleId: string,
-    payload: { blog_id?: number | null; publish?: boolean },
+    payload: { blog_id?: number | null; publish?: boolean } & AuthorFields,
     opts?: ApiFetchOptions,
   ) {
     return apiFetch<{
@@ -4066,6 +4082,21 @@ export const api = {
   },
 
   // Feature 3 — Site Map (Internal Linking ingestion)
+  /** WordPress users who can author posts (every author picker). One request per project per 5 min,
+   *  shared by every picker on screen; ``refresh`` re-reads WordPress. */
+  getWordpressAuthors(projectId: string, opts?: { refresh?: boolean }) {
+    const hit = _wpAuthorsCache.get(projectId);
+    if (hit && !opts?.refresh && Date.now() - hit.at < 300_000) return hit.p;
+    const p = apiFetch<WordpressAuthorsResponse>(
+      `/api/projects/${projectId}/wordpress/authors${opts?.refresh ? "?refresh=true" : ""}`,
+      undefined,
+      { skipGlobalLoading: true, timeoutMs: META_API_TIMEOUT_MS },
+    );
+    _wpAuthorsCache.set(projectId, { at: Date.now(), p });
+    p.catch(() => _wpAuthorsCache.delete(projectId));
+    return p;
+  },
+
   async siteMapList(projectId: string) {
     return apiFetch<SiteMapListResponse>(`/api/projects/${projectId}/site-map`);
   },
@@ -4199,7 +4230,7 @@ export const api = {
         featured_image_url?: string | null;
         image_url?: string | null;
       }> | null;
-    },
+    } & AuthorFields,
     opts?: ApiFetchOptions & TopicClusterWaitOptions,
   ) {
     const { onProgress, intervalMs, maxWaitMs, ...fetchOpts } = opts ?? {};
@@ -4552,4 +4583,18 @@ export type ArticleQualityReport = {
     status: "ok" | "thin" | "failed"; error?: string; seconds?: number; generated_at?: string;
     facts?: ArticleResearchFact[]; sources_cited?: string[]; unsupported_after?: string[]; revised?: boolean;
   };
+};
+
+
+/** Post author choice sent with generate / schedule / publish / edit. Omitted = keep the article's choice;
+ *  wp_author_id 0 = clear it (the project default applies). */
+export type AuthorFields = { wp_author_id?: number | null; wp_author_name?: string | null; shopify_author?: string | null };
+export type WordpressAuthor = { id: number; name: string; slug?: string };
+export type WordpressAuthorsResponse = {
+  authors: WordpressAuthor[];
+  current: WordpressAuthor | null;
+  can_assign: boolean;
+  source: "plugin" | "core" | "not_connected";
+  default_author_id: number | null;
+  cached?: boolean;
 };

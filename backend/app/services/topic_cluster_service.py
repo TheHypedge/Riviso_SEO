@@ -627,6 +627,7 @@ class TopicClusterService:
         wp_status: str | None = None,
         mapped_products: list[dict] | None = None,
         inner_image_count: int = 0,
+        author: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Generate article bodies for the pillar + each cluster without ``imported_article_id``.
@@ -747,6 +748,9 @@ class TopicClusterService:
                         errors.append({"topic_id": topic_id, "message": warn[:500]})
                 from app.api.routes.articles import apply_generate_wp_choice
 
+                if author:
+                    # After generation (which rewrites the row), before any auto-publish reads it.
+                    await asyncio.to_thread(st.patch_article_fields, aid, author)
                 await apply_generate_wp_choice(
                     st=st, proj=proj, project_id=pid, article_id=aid,
                     post_type=post_type, wp_status=wp_status,

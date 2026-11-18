@@ -348,6 +348,7 @@ async def _handle_cluster_generate_all(payload: dict) -> None:
             post_type=payload.get("post_type"),
             wp_status=payload.get("wp_status"),
             mapped_products=payload.get("mapped_products"),
+            author=payload.get("author") if isinstance(payload.get("author"), dict) else None,
         )
 
 

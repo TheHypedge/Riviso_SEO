@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.core.apm import background_task
 from app.legacy.storage import get_legacy_storage_module
+from app.services.authors import applied_author_fields, resolve_shopify_author, resolve_wp_author
 from app.services.wordpress_client import WordpressClient, resolve_featured_media_id
 from app.services.context_links import apply_context_links_html
 from app.services.shopify_product_pipeline import is_shopify_project
@@ -467,6 +468,9 @@ async def publish_article_to_wordpress(*, st=None, proj: dict, article: dict, po
         payload["featured_media"] = featured_media_id
     if category_ids:
         payload["categories"] = category_ids
+    author_id, _author_name = resolve_wp_author(article, proj)
+    if author_id:
+        payload["author"] = author_id
 
     # WordPress tags from our keywords (create if missing)
     kw = [str(x).strip() for x in (article.get("keywords") or []) if str(x).strip()]
@@ -549,6 +553,9 @@ async def publish_article_to_shopify_scheduled(
     }
     if image_payload:
         article_body["image"] = image_payload
+    shopify_author = resolve_shopify_author(article, proj)
+    if shopify_author:
+        article_body["author"] = shopify_author
 
     # If this article already has a Shopify ID, update it instead of creating a duplicate.
     existing_id_raw = article.get("shopify_article_id")
@@ -1004,6 +1011,7 @@ async def execute_scheduled_job_post_now(*, st, proj: dict, job: dict, already_c
                 st.update_article_fields,
                 aid,
                 {
+                    **applied_author_fields(created, *resolve_wp_author(art, proj)),
                     "wp_post_id": wp_post_id,
                     "wp_link": wp_link,
                     "wp_rest_base": (job.get("post_type") or "posts"),
@@ -1553,6 +1561,7 @@ async def scheduler_loop(*, poll_seconds: float = 10.0) -> None:
                             st.update_article_fields,
                             aid,
                             {
+                                **applied_author_fields(created, *resolve_wp_author(art, proj)),
                                 "wp_post_id": wp_post_id,
                                 "wp_link": wp_link,
                                 "wp_rest_base": (j.get("post_type") or "posts"),

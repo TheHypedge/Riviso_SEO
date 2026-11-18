@@ -46,4 +46,4 @@ def test_shipped_plugin_is_canonical_and_versioned():
     assert pk.resolve_plugin_source_dir().parent.parent.name == "backend"
     data, _ = pk.build_plugin_zip_bytes()
     pk.validate_plugin_zip(data)
-    assert pk.get_plugin_version() == "0.7.0"
+    assert pk.get_plugin_version() == "0.8.0"

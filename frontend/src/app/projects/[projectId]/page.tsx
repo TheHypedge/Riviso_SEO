@@ -8,6 +8,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "../../page.module.css";
 import { formatDayMonYearTime } from "@/lib/dateFormat";
 import InnerImageCountField from "@/components/InnerImageCountField";
+import AuthorSelect from "@/components/AuthorSelect";
+import DefaultAuthorSetting from "@/components/settings/DefaultAuthorSetting";
 import BulkGenerateModal, { type BulkGenerateValues } from "@/components/BulkGenerateModal";
 import { projectSettingsHref } from "@/lib/articlePaths";
 import projectsDark from "../projectsDark.module.css";
@@ -59,6 +61,7 @@ import {
   ArticleListItem,
   ArticlePublic,
   ArticleSyncResult,
+  type AuthorFields,
   BulkRepairResponse,
   BulkUploadRow,
   clearAuth,
@@ -857,6 +860,7 @@ export default function ProjectPage() {
     postType: string;
     wpStatus: "draft" | "publish";
     mappedProducts: MappedShopifyProduct[];
+    author: AuthorFields | null;
     step: "prompts" | "products";
     busy: boolean;
   } | null>(null);
@@ -868,6 +872,7 @@ export default function ProjectPage() {
     postType: string;
     wpStatus: "draft" | "publish";
     mappedProducts: MappedShopifyProduct[];
+    author: AuthorFields | null;
     step: "prompts" | "products";
     busy: boolean;
   } | null>(null);
@@ -1301,6 +1306,7 @@ export default function ProjectPage() {
   const [scheduleWritingPromptId, setScheduleWritingPromptId] = useState<string>("");
   const [scheduleImagePromptId, setScheduleImagePromptId] = useState<string>("");
   const [scheduleInnerImageCount, setScheduleInnerImageCount] = useState(0);
+  const [scheduleAuthor, setScheduleAuthor] = useState<AuthorFields | null>(null);
 
   const [editJob, setEditJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
   const [editJobWhen, setEditJobWhen] = useState("");
@@ -1311,6 +1317,9 @@ export default function ProjectPage() {
   const [editJobImagePromptId, setEditJobImagePromptId] = useState("");
   const [editJobGenerateImage, setEditJobGenerateImage] = useState(true);
   const [editJobInnerImageCount, setEditJobInnerImageCount] = useState(0);
+  // The author lives on the article (not the job): loaded when the dialog opens, saved on the article.
+  const [editJobAuthor, setEditJobAuthor] = useState<AuthorFields | null>(null);
+  const [editJobAuthorDirty, setEditJobAuthorDirty] = useState(false);
   const [editRescheduleBusy, setEditRescheduleBusy] = useState(false);
   const [confirmCancelJob, setConfirmCancelJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
   const [confirmPostNowJob, setConfirmPostNowJob] = useState<null | import("@/lib/api").ScheduledJobPublic>(null);
@@ -3828,6 +3837,7 @@ export default function ProjectPage() {
         generate_image: true,
         inner_image_count: scheduleInnerImageCount,
         user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
+        ...(scheduleAuthor || {}),
       });
       // Optimistic UI update: scheduling should not block on re-fetching large lists,
       // which can time out on production proxies.
@@ -3855,6 +3865,7 @@ export default function ProjectPage() {
       setScheduleWritingPromptId(scheduleWritingPrompts?.default_id || "");
       setScheduleImagePromptId(scheduleImagePrompts?.default_id || "");
       setScheduleInnerImageCount(0);
+      setScheduleAuthor(null);
     } catch (e) {
       if (showWebsiteConnectionErrorIfNeeded(e)) return;
       setError(e instanceof Error ? e.message : "Schedule failed");
@@ -4036,6 +4047,12 @@ export default function ProjectPage() {
     setEditJobImagePromptId((j.image_prompt_id || meta.imagePrompts?.default_id || "").trim());
     setEditJobGenerateImage(Boolean(j.generate_image ?? true));
     setEditJobInnerImageCount(Math.max(0, Math.min(5, Math.trunc(Number(j.inner_image_count) || 0))));
+    setEditJobAuthor(null);
+    setEditJobAuthorDirty(false);
+    void api
+      .getArticleEditorShell(projectId, j.article_id, { skipGlobalLoading: true })
+      .then((a) => setEditJobAuthor((cur) => cur ?? { wp_author_id: a.wp_author_id ?? null, wp_author_name: a.wp_author_name ?? null, shopify_author: a.shopify_author ?? null }))
+      .catch(() => {});
   }
 
   /** Default action for clicking a calendar block -- mirrors what the list row's
@@ -4092,6 +4109,7 @@ export default function ProjectPage() {
           generate_image: editJobGenerateImage,
           inner_image_count: editJobInnerImageCount,
           user_timezone: _userTz,
+          ...(editJobAuthorDirty && editJobAuthor ? editJobAuthor : {}),
         });
       } else {
         const updated = await api.updateScheduledJob(projectId, savedJobId, {
@@ -4106,6 +4124,9 @@ export default function ProjectPage() {
           user_timezone: _userTz,
         });
         savedJobId = updated.id || savedJobId;
+        if (editJobAuthorDirty && editJobAuthor) {
+          await api.updateArticle(projectId, editJob.article_id, editJobAuthor, { skipGlobalLoading: true });
+        }
         setScheduledJobs((prev) => {
           const next = prev.map((row) => (row.id === editJob.id ? { ...row, ...updated } : row));
           return next.some((row) => row.id === savedJobId) ? next : [updated, ...next];
@@ -4235,6 +4256,7 @@ export default function ProjectPage() {
               wp_status: isShopifyProject ? null : values.wpStatus,
               mapped_products: isShopifyProject && values.mappedProducts.length ? values.mappedProducts : undefined,
               mapped_pages: !isShopifyProject && values.mappedPages.length ? values.mappedPages : undefined,
+              ...(values.author || {}),
             },
             { skipGlobalLoading: true, noWait: true },
           ),
@@ -4318,6 +4340,7 @@ export default function ProjectPage() {
         inner_image_count: values.innerImageCount,
         user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
         category_ids: values.categoryIds.length ? values.categoryIds : undefined,
+        ...(values.author || {}),
       };
 
       const res = await api.bulkScheduleArticles(projectId, schedulePayload);
@@ -4418,6 +4441,7 @@ export default function ProjectPage() {
         inner_image_count: values.innerImageCount,
         user_timezone: profileTz || Intl.DateTimeFormat().resolvedOptions().timeZone,
         category_ids: values.categoryIds.length ? values.categoryIds : undefined,
+        ...(values.author || {}),
       });
       if (res.failed?.length) {
         const first = res.failed[0];
@@ -5389,6 +5413,7 @@ export default function ProjectPage() {
       postType?: string | null;
       wpStatus?: "draft" | "publish" | null;
       mappedProducts?: MappedShopifyProduct[] | null;
+      author?: AuthorFields | null;
     },
   ) {
     // Shopify projects can generate drafts without the store being connected yet.
@@ -5463,6 +5488,7 @@ export default function ProjectPage() {
           post_type: opts?.postType || null,
           wp_status: opts?.wpStatus || null,
           mapped_products: mapped,
+          ...(opts?.author || {}),
         },
         {
           skipGlobalLoading: true,
@@ -5522,6 +5548,7 @@ export default function ProjectPage() {
       postType: wpDefaults?.post_type || "posts",
       wpStatus: wpDefaults?.wp_status || "draft",
       mappedProducts: [],
+      author: null,
       step: "prompts",
       busy: false,
     });
@@ -5978,6 +6005,7 @@ export default function ProjectPage() {
       postType: wpDefaults?.post_type || "posts",
       wpStatus: wpDefaults?.wp_status || "draft",
       mappedProducts: [],
+      author: null,
       step: "prompts",
       busy: false,
     });
@@ -6020,6 +6048,7 @@ export default function ProjectPage() {
               post_type: m.postType || null,
               wp_status: m.wpStatus || null,
               mapped_products: mapped,
+              ...(m.author || {}),
             },
             { skipGlobalLoading: true, noWait: true },
           ),
@@ -7002,6 +7031,7 @@ export default function ProjectPage() {
                     </>
                   ) : (
                     <BulkScheduleForm
+                      projectId={projectId}
                       seedRows={bulkScheduleSeedRows}
                       active={showBulkPopup && bulkMode === "schedule"}
                       profileTz={profileTz}
@@ -7233,9 +7263,11 @@ export default function ProjectPage() {
                                   >
                                     {title}
                                   </Link>
-                                  {a.generated_at ? (
+                                  {a.generated_at || a.author_name ? (
                                     <span className={styles.articleGeneratedAt}>
-                                      Generated {formatDayMonYearTime(a.generated_at, profileTz || undefined)}
+                                      {a.generated_at ? `Generated ${formatDayMonYearTime(a.generated_at, profileTz || undefined)}` : ""}
+                                      {a.generated_at && a.author_name ? " · " : ""}
+                                      {a.author_name ? `by ${a.author_name}` : ""}
                                     </span>
                                   ) : null}
                                 </div>
@@ -7326,6 +7358,12 @@ export default function ProjectPage() {
                                   {categoryName}
                                 </dd>
                               </div>
+                              {a.author_name ? (
+                                <div className={styles.articlesMobileMetaRow}>
+                                  <dt>Author</dt>
+                                  <dd>{a.author_name}</dd>
+                                </div>
+                              ) : null}
                             </dl>
                             <div className={styles.articlesMobileActions}>
                               {renderArticleActions(a, title, styles.articlesMobileIconBtn)}
@@ -7470,6 +7508,7 @@ export default function ProjectPage() {
                       monthRemaining={innerImagesLeft}
                       hint="0–5. Placed between sections: data charts where the article has real figures, otherwise images in the selected image prompt's style. Applies only if this schedule generates the article."
                     />
+                    <AuthorSelect projectId={projectId} value={scheduleAuthor} onChange={setScheduleAuthor} label="Publish as (author)" />
 
                     <label className={styles.label}>
                       WordPress post type
@@ -7811,6 +7850,7 @@ export default function ProjectPage() {
 
             {bulkGenerateIds ? (
               <BulkGenerateModal
+                projectId={projectId}
                 count={bulkGenerateIds.length}
                 isShopify={isShopifyProject}
                 writingPrompts={scheduleWritingPrompts}
@@ -10169,6 +10209,15 @@ export default function ProjectPage() {
                       onChange={setEditJobInnerImageCount}
                       monthRemaining={innerImagesLeft}
                     />
+                    <AuthorSelect
+                      projectId={projectId}
+                      value={editJobAuthor}
+                      onChange={(a) => {
+                        setEditJobAuthor(a);
+                        setEditJobAuthorDirty(true);
+                      }}
+                      label="Publish as (author)"
+                    />
                     <label className={styles.label}>
                       Categories
                       <select
@@ -12219,6 +12268,19 @@ export default function ProjectPage() {
                   }}
                 />
               ) : null}
+              {isShopifyProject && settings ? (
+                <section className={styles.settingsSectionCard}>
+                  <p className={styles.settingsSectionKicker}>Publishing</p>
+                  <h3 className={styles.settingsSectionTitle}>Post authors</h3>
+                  <DefaultAuthorSetting
+                  projectId={projectId}
+                  platform={"shopify"}
+                  settings={settings}
+                  onSaved={(patch) => setSettings((prev) => (prev ? { ...prev, ...patch } : prev))}
+                  onMessage={(message, tone) => setToast({ message, tone })}
+                />
+                </section>
+              ) : null}
               {!isShopifyProject ? (
                 <WordPressConnectionSection
                   projectId={projectId}
@@ -12289,6 +12351,13 @@ export default function ProjectPage() {
                       ariaLabel="Default categories"
                     />
                   </div>
+                  <DefaultAuthorSetting
+                  projectId={projectId}
+                  platform={"wordpress"}
+                  settings={settings}
+                  onSaved={(patch) => setSettings((prev) => (prev ? { ...prev, ...patch } : prev))}
+                  onMessage={(message, tone) => setToast({ message, tone })}
+                />
                 </div>
               </section>
               ) : null}
@@ -12708,6 +12777,12 @@ export default function ProjectPage() {
                       onChange={(n) => setCurationPromptModal((m) => (m ? { ...m, innerImageCount: n } : m))}
                       monthRemaining={innerImagesLeft}
                     />
+                    <AuthorSelect
+                      projectId={projectId}
+                      value={curationPromptModal.author}
+                      onChange={(a) => setCurationPromptModal((m) => (m ? { ...m, author: a } : m))}
+                      label="Publish as (author)"
+                    />
                     <label className={styles.label}>
                       WordPress post type
                       <select
@@ -12893,6 +12968,12 @@ export default function ProjectPage() {
                       onChange={(n) => setClusterGeneratePromptModal((m) => (m ? { ...m, innerImageCount: n } : m))}
                       monthRemaining={innerImagesLeft}
                     />
+                    <AuthorSelect
+                      projectId={projectId}
+                      value={clusterGeneratePromptModal.author}
+                      onChange={(a) => setClusterGeneratePromptModal((m) => (m ? { ...m, author: a } : m))}
+                      label="Publish as (author)"
+                    />
                     <label className={styles.label}>
                       WordPress post type
                       <select
@@ -12989,6 +13070,7 @@ export default function ProjectPage() {
                           innerImageCount: m.innerImageCount,
                           postType: m.postType || null,
                           wpStatus: m.wpStatus || null,
+                          author: m.author,
                         });
                       }
                     }}
@@ -13012,6 +13094,7 @@ export default function ProjectPage() {
                           innerImageCount: m.innerImageCount,
                           postType: m.postType || null,
                           wpStatus: m.wpStatus || null,
+                          author: m.author,
                           mappedProducts: [],
                         });
                       }}
@@ -13033,6 +13116,7 @@ export default function ProjectPage() {
                           innerImageCount: m.innerImageCount,
                           postType: m.postType || null,
                           wpStatus: m.wpStatus || null,
+                          author: m.author,
                           mappedProducts: m.mappedProducts,
                         });
                       }}
@@ -13047,6 +13131,7 @@ export default function ProjectPage() {
         ) : null}
 
         <BulkScheduleModal
+          projectId={projectId}
           open={!!researchScheduleModal}
           title={
             researchScheduleModal?.kind === "cluster"

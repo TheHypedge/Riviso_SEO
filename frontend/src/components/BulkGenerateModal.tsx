@@ -3,10 +3,11 @@
 import { useState } from "react";
 
 import styles from "@/app/page.module.css";
+import AuthorSelect from "@/components/AuthorSelect";
 import InnerImageCountField from "@/components/InnerImageCountField";
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
 import { WordPressPageMapPicker } from "@/components/wordpress/WordPressPageMapPicker";
-import type { PromptListResponse, WordpressCategory, WordpressPostType } from "@/lib/api";
+import type { AuthorFields, PromptListResponse, WordpressCategory, WordpressPostType } from "@/lib/api";
 import type { MappedShopifyProduct, ShopifyCatalogProduct } from "@/lib/shopifyProductMapping";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import type { MappedWordPressPage, SiteMapEntry } from "@/lib/wordpressPageMapping";
@@ -22,9 +23,12 @@ export type BulkGenerateValues = {
   categoryIds: number[];
   mappedPages: MappedWordPressPage[];
   mappedProducts: MappedShopifyProduct[];
+  /** Null = keep each article's author (else the project default). */
+  author: AuthorFields | null;
 };
 
 type Props = {
+  projectId: string;
   count: number;
   isShopify: boolean;
   writingPrompts: PromptListResponse | null;
@@ -62,6 +66,7 @@ export default function BulkGenerateModal(p: Props) {
     categoryIds: [],
     mappedPages: [],
     mappedProducts: [],
+    author: null,
   }));
   const set = <K extends keyof BulkGenerateValues>(k: K, val: BulkGenerateValues[K]) => setV((s) => ({ ...s, [k]: val }));
   const freeCats = p.cats.filter((c) => !v.categoryIds.includes(c.id));
@@ -107,6 +112,7 @@ export default function BulkGenerateModal(p: Props) {
             </select>
           </label>
           <InnerImageCountField value={v.innerImageCount} onChange={(n) => set("innerImageCount", n)} monthRemaining={p.innerImagesLeft} />
+          <AuthorSelect projectId={p.projectId} value={v.author} onChange={(a) => set("author", a)} label="Publish as (author)" />
 
           {!p.isShopify ? (
             <>

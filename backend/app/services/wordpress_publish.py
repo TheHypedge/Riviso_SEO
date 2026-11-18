@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from app.services.authors import ensure_wp_author
 from app.services.url_guard import assert_public_http_url, ssrf_guarded_event_hooks
 from app.services.wordpress_client import WordpressClient
 
@@ -39,6 +40,8 @@ def _plugin_payload(*, rest_base: str, payload: dict[str, Any]) -> dict[str, Any
         "featured_media": payload.get("featured_media"),
         "meta": payload.get("meta"),
     }
+    if payload.get("author"):
+        body["author"] = int(payload["author"])
     tag_names = payload.get("tag_names")
     if isinstance(tag_names, list) and tag_names:
         body["tag_names"] = [str(t).strip()[:200] for t in tag_names if str(t).strip()][:15]
@@ -119,12 +122,15 @@ async def publish_post_to_wordpress(
 
     last_err: Exception | None = None
     plugin_auth_block = False
+    author_id = int(payload["author"]) if payload.get("author") else None
     for label, body in attempts:
         try:
             if label.startswith("plugin:"):
                 ns = label.split(":", 1)[1]
-                return await _post_plugin_publish(wp, ns, body)
-            return await _post_core_rest(wp, rest_base, body)
+                created = await _post_plugin_publish(wp, ns, body)
+            else:
+                created = await _post_core_rest(wp, rest_base, body)
+            return await ensure_wp_author(wp, rest_base=rest_base, created=created, author_id=author_id)
         except httpx.HTTPStatusError as e:
             last_err = e
             if label.startswith("plugin:") and e.response.status_code in (401, 403):
@@ -165,6 +171,8 @@ def _plugin_update_body(*, wp_post_id: int, rest_base: str, payload: dict[str, A
         "featured_media": payload.get("featured_media"),
         "meta": payload.get("meta"),
     }
+    if payload.get("author"):
+        body["author"] = int(payload["author"])
     tag_names = payload.get("tag_names")
     if isinstance(tag_names, list) and tag_names:
         body["tag_names"] = [str(t).strip()[:200] for t in tag_names if str(t).strip()][:15]
@@ -222,6 +230,7 @@ async def update_post_on_wordpress(
         ]
     )
 
+    author_id = int(payload["author"]) if payload.get("author") else None
     last_err: Exception | None = None
     for label, body in attempts:
         if body is None:
@@ -229,14 +238,14 @@ async def update_post_on_wordpress(
         try:
             if label.startswith("plugin:"):
                 ns = label.split(":", 1)[1]
-                return await _post_plugin_update(wp, ns, body)
-            if label.startswith("core-post:"):
+                updated = await _post_plugin_update(wp, ns, body)
+            elif label.startswith("core-post:"):
                 updated = await wp.post_json(core_endpoint, body, timeout=90.0)
             else:
                 updated = await wp.put_json(core_endpoint, body, timeout=90.0)
             if not isinstance(updated, dict):
                 raise RuntimeError("Unexpected WordPress REST update response")
-            return updated
+            return await ensure_wp_author(wp, rest_base=rest_base, created=updated, author_id=author_id)
         except Exception as e:
             last_err = e
             log.debug("WP update attempt %s failed: %s", label, _http_detail(e))

@@ -13,6 +13,7 @@ import type { PromptListResponse, WordpressCategory, WordpressPostType } from "@
 export type { BulkScheduleFormValues, BulkScheduleSeedRow };
 
 type BulkScheduleModalProps = {
+  projectId?: string;
   open: boolean;
   title: string;
   seedRows: BulkScheduleSeedRow[];
@@ -32,6 +33,7 @@ type BulkScheduleModalProps = {
 export function BulkScheduleModal({
   open,
   title,
+  projectId,
   seedRows,
   profileTz,
   defaults,
@@ -84,6 +86,7 @@ export function BulkScheduleModal({
         </div>
 
         <BulkScheduleForm
+          projectId={projectId}
           seedRows={seedRows}
           active={open}
           profileTz={profileTz}

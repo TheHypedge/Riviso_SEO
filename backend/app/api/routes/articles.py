@@ -40,6 +40,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.deps import get_current_user
+from app.services.authors import AuthorChoice, applied_author_fields, author_updates, resolve_shopify_author, resolve_wp_author
 from app.services.plan_gatekeeper import consume_article_quota_for_project
 from app.core.ratelimit import limiter
 from app.core.project_lookup import async_require_project_access
@@ -379,6 +380,10 @@ def _to_public(a: dict) -> ArticlePublic:
         shopify_link=(a.get("shopify_link") or "").strip() or None,
         wp_category_ids=(a.get("wp_category_ids") or ""),
         source_url=(a.get("source_url") or "").strip() or None,
+        wp_author_id=a.get("wp_author_id") if isinstance(a.get("wp_author_id"), int) else None,
+        wp_author_name=(a.get("wp_author_name") or "").strip() or None,
+        wp_author_applied_id=a.get("wp_author_applied_id") if isinstance(a.get("wp_author_applied_id"), int) else None,
+        shopify_author=(a.get("shopify_author") or "").strip() or None,
     )
 
 
@@ -397,6 +402,7 @@ def _to_list_item(a: dict) -> ArticleListItem:
         wp_link=(a.get("wp_link") or "").strip() or None,
         monitor_status=(a.get("monitor_status") or "").strip() or None,
         wp_category_ids=(a.get("wp_category_ids") or ""),
+        author_name=((a.get("wp_author_name") or a.get("shopify_author") or "").strip() or None),
         sync_status=(a.get("sync_status") or "unknown").strip(),
     )
 
@@ -532,6 +538,10 @@ def _to_detail_response(
             topic_role=(article.get("topic_role") or "").strip() or None,
             cluster_link_context=cluster_ctx,
             linkedin_post_url=_linkedin_post_url(st, article),
+            wp_author_id=pub.wp_author_id,
+            wp_author_name=pub.wp_author_name,
+            wp_author_applied_id=pub.wp_author_applied_id,
+            shopify_author=pub.shopify_author,
         )
     except ValidationError as e:
         _log.warning(
@@ -1994,6 +2004,7 @@ async def update_article(
         updates["wp_category_ids"] = ",".join(str(i) for i in payload.category_ids)
     if payload.tag_ids is not None:
         updates["wp_tag_ids"] = ",".join(str(i) for i in payload.tag_ids)
+    updates.update(author_updates(payload))
 
     if updates:
         # $set instead of a full read-modify-replace -- none of this route's fields
@@ -2203,6 +2214,9 @@ async def generate_article_and_image(
             ]
 
     aid = (article_id or "").strip()
+    _author = author_updates(payload)
+    if _author:
+        await run_sync(st.patch_article_fields, aid, _author)
     post_type_norm: str | None = None
     wp_status_norm: str | None = None
     if payload.post_type or payload.wp_status:
@@ -2731,8 +2745,10 @@ async def bulk_schedule_articles(
 
     article_updates: list[tuple[str, dict]] = []
     prep_rows: list[tuple[dict, dict]] = []
+    batch_author = author_updates(payload)
     for aid, norm_utc, _dt in parsed:
         art = articles_map[aid]
+        art.update(batch_author)  # rows below are written back in full; keep the author choice in them
         article_updates.append(
             (
                 aid,
@@ -2742,6 +2758,7 @@ async def bulk_schedule_articles(
                     "wp_rest_base": post_type,
                     "wp_schedule_error": "",
                     "status": (art.get("status") or "pending"),
+                    **batch_author,
                 },
             )
         )
@@ -2791,6 +2808,11 @@ async def schedule_article(
     proj = await _require_project_access(st=st, user=user, project_id=project_id, full=True)
     _require_verified_website(proj)
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    _author = author_updates(payload)
+    if _author:
+        # Keep the in-memory row in step: _persist_schedule_row writes this dict back in full.
+        a.update(_author)
+        await run_sync(st.patch_article_fields, article_id, _author)
 
     dt_utc = _parse_schedule_time_utc(raw=payload.wp_scheduled_at or "", user=user, payload_timezone=payload.user_timezone)
     norm_utc = dt_utc.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
@@ -3051,6 +3073,7 @@ async def publish_to_live_site(
         tag_ids=tag_ids,
         image_file=image_file,
         claimed_job_id=claimed_job_id,
+        published_by_user_id=(user.get("id") or "").strip(),
     )
 
 
@@ -3067,6 +3090,7 @@ async def _publish_article_core(
     tag_ids: str = "",
     image_file: UploadFile | None = None,
     claimed_job_id: str | None = None,
+    published_by_user_id: str = "",
 ) -> dict:
     """WordPress publish shared by the /publish route and post-generation auto-publish.
 
@@ -3170,6 +3194,9 @@ async def _publish_article_core(
         payload["featured_media"] = featured_media_id
     if cat_ids:
         payload["categories"] = cat_ids
+    author_id, author_name = resolve_wp_author(a, proj)
+    if author_id:
+        payload["author"] = author_id
     _apply_wp_tags_to_payload(payload, tag_ids=tag_ids_list, keywords=a.get("keywords") or [])
 
     await publish_pipeline_status(article_id, MSG_PUBLISH_DISPATCH, STAGE_PUBLISH_DISPATCH)
@@ -3216,6 +3243,8 @@ async def _publish_article_core(
         # Persist the category WP actually assigned (including WP default when none were sent).
         "wp_category_ids": effective_category_ids,
         "wp_tag_ids": effective_tag_ids,
+        **applied_author_fields(created, author_id, author_name),
+        "published_by_user_id": published_by_user_id or (a.get("published_by_user_id") or ""),
     }
     # Cache the WP media ID so subsequent updates don't re-upload the same image.
     if featured_media_id is not None and featured_media_id > 0:
@@ -3411,6 +3440,10 @@ async def publish_to_shopify_blog(
         )
 
     a = await run_sync(_get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    _author = author_updates(payload) if payload is not None else {}
+    if _author:
+        a.update(_author)
+        await run_sync(st.patch_article_fields, article_id, _author)
     title = (a.get("title") or "").strip()
     article_md = (a.get("article") or "").strip()
     if not title or not article_md:
@@ -3499,6 +3532,9 @@ async def publish_to_shopify_blog(
     }
     if image_payload:
         article_body["image"] = image_payload
+    shopify_author = resolve_shopify_author(a, proj)
+    if shopify_author:
+        article_body["author"] = shopify_author
 
     await publish_pipeline_status(article_id, MSG_PUBLISH_DISPATCH, STAGE_PUBLISH_DISPATCH)
     is_update = bool(existing_shopify_id)
@@ -3714,6 +3750,11 @@ async def update_wordpress_post(
         payload["featured_media"] = featured_media_id
     if cat_ids:
         payload["categories"] = cat_ids
+    # Updates only (re)assign an author the article itself carries: posts published before
+    # authors existed keep whoever WordPress has, never silently switched to the project default.
+    upd_author_id = int(a["wp_author_id"]) if str(a.get("wp_author_id") or "").isdigit() and int(a["wp_author_id"]) > 0 else None
+    if upd_author_id:
+        payload["author"] = upd_author_id
     _apply_wp_tags_to_payload(payload, tag_ids=tag_ids_list, keywords=a.get("keywords") or [])
 
     from app.services.wordpress_publish import update_post_on_wordpress
@@ -3760,6 +3801,8 @@ async def update_wordpress_post(
         "wp_category_ids": effective_category_ids_upd,
         "wp_tag_ids": effective_tag_ids_upd,
     }
+    if isinstance(updated, dict) and updated.get("author") is not None:
+        db_updates["wp_author_applied_id"] = int(updated["author"]) if str(updated["author"]).isdigit() else None
     # Cache the WP media ID so subsequent updates don't re-upload the same image.
     if featured_media_id is not None and featured_media_id > 0:
         resolved_image_url = image_url_for_update or (

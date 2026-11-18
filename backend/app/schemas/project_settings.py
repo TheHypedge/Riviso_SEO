@@ -68,6 +68,11 @@ class ProjectSettingsPublic(BaseModel):
         default=True,
         description="When true, publish/update sends Article/BlogPosting + FAQPage JSON-LD schema meta.",
     )
+    # Default post author when an article has none chosen (app/services/authors.py).
+    default_wp_author_id: int | None = None
+    default_wp_author_name: str | None = None
+    shopify_authors: list[str] = Field(default_factory=list)
+    default_shopify_author: str | None = None
 
 
 class ProjectSettingsUpdate(BaseModel):
@@ -84,6 +89,11 @@ class ProjectSettingsUpdate(BaseModel):
     shopify_product_aware_enabled: bool | None = None
     wp_internal_link_aware_enabled: bool | None = None
     schema_markup_enabled: bool | None = None
+    # 0 clears the default (publish as the connected WordPress user).
+    default_wp_author_id: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    default_wp_author_name: str | None = Field(default=None, max_length=200)
+    shopify_authors: list[str] | None = Field(default=None, max_length=20)
+    default_shopify_author: str | None = Field(default=None, max_length=200)
     shopify_shop: str | None = Field(default=None, max_length=2048)
     shopify_client_id: str | None = Field(default=None, max_length=256)
     shopify_client_secret: str | None = Field(default=None, max_length=5000)

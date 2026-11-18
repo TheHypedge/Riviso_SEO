@@ -2,6 +2,7 @@
 
 import { startTransition } from "react";
 import styles from "@/app/page.module.css";
+import AuthorSelect from "@/components/AuthorSelect";
 import { ScheduleModalIcons as Icon } from "@/components/bulkSchedule/scheduleModalIcons";
 import {
   useBulkScheduleForm,
@@ -14,6 +15,8 @@ import type { PromptListResponse, WordpressCategory, WordpressPostType } from "@
 export type { BulkScheduleFormValues, BulkScheduleSeedRow };
 
 type BulkScheduleFormProps = {
+  /** Enables the author picker (every scheduled article is published as this author). */
+  projectId?: string;
   seedRows: BulkScheduleSeedRow[];
   active: boolean;
   profileTz: string;
@@ -31,6 +34,7 @@ type BulkScheduleFormProps = {
 };
 
 export function BulkScheduleForm({
+  projectId,
   seedRows,
   active,
   profileTz,
@@ -291,6 +295,9 @@ export function BulkScheduleForm({
                   0–5. Placed between sections: data charts where the article has real figures, otherwise images in the selected image prompt's style. Applies only to articles this schedule generates.
                 </span>
               </label>
+              {projectId ? (
+                <AuthorSelect projectId={projectId} value={form.author} onChange={form.setAuthor} disabled={submitting} label="Publish as (author)" />
+              ) : null}
             </div>
           </div>
         </section>
