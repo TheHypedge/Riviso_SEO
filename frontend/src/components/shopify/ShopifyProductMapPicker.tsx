@@ -25,6 +25,8 @@ type Props = {
   requireProductAwareToggle?: boolean;
   productAwareEnabled?: boolean;
   grantedScopes?: string[];
+  /** Set when Product-aware is off: links to the switch (new tab) that makes Riviso pick products itself. */
+  autoSettingsHref?: string;
   compact?: boolean;
 };
 
@@ -37,6 +39,7 @@ export function ShopifyProductMapPicker({
   requireProductAwareToggle = false,
   productAwareEnabled = true,
   grantedScopes = [],
+  autoSettingsHref,
   compact = false,
 }: Props) {
   const activeProducts = products.filter((p) => {
@@ -63,6 +66,15 @@ export function ShopifyProductMapPicker({
           Showing <strong>active</strong> products only. Select up to {maxItems} — Riviso adds{" "}
           <code>/products/&#123;handle&#125;</code> links in the article and uses the first product&apos;s featured
           image as a style reference for the generated hero image when available.
+          {autoSettingsHref ? (
+            <>
+              {" "}Or turn on <strong>Product-aware blog generation</strong> in{" "}
+              <a href={autoSettingsHref} target="_blank" rel="noopener noreferrer" style={{ color: "var(--aa-accent, inherit)", fontWeight: 700, textDecoration: "underline" }}>
+                Project Settings → Connection
+              </a>{" "}
+              to have Riviso pick products automatically and skip this step.
+            </>
+          ) : null}
         </p>
       </div>
 

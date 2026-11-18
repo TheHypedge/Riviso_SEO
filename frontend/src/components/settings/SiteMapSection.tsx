@@ -45,13 +45,13 @@ export function SiteMapSection(p: Props) {
         </span>
       </header>
 
-      <div className={s.optionRow} style={{ marginTop: 0, paddingTop: 0, borderTop: 0 }}>
+      <div id="link-aware" className={s.optionRow} style={{ marginTop: 0, paddingTop: 0, borderTop: 0 }}>
         <div className={s.optionText}>
           <span className={s.optionTitle} id="link-aware-label">
             Internal-link aware articles
           </span>
           <span className={s.optionDesc}>
-            New articles link to relevant posts from this list. Applies when you click Save changes.
+            New articles link to relevant posts from this list automatically, without asking you to map pages. Saves automatically.
           </span>
         </div>
         <input

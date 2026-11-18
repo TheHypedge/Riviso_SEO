@@ -36,6 +36,10 @@ type Props = {
   siteMapEntries: SiteMapEntry[];
   siteMapLoading: boolean;
   internalLinkAware: boolean;
+  shopifyProductAware?: boolean;
+  /** Project Settings deep links for the automatic-mapping switches. */
+  wpSettingsHref?: string;
+  shopifySettingsHref?: string;
   shopifyProducts: ShopifyCatalogProduct[];
   shopifyLoading: boolean;
   shopifyScopes: string[];
@@ -171,6 +175,7 @@ export default function BulkGenerateModal(p: Props) {
                 onChange={(next) => set("mappedPages", next)}
                 loading={p.siteMapLoading}
                 internalLinkAwareEnabled={p.internalLinkAware}
+                settingsHref={p.wpSettingsHref}
               />
             </>
           ) : (
@@ -180,6 +185,7 @@ export default function BulkGenerateModal(p: Props) {
               onChange={(next) => set("mappedProducts", next)}
               loading={p.shopifyLoading}
               grantedScopes={p.shopifyScopes}
+              autoSettingsHref={p.shopifyProductAware ? undefined : p.shopifySettingsHref}
             />
           )}
           {p.error ? <p className={styles.error} role="alert" style={{ margin: 0 }}>{p.error}</p> : null}

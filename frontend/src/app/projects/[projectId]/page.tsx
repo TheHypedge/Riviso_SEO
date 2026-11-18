@@ -9,6 +9,7 @@ import styles from "../../page.module.css";
 import { formatDayMonYearTime } from "@/lib/dateFormat";
 import InnerImageCountField from "@/components/InnerImageCountField";
 import BulkGenerateModal, { type BulkGenerateValues } from "@/components/BulkGenerateModal";
+import { projectSettingsHref } from "@/lib/articlePaths";
 import projectsDark from "../projectsDark.module.css";
 import { CategoryMultiSelect } from "@/components/wordpress/CategoryMultiSelect";
 import { ArticlesOverview } from "@/components/ArticlesOverview";
@@ -2309,18 +2310,30 @@ export default function ProjectPage() {
   useEffect(() => {
     if (!token) return;
     if (tab !== "project_settings") return;
-    if (!isShopifyProject) return;
     if (!settings) return;
-    const next = Boolean(sShopifyProductAware);
-    const cur = Boolean(settings.shopify_product_aware_enabled);
-    if (next === cur) return;
+    // Automatic-mapping switches save on toggle (Shopify: product-aware, WordPress: internal-link
+    // aware); the WordPress one used to wait for "Save changes", so flipping it alone never persisted.
+    const patch = isShopifyProject
+      ? Boolean(sShopifyProductAware) !== Boolean(settings.shopify_product_aware_enabled)
+        ? { shopify_product_aware_enabled: Boolean(sShopifyProductAware) }
+        : null
+      : Boolean(sWpInternalLinkAware) !== Boolean(settings.wp_internal_link_aware_enabled)
+        ? { wp_internal_link_aware_enabled: Boolean(sWpInternalLinkAware) }
+        : null;
+    if (!patch) return;
     if (autoSaveToggleTimerRef.current) window.clearTimeout(autoSaveToggleTimerRef.current);
     autoSaveToggleTimerRef.current = window.setTimeout(() => {
       void api
-        .updateProjectSettings(projectId, { shopify_product_aware_enabled: next })
+        .updateProjectSettings(projectId, patch)
         .then((saved) => {
-          setSettings(saved);
-          setToast({ message: "Saved", tone: "success" });
+          // Only adopt the saved switch values: replacing the whole form state would wipe other unsaved edits.
+          setSettings((prev) => (prev ? { ...prev, shopify_product_aware_enabled: saved.shopify_product_aware_enabled, wp_internal_link_aware_enabled: saved.wp_internal_link_aware_enabled } : saved));
+          // The server's value is the truth: mirror it into the switch so a value that didn't stick
+          // shows as off (and doesn't re-trigger this save in a loop).
+          setSShopifyProductAware(Boolean(saved.shopify_product_aware_enabled));
+          setSWpInternalLinkAware(Boolean(saved.wp_internal_link_aware_enabled));
+          const stuck = Object.entries(patch).every(([k, v]) => Boolean((saved as Record<string, unknown>)[k]) === v);
+          setToast(stuck ? { message: "Saved", tone: "success" } : { message: "The setting could not be saved. Please try again.", tone: "error" });
         })
         .catch((e) => {
           setToast({ message: e instanceof Error ? e.message : "Save failed", tone: "error" });
@@ -2330,7 +2343,27 @@ export default function ProjectPage() {
       if (autoSaveToggleTimerRef.current) window.clearTimeout(autoSaveToggleTimerRef.current);
       autoSaveToggleTimerRef.current = null;
     };
-  }, [projectId, tab, token, isShopifyProject, settings, sShopifyProductAware]);
+  }, [projectId, tab, token, isShopifyProject, settings, sShopifyProductAware, sWpInternalLinkAware]);
+
+  // Deep link from the generate dialogs: ?tab=project_settings&settings=integrations&focus=link-aware
+  // opens the right settings sub-tab and scrolls the switch into view.
+  const settingsDeepLink = `${searchParams?.get("settings") || ""}|${searchParams?.get("focus") || ""}`;
+  const settingsLoaded = Boolean(settings);
+  const handledDeepLinkRef = useRef("");
+  useEffect(() => {
+    if (tab !== "project_settings" || settingsDeepLink === "|" || !settingsLoaded) return;
+    if (handledDeepLinkRef.current === settingsDeepLink) return;
+    handledDeepLinkRef.current = settingsDeepLink;
+    const [sub, focus] = settingsDeepLink.split("|");
+    if (sub === "connection" || sub === "content" || sub === "integrations") setSettingsSubTab(sub);
+    if (!focus) return;
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(focus);
+      el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      (el?.querySelector("input") as HTMLInputElement | null)?.focus({ preventScroll: true });
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [tab, settingsDeepLink, settingsLoaded]);
 
   // Auto-save Shopify project display name (debounced) so sidebar + switcher stay in sync.
   const shopifyNameSaveTimerRef = useRef<number | null>(null);
@@ -7789,6 +7822,9 @@ export default function ProjectPage() {
                 siteMapEntries={siteMap?.entries || []}
                 siteMapLoading={bulkGenerateSiteMapLoading}
                 internalLinkAware={Boolean(settings?.wp_internal_link_aware_enabled)}
+                shopifyProductAware={Boolean(settings?.shopify_product_aware_enabled)}
+                wpSettingsHref={projectSettingsHref(projectId, "wordpress")}
+                shopifySettingsHref={projectSettingsHref(projectId, "shopify")}
                 shopifyProducts={shopifyCatalog?.products || []}
                 shopifyLoading={shopifyCatalogLoading}
                 shopifyScopes={shopifyCatalog?.granted_scopes || []}

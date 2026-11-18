@@ -44,6 +44,7 @@ import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapP
 import { WordPressPageMapPicker } from "@/components/wordpress/WordPressPageMapPicker";
 import InnerImageCountField from "@/components/InnerImageCountField";
 import ArticleQualityPanel from "@/components/ArticleQualityPanel";
+import { projectSettingsHref } from "@/lib/articlePaths";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
 import type { MappedWordPressPage } from "@/lib/wordpressPageMapping";
 import { formatShopifyBlogOptionLabel } from "@/lib/shopifyBlogLabel";
@@ -1370,6 +1371,16 @@ export default function ArticleEditPage() {
 
   async function startGenerateFlow(opts?: { regenerate?: boolean; generateImageOverride?: boolean }) {
     if (isShopifyProject || isWordPressProject) {
+      // Auto mapping on (Project Settings) -> no picker: the backend selects pages/products itself
+      // when none are sent. Read fresh settings: the switch may have just been flipped in another tab.
+      const fresh = await api.getProjectSettings(params.projectId, { fresh: true }).catch(() => null);
+      if (fresh) setProjectSettings(fresh);
+      const s = fresh || projectSettings;
+      const autoMap = isShopifyProject ? Boolean(s?.shopify_product_aware_enabled) : Boolean(s?.wp_internal_link_aware_enabled);
+      if (autoMap) {
+        void doGenerate(undefined, undefined, { ...opts, skipPlatformMapping: true });
+        return;
+      }
       if (isWordPressProject) {
         const ctx = await ensureClusterLinkContext();
         if (ctx?.auto_link_ready) {
@@ -2180,9 +2191,9 @@ export default function ArticleEditPage() {
                   </div>
                 ) : null}
                 {isShopifyProject ? (
-                  <ShopifyProductMapPicker products={shopifyCatalog?.products || []} value={mappedProductsForGenerate} onChange={setMappedProductsForGenerate} loading={shopifyCatalogLoading} grantedScopes={shopifyCatalog?.granted_scopes || []} />
+                  <ShopifyProductMapPicker products={shopifyCatalog?.products || []} value={mappedProductsForGenerate} onChange={setMappedProductsForGenerate} loading={shopifyCatalogLoading} grantedScopes={shopifyCatalog?.granted_scopes || []} autoSettingsHref={shopifyProductAware ? undefined : projectSettingsHref(params.projectId, "shopify")} />
                 ) : (
-                  <WordPressPageMapPicker entries={siteMapEntries || []} value={mappedPagesForGenerate} onChange={setMappedPagesForGenerate} loading={siteMapLoading} internalLinkAwareEnabled={wpInternalLinkAware} />
+                  <WordPressPageMapPicker entries={siteMapEntries || []} value={mappedPagesForGenerate} onChange={setMappedPagesForGenerate} loading={siteMapLoading} internalLinkAwareEnabled={wpInternalLinkAware} settingsHref={projectSettingsHref(params.projectId, "wordpress")} />
                 )}
               </div>
               <div className={styles.modalFooter}>

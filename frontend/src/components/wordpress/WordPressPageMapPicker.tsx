@@ -17,6 +17,8 @@ type Props = {
   maxItems?: number;
   loading?: boolean;
   internalLinkAwareEnabled?: boolean;
+  /** Project Settings deep link (opens in a new tab so an open editor keeps its unsaved work). */
+  settingsHref?: string;
   compact?: boolean;
 };
 
@@ -27,8 +29,17 @@ export function WordPressPageMapPicker({
   maxItems = 3,
   loading = false,
   internalLinkAwareEnabled = true,
+  settingsHref,
   compact = false,
 }: Props) {
+  const settingsLink = (label: string) =>
+    settingsHref ? (
+      <a href={settingsHref} target="_blank" rel="noopener noreferrer" style={{ color: "var(--aa-accent, inherit)", fontWeight: 700, textDecoration: "underline" }}>
+        {label}
+      </a>
+    ) : (
+      label
+    );
   const rows = entries.filter((e) => (e.post_url || "").trim() && (e.post_title || "").trim());
 
   // Pages picked here are always honoured by the backend (explicit mapped_pages); the
@@ -43,8 +54,8 @@ export function WordPressPageMapPicker({
           uses the first page&apos;s featured image as a style reference for the hero image when available.
           {!internalLinkAwareEnabled ? (
             <>
-              {" "}Pick pages here, or turn on <strong>Internal-link aware articles</strong> in Project Settings to have
-              Riviso pick them automatically.
+              {" "}Pick pages here, or turn on <strong>Internal-link aware articles</strong> in{" "}
+              {settingsLink("Project Settings → Integrations")} to have Riviso pick them automatically and skip this step.
             </>
           ) : null}
         </p>
@@ -54,7 +65,7 @@ export function WordPressPageMapPicker({
         <InlineListSkeleton rows={5} />
       ) : rows.length === 0 ? (
         <p className={styles.muted} style={{ fontSize: 12, lineHeight: 1.5 }}>
-          No site map entries yet. Sync from WordPress in Project Settings, then try again.
+          No site map entries yet. Sync from WordPress in {settingsLink("Project Settings → Integrations")}, then try again.
         </p>
       ) : (
         <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8, maxHeight: 280, overflow: "auto" }}>

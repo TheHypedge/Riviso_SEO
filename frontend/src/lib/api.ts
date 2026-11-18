@@ -2775,7 +2775,12 @@ export const api = {
       shopify_access_token: string;
     }>,
   ) {
-    return apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, { method: "PATCH", body: JSON.stringify(patch) });
+    const saved = await apiFetch<ProjectSettings>(`/api/projects/${projectId}/settings`, { method: "PATCH", body: JSON.stringify(patch) });
+    // Every other screen (article editor, bulk generate) reads settings through the 30s cache:
+    // without this a switch flipped here kept its old value elsewhere until the cache expired.
+    invalidateProjectSettingsCache(projectId);
+    cacheSetValue(_cacheProjectSettings, `${projectId}:v2`, saved);
+    return saved;
   },
   async verifyWordpress(projectId: string, payload: Partial<{ wp_site_url: string; wp_username: string; wp_app_password: string }>) {
     return apiFetch<WordpressVerifyResponse>(

@@ -373,7 +373,7 @@ export function ShopifyProjectSettings({
         </p>
       ) : null}
 
-      <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%)` }}>
+      <div id="product-aware" style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid color-mix(in oklab, var(--aa-hairline), transparent 12%)` }}>
         <label className={styles.settingsFieldLabel} style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <input
             type="checkbox"
@@ -383,7 +383,7 @@ export function ShopifyProjectSettings({
           <span>
             <strong>Product-aware blog generation</strong>
             <div className={styles.muted} style={{ fontSize: 12, marginTop: 4, lineHeight: 1.45 }}>
-              When enabled, Riviso pulls relevant products from this project&apos;s Shopify catalog.
+              When enabled, Riviso pulls relevant products from this project&apos;s Shopify catalog automatically, without asking you to map them. Saves automatically.
             </div>
           </span>
         </label>

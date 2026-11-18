@@ -67,3 +67,9 @@ export function formatArticleLoadError(e: unknown): { message: string; canRetry:
     notFound: false,
   };
 }
+
+/** Deep link to the Project Settings switch that turns on automatic page/product mapping. */
+export function projectSettingsHref(projectId: string, platform: "wordpress" | "shopify"): string {
+  const sub = platform === "shopify" ? "connection" : "integrations";
+  return `/projects/${encodeURIComponent(projectId)}?tab=project_settings&settings=${sub}&focus=${platform === "shopify" ? "product-aware" : "link-aware"}`;
+}
