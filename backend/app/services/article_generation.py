@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
 from datetime import datetime
 from functools import lru_cache
 from typing import Any, Callable
@@ -16,6 +17,7 @@ from app.services.content_sanitizer import (
     sanitize_meta_title,
 )
 from app.services.openai_client import OpenAIClient
+from app.services.editorial_profiles import format_editorial_profile_for_system_prompt
 from app.services.generation_blocklist import format_banned_phrases_for_prompt
 from app.services.human_writing_guardrail import (
     HUMAN_FIRST_SYSTEM_ANCHOR,
@@ -114,6 +116,20 @@ async def generate_article_bundle_safe(**kwargs: Any) -> dict:
         return await generate_article_bundle(**filtered)
 
 
+def _single_h1(md: str) -> str:
+    """Exactly one H1: any later "# " heading becomes "## " (models sometimes use H1 for every section,
+    which leaves the article with no H2s and breaks FAQ schema parsing)."""
+    seen = False
+    out = []
+    for line in (md or "").splitlines():
+        if re.match(r"^#\s", line):
+            if seen:
+                line = "#" + line
+            seen = True
+        out.append(line)
+    return "\n".join(out)
+
+
 def _use_claude() -> bool:
     return (settings.llm_text_provider or "").strip().lower() in {"anthropic", "claude"}
 
@@ -155,6 +171,8 @@ def build_generation_messages(
     shopify_product_mapping: bool = False,
     wordpress_content_mapping: bool = False,
     reference_source_content: str | None = None,
+    editorial_profile: str | None = None,
+    research_context: str | None = None,
 ) -> tuple[str, str]:
     """Build (system, user) chat payloads — single source of truth for token estimation and generation."""
     bi = (brand_identity or "").strip()
@@ -267,10 +285,13 @@ def build_generation_messages(
         "- Never use semicolons as sentence connectors (e.g. 'X; however, Y'). Use a full stop or comma instead.\n"
         "- Never use a colon as a dramatic mid-sentence pause (e.g. 'The answer: it works'). Write a complete sentence.\n"
         + depth_and_faq_blocks
+        + format_editorial_profile_for_system_prompt(editorial_profile)
+        + (research_context or "")
         + "\nUSER PROMPT AUTHORITY: The writing instructions in the user message are the HIGHEST PRIORITY "
         "directive for this article. Follow them precisely and completely — they define the article's "
         "angle, tone, structure, depth, and focus. All other system requirements (including depth and FAQ) "
-        "are subordinate to the user's prompt and should be adjusted or skipped if the user instructs it.\n"
+        "are subordinate to the user's prompt and should be adjusted or skipped if the user instructs it, "
+        "EXCEPT the language-quality, factual-accuracy and professional-compliance rules, which always apply.\n"
         "\nReturn ONLY a JSON object with exactly these keys and no others: "
         '"article_markdown", "meta_title", "meta_description".\n'
         "Do not add commentary, explanations, or keys such as title, body, keywords, or choices.\n"
@@ -330,6 +351,9 @@ async def generate_article_bundle(
     shopify_mapped_products: list[dict[str, str]] | None = None,
     wordpress_mapped_pages: list[dict[str, str]] | None = None,
     reference_source_content: str | None = None,
+    editorial_profile: str | None = None,
+    research: bool = False,
+    research_country: str | None = None,
     **extra_kwargs: Any,
 ) -> dict:
     """
@@ -376,6 +400,18 @@ async def generate_article_bundle(
 
     client = OpenAIClient()
 
+    research_pack: dict | None = None
+    if research:
+        from app.services.research_pipeline import build_research_pack
+
+        research_pack = await build_research_pack(
+            title=title, focus=focus_keyphrase, keywords=keywords,
+            profile=editorial_profile or "general", country=research_country,
+        )
+        log.info("Research pack for %r: status=%s facts=%d in %ss", title[:80], research_pack.get("status"),
+                 len(research_pack.get("facts") or []), research_pack.get("seconds"))
+    from app.services.research_pipeline import format_research_for_prompt
+
     pc_raw = product_context or ""
     shopify_mapping = bool(shopify_for_injection) or "Shopify product context" in pc_raw
     wp_mapping = bool(wp_for_injection) or "WordPress internal page" in pc_raw
@@ -391,6 +427,8 @@ async def generate_article_bundle(
         shopify_product_mapping=shopify_mapping or bool(shopify_for_injection),
         wordpress_content_mapping=wp_mapping or bool(wp_for_injection),
         reference_source_content=reference_source_content,
+        editorial_profile=editorial_profile,
+        research_context=format_research_for_prompt(research_pack),
     )
 
     text_model = _article_text_model()
@@ -402,7 +440,7 @@ async def generate_article_bundle(
         obj = await client.chat_json(model=text_model, system=sys, user=user)
     obj = enforce_strict_article_json(dict(obj))
 
-    article_md = sanitize_article_body(obj.get("article_markdown"))
+    article_md = _single_h1(sanitize_article_body(obj.get("article_markdown")))
     meta_title = sanitize_meta_title(obj.get("meta_title"))
     meta_desc = sanitize_meta_description(obj.get("meta_description"))
 
@@ -425,11 +463,39 @@ async def generate_article_bundle(
         except Exception:
             log.exception("WordPress post-generation page injection failed")
 
-    from app.services.article_quality import structure_report, verify_external_links
+    from app.services.article_quality import seo_aeo_geo_score, structure_report, verify_external_links
+    from app.services.research_pipeline import apply_citations, revise_unsupported, unsupported_claims
+
+    trusted = {str((p.as_dict() if hasattr(p, "as_dict") else p).get("post_url") or "") for p in wp_for_injection}
+    research_summary: dict[str, Any] = {}
+    if research_pack is not None:
+        claims = unsupported_claims(article_md, research_pack)
+        revised = False
+        if claims:
+            fixed = await revise_unsupported(
+                client, settings.openai_research_model or settings.openai_text_model,
+                md=article_md, claims=claims, pack=research_pack,
+            )
+            if fixed:
+                article_md, revised = fixed, True
+        after = unsupported_claims(article_md, research_pack)
+        try:
+            article_md, cited = apply_citations(article_md, research_pack, trusted_urls=trusted)
+        except Exception:
+            log.exception("Citation formatting failed; markers stripped")
+            article_md, cited = re.sub(r"\[F\d+(?:\s*,\s*F\d+)*\]", "", article_md), []
+        trusted |= set(cited)
+        research_summary = {
+            **{k: research_pack.get(k) for k in ("status", "error", "seconds", "generated_at", "intent", "core_answer",
+                                                  "questions", "facts", "rejected", "searches", "errors")},
+            "sources_cited": cited,
+            "unsupported_before": claims,
+            "unsupported_after": after,
+            "revised": revised,
+        }
 
     removed_links: list[str] = []
     try:
-        trusted = {str((p.as_dict() if hasattr(p, "as_dict") else p).get("post_url") or "") for p in wp_for_injection}
         article_md, removed_links = await asyncio.wait_for(
             verify_external_links(article_md, trusted_urls=trusted), timeout=30.0
         )
@@ -437,6 +503,15 @@ async def generate_article_bundle(
         log.warning("External link verification skipped", exc_info=True)
     quality_report = structure_report(article_md)
     quality_report["dead_links_removed"] = removed_links
+    try:
+        quality_report["seo_aeo_geo"] = seo_aeo_geo_score(
+            article_md, focus=focus_keyphrase, profile=editorial_profile or "general",
+            research=research_summary or None, internal_urls={u for u in trusted if u and u not in research_summary.get("sources_cited", [])},
+        )
+    except Exception:
+        log.exception("SEO/AEO/GEO scoring failed")
+    if research_summary:
+        quality_report["research"] = research_summary
     log.info("Article quality report for %r: %s", title[:80], quality_report)
 
     image_url: str | None = None

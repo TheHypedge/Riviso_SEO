@@ -22,6 +22,8 @@ from app.services.article_generation import (
     generate_article_bundle_safe,
     generate_featured_image_only,
 )
+from app.services.editorial_profiles import resolve_editorial_profile
+from app.services.research_pipeline import project_country, research_enabled
 from app.services.prompt_validation import assert_image_prompt_allowed, assert_writing_prompt_allowed
 from app.services.integrity_engine import AIDetectionAuditor
 from app.services.platform_generation import resolve_platform_generation_extras
@@ -222,7 +224,11 @@ async def execute_article_generation(
     if platform_extras.get("wp_mapped_pages"):
         await publish_pipeline_status(article_id, MSG_INTERNAL_LINKS, STAGE_INTERNAL_LINKS)
 
-    await publish_pipeline_status(article_id, MSG_OPENAI, STAGE_OPENAI_DISPATCH)
+    use_research = research_enabled(proj)
+    if use_research:
+        await publish_pipeline_status(article_id, "Researching live sources and verifying facts...", STAGE_OPENAI_DISPATCH)
+    else:
+        await publish_pipeline_status(article_id, MSG_OPENAI, STAGE_OPENAI_DISPATCH)
 
     try:
         gen = await generate_article_bundle_safe(
@@ -239,6 +245,9 @@ async def execute_article_generation(
             generate_image=generate_image,
             image_prompt_text=(resolved_image or {}).get("text") or None,
             reference_source_content=reference_source_content,
+            editorial_profile=resolve_editorial_profile(proj),
+            research=use_research,
+            research_country=project_country(proj),
         )
     except HTTPException:
         if quota_consumed and hasattr(st, "refund_article_usage"):

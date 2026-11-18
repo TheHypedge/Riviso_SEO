@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 MAX_INNER_IMAGES = 5
 
 # A chart in the FAQ or the wrap-up reads as noise; keep them in the body sections.
-_SKIP_HEADING = re.compile(r"faq|frequently asked|conclusion|final thoughts|key takeaways|summary", re.IGNORECASE)
+_SKIP_HEADING = re.compile(r"faq|frequently asked|sources|references|conclusion|final thoughts|key takeaways|summary", re.IGNORECASE)
 _NUM = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 W, H = 1200, 675

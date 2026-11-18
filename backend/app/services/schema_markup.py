@@ -132,6 +132,10 @@ def build_article_jsonld(article: dict[str, Any], project: dict[str, Any]) -> di
         data["dateModified"] = modified
     if image:
         data["image"] = image
+    # GEO: the verified sources the article cites (research pipeline), as schema.org citations.
+    cited = ((article.get("quality_report") or {}).get("research") or {}).get("sources_cited") or []
+    if cited:
+        data["citation"] = [{"@type": "CreativeWork", "url": u} for u in cited[:20] if isinstance(u, str)]
     return data
 
 

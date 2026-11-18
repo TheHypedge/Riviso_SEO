@@ -3125,6 +3125,14 @@ export const api = {
     }
   },
 
+  getArticleQuality(projectId: string, articleId: string) {
+    return apiFetch<{ quality_report: ArticleQualityReport }>(
+      `/api/projects/${projectId}/articles/${articleId}/quality`,
+      undefined,
+      { skipGlobalLoading: true },
+    );
+  },
+
   async getArticleBody(projectId: string, articleId: string, opts?: ApiFetchOptions & { fresh?: boolean }) {
     const key = articleDetailCacheKey(projectId, articleId);
     if (!opts?.fresh) {
@@ -4525,3 +4533,18 @@ export const api = {
   },
 };
 
+
+/** Stored on each article by the last generation (backend article_generation + research_pipeline). */
+export type ArticleQualityCheck = { id: string; label: string; weight: number; ok: boolean | null; detail: string };
+export type ArticleResearchFact = {
+  id: string; claim: string; value?: string; source_url: string; source_title?: string;
+  as_of?: string; status?: string; verification?: "verified" | "cited";
+};
+export type ArticleQualityReport = {
+  passed?: boolean;
+  seo_aeo_geo?: { score: number; checks: ArticleQualityCheck[]; compliance_issues: string[] };
+  research?: {
+    status: "ok" | "thin" | "failed"; error?: string; seconds?: number; generated_at?: string;
+    facts?: ArticleResearchFact[]; sources_cited?: string[]; unsupported_after?: string[]; revised?: boolean;
+  };
+};

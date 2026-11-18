@@ -221,6 +221,10 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
     openai_text_model: str = Field(default="gpt-4.1", validation_alias="OPENAI_TEXT_MODEL")
     openai_image_model: str = "gpt-image-2"
+    # Evidence-first research before generation (research_pipeline.py): live web search, source
+    # verification, numbered citations. Off by default; a project's ``research_enabled`` overrides it.
+    research_pipeline_enabled: bool = Field(default=False, validation_alias="RESEARCH_PIPELINE_ENABLED")
+    openai_research_model: str = Field(default="", validation_alias="OPENAI_RESEARCH_MODEL")  # "" = text model
     # 1536-dim, fastest + cheapest tier; used by the cluster-validation engine
     # to detect "intent overlap" between proposed topics and existing content.
     openai_embedding_model: str = "text-embedding-3-small"

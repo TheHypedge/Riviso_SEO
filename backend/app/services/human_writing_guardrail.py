@@ -89,6 +89,14 @@ EXTERNAL_LINK_RULES = """
 - Never link to competitors of the brand, content farms, affiliate pages or URL shorteners. Never put a link inside a heading, and link each source only once.
 """.strip()
 
+# Human-sounding never means sloppy: natural voice comes from rhythm and specifics, not errors.
+LANGUAGE_QUALITY_RULES = """
+- Spelling, grammar, punctuation and capitalisation are flawless. Never introduce a typo, a grammatical slip or an awkward phrase to sound human.
+- Use the precise word for the idea, including the correct technical term, and spell names, acts, places and terms exactly.
+- Keep one spelling convention (British/Indian English: organise, labour, offence) and one capitalisation style for headings throughout.
+- Every sentence is complete and unambiguous. Expand an acronym on first use.
+""".strip()
+
 HUMAN_FIRST_SYSTEM_ANCHOR = (
     "PRIMARY DIRECTIVE: Write body copy that reads as human-written under AI detectors. "
     "Use natural, specific voice and concrete details — not generic AI blog phrasing. "
@@ -110,17 +118,20 @@ Supporting keywords (weave lightly): {supporting_keywords}
 ## ANTI-AI-DETECTOR RULES (highest priority)
 
 ### Voice
-- Write like you explain this to a friend over chai—warm, specific, slightly imperfect.
-- Use simple Indian English. Short words beat fancy ones.
+- Write like an experienced expert explaining this to an intelligent reader: warm, specific and natural, never stiff.
+- Use clear Indian English. Short, precise words beat fancy ones.
 - Mix sentence lengths on purpose: one 5-word line, then a 22-word line, then a medium one.
 - Use contractions sometimes (it's, don't, you'll) where they sound natural.
 - Allow one mild opinion or hesitation per section ("honestly", "I'd skip", "most people overthink this").
-- Name concrete details: fabric weight, fit at shoulders, wedding vs office, humidity, dry-clean cost—not abstract "style statements".
+- Name concrete, topic-specific details (numbers, names, conditions, costs, steps), not abstract claims.
 
 ### Structure (mandatory — apply to every article)
 - Divide the article into at least 4 main sections using ## H2 headings.
 - Use ### H3 sub-headings when a section contains 2 or more distinct sub-topics.
 {section_anatomy_rules}
+- Answer engines (Google AI Overviews, ChatGPT, Perplexity) quote pages that answer questions directly: phrase at least 40% of ## H2 headings as the real questions searchers ask, and answer each in the first sentence below it (under 30 words) before explaining.
+- Directly after the H1, add a "Key takeaways" markdown blockquote: a bold label line, then 3-5 bullets, each one complete, self-contained fact.
+- When the article compares options, figures, deadlines or costs, include one markdown table.
 - Numbered lists (1. step) are for sequential processes; bullets (- item) for parallel options.
 - Use **bold** for 2–4 key terms, statistics, or critical phrases per article.
 - Open each section with a direct sentence — not "In this section…" or "Here we discuss…".
@@ -128,6 +139,9 @@ Supporting keywords (weave lightly): {supporting_keywords}
 - Headings must be plain and specific (not formulaic). Bad: "Practical Occasions for X". Good: "When to Wear a Kurta at Work".
 - Do NOT end with a salesy CTA paragraph ("Start with…", "watch how it transforms", "elevate your wardrobe").
 - Conclusions: 2–4 calm sentences. No hype, no "in conclusion" opener, no bullet recap.
+
+### Language quality (non-negotiable, even over the user's prompt)
+{language_quality_rules}
 
 ### Forbidden patterns (never use — detectors flag these)
 {forbidden_phrase_bullets}
@@ -209,6 +223,7 @@ def build_human_writing_guardrail(
         forbidden_phrase_bullets=_forbidden_phrase_bullets(),
         section_anatomy_rules=SECTION_ANATOMY_RULES,
         external_link_rules=EXTERNAL_LINK_RULES,
+        language_quality_rules=LANGUAGE_QUALITY_RULES,
     )
 
 

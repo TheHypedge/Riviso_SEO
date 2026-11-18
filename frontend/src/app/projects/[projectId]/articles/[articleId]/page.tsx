@@ -43,6 +43,7 @@ import { ArticleGenerationProgress } from "@/components/ArticleGenerationProgres
 import { ShopifyProductMapPicker } from "@/components/shopify/ShopifyProductMapPicker";
 import { WordPressPageMapPicker } from "@/components/wordpress/WordPressPageMapPicker";
 import InnerImageCountField from "@/components/InnerImageCountField";
+import ArticleQualityPanel from "@/components/ArticleQualityPanel";
 import type { MappedShopifyProduct } from "@/lib/shopifyProductMapping";
 import type { MappedWordPressPage } from "@/lib/wordpressPageMapping";
 import { formatShopifyBlogOptionLabel } from "@/lib/shopifyBlogLabel";
@@ -3076,6 +3077,8 @@ export default function ArticleEditPage() {
                         </button>
                       </div>
                     </div>
+
+                    <ArticleQualityPanel className={editorStyles.panelSection} projectId={params.projectId} articleId={params.articleId} refreshKey={article?.generated_at ?? null} />
 
                     {isArticleInfoDirty ? (
                       <div className={editorStyles.panelSection}>

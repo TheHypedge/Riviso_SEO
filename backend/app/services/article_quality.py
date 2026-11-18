@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 _LINK_RE = re.compile(r"(?<!!)\[([^\[\]\n]+)\]\((https?://[^\s)]+)\)")
 _LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _SENT_RE = re.compile(r"[^.!?:]+[.!?:]+(?=\s|$)")
-_FAQ_RE = re.compile(r"faq|frequently asked", re.IGNORECASE)
+_FAQ_RE = re.compile(r"faq|frequently asked|^sources$|^references$|^key takeaways$", re.IGNORECASE)
 
 
 def _plain(text: str) -> str:
@@ -141,3 +141,92 @@ async def verify_external_links(md: str, *, trusted_urls: set[str] | frozenset[s
         return m.group(0)
 
     return _LINK_RE.sub(keep, md), sorted(dead)
+
+
+# ---------------------------------------------------------------- SEO / AEO / GEO score
+
+_BCI_BANNED = re.compile(
+    r"\b(best|top|no\.?\s?1|number one|leading|most trusted)\s+(lawyers?|advocates?|law firms?|attorneys?)\b"
+    r"|\bguarantee[sd]?\s+(?:(?:a|an|the|your|you)\s+)?(?:bail|acquittal|success|results?|outcomes?|win|victory|relief|divorce|favourable)\b"
+    r"|\b(?:result|success|outcome|acquittal|bail)\s+(?:is\s+)?guaranteed\b|\b100%\s+success\b|\bsuccess rate\b|\bhire us\b|\bcall (us )?now\b",
+    re.IGNORECASE,
+)
+_OLD_CODE_RE = re.compile(r"\b(IPC|CrPC|Cr\.P\.C\.?|Indian Penal Code|Code of Criminal Procedure|Indian Evidence Act)\b")
+_NEW_CODE_RE = re.compile(r"\b(BNS|BNSS|BSA|Bharatiya Nyaya Sanhita|Bharatiya Nagarik Suraksha Sanhita|Bharatiya Sakshya Adhiniyam)\b")
+_CITE_RE = re.compile(r"\[\[\d+\]\]\(https?://")
+
+
+def _h2_sections(md: str) -> list[tuple[str, str]]:
+    parts = re.split(r"(?m)^##\s+(.+)$", md or "")
+    return [(parts[i].strip(), parts[i + 1]) for i in range(1, len(parts) - 1, 2)]
+
+
+def seo_aeo_geo_score(md: str, *, focus: str = "", profile: str = "general", research: dict | None = None,
+                      internal_urls: set[str] | frozenset[str] = frozenset()) -> dict:
+    """Weighted checklist (0-100) of what ranks in Google and gets cited by AI answer engines.
+
+    Checks that cannot apply (no site map for internal links, no research pack) are left out of
+    the denominator instead of counting as failures.
+    """
+    from app.services.schema_markup import extract_faq_pairs
+
+    text = md or ""
+    plain = _plain(text)
+    lower = plain.lower()
+    words = len(plain.split())
+    sections = [(h, b) for h, b in _h2_sections(text) if not _FAQ_RE.search(h)]
+    questions = [(h, b) for h, b in sections if h.rstrip().endswith("?")]
+
+    def first_sentence_words(body: str) -> int:
+        para = next((ln for ln in body.splitlines() if ln.strip() and not ln.lstrip().startswith(("#", "-", "*", "|", ">", "!", "<"))), "")
+        sents = _sentences(para)
+        return len(sents[0].split()) if sents else 999
+
+    faq = extract_faq_pairs(text)
+    faq_ok = [p for p in faq if 20 <= len(p["answer"].split()) <= 90]
+    h1 = next((ln for ln in text.splitlines() if re.match(r"^#\s", ln)), "")
+    intro = " ".join(lower.split()[:150])
+    f = (focus or "").strip().lower()
+    cites = len(_CITE_RE.findall(text))
+    links = _LINK_RE.findall(text)
+    internal = [u for _, u in links if u in internal_urls]
+    rs = research or {}
+
+    checks: list[tuple[str, str, int, bool | None, str]] = [
+        # id, label, weight, ok (None = not applicable), detail
+        ("kw_intro", "Focus keyphrase in H1 or opening", 8, (f in h1.lower() or f in intro) if f else None, ""),
+        ("kw_h2", "Focus keyphrase in an H2", 4, any(f in h.lower() for h, _ in sections) if f else None, ""),
+        ("depth", "Depth: 900+ words", 6, words >= 900, f"{words} words"),
+        ("internal_links", "2+ internal links", 8, (len(set(internal)) >= 2) if internal_urls else None, f"{len(set(internal))} internal"),
+        ("question_h2", "Question-style H2s (40%+)", 8, bool(sections) and len(questions) / len(sections) >= 0.4, f"{len(questions)}/{len(sections)}"),
+        ("answer_first", "H2 questions answered in the first sentence", 8,
+         (sum(first_sentence_words(b) <= 30 for _, b in questions) >= 0.7 * len(questions)) if questions else None, ""),
+        ("faq", "FAQ with 3+ questions", 8, len(faq) >= 3, f"{len(faq)} pairs"),
+        ("faq_len", "FAQ answers 20-90 words", 4, (len(faq_ok) >= 0.7 * len(faq)) if faq else None, ""),
+        ("takeaways", "Key takeaways summary", 5, "key takeaways" in lower, ""),
+        ("table", "Comparison or data table", 4, bool(re.search(r"(?m)^\|.+\|\s*$", text)), ""),
+        ("citations", "3+ cited sources", 10, cites >= 3 if rs.get("status") == "ok" else None, f"{cites} citations"),
+        ("claims", "No unsupported statistics or cases", 8,
+         (not rs.get("unsupported_after")) if rs.get("status") == "ok" else None, ", ".join(rs.get("unsupported_after") or [])[:200]),
+        ("freshness", "Dated facts (as of / year)", 4, bool(re.search(r"\bas of\b|\b20[12]\d\b", lower)), ""),
+        ("structure", "Prose-led section structure", 6, bool(structure_report(text).get("passed")), ""),
+        ("clean", "No AI-tell phrases or em dashes", 4,
+         not any(p in lower for p in AI_DETECTOR_BANNED_PHRASES) and "\u2014" not in text, ""),
+    ]
+    compliance: list[str] = []
+    if profile == "legal":
+        if "not legal advice" not in lower:
+            compliance.append("Missing 'not legal advice' disclaimer")
+        compliance += [f"Bar Council: '{m.group(0)}'" for m in _BCI_BANNED.finditer(plain)][:5]
+        if _OLD_CODE_RE.search(plain) and not _NEW_CODE_RE.search(plain):
+            compliance.append("Cites IPC/CrPC/Evidence Act without the BNS/BNSS/BSA equivalent")
+        checks.append(("compliance", "Legal compliance (disclaimer, BCI, new codes)", 8, not compliance, "; ".join(compliance)))
+
+    applicable = [c for c in checks if c[3] is not None]
+    total = sum(c[2] for c in applicable) or 1
+    earned = sum(c[2] for c in applicable if c[3])
+    return {
+        "score": round(100 * earned / total),
+        "checks": [{"id": c[0], "label": c[1], "weight": c[2], "ok": c[3], "detail": c[4]} for c in checks],
+        "compliance_issues": compliance,
+    }

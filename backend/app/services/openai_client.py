@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import logging
 from typing import Any
 
@@ -105,6 +106,50 @@ class OpenAIClient:
         if not isinstance(obj, dict):
             raise RuntimeError("Model JSON response is not an object")
         return obj
+
+    async def web_search(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        allowed_domains: list[str] | None = None,
+        country: str | None = None,
+        timeout_s: float = 150.0,
+    ) -> dict[str, Any]:
+        """Responses API + built-in ``web_search`` tool.
+
+        Returns ``{"text", "citations": [{url, title}], "sources": [url], "queries": [str],
+        "domain_filter_applied": bool}``. Tool variants are tried newest-first so an account
+        or model without domain filters still gets a (post-filtered) search instead of nothing.
+        """
+        base: dict[str, Any] = {"type": "web_search", "search_context_size": "high"}
+        if country and len(country) == 2:
+            base["user_location"] = {"type": "approximate", "country": country.upper()}
+        variants: list[tuple[dict[str, Any], bool]] = []
+        if allowed_domains:
+            variants.append(({**base, "filters": {"allowed_domains": allowed_domains[:100]}}, True))
+        variants.append((base, False))
+        variants.append(({k: v for k, v in base.items() if k != "search_context_size"} | {"type": "web_search_preview"}, False))
+
+        last_err: Exception | None = None
+        for tool, filtered in variants:
+            payload: dict[str, Any] = {"model": model, "input": prompt, "tools": [tool]}
+            if tool["type"] == "web_search":
+                payload["include"] = ["web_search_call.action.sources"]
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, read=timeout_s)) as client:
+                    res = await client.post("https://api.openai.com/v1/responses", headers=self._headers(), json=payload)
+                if res.status_code == 400:
+                    last_err = RuntimeError(f"web_search variant rejected: {res.text[:300]}")
+                    log.info("OpenAI web_search variant %s rejected, trying next", tool["type"])
+                    continue
+                res.raise_for_status()
+            except httpx.HTTPError as e:
+                raise RuntimeError(f"OpenAI web search failed: {type(e).__name__}: {e}") from e
+            out = _parse_web_search_response(res.json())
+            out["domain_filter_applied"] = filtered
+            return out
+        raise last_err or RuntimeError("OpenAI web search failed")
 
     async def chat_text(self, *, model: str, user: str, timeout_s: float = 30.0) -> str:
         """
@@ -236,3 +281,47 @@ class OpenAIClient:
                 return f"data:image/png;base64,{b64.strip()}"
         return None
 
+
+
+def _parse_web_search_response(data: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a Responses API payload into text, the URLs the search touched, and cited segments.
+
+    ``segments`` pairs each citation with the line of text it supports (the bullet/sentence the
+    annotation sits in), so facts can be tied to a URL the search really returned.
+    """
+    texts: list[str] = []
+    citations: list[dict[str, str]] = []
+    segments: list[dict[str, str]] = []
+    sources: list[str] = []
+    queries: list[str] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") in ("web_search_call", "web_search_preview_call"):
+            action = item.get("action") or {}
+            if action.get("query"):
+                queries.append(str(action["query"]))
+            for s in action.get("sources") or []:
+                if isinstance(s, dict) and s.get("url"):
+                    sources.append(str(s["url"]))
+        elif item.get("type") == "message":
+            for c in item.get("content") or []:
+                if not isinstance(c, dict) or c.get("type") != "output_text":
+                    continue
+                text = str(c.get("text") or "")
+                texts.append(text)
+                for a in c.get("annotations") or []:
+                    if not (isinstance(a, dict) and a.get("type") == "url_citation" and a.get("url")):
+                        continue
+                    citations.append({"url": str(a["url"]), "title": str(a.get("title") or "")})
+                    try:
+                        i = int(a.get("start_index"))
+                    except (TypeError, ValueError):
+                        continue
+                    line_start = text.rfind("\n", 0, i) + 1
+                    line = text[line_start:i]
+                    line = re.sub(r"\(\s*\[[^\]]*\]\([^)]*\)\s*\)", " ", line)  # drop inline "([site](url))" refs
+                    line = re.sub(r"[*_`]+", "", line).strip(" -•\t")
+                    if len(line) >= 20:
+                        segments.append({"text": line[:600], "url": str(a["url"]), "title": str(a.get("title") or "")})
+    return {"text": "\n".join(texts).strip(), "citations": citations, "segments": segments, "sources": sources, "queries": queries}

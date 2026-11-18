@@ -1768,6 +1768,20 @@ async def get_article_body(
         raise HTTPException(status_code=500, detail="Could not load article body") from e
 
 
+@router.get("/{article_id}/quality")
+async def get_article_quality(
+    project_id: str,
+    article_id: str,
+    user: dict = Depends(get_current_user),
+) -> dict:
+    """Last generation's quality report: structure, SEO/AEO/GEO score and the research pack (facts + sources)."""
+    st = get_legacy_storage_module()
+    await _require_project_access(st=st, user=user, project_id=project_id)
+    a = await run_sync(call_storage, _get_article_or_404, st=st, project_id=project_id, article_id=article_id)
+    qr = a.get("quality_report") if isinstance(a, dict) else None
+    return {"quality_report": qr if isinstance(qr, dict) else {}}
+
+
 @router.get("/{article_id}", response_model=ArticleDetailResponse)
 async def get_article_detail(
     project_id: str,
