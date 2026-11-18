@@ -442,6 +442,11 @@ export default function ArticleEditPage() {
   const [removeImageConfirming, setRemoveImageConfirming] = useState(false);
   const featuredImageFileInputRef = useRef<HTMLInputElement>(null);
   const [generatedImageUrl, setGeneratedImageUrl] = useState<string>("");
+  // Mirror of generatedImageUrl (keyed by article) readable inside stable callbacks (see applyArticleBody).
+  const loadedImageUrlRef = useRef<{ key: string; url: string }>({ key: "", url: "" });
+  useEffect(() => {
+    loadedImageUrlRef.current = { key: `${params.projectId}:${params.articleId}`, url: generatedImageUrl };
+  }, [generatedImageUrl, params.projectId, params.articleId]);
   const [featuredImageLoading, setFeaturedImageLoading] = useState(false);
   const [featuredImageLoadFailed, setFeaturedImageLoadFailed] = useState(false);
   const featuredImageLoadRef = useRef<{ articleKey: string; state: "idle" | "loading" | "loaded" | "failed" }>({
@@ -866,17 +871,29 @@ export default function ArticleEditPage() {
       const merged: ArticleDetail = { ...shell, article: bodyText };
       setArticle(merged);
       setBody(bodyText);
-      setEditorBaseline(
-        baselineFromFields({
+      // Functional update: the featured image is fetched separately (the editor shell never
+      // carries its URL) and its response can land in the same tick as this body or a WordPress
+      // sync. Reading the previous baseline keeps the URL the loader just recorded instead of
+      // resetting it to "" -- which made every live article open as "unsaved".
+      setEditorBaseline((prev) => {
+        const loaded = loadedImageUrlRef.current;
+        const imageUrl =
+          (shell.image_url || "").trim() ||
+          (shell.has_featured_image
+            ? loaded.key === `${shell.project_id}:${shell.id}` && loaded.url
+              ? loaded.url
+              : prev?.imageUrl || ""
+            : "");
+        return baselineFromFields({
           title: shell.title || "",
           keywords: kwToString(shell.keywords),
           focus: shell.focus_keyphrase || "",
           body: bodyText,
           metaTitle: shell.meta_title || "",
           metaDesc: shell.meta_description || "",
-          imageUrl: shell.image_url || "",
-        }),
-      );
+          imageUrl,
+        });
+      });
       setEditorRevision((r) => r + 1);
     },
     [],
@@ -1253,6 +1270,13 @@ export default function ArticleEditPage() {
     } finally {
       setWpMetaLoading(false);
     }
+  }
+
+  // After a successful save/publish/update the editor's own values ARE the saved state. The server's
+  // copy is re-serialized/sanitized (whitespace, dashes, markdown spelling), so building the baseline
+  // from it left the article "dirty" right after an update: Update reappeared and leaving prompted.
+  function markSavedAsShown(imageUrl: string) {
+    setEditorBaseline(baselineFromFields({ title, keywords, focus, body, metaTitle, metaDesc, imageUrl }));
   }
 
   async function persistEditorForWordPress(opts?: { skipGlobalLoading?: boolean }) {
@@ -1749,7 +1773,7 @@ export default function ArticleEditPage() {
           setArticle(refreshed);
           const syncedImageUrl = refreshed.image_url || generatedImageUrl;
           setGeneratedImageUrl(syncedImageUrl);
-          setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
+          markSavedAsShown(syncedImageUrl);
           setWpMetaBaseline({ postType: wpPostType, wpStatus, categoryIds: wpIdsKey(wpCategoryIds), tagIds: wpIdsKey(wpTagIds) });
           // Do NOT reset wpPostType from article.wp_rest_base — keep the project default
           // so the Post Type selector reflects the project setting, not the historical value.
@@ -1794,7 +1818,7 @@ export default function ArticleEditPage() {
       setArticle(refreshed);
       const syncedImageUrl = refreshed.image_url || generatedImageUrl;
       setGeneratedImageUrl(syncedImageUrl);
-      setEditorBaseline(baselineFromArticle(refreshed, syncedImageUrl));
+      markSavedAsShown(syncedImageUrl);
       setWpMetaBaseline({ postType: wpPostType, wpStatus: effectiveWpStatus, categoryIds: wpIdsKey(wpCategoryIds), tagIds: wpIdsKey(wpTagIds) });
       // Do NOT reset wpPostType from article.wp_rest_base — keep the project default.
       let noticeText = `${res.status}: ${res.message}${res.wp_link ? `\n${res.wp_link}` : ""}`;
@@ -1959,6 +1983,8 @@ export default function ArticleEditPage() {
         params.projectId,
         params.articleId,
         async () => {
+          // Push the editor's current text first -- the store receives what the article holds.
+          await persistEditorForWordPress({ skipGlobalLoading: true });
           const res = await api.publishArticleToShopify(
             params.projectId,
             params.articleId,
@@ -1970,6 +1996,7 @@ export default function ArticleEditPage() {
           );
           const refreshed = await api.getArticle(params.projectId, params.articleId, { fresh: true, skipGlobalLoading: true });
           setArticle(refreshed);
+          markSavedAsShown(generatedImageUrl);
           setNotice(`${res.message}${res.shopify_link ? `\n${res.shopify_link}` : ""}`);
         },
         { initialMessage: "Publishing to Shopify — connecting to live pipeline stream…" },
@@ -2498,6 +2525,11 @@ export default function ArticleEditPage() {
                     {exportingPdf ? "Exporting…" : "Export PDF"}
                   </button>
                   {renderLinkedinButton()}
+                  {isDirty ? (
+                    <button type="button" className={styles.btnSecondary} onClick={save} disabled={editorLocked}>
+                      Save draft
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </div>
