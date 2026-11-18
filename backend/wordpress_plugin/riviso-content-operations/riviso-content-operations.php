@@ -3,7 +3,7 @@
  * Plugin Name: RivisoSEO
  * Plugin URI: https://riviso.com
  * Description: Connect WordPress to Riviso for SEO meta in REST, publish/update endpoints, and connection verification.
- * Version: 0.8.0
+ * Version: 0.8.1
  * Requires at least: 5.8
  * Requires PHP: 7.4
  * Author: Riviso

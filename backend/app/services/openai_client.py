@@ -172,7 +172,9 @@ class OpenAIClient:
         model: str,
         prompt: str,
         reference_image_url: str | None = None,
+        size: str = "1024x1024",
     ) -> str | None:
+        """``size``: "1024x1024" (featured) or "1536x1024" (landscape in-article illustrations)."""
         ref = (reference_image_url or "").strip()
         if ref:
             try:
@@ -189,7 +191,7 @@ class OpenAIClient:
         payload = {
             "model": model,
             "prompt": prompt,
-            "size": "1024x1024",
+            "size": size,
         }
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=300.0)) as client:
             res = await client.post(

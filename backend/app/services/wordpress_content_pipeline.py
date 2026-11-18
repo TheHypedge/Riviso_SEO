@@ -39,6 +39,9 @@ class WordPressGenerationContext:
     reference_image_url: str | None
 
 
+AUTO_INTERNAL_LINKS = 5
+
+
 def is_wordpress_project(proj: dict[str, Any]) -> bool:
     plat = (proj.get("platform") or "wordpress").strip().lower()
     return plat not in ("shopify",) and plat != ""
@@ -152,6 +155,8 @@ def _catalog_fallback_pages(
 
     if not query:
         return []
+    own_title = " ".join((title or "").lower().split())
+    phrase = " ".join((focus_keyphrase or "").lower().split())
 
     scored: list[tuple[int, dict[str, Any]]] = []
     for row in rows or []:
@@ -161,11 +166,15 @@ def _catalog_fallback_pages(
         post_title = (row.get("post_title") or "").strip()
         if not post_url or not post_title:
             continue
+        if " ".join(post_title.lower().split()) == own_title:
+            continue  # never link an article to its own live post
         hay = f"{post_title} {row.get('focus_keyphrase') or ''}"
         words = _norm_words(hay)
         score = len(query & words)
         if score <= 0:
             continue
+        if phrase and len(phrase) > 3 and phrase in hay.lower():
+            score += 3  # the exact topic beats scattered word overlap
         scored.append((score, row))
 
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -239,7 +248,9 @@ def resolve_wordpress_generation_context(
                 title=title,
                 keywords=keywords,
                 focus_keyphrase=focus_keyphrase,
-                max_pages=max_pages,
+                # Auto mode links up to 5 related posts (the prompt asks for 3-5 internal links);
+                # hand-picked mappings keep the picker's own limit.
+                max_pages=max(max_pages, AUTO_INTERNAL_LINKS),
             )
         except Exception:
             log.debug("WordPress site-map fallback failed", exc_info=True)

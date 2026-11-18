@@ -19,7 +19,7 @@ final class RivisoContentOperationsConnector {
 	const LEGACY_REST_NAMESPACE = 'auto-articles/v1';
 	const OPTION_CONNECTOR_ID = 'riviso_content_ops_connector_id';
 	const LEGACY_OPTION_CONNECTOR_ID = 'auto_articles_connector_id';
-	const VERSION = '0.8.0';
+	const VERSION = '0.8.1';
 	const OPTION_INDEXNOW_KEY = 'riviso_indexnow_key';
 	const OPTION_UPDATE_TOKEN = 'riviso_update_token';
 	const SCHEMA_META_KEYS = array( '_riviso_schema_faq', '_riviso_schema_article' );
@@ -35,6 +35,7 @@ final class RivisoContentOperationsConnector {
 		// Priority 20: after Yoast/Rank Math's own wp_head schema output; we only add
 		// our own separate nodes (FAQPage, and Article only when neither is active).
 		add_action( 'wp_head', array( __CLASS__, 'output_schema_markup' ), 20 );
+		add_filter( 'safe_style_css', array( __CLASS__, 'allow_image_crop_css' ) );
 		add_filter( 'pre_set_site_transient_update_plugins', array( __CLASS__, 'check_for_update' ) );
 		add_filter( 'plugins_api', array( __CLASS__, 'plugin_info' ), 10, 3 );
 
@@ -515,6 +516,17 @@ final class RivisoContentOperationsConnector {
 			),
 			200
 		);
+	}
+
+	/**
+	 * Keep Riviso's in-article image crop (object-fit / object-position) on WordPress < 6.1,
+	 * whose KSES style allow-list predates those properties. Newer cores already allow them.
+	 *
+	 * @param string[] $props Allowed CSS properties.
+	 * @return string[]
+	 */
+	public static function allow_image_crop_css( $props ) {
+		return array_values( array_unique( array_merge( (array) $props, array( 'object-fit', 'object-position' ) ) ) );
 	}
 
 	/**

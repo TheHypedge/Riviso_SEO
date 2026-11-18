@@ -438,7 +438,8 @@ def _mongo_owner_user_id_filter(owner_user_id: str) -> dict[str, Any]:
 
 
 _ARTICLE_AUTHOR_KEYS = ("wp_author_id", "wp_author_name", "shopify_author", "wp_author_applied_id", "published_by_user_id")
-_PROJECT_AUTHOR_KEYS = ("default_wp_author_id", "default_wp_author_name", "shopify_authors", "default_shopify_author")
+_PROJECT_PUBLISHING_KEYS = ("default_wp_author_id", "default_wp_author_name", "shopify_authors", "default_shopify_author",
+                        "inner_image_max_height")
 
 
 def _positive_int_or_none(v: Any) -> int | None:
@@ -460,13 +461,23 @@ def _article_author_fields(d: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _project_author_fields(d: dict[str, Any]) -> dict[str, Any]:
+def _inner_image_height_or_none(v: Any) -> int | None:
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return 0 if n == 0 else (min(1000, max(200, n)) if n > 0 else None)
+
+
+def _project_publishing_fields(d: dict[str, Any]) -> dict[str, Any]:
     names = [str(x).strip()[:200] for x in (d.get("shopify_authors") or []) if str(x).strip()][:20]
     return {
         "default_wp_author_id": _positive_int_or_none(d.get("default_wp_author_id")),
         "default_wp_author_name": str(d.get("default_wp_author_name") or "").strip()[:200],
         "shopify_authors": names,
         "default_shopify_author": str(d.get("default_shopify_author") or "").strip()[:200],
+        # In-article AI illustrations are cropped to this height (px); None = app default, 0 = original.
+        "inner_image_max_height": _inner_image_height_or_none(d.get("inner_image_max_height")),
     }
 
 
@@ -569,7 +580,7 @@ def _normalize_project_dict(d: dict[str, Any]) -> dict[str, Any]:
         # Schema markup (JSON-LD Article/BlogPosting + FAQPage) on publish/update.
         "schema_markup_enabled": bool(d.get("schema_markup_enabled", True)),
         # Default post author (app/services/authors.py).
-        **_project_author_fields(d),
+        **_project_publishing_fields(d),
         # Whether the connected site's connector plugin version is new enough to
         # actually print schema markup in <head> (_RIVISO_MIN_SCHEMA_VERSION).
         "wp_schema_supported": bool(d.get("wp_schema_supported", False)),
@@ -2812,7 +2823,7 @@ def _apply_project_updates_dict(p: dict[str, Any], updates: dict[str, Any]) -> N
             "wp_plugin_message",
             "wp_seo_platform",
             "schema_markup_enabled",
-            *_PROJECT_AUTHOR_KEYS,
+            *_PROJECT_PUBLISHING_KEYS,
             "wp_schema_supported",
             "platform",
             "shopify_shop",
@@ -3027,7 +3038,7 @@ def _mongo_doc_to_project(doc: dict[str, Any] | None) -> dict[str, Any]:
         "wp_plugin_message": d.get("wp_plugin_message") or "",
         "wp_seo_platform": d.get("wp_seo_platform") or "",
         "schema_markup_enabled": bool(d.get("schema_markup_enabled", True)),
-        **_project_author_fields(d),
+        **_project_publishing_fields(d),
         "wp_schema_supported": bool(d.get("wp_schema_supported", False)),
         "platform": ((d.get("platform") or "wordpress").strip().lower() or "wordpress")[:32],
         "shopify_shop": (d.get("shopify_shop") or "").strip()[:2048],

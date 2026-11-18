@@ -279,3 +279,24 @@ def test_research_enabled_flag_and_country(monkeypatch):
 def test_single_h1_demotes_extra_h1s():
     md = "Intro\n\n# Main\n\n### Sub\n\n# Second\n\n## Already h2\n"
     assert ag._single_h1(md) == "Intro\n\n# Main\n\n### Sub\n\n## Second\n\n## Already h2"
+
+
+def test_general_niche_drops_low_authority_sources_and_ranks_official_first(fake_client, fake_pages, monkeypatch):
+    c = fake_client()
+
+    async def ws(*, model, prompt, allowed_domains=None, country=None):
+        # Fake extraction maps S1/S2/S3 to the first three kept notes; the blog note is dropped before numbering.
+        segs = [
+            {"text": "Default bail arises after 90 days for serious offences.", "url": SRC, "title": "BNSS, 2023"},
+            {"text": "Blog says default bail is easy to get in 90 days.", "url": "https://legaltips.blogspot.com/p", "title": "blog"},
+            {"text": "Hardeep Singh v. State of Punjab set the test.", "url": SRC2, "title": "SCI"},
+            {"text": "It must be claimed before the chargesheet is filed.", "url": SRC, "title": "BNSS, 2023"},
+        ]
+        return {"text": "", "citations": [], "segments": segs, "sources": [], "queries": [], "domain_filter_applied": False}
+
+    monkeypatch.setattr(c, "web_search", ws)
+    pack = asyncio.run(rp.build_research_pack(title="Default bail", focus="default bail", keywords=[], profile="general"))
+    assert all("blogspot" not in f["source_url"] for f in pack["facts"])
+    assert sum(m["low_authority_dropped"] for m in pack["searches"]) >= 1
+    assert all(f["authority"] == 1 for f in pack["facts"])  # sci.gov.in / indiacode.nic.in are official
+    assert "official)" in rp.format_research_for_prompt(pack)

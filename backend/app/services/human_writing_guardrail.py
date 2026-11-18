@@ -82,8 +82,8 @@ SECTION_ANATOMY_RULES = """
 """.strip()
 
 EXTERNAL_LINK_RULES = """
-- Back up factual, legal, medical, financial, statistical or regulatory claims with 2-4 inline links to authoritative external sources, spread across different sections.
-- Prefer official primary sources: government sites (.gov, .gov.in, .nic.in, gov.uk, europa.eu), regulators, standards bodies, universities (.edu, .ac.in), WHO / UN / World Bank, and the official site or documentation of the organisation or product being discussed.
+- Back up every factual, legal, medical, financial, statistical or regulatory claim with inline links to the authoritative external sources it comes from: aim for 4-8 outbound links, each to a different source, spread across different sections. Credit the publisher of every figure or study you use.
+- Link only high-authority sources: government sites (.gov, .gov.in, .nic.in, gov.uk, europa.eu), courts and regulators, standards bodies, universities (.edu, .ac.in), WHO / UN / World Bank / OECD, peer-reviewed research (PubMed, Nature, The Lancet), official statistics, major established publications (Reuters, BBC, The Hindu, Mint), and the official site or documentation of the organisation or product being discussed. Never blogs, forums, Q&A sites, social media or content farms.
 - Link only URLs you are certain exist and are stable. Prefer the organisation's main page or a well-known section page over a guessed deep link. Never invent paths, query strings or document IDs; if unsure, link the official homepage or leave the link out. Every external link is checked and broken ones are removed.
 - Anchor text says what the reader will find (e.g. [RBI's digital lending guidelines](https://www.rbi.org.in/)). Never "click here", "source", "this link" or a bare URL.
 - Never link to competitors of the brand, content farms, affiliate pages or URL shorteners. Never put a link inside a heading, and link each source only once.

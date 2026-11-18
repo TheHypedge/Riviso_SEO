@@ -362,6 +362,8 @@ export type ProjectSettings = {
   default_wp_author_name?: string | null;
   shopify_authors?: string[];
   default_shopify_author?: string | null;
+  /** Height (px) in-article AI illustrations are cropped to; 0 = original, null = app default (420). */
+  inner_image_max_height?: number | null;
   gsc_property_url?: string | null;
   gsc_index_on_publish?: boolean;
 };
@@ -2785,6 +2787,7 @@ export const api = {
       default_wp_author_name: string;
       shopify_authors: string[];
       default_shopify_author: string;
+      inner_image_max_height: number;
       shopify_shop: string;
       shopify_client_id: string;
       shopify_client_secret: string;

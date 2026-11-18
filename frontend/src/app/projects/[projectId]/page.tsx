@@ -10,6 +10,7 @@ import { formatDayMonYearTime } from "@/lib/dateFormat";
 import InnerImageCountField from "@/components/InnerImageCountField";
 import AuthorSelect from "@/components/AuthorSelect";
 import DefaultAuthorSetting from "@/components/settings/DefaultAuthorSetting";
+import InnerImageHeightSetting from "@/components/settings/InnerImageHeightSetting";
 import BulkGenerateModal, { type BulkGenerateValues } from "@/components/BulkGenerateModal";
 import { projectSettingsHref } from "@/lib/articlePaths";
 import projectsDark from "../projectsDark.module.css";
@@ -12386,6 +12387,18 @@ export default function ProjectPage() {
                     citiesAll={targetCitiesAll}
                     onCitiesAll={setTargetCitiesAll}
                   />
+                ) : null}
+                {settings ? (
+                  <section className={styles.settingsSectionCard} style={{ marginTop: 16 }}>
+                    <p className={styles.settingsSectionKicker}>Images</p>
+                    <h3 className={styles.settingsSectionTitle}>In-article images</h3>
+                    <InnerImageHeightSetting
+                      projectId={projectId}
+                      value={settings.inner_image_max_height}
+                      onSaved={(h) => setSettings((prev) => (prev ? { ...prev, inner_image_max_height: h } : prev))}
+                      onMessage={(message, tone) => setToast({ message, tone })}
+                    />
+                  </section>
                 ) : null}
               </div>
 

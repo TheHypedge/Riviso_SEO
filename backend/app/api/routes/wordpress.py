@@ -681,6 +681,7 @@ async def get_project_settings(project_id: str, user: dict = Depends(get_current
         default_wp_author_name=(proj.get("default_wp_author_name") or "").strip() or None,
         shopify_authors=clean_shopify_authors(proj.get("shopify_authors")),
         default_shopify_author=(proj.get("default_shopify_author") or "").strip() or None,
+        inner_image_max_height=proj.get("inner_image_max_height") if isinstance(proj.get("inner_image_max_height"), int) else None,
         plugin_download_url="/api/wordpress/plugin/download",
         default_wp_rest_base=def_rest,
         default_wp_status=def_status,
@@ -834,6 +835,11 @@ async def update_project_settings(
     if payload.default_wp_author_id is not None and "default_wp_author_id" not in updates:
         updates["default_wp_author_id"] = payload.default_wp_author_id or None
         updates["default_wp_author_name"] = (payload.default_wp_author_name or "").strip()[:200] if payload.default_wp_author_id else ""
+    if payload.inner_image_max_height is not None:
+        h = int(payload.inner_image_max_height)
+        if 0 < h < 200:
+            raise HTTPException(status_code=400, detail="Inner image height must be 0 (original size) or 200-1000 px.")
+        updates["inner_image_max_height"] = h
     if payload.shopify_authors is not None:
         updates["shopify_authors"] = clean_shopify_authors(payload.shopify_authors)
     if payload.default_shopify_author is not None:

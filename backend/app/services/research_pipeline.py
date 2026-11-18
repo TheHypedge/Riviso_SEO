@@ -30,6 +30,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.editorial_profiles import research_domains, research_hints
+from app.services.source_authority import LABELS, LOW, UNKNOWN, authority_tier
 from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
 
 log = logging.getLogger(__name__)
@@ -102,7 +103,9 @@ Questions to answer:
 {questions}
 
 Look especially for: {hints}.
-Prefer official primary sources (government, courts, regulators, official bodies).
+Use only authoritative sources: government and official bodies, courts and regulators, universities,
+peer-reviewed research, official statistics and major established publications. Never use blogs,
+forums, social media, Q&A sites or content farms. Prefer the primary source of a figure over a page quoting it.
 
 Each bullet is ONE precise, self-contained fact on its own line: exact figures, section numbers, deadlines, names, dates and the period a figure refers to. Cite the source for every bullet. Write 10-16 bullets and nothing from memory."""
 
@@ -132,17 +135,20 @@ async def _search(client: Any, model: str, *, title: str, focus: str, questions:
     # never a URL the model typed. Notes outside the niche allow-list (unfiltered fallback search) are dropped.
     segs: list[dict] = []
     seen: set[tuple[str, str]] = set()
-    off_list = 0
+    off_list = low = 0
     for sg in res.get("segments") or []:
         url = _clean_url(sg["url"])
         if not _host_allowed(url, domains):
             off_list += 1
             continue
+        if authority_tier(url, trusted=domains) == LOW:
+            low += 1  # blogs, forums, social, content farms: never a source
+            continue
         key = (sg["text"], url)
         if key not in seen:
             seen.add(key)
             segs.append({"id": f"S{len(segs) + 1}", "text": sg["text"], "url": url, "title": sg.get("title") or ""})
-    meta = {"queries": res.get("queries") or [], "segments": len(segs), "off_list_dropped": off_list,
+    meta = {"queries": res.get("queries") or [], "segments": len(segs), "off_list_dropped": off_list, "low_authority_dropped": low,
             "domain_filter_applied": bool(res.get("domain_filter_applied"))}
     if not segs:
         return [], meta
@@ -160,6 +166,7 @@ async def _search(client: Any, model: str, *, title: str, focus: str, questions:
             "type": str(f.get("type") or "other").strip()[:20],
             "source_url": sg["url"],
             "source_title": sg["title"][:200],
+            "authority": authority_tier(sg["url"], trusted=domains),
             "note": sg["text"][:400],
             "as_of": str(f.get("as_of") or "").strip()[:60],
             "status": str(f.get("status") or "").strip()[:20],
@@ -275,9 +282,10 @@ async def build_research_pack(*, title: str, focus: str, keywords: list[str], pr
             log.warning("Source verification timed out; facts kept as cited", exc_info=True)
             for f in facts:
                 f.setdefault("verification", "cited")
-        usable = [f for f in facts if f.get("verification") in ("verified", "cited")][:MAX_FACTS]
-        # Verified facts first so the writer leans on the strongest evidence.
-        usable.sort(key=lambda f: f.get("verification") != "verified")
+        usable = [f for f in facts if f.get("verification") in ("verified", "cited")]
+        # Strongest evidence first: official sources, then reputable, each verified before cited-only.
+        usable.sort(key=lambda f: (f.get("authority", UNKNOWN), f.get("verification") != "verified"))
+        usable = usable[:MAX_FACTS]
         for i, f in enumerate(usable, 1):
             f["id"] = f"F{i}"
         pack["facts"] = usable
@@ -313,12 +321,15 @@ def format_research_for_prompt(pack: dict[str, Any] | None) -> str:
             bits.append(f"as of {f['as_of']}")
         if f.get("status") and f["status"] not in ("settled", "unclear"):
             bits.append(f"status: {f['status']}")
-        bits.append(f"source: {f.get('source_title') or _host(f['source_url'])} ({_host(f['source_url'])})")
+        bits.append(f"source: {f.get('source_title') or _host(f['source_url'])} ({_host(f['source_url'])}, "
+                    f"{LABELS.get(f.get('authority', UNKNOWN), 'unrated')})")
         lines.append(f"[{f['id']}] " + " | ".join(bits))
     lines.append(
         "\nRESEARCH RULES (these replace the external-link rules above):\n"
         "- Build the article on these facts. Cite every fact you use by writing its marker right after the sentence, e.g. "
-        "\"The application must be filed within 90 days.[F3]\" Use several different facts across the article.\n"
+        "\"The application must be filed within 90 days.[F3]\"\n"
+        "- Cite at least 6 different facts from at least 4 different sources, spread across the sections, and prefer "
+        "official sources over the rest. Every cited source becomes an outbound link, so the data you use credits its publisher.\n"
         "- Every statistic, percentage, money amount, case citation and date-specific claim MUST come from this pack and carry its marker.\n"
         "- Do NOT write any external URL or external markdown link yourself. Sources are attached automatically from the markers.\n"
         "- If something you want to say is not in the pack and is not basic, settled knowledge, leave it out.\n"

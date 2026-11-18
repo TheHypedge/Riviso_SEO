@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.services.human_writing_guardrail import AI_DETECTOR_BANNED_PHRASES
+from app.services.source_authority import LOW, REPUTABLE, authority_tier, is_low_authority
 from app.services.url_guard import SsrfError, assert_public_http_url, ssrf_guarded_event_hooks
 
 log = logging.getLogger(__name__)
@@ -128,7 +129,8 @@ async def verify_external_links(md: str, *, trusted_urls: set[str] | frozenset[s
                 return u, await _link_is_dead(client, u)
 
         results = await asyncio.gather(*(check(u) for u in sorted(urls)))
-    dead = {u for u, is_dead in results if is_dead}
+    # Low-authority destinations (blogs, forums, social, shorteners) are unlinked like dead ones.
+    dead = {u for u, is_dead in results if is_dead} | {u for u in urls if is_low_authority(u)}
     if dead:
         log.info("Removed %d dead external link(s): %s", len(dead), ", ".join(urlsplit(u).netloc for u in dead))
     seen: set[str] = set()
@@ -190,6 +192,9 @@ def seo_aeo_geo_score(md: str, *, focus: str = "", profile: str = "general", res
     cites = len(_CITE_RE.findall(text))
     links = _LINK_RE.findall(text)
     internal = [u for _, u in links if u in internal_urls]
+    external = {u for _, u in links if u not in internal_urls}
+    authoritative = {u for u in external if authority_tier(u) <= REPUTABLE}
+    low_links = {u for u in external if authority_tier(u) == LOW}
     rs = research or {}
 
     checks: list[tuple[str, str, int, bool | None, str]] = [
@@ -208,6 +213,8 @@ def seo_aeo_geo_score(md: str, *, focus: str = "", profile: str = "general", res
         ("citations", "3+ cited sources", 10, cites >= 3 if rs.get("status") == "ok" else None, f"{cites} citations"),
         ("claims", "No unsupported statistics or cases", 8,
          (not rs.get("unsupported_after")) if rs.get("status") == "ok" else None, ", ".join(rs.get("unsupported_after") or [])[:200]),
+        ("authority", "3+ authoritative outbound sources, no low-authority links", 8,
+         len(authoritative) >= 3 and not low_links, f"{len(authoritative)} authoritative, {len(low_links)} low"),
         ("freshness", "Dated facts (as of / year)", 4, bool(re.search(r"\bas of\b|\b20[12]\d\b", lower)), ""),
         ("structure", "Prose-led section structure", 6, bool(structure_report(text).get("passed")), ""),
         ("clean", "No AI-tell phrases or em dashes", 4,

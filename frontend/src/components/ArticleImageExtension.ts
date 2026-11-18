@@ -19,6 +19,12 @@ function alignFromClassList(classList: string | null | undefined): ArticleImageA
   return null;
 }
 
+/** "50% 30%" from `object-position:50% 30%` (only percentage pairs -- what the editor writes). */
+export function focusFromStyle(style: string | null | undefined): string | null {
+  const m = /object-position\s*:\s*(\d{1,3}(?:\.\d+)?)%\s+(\d{1,3}(?:\.\d+)?)%/i.exec(style || "");
+  return m ? `${Math.min(100, +m[1])}% ${Math.min(100, +m[2])}%` : null;
+}
+
 function pxFromStyle(prop: "width" | "height", style: string | null | undefined): number | null {
   const m = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*(\\d+(?:\\.\\d+)?)px`, "i").exec(style || "");
   return m ? Math.round(parseFloat(m[1])) : null;
@@ -55,9 +61,19 @@ export const ArticleImage = Image.extend({
       height: {
         default: null as number | null,
         parseHTML: (element: HTMLElement) => pxFromStyle("height", element.getAttribute("style")),
-        renderHTML: (attributes: { height: number | null }) => {
+        renderHTML: (attributes: { height: number | null; width: number | null }) => {
           if (!attributes.height) return {};
-          return { style: `height:${attributes.height}px;object-fit:cover;` };
+          // No explicit width = full column width, so the fixed height crops instead of shrinking the picture.
+          return { style: `${attributes.width ? "" : "width:100%;"}height:${attributes.height}px;object-fit:cover;` };
+        },
+      },
+      // Which part of a cropped image shows (CSS object-position, "X% Y%"); set by Reposition.
+      focus: {
+        default: null as string | null,
+        parseHTML: (element: HTMLElement) => focusFromStyle(element.getAttribute("style")),
+        renderHTML: (attributes: { focus: string | null; height: number | null }) => {
+          if (!attributes.focus || !attributes.height) return {};
+          return { style: `object-position:${attributes.focus};` };
         },
       },
       align: {

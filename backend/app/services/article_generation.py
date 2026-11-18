@@ -209,7 +209,7 @@ def build_generation_messages(
             "- Use ONLY the pages listed in the page context.\n"
             "- Link with markdown using the exact post URLs given "
             "(e.g. [Page title](https://yoursite.com/post-slug/)).\n"
-            "- Place 2-4 natural inline internal links (fewer only if fewer pages fit), each in a body "
+            "- Place 3-5 natural inline internal links (fewer only if fewer pages fit), each in a body "
             "paragraph of a different section, never in a heading. The anchor text describes the "
             "linked page's topic, never 'click here' or 'read more'.\n"
             "- Do not invent posts, slugs, or URLs that are not in the context.\n"
@@ -570,8 +570,9 @@ async def generate_featured_image_only(
     niche_identifier: str | None = None,
     image_prompt_text: str | None = None,
     reference_image_url: str | None = None,
+    size: str = "1024x1024",
 ) -> dict:
-    """Generate only the featured image for an existing article."""
+    """Generate only the featured image for an existing article (``size`` 1536x1024 for in-article art)."""
     if image_prompt_text:
         assert_image_prompt_allowed(image_prompt_text)
     image_prompt = build_programmatic_image_prompt(
@@ -590,6 +591,7 @@ async def generate_featured_image_only(
                 model=settings.openai_image_model,
                 prompt=image_prompt,
                 reference_image_url=ref_url,
+                size=size,
             ),
             timeout=300.0,
         )

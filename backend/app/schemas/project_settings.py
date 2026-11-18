@@ -73,6 +73,8 @@ class ProjectSettingsPublic(BaseModel):
     default_wp_author_name: str | None = None
     shopify_authors: list[str] = Field(default_factory=list)
     default_shopify_author: str | None = None
+    # Height (px) in-article AI illustrations are cropped to; 0 keeps the original, None = app default.
+    inner_image_max_height: int | None = None
 
 
 class ProjectSettingsUpdate(BaseModel):
@@ -94,6 +96,7 @@ class ProjectSettingsUpdate(BaseModel):
     default_wp_author_name: str | None = Field(default=None, max_length=200)
     shopify_authors: list[str] | None = Field(default=None, max_length=20)
     default_shopify_author: str | None = Field(default=None, max_length=200)
+    inner_image_max_height: int | None = Field(default=None, ge=0, le=1000)
     shopify_shop: str | None = Field(default=None, max_length=2048)
     shopify_client_id: str | None = Field(default=None, max_length=256)
     shopify_client_secret: str | None = Field(default=None, max_length=5000)

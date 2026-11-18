@@ -23,6 +23,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.services.article_generation import generate_featured_image_only
+from app.services import inner_visuals
 from app.services.article_media_storage import save_article_media
 from app.services.openai_client import OpenAIClient
 from app.services.shopify_article_image import featured_image_bytes_from_data_url, featured_image_bytes_from_http_url
@@ -32,6 +33,8 @@ from app.services.to_thread import run_sync
 log = logging.getLogger(__name__)
 
 MAX_INNER_IMAGES = 5
+# Height (px) AI illustrations are cropped to when a project hasn't chosen one; 0 keeps the original.
+DEFAULT_INNER_IMAGE_MAX_HEIGHT = 420
 
 # A chart in the FAQ or the wrap-up reads as noise; keep them in the body sections.
 _SKIP_HEADING = re.compile(r"faq|frequently asked|sources|references|conclusion|final thoughts|key takeaways|summary", re.IGNORECASE)
@@ -86,13 +89,23 @@ def candidate_sections(markdown: str, n: int) -> list[tuple[int, str, str]]:
     return _spread([s for s in body_sections(markdown) if _NUM.search(s[2])], n)
 
 
-def insert_images(markdown: str, placed: list[tuple[int, str, str]]) -> str:
-    """Insert ``(line_index, url, alt)`` images as raw ``<img>`` tags -- the same format
+def illustration_style(max_height: int | None) -> str:
+    """Inline crop for AI illustrations: full width, fixed height, cover, centred focal point --
+    exactly what the editor's crop/reposition writes, so it stays editable."""
+    h = int(max_height or 0)
+    return f"width:100%;height:{h}px;object-fit:cover;object-position:50% 50%;" if h > 0 else ""
+
+
+def insert_images(markdown: str, placed: list[tuple]) -> str:
+    """Insert ``(line_index, url, alt[, style])`` images as raw ``<img>`` tags -- the same format
     the editor's Insert Media writes, so it round-trips through the editor and both
     markdown renderers unchanged."""
     lines = (markdown or "").split("\n")
-    for idx, url, alt in sorted(placed, key=lambda x: x[0], reverse=True):
-        tag = f'<img src="{html.escape(url, quote=True)}" alt="{html.escape(alt, quote=True)}">'
+    for item in sorted(placed, key=lambda x: x[0], reverse=True):
+        idx, url, alt = item[:3]
+        style = item[3] if len(item) > 3 and item[3] else ""
+        tag = f'<img src="{html.escape(url, quote=True)}" alt="{html.escape(alt, quote=True)}"'
+        tag += f' style="{html.escape(style, quote=True)}">' if style else ">"
         lines[idx:idx] = ["", tag, ""]
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
 
@@ -368,6 +381,7 @@ async def illustrate_passage(
             brand_identity=proj.get("brand_identity") or "",
             niche_identifier=proj.get("niche_identifier") or "",
             image_prompt_text=(prompt or {}).get("text") or None,
+            size="1536x1024",  # landscape: in-article art is read in a column, not as a square poster
         )
 
     try:
@@ -438,60 +452,69 @@ async def build_inner_images(
                 log.info("inner images: quota reached for article %s: %s", article_id, msg)
             return ok
 
-        placed: list[tuple[int, str, str]] = []
+        placed: list[tuple] = []
         used_values: set[float] = set()  # one figure never appears in two charts
-        out_of_quota = False
-        # Bound text-model calls: a few fallback sections beyond the requested count.
-        for line_idx, heading, text in candidate_sections(markdown, count)[: count + 3]:
-            if len(placed) >= count:
-                break
-            try:
+        used: dict[str, int] = {}
+        max_h = (proj or {}).get("inner_image_max_height")
+        crop = illustration_style(DEFAULT_INNER_IMAGE_MAX_HEIGHT if max_h is None else max_h)
+
+        async def save_svg(svg: bytes) -> str | None:
+            _image_id, cloud_url = await run_sync(
+                save_article_media, data=svg, content_type="image/svg+xml", project_id=project_id, article_id=article_id
+            )
+            # Only a Cloudinary URL is usable on WordPress; Cloudinary serves the SVG as PNG by extension.
+            return re.sub(r"\.svg$", ".png", cloud_url) if cloud_url else None
+
+        async def attempt(kind: str, line_idx: int, heading: str, text: str) -> tuple | None:
+            """One visual of ``kind`` for this section, or None (nothing honest to draw / failed)."""
+            nonlocal used_values
+            if kind == "chart":
                 chart = await _extract_chart(title, heading, text)
                 if not chart:
-                    continue
+                    return None
                 values = {p["value"] for p in chart["points"]}
-                if values & used_values:
-                    continue
-                if not await quota_ok():
-                    out_of_quota = True
-                    break
-                svg = render_chart_svg(chart, heading or title)
-                _image_id, cloud_url = await run_sync(
-                    save_article_media, data=svg, content_type="image/svg+xml", project_id=project_id, article_id=article_id
-                )
-                # Only a Cloudinary URL is usable on WordPress; Cloudinary serves the SVG as PNG
-                # by extension, which every CMS and email client renders.
-                if cloud_url:
-                    placed.append((line_idx, re.sub(r"\.svg$", ".png", cloud_url), chart_alt(chart)))
+                if values & used_values or not await quota_ok():
+                    return None
+                url = await save_svg(render_chart_svg(chart, heading or title))
+                if url:
                     used_values |= values
-            except Exception:
-                log.warning("inner images: chart for section %r of article %s failed", heading, article_id, exc_info=True)
-
-        charts = len(placed)
-        if proj is not None and not out_of_quota and len(placed) < count:
-            taken = {p[0] for p in placed}
-            free = [s for s in body_sections(markdown) if s[0] not in taken]
-            # ponytail: sequential (~1 min per image); bounded gather if prep latency matters.
-            # A failed section moves on to the next free one, so one rejection doesn't cost a slot;
-            # attempts are capped so a broken image model can't burn the budget.
-            need = count - len(placed)
-            for line_idx, heading, text in _spread(free, need)[: need + 2]:
-                if len(placed) >= count:
-                    break
+                return (line_idx, url, chart_alt(chart)) if url else None
+            if kind == "illustration":
                 if not await quota_ok():
-                    break
-                try:
-                    _id, url, alt = await illustrate_passage(
-                        proj=proj, image_prompt_id=image_prompt_id, title=title, heading=heading, passage=text,
-                        keywords=keywords or [], project_id=project_id, article_id=article_id,
-                    )
-                    # Only a Cloudinary URL works on WordPress (never a local /media path).
-                    if url:
-                        placed.append((line_idx, url, alt or heading))
-                except Exception:
-                    log.warning("inner images: illustration for section %r of article %s failed", heading, article_id, exc_info=True)
+                    return None
+                _id, url, alt = await illustrate_passage(
+                    proj=proj, image_prompt_id=image_prompt_id, title=title, heading=heading, passage=text,
+                    keywords=keywords or [], project_id=project_id, article_id=article_id,
+                )
+                # Only a Cloudinary URL works on WordPress (never a local /media path).
+                return (line_idx, url, alt or heading, crop) if url else None
+            data = inner_visuals.extract(kind, text)
+            if not data or not await quota_ok():
+                return None
+            svg, alt = inner_visuals.render_visual(kind, data, heading or title, heading or title)
+            url = await save_svg(svg)
+            return (line_idx, url, alt) if url else None
 
-        log.info("inner images: article %s got %d chart(s) + %d illustration(s) of %d requested", article_id, charts, len(placed) - charts, count)
+        # Visual planner: spread over the article, and for each section try the kinds it can
+        # honestly support, least-used first -- several images mix diagrams, charts and art.
+        # ponytail: sequential (~1 min per AI image); bounded gather if prep latency matters.
+        # Attempts are capped so a broken model can't burn the budget.
+        for line_idx, heading, text in _spread(sections, count)[: count + 3]:
+            if len(placed) >= count:
+                break
+            opts = inner_visuals.section_options(text, has_numbers=bool(_NUM.search(text)), allow_illustration=proj is not None)
+            for kind in inner_visuals.order_for_variety(opts, used):
+                try:
+                    got = await attempt(kind, line_idx, heading, text)
+                except Exception:
+                    log.warning("inner images: %s for section %r of article %s failed", kind, heading, article_id, exc_info=True)
+                    got = None
+                if got:
+                    placed.append(got)
+                    used[kind] = used.get(kind, 0) + 1
+                    break
+
+        log.info("inner images: article %s got %s of %d requested", article_id, used or "none", count)
         if not placed:
             return markdown, 0
         return insert_images(markdown, placed), len(placed)

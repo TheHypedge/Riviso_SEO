@@ -664,6 +664,34 @@
   line-height: 1;
 }
 
+.articleImageToolbarSep {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--aa-hairline);
+}
+
+.articleImageNodeView[data-repositioning="true"] {
+  outline-style: dashed;
+}
+
+.articleImageRepositionHint {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 20px);
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--aa-ink), transparent 25%);
+  color: var(--aa-surface-card);
+  font-size: 12px;
+  line-height: 1.3;
+  text-align: center;
+  pointer-events: none;
+  z-index: var(--z-dropdown, 100);
+}
+
 .articleImageAlignBtn:hover,
 .articleImageDeleteBtn:hover {
   background: var(--aa-surface-soft);
